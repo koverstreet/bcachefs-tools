@@ -231,7 +231,7 @@ use crate::util::sharing::Unshared;
 use crate::sb::io::{read_super, SbReadScratch};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
-use crate::util::alloc::{free_pinned, kbox_pin_init};
+use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
@@ -485,10 +485,7 @@ impl Dev {
 unsafe impl KobjOwner for Dev {
     const GROUPS: GroupList<DevDir> = DEV_GROUPS.list();
     type Dir = DevDir;
-
-    unsafe fn release(this: NonNull<Dev>) {
-        unsafe { free_pinned(this.as_ptr()) }
-    }
+    type Alloc = MaybeRcuAlloc<Dev>;
 }
 
 #[pinned_drop]

@@ -24,7 +24,7 @@ use crate::util::place::{container_of_raw, Enclosing, Place, Placed};
 #[path = "../kobject.rs"]
 mod common;
 pub use common::StaticKobject;
-pub(crate) use common::into_aref;
+pub(crate) use common::{into_aref, KobjAlloc};
 
 /// /sys/fs.
 pub fn fs_kobj() -> Option<&'static Kobject> {
@@ -180,18 +180,17 @@ impl<A: Place<Type = Self, Base: Enclosing<Visible = A::Base>>> KobjPlace for Pl
 /// What a kobject is the kobject of: its kobj_type's.
 ///
 /// # Safety
-/// Its Dir's kobject was made with Kobject::new::<Self>(); release() frees
-/// what it's given, as the MaybeRcuAlloc it's in, if it's in one. An
-/// AlwaysRefCounted owner's refs are its kobject's.
+/// Its Dir's kobject was made with Kobject::new::<Self>(), in a Self an Alloc
+/// holds. An AlwaysRefCounted owner's refs are its kobject's.
 pub(crate) unsafe trait KobjOwner: Sized + 'static {
     const GROUPS: GroupList<Self::Dir>;
     type Dir: Dir<Obj = Self>;
+    type Alloc: KobjAlloc<Self>;
 
-    /// The last ref's been put.
-    ///
-    /// # Safety
-    /// Nothing uses @this after.
-    unsafe fn release(this: NonNull<Self>);
+    /// The last ref's been put: what held it, to drop.
+    fn release(this: Self::Alloc) {
+        drop(this)
+    }
 }
 
 struct Ktype<T>(PhantomData<T>);
@@ -208,7 +207,7 @@ impl<T: KobjOwner> Ktype<T> {
     };
 
     unsafe extern "C" fn release(kobj: *mut c::kobject) {
-        unsafe { T::release(NonNull::new_unchecked(<T::Dir as Dir>::Kobj::owner(kobj.cast()))) }
+        T::release(unsafe { T::Alloc::from_raw(NonNull::new_unchecked(<T::Dir as Dir>::Kobj::owner(kobj.cast()))) })
     }
 }
 

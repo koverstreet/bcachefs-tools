@@ -350,7 +350,7 @@ pub type KVec<T> = Vec<T, Kmalloc>;
 pub type KVVec<T> = Vec<T, KVmalloc>;
 
 /// A @T for C to hold: a MaybeRcuAlloc's, kvmalloc()'d, given up to a raw
-/// pointer, which free_pinned() takes back.
+/// pointer, which MaybeRcuAlloc::from_raw() takes back.
 pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
     MaybeRcuAlloc::<T, KVmalloc>::new(init).map(|b| b.into_raw().as_ptr())
 }
@@ -374,14 +374,6 @@ pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchE
         Failed::Alloc   => err.into(),
         Failed::Init(e) => e,
     })
-}
-
-/// Drop and free @p, as its MaybeRcuAlloc's drop does.
-///
-/// # Safety
-/// @p is from alloc_pinned(), and nothing but RCU readers uses it after.
-pub unsafe fn free_pinned<T>(p: *mut T) {
-    drop(unsafe { MaybeRcuAlloc::<T, KVmalloc>::from_raw(core::ptr::NonNull::new_unchecked(p)) })
 }
 
 /// A KBox frees when it drops, without waiting out RCU readers: what they may

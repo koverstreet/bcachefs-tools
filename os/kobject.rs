@@ -38,9 +38,32 @@ use crate::os::sysfs::Dir;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::refcount::{ARef, AlwaysRefCounted};
 
+/// What holds a KobjOwner - a MaybeRcuAlloc, or the static it's in - given up
+/// to its kobject's refs, and had back whole by their last put.
+pub(crate) trait KobjAlloc<T>: Sized {
+    /// # Safety
+    /// @p is the T one held, and it's had back once.
+    unsafe fn from_raw(p: NonNull<T>) -> Self;
+}
+
+impl<T> KobjAlloc<T> for MaybeRcuAlloc<T> {
+    unsafe fn from_raw(p: NonNull<T>) -> Self {
+        unsafe { MaybeRcuAlloc::from_raw(p) }
+    }
+}
+
+impl<T: 'static> KobjAlloc<T> for &'static T {
+    unsafe fn from_raw(p: NonNull<T>) -> Self {
+        unsafe { p.as_ref() }
+    }
+}
+
 /// @b's T, owned from here by its kobject's refs: the ref Kobject::new() made
-/// is the ARef's, and the last put frees it as @b's drop would have.
-pub(crate) fn into_aref<T: KobjOwner + AlwaysRefCounted>(b: MaybeRcuAlloc<T>) -> ARef<T> {
+/// is the ARef's, and the last put gives @b back to its release.
+pub(crate) fn into_aref<T>(b: MaybeRcuAlloc<T>) -> ARef<T>
+where
+    T: KobjOwner<Alloc = MaybeRcuAlloc<T>> + AlwaysRefCounted,
+{
     unsafe { ARef::from_raw(b.into_raw()) }
 }
 
@@ -92,6 +115,5 @@ impl KobjPlace for StaticKobject {
 unsafe impl KobjOwner for StaticKobject {
     const GROUPS: GroupList<StaticKobject> = NO_GROUPS.list();
     type Dir = StaticKobject;
-
-    unsafe fn release(_: NonNull<Self>) {}
+    type Alloc = &'static StaticKobject;
 }

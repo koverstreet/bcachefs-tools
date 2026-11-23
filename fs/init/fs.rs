@@ -39,6 +39,7 @@ use crate::os::kernel::READ;
 use crate::os::sched;
 use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
@@ -898,15 +899,18 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
 unsafe impl KobjOwner for Fs {
     const GROUPS: GroupList<FsDir> = FS_GROUPS.list();
     type Dir = FsDir;
+    type Alloc = MaybeRcuAlloc<Fs>;
 
-    unsafe fn release(this: NonNull<Fs>) {
-        unsafe { release(this.as_ptr()) }
+    fn release(mut this: MaybeRcuAlloc<Fs>) {
+        teardown(&mut this);
+        drop(this);
+        #[cfg(kernel)]
+        unsafe { c::module_put(&raw mut kernel::bindings::__this_module) };
     }
 }
 
-/// # Safety
-/// @p's kobject's last ref is put.
-unsafe fn release(p: *mut Fs) {
+fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
+    let p = this.as_non_null().as_ptr();
     let fs = unsafe { &*p };
 
     journal_keys_put_initial(fs);
@@ -932,12 +936,7 @@ unsafe fn release(p: *mut Fs) {
         fs.btree.key_cache.keys.exit();
     }
     crate::debug::async_objs::lists::async_obj_exit(fs);
-    unsafe {
-        fs.disk_groups.free();
-        crate::util::alloc::free_pinned(p);
-    }
-    #[cfg(kernel)]
-    unsafe { c::module_put(&raw mut kernel::bindings::__this_module) };
+    unsafe { fs.disk_groups.free() };
 }
 
 /// Which is the filesystem's superblock: the newest - highest seq, then write
