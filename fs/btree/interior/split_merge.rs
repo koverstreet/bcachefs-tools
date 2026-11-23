@@ -882,19 +882,28 @@ fn parent(paths: &Paths<'_>, path: PathIdx, level: usize) -> *mut c::btree_bkey_
 }
 
 /// A node a merge takes in: its path, which the merge holds a ref on, and its
-/// live u64s - an estimate, from the evicted-size table, until it's read.
-struct Src<'n> {
-    b:         Option<Node<'n>>,
+/// live u64s - an estimate, from the evicted-size table, until it's read, which
+/// its path being should_be_locked records.
+struct Src {
     path:      PathIdx,
     live_u64s: u16,
 }
 
-fn read_nodes<'n>(srcs: &[Src<'n>]) -> ArrayVec<Node<'n>, 3> {
-    srcs.iter().map(|s| s.b.expect("a merge src not read")).collect()
+impl Src {
+    fn node<'p>(&self, paths: &'p Paths<'_>, level: usize) -> Option<Node<'p>> {
+        let path = &paths[self.path];
+        path.should_be_locked().then(|| path.locked_btree_node(level).expect("a merge src read, held by its path"))
+    }
 }
 
-/// @b's side toward @sib poisoned: @sib has another parent.
-fn poison_side(b: Node<'_>, sib: Node<'_>) {
+fn read_nodes<'p>(paths: &'p Paths<'_>, level: usize, srcs: &[Src]) -> ArrayVec<Node<'p>, 3> {
+    srcs.iter().map(|s| s.node(paths, level).expect("a merge src not read")).collect()
+}
+
+/// @pivot's node's side toward @sib's poisoned: @sib's node has another parent.
+fn poison_side(paths: &Paths<'_>, level: usize, pivot: PathIdx, sib: PathIdx) {
+    let b = paths[pivot].locked_btree_node(level).expect("a merge's pivot, held by its path");
+    let sib = paths[sib].locked_btree_node(level).expect("a merge src, read");
     let side = if sib.contents().data().max_key < b.contents().data().min_key { PREV_SIB } else { NEXT_SIB };
     set_sib_u64s(b, side, u16::MAX);
 }
@@ -930,10 +939,10 @@ fn merge_topology_check(fs: &Fs, srcs: &[Node<'_>]) -> Result<(), BchError> {
  *      foreground merge threshold
  *   3. Get + traverse a path at the sibling's position. Try nofill first;
  *      on miss, look up the evicted-size hash table via the parent's
- *      now-locked iter. If we get an estimate, push with @b None and
+ *      now-locked iter. If we get an estimate, push it unread and
  *      defer the real traverse until after the caller's size check.
  *      Otherwise pay for the real read.
- *   4. Skip if sibling has a different parent (only when @b is set —
+ *   4. Skip if sibling has a different parent (only when it was read —
  *      deferred srcs validate parent post-fill; the post-update_start
  *      recheck catches the rest).
  *
@@ -943,15 +952,16 @@ fn merge_topology_check(fs: &Fs, srcs: &[Node<'_>]) -> Result<(), BchError> {
  * Ok on push or any skip; Err a real error (trans restart from path
  * traverse), the path put before returning.
  */
-fn merge_push_pos<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, srcs: &mut ArrayVec<Src<'n>, 3>,
-                      level: usize, pivot_path: PathIdx, sib: usize) -> Result<(), BchError> {
+fn merge_push_pos(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, srcs: &mut ArrayVec<Src, 3>,
+                  level: usize, pivot_path: PathIdx, sib: usize) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let pivot = paths.held_btree_node(pivot_path, level).expect("a merge's pivot, held by its path");
+    let pivot = paths[pivot_path].locked_btree_node(level).expect("a merge's pivot, held by its path");
     let data = pivot.contents().data();
+    let (min_key, max_key) = (data.min_key, data.max_key);
 
-    if (sib == PREV_SIB && data.min_key == POS_MIN) ||
-       (sib == NEXT_SIB && data.max_key == SPOS_MAX) {
+    if (sib == PREV_SIB && min_key == POS_MIN) ||
+       (sib == NEXT_SIB && max_key == SPOS_MAX) {
         set_sib_u64s(pivot, sib, u16::MAX);
         return Ok(());
     }
@@ -960,22 +970,24 @@ fn merge_push_pos<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, srcs: &mu
         return Ok(());
     }
 
+    let btree = Btree(pivot.c.btree_id.get().into());
     let parent_b = parent(paths, pivot_path, level);
-    let pos = if sib == PREV_SIB { data.min_key.predecessor() } else { data.max_key.successor() };
-    let path = trans.path_get(paths, Btree(pivot.c.btree_id.get().into()), pos, level as u32 + 1, level as u32,
+    let pos = if sib == PREV_SIB { min_key.predecessor() } else { max_key.successor() };
+    let path = trans.path_get(paths, btree, pos, level as u32 + 1, level as u32,
                               BtreeIterFlags::INTENT, crate::ret_ip!());
 
     match merge_sibling(t, paths, path, level) {
-        Ok(Some((b, live_u64s))) if b.is_none_or(|_| parent(paths, path, level) == parent_b) => {
-            if b.is_some() {
+        Ok(Some((read, live_u64s))) if !read || parent(paths, path, level) == parent_b => {
+            if read {
                 trans.path_set_should_be_locked(paths, path);
             }
-            srcs.push(Src { b, path, live_u64s });
+            srcs.push(Src { path, live_u64s });
             Ok(())
         }
         ret => {
             trans.path_put(paths, path, true);
             if let Ok(Some(_)) = ret {
+                let pivot = paths[pivot_path].locked_btree_node(level).expect("a merge's pivot, held by its path");
                 set_sib_u64s(pivot, sib, u16::MAX);
             }
             ret.map(|_| ())
@@ -983,11 +995,11 @@ fn merge_push_pos<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, srcs: &mu
     }
 }
 
-/// The node @path is at, traversed, with its live u64s - or with no node, an
-/// estimate of them from the evicted-size table; None if its parent has no key
-/// there.
-fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx,
-                     level: usize) -> Result<Option<(Option<Node<'n>>, u16)>, BchError> {
+/// The live u64s of the node @path is at, and whether it was read - traversed -
+/// for them, or they're an estimate from the evicted-size table; None if its
+/// parent has no key there.
+fn merge_sibling(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
+                 level: usize) -> Result<Option<(bool, u16)>, BchError> {
     let trans = t.trans();
     match trans.path_traverse(t, paths, path, BtreeIterFlags::NOFILL) {
         Err(e) if e.matches(Errcode::no_btree_node_nofill) => {
@@ -1019,21 +1031,21 @@ fn merge_sibling<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: Path
 
             let Some(hash) = hash else { return Ok(None) };
             if let Some(est) = (hash != 0).then(|| trans.fs().btree.evicted_size.lookup(hash)).flatten() {
-                return Ok(Some((None, est)));
+                return Ok(Some((false, est)));
             }
             trans.path_traverse(t, paths, path, BtreeIterFlags::empty())?;
         }
         ret => ret?,
     }
 
-    let b = paths.held_btree_node(path, level).expect("a sibling, traversed");
-    Ok(Some((Some(b), b.contents().nr.live_u64s)))
+    let b = paths[path].locked_btree_node(level).expect("a sibling, traversed");
+    Ok(Some((true, b.contents().nr.live_u64s)))
 }
 
 /// The srcs' u64s together: in the format they'd be packed into, if they've
 /// all been read, and it - their estimates' sum if not.
-fn merge_u64s_and_format(srcs: &[Src<'_>]) -> (usize, Option<c::bkey_format>) {
-    let Some(nodes) = srcs.iter().map(|s| s.b).collect::<Option<ArrayVec<Node<'_>, 3>>>() else {
+fn merge_u64s_and_format(paths: &Paths<'_>, level: usize, srcs: &[Src]) -> (usize, Option<c::bkey_format>) {
+    let Some(nodes) = srcs.iter().map(|s| s.node(paths, level)).collect::<Option<ArrayVec<Node<'_>, 3>>>() else {
         return (srcs.iter().map(|s| usize::from(s.live_u64s)).sum(), None);
     };
 
@@ -1052,21 +1064,23 @@ fn merge_u64s_and_format(srcs: &[Src<'_>]) -> (usize, Option<c::bkey_format>) {
     (total_u64s, Some(new_f))
 }
 
-fn merge_fail_reset_sib_u64s(fs: &Fs, paths: &Paths<'_>, b: Node<'_>, srcs: &[Src<'_>]) {
+fn merge_fail_reset_sib_u64s(fs: &Fs, paths: &Paths<'_>, level: usize, pivot: PathIdx, srcs: &[Src]) {
+    let b = paths[pivot].locked_btree_node(level).expect("a merge's pivot, held by its path");
     let contents = b.contents();
     let hysteresis = merge_hysteresis(fs);
 
     for s in srcs {
-        if s.b.is_some_and(|sb| ptr::eq(sb.node(), b.node())) {
+        let sb = s.node(paths, level);
+        if sb.is_some_and(|sb| ptr::eq(sb.node(), b.node())) {
             continue;
         }
 
         /*
-         * For deferred srcs (b == None), use the path's pos to determine
+         * For deferred srcs (unread), use the path's pos to determine
          * which side it's on — pos was set to bpos_predecessor/successor of
          * the pivot's keyspace at path_get time, so it never overlaps.
          */
-        let before = match s.b {
+        let before = match sb {
             Some(sb) => sb.key().k.p < b.key().k.p,
             None     => paths[s.path].pos < contents.data().min_key,
         };
@@ -1083,10 +1097,10 @@ fn merge_fail_reset_sib_u64s(fs: &Fs, paths: &Paths<'_>, b: Node<'_>, srcs: &[Sr
  * and their format if they've all been read. None if the merge cannot fit
  * in fewer dsts than srcs.
  */
-fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
-              srcs: &mut ArrayVec<Src<'_>, 3>) -> Option<(usize, usize, Option<c::bkey_format>)> {
+fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, level: usize, pivot: PathIdx,
+              srcs: &mut ArrayVec<Src, 3>) -> Option<(usize, usize, Option<c::bkey_format>)> {
     let fs = trans.fs();
-    let (mut total_u64s, mut new_f) = merge_u64s_and_format(srcs);
+    let (mut total_u64s, mut new_f) = merge_u64s_and_format(paths, level, srcs);
     /*
      * Choose dst count: one node if everything packs into max, two nodes
      * (pack via pack_into_dsts) if 3 srcs overflow but fit in 2x max.
@@ -1101,16 +1115,16 @@ fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
     if nr_dsts >= srcs.len() && srcs.len() == 3 {
         let remove = if srcs[0].live_u64s > srcs[2].live_u64s { 0 } else { 2 };
 
-        merge_fail_reset_sib_u64s(fs, paths, b, &srcs[remove..=remove]);
+        merge_fail_reset_sib_u64s(fs, paths, level, pivot, &srcs[remove..=remove]);
         let s = srcs.remove(remove);
         trans.path_put(paths, s.path, true);
 
-        (total_u64s, new_f) = merge_u64s_and_format(srcs);
+        (total_u64s, new_f) = merge_u64s_and_format(paths, level, srcs);
         nr_dsts = total_u64s.div_ceil(fs.btree_max_u64s() / 2).max(1);
     }
 
     if nr_dsts >= srcs.len() {
-        merge_fail_reset_sib_u64s(fs, paths, b, srcs);
+        merge_fail_reset_sib_u64s(fs, paths, level, pivot, srcs);
         return None;
     }
     Some((nr_dsts, total_u64s, new_f))
@@ -1121,10 +1135,11 @@ fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: Node<'_>,
  * None if the merge doesn't fit, or merge_layout found no candidate pivot
  * whose worst dst stays under split_thresh.
  */
-fn merge_layouts(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, b: Node<'_>,
-                 srcs: &mut ArrayVec<Src<'_>, 3>) -> Option<ArrayVec<DstLayout, 2>> {
-    let (nr_dsts, total_u64s, new_f) = merge_fits(t.trans(), paths, b, srcs)?;
-    let nodes = read_nodes(srcs);
+fn merge_layouts(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, level: usize, pivot: PathIdx,
+                 srcs: &mut ArrayVec<Src, 3>) -> Option<ArrayVec<DstLayout, 2>> {
+    let (nr_dsts, total_u64s, new_f) = merge_fits(t.trans(), paths, level, pivot, srcs)?;
+    let paths = &*paths;
+    let nodes = read_nodes(paths, level, srcs);
     let min_key = nodes[0].contents().data().min_key;
     let max_key = nodes[nodes.len() - 1].contents().data().max_key;
 
@@ -1141,8 +1156,9 @@ fn merge_layouts(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, b: Node<'_>,
          * single node. If it does fit, fall through to a 1-dst merge
          * rather than abandon the consolidation.
          */
+        let b = paths[pivot].locked_btree_node(level).expect("a merge's pivot, held by its path");
         if !b.fits_u64s(total_u64s) {
-            merge_fail_reset_sib_u64s(t.fs(), paths, b, srcs);
+            merge_fail_reset_sib_u64s(t.fs(), paths, level, pivot, srcs);
             return None;
         }
     }
@@ -1185,8 +1201,8 @@ pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathI
 
 /// merge(), the srcs' paths it takes in @srcs, for merge() to put: whether it
 /// merged.
-fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, level: usize, commit: CommitOpts,
-                srcs: &mut ArrayVec<Src<'n>, 3>) -> Result<bool, BchError> {
+fn merge_in(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, level: usize, commit: CommitOpts,
+            srcs: &mut ArrayVec<Src, 3>) -> Result<bool, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
@@ -1212,7 +1228,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
         commit
     };
 
-    let b: Node<'n> = paths.held_btree_node(path, level).expect("a merge's node, held by its path");
+    let b = paths[path].locked_btree_node(level).expect("a merge's node, held by its path");
     let btree = Btree(b.c.btree_id.get().into());
     let data = b.contents().data();
 
@@ -1224,6 +1240,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
        (level == 0 && key_is_shard_boundary(fs, btree, data.max_key.successor())) {
         set_sib_u64s(b, NEXT_SIB, u16::MAX);
     }
+    let live_u64s = b.contents().nr.live_u64s;
 
     /*
      * Push srcs in left-to-right order so srcs is naturally sorted: prev
@@ -1234,7 +1251,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
     merge_push_pos(t, paths, srcs, level, path, PREV_SIB)?;
 
     paths.get_ll(path, true);
-    srcs.push(Src { b: Some(b), path, live_u64s: b.contents().nr.live_u64s });
+    srcs.push(Src { path, live_u64s });
 
     merge_push_pos(t, paths, srcs, level, path, NEXT_SIB)?;
 
@@ -1246,7 +1263,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
         let max = fs.btree_max_u64s();
         let mut total_u64s = 0;
         for s in srcs.iter() {
-            match s.b {
+            match s.node(paths, level) {
                 Some(sb) => prt!(out, "{}", sb.pos_to_text(fs)),
                 None     => prt!(out, "(evicted node)"),
             }
@@ -1254,6 +1271,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
             total_u64s += usize::from(s.live_u64s);
         }
 
+        let b = paths[path].locked_btree_node(level).expect("a merge's node, held by its path");
         let contents = b.contents();
         prt!(out, "Pivot sib_u64s {} {} threshold {}\n",
              contents.sib_u64s[PREV_SIB].get(), contents.sib_u64s[NEXT_SIB].get(), fs.btree.foreground_merge_threshold);
@@ -1264,7 +1282,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
              total_u64s.div_ceil(per_node).max(1));
     });
 
-    if merge_fits(trans, paths, b, srcs).is_none() {
+    if merge_fits(trans, paths, level, path, srcs).is_none() {
         return Ok(false);
     }
 
@@ -1290,41 +1308,40 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
 
         trans.path_traverse(t, paths, src_path, BtreeIterFlags::empty())?;
 
-        let sb = paths.held_btree_node(src_path, level).expect("a merge src, traversed");
-
         if parent(paths, src_path, level) != parent(paths, path, level) {
-            poison_side(b, sb);
+            poison_side(paths, level, path, src_path);
 
             let s = srcs.remove(i);
             trans.path_put(paths, s.path, true);
             continue;
         }
 
-        srcs[i].b = Some(sb);
+        let sb = paths[src_path].locked_btree_node(level).expect("a merge src, traversed");
         srcs[i].live_u64s = sb.contents().nr.live_u64s;
         trans.path_set_should_be_locked(paths, src_path);
         i += 1;
     }
 
     /*
-     * Post deferred-fill, every surviving src must have ->b set so that
+     * Post deferred-fill, every surviving src must be read so that
      * merge_layouts() / merge_u64s_and_format() takes the precise
      * format-aware path. The estimate-only fallback (sum of live_u64s)
      * doesn't account for format growth on repack and would let an
      * infeasible merge through, blowing up later in pack_into_dsts or
      * sort_into.
      */
-    let nodes = read_nodes(srcs);
-    merge_topology_check(fs, &nodes)?;
+    merge_topology_check(fs, &read_nodes(paths, level, srcs))?;
 
     if srcs.len() == 1 {
         return Ok(false);
     }
 
-    let Some(layouts) = merge_layouts(t, paths, b, srcs) else { return Ok(false) };
+    let Some(layouts) = merge_layouts(t, paths, level, path, srcs) else { return Ok(false) };
 
-    let nodes = read_nodes(srcs);
-    let range = (nodes[0].contents().data().min_key, nodes[nodes.len() - 1].contents().data().max_key);
+    let range = {
+        let nodes = read_nodes(paths, level, srcs);
+        (nodes[0].contents().data().min_key, nodes[nodes.len() - 1].contents().data().max_key)
+    };
     let update = InteriorUpdate::start(t, paths, path, level, StartOpts {
         split:  layouts.len() == 2,
         commit: commit.flags(CommitFlags::NO_ENOSPC),
@@ -1341,9 +1358,9 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
      * comparison and poison just that side's cached estimate.
      */
     let parent_b = parent(paths, path, level);
-    for (s, &sb) in srcs.iter().zip(&nodes) {
+    for s in srcs.iter() {
         if s.path != path && parent(paths, s.path, level) != parent_b {
-            poison_side(b, sb);
+            poison_side(paths, level, path, s.path);
             return Ok(false);
         }
     }
@@ -1362,7 +1379,7 @@ fn merge_in<'n>(t: &TransAttempt<'_, '_>, paths: &mut Paths<'n>, path: PathIdx, 
 }
 
 fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathIdx, level: usize,
-                srcs: &[Src<'_>], layouts: &[DstLayout]) -> Result<(), BchError> {
+                srcs: &[Src], layouts: &[DstLayout]) -> Result<(), BchError> {
     let trans = update.trans();
     let fs = trans.fs();
 
@@ -1370,7 +1387,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
         trans.node_lock_write(paths, s.path, level)?;
     }
 
-    let nodes = read_nodes(srcs);
+    let nodes = read_nodes(paths, level, srcs);
 
     /*
      * Allocate destination nodes: 1 for plain N->1, 2 for the 3->2 case,
@@ -1400,6 +1417,9 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
         assert!(n.fits_u64s(u64s), "a merged node of {u64s} u64s past its buffer:\n{}", n.to_text(fs));
     }
 
+    let src_pos: ArrayVec<Bpos, 3> = nodes.iter().map(|s| s.key().k.p).collect();
+    drop(nodes);
+
     for n in &mut dsts {
         build_aux_trees(n.node(), n.contents_mut());
         update.take_path(paths, n);
@@ -1416,11 +1436,10 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
      * journal record) need each surviving delete; unlink() emits them
      * together.
      */
-    let pos = |b: Node<'_>| b.key().k.p;
     let (mut si, mut di) = (0, 0);
-    while si < nodes.len() || di < dsts.len() {
-        let src_p = nodes.get(si).map(|&s| pos(s));
-        let dst_p = dsts.get(di).map(|n| pos(n.held()));
+    while si < src_pos.len() || di < dsts.len() {
+        let src_p = src_pos.get(si).copied();
+        let dst_p = dsts.get(di).map(|n| n.held().key().k.p);
 
         match (src_p, dst_p) {
             (Some(s), Some(d)) if s == d => {
@@ -1443,7 +1462,9 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
     update.insert_into_parent(paths, path, level)?;
 
-    fs.event_inc_trace(events::btree_node_merge, |out| btree_node_op_log(out, fs, &nodes, &dsts));
+    fs.event_inc_trace(events::btree_node_merge, |out| {
+        btree_node_op_log(out, fs, &read_nodes(paths, level, srcs), &dsts)
+    });
 
     let old: ArrayVec<_, 3> = srcs.iter().map(|s| s.path).collect();
     update.replace(paths, level, &old, &mut dsts);
