@@ -12,32 +12,34 @@ use core::ptr::NonNull;
 
 pub type BlockDevice = c::block_device;
 
-/// What open_by_path() opens: the device's file.
-pub type BdevFile = c::file;
+/// What open_by_path() opens: the device's file, closed - bdev_fput() - as it
+/// drops.
+pub struct BdevFile(NonNull<c::file>);
+
+// a file, any thread's to use and close
+unsafe impl Send for BdevFile {}
+unsafe impl Sync for BdevFile {}
+
+impl BdevFile {
+    /// The device it has open, while it does.
+    pub fn bdev(&self) -> &BlockDevice {
+        unsafe { &*c::file_bdev(self.0.as_ptr()) }
+    }
+}
+
+impl Drop for BdevFile {
+    fn drop(&mut self) {
+        unsafe { c::bdev_fput(self.0.as_ptr()) }
+    }
+}
 
 /// @path opened, as @mode says: bdev_file_open_by_path(). @holder, if
 /// BLK_OPEN_EXCL, is the exclusive claim, and @ops the block layer's calls
 /// into it - the device going away, a sync.
 pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, holder: *const c_void,
-                    ops: *const c::blk_holder_ops) -> Result<NonNull<BdevFile>, BchError> {
+                    ops: *const c::blk_holder_ops) -> Result<BdevFile, BchError> {
     let f = unsafe { c::bdev_file_open_by_path(path.as_ptr().cast(), mode, holder.cast_mut(), ops) };
-    errptr_to_result(NonNull::new(f).expect("bdev_file_open_by_path(): an ERR_PTR, not NULL"))
-}
-
-/// The device @file has open.
-///
-/// # Safety
-/// @file is open_by_path()'s, and not yet closed.
-pub unsafe fn file_bdev(file: NonNull<BdevFile>) -> *mut BlockDevice {
-    unsafe { c::file_bdev(file.as_ptr()) }
-}
-
-/// bdev_fput(): @file closed.
-///
-/// # Safety
-/// @file is open_by_path()'s, and nothing uses it, or its device, after.
-pub unsafe fn close(file: NonNull<BdevFile>) {
-    unsafe { c::bdev_fput(file.as_ptr()) }
+    errptr_to_result(NonNull::new(f).expect("bdev_file_open_by_path(): an ERR_PTR, not NULL")).map(BdevFile)
 }
 
 /// The device @bio is for, if it's set: bio_set_dev()'s.

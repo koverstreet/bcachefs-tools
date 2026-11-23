@@ -12,7 +12,7 @@ use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
 use crate::util::Printbuf;
 use core::ffi::{c_void, CStr};
-use core::ptr::{self, NonNull};
+use core::ptr;
 use io_uring::{opcode, squeue, types, IoUring};
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use rustix::fs::{FileType, Mode, OFlags};
@@ -52,8 +52,22 @@ impl BlockDevice {
     }
 }
 
-/// What open_by_path() opens: the device itself, here.
-pub type BdevFile = BlockDevice;
+/// What open_by_path() opens: the device itself, here - closed as it drops,
+/// what it wrote synced first.
+pub struct BdevFile(Box<BlockDevice>);
+
+impl BdevFile {
+    /// The device it has open, while it does.
+    pub fn bdev(&self) -> &BlockDevice {
+        &self.0
+    }
+}
+
+impl Drop for BdevFile {
+    fn drop(&mut self) {
+        let _ = rustix::fs::fdatasync(&self.0.fd);
+    }
+}
 
 fn is_blk(st: &rustix::fs::Stat) -> bool {
     FileType::from_raw_mode(st.st_mode) == FileType::BlockDevice
@@ -85,7 +99,7 @@ pub fn open_flags(mode: c::blk_mode_t) -> OFlags {
 /// @path opened, as @mode says: bdev_file_open_by_path(). The exclusive claim,
 /// with BLK_OPEN_EXCL, is O_EXCL's; userspace has no @holder or @ops to call.
 pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, _holder: *const c_void,
-                    _ops: *const c::blk_holder_ops) -> Result<NonNull<BdevFile>, BchError> {
+                    _ops: *const c::blk_holder_ops) -> Result<BdevFile, BchError> {
     let fd = rustix::fs::open(path, open_flags(mode), Mode::from_raw_mode(0o600)).map_err(io_err)?;
     let st = rustix::fs::fstat(&fd).map_err(io_err)?;
 
@@ -93,29 +107,12 @@ pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, _holder: *const c_void,
     let name = path.to_bytes();
     let name = name.rsplit(|&b| b == b'/').next().unwrap_or(name);
 
-    Ok(NonNull::from(Box::leak(Box::new(BlockDevice {
+    Ok(BdevFile(Box::new(BlockDevice {
         name: CString::new(name).expect("a path's last component, a CStr's"),
         dev:  st.st_rdev as c::dev_t,
         fd,
         kobj: ::pin_init::zeroed(),
-    }))))
-}
-
-/// The device @file has open.
-///
-/// # Safety
-/// @file is open_by_path()'s, and not yet closed.
-pub unsafe fn file_bdev(file: NonNull<BdevFile>) -> *mut BlockDevice {
-    file.as_ptr()
-}
-
-/// bdev_fput(): @file closed, what it wrote synced first.
-///
-/// # Safety
-/// @file is open_by_path()'s, and nothing uses it, or its device, after.
-pub unsafe fn close(file: NonNull<BdevFile>) {
-    let bdev = unsafe { Box::from_raw(file.as_ptr()) };
-    let _ = rustix::fs::fdatasync(&bdev.fd);
+    })))
 }
 
 /// Its number, major and minor: a file's is 0.

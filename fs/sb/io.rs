@@ -1055,12 +1055,8 @@ impl bch_sb_buf {
 /// The device closed, and its holder put.
 impl Drop for c::bch_sb_io {
     fn drop(&mut self) {
-        use core::ptr::NonNull;
-
-        if let Some(file) = NonNull::new(self.s_bdev_file) {
-            // SAFETY: the file the device was opened with
-            unsafe { crate::os::blkdev::close(file) };
-        }
+        // the file first: its exclusive claim is the holder's
+        drop(self.s_bdev_file.take());
         // SAFETY: read_super_and_backups()'s Arc ref, or null
         if !self.holder.is_null() {
             drop(unsafe { Arc::from_raw(self.holder) });
@@ -1076,11 +1072,17 @@ impl c::bch_sb_io {
         self.sb_name.as_deref().map_or(c"", |n| CStr::from_bytes_with_nul(n).expect("a device's name, NUL-terminated"))
     }
 
+    /// Its device, while it has it open: from read_super() till it's freed.
+    pub(crate) fn bdev(&self) -> Option<&BlockDevice> {
+        self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev)
+    }
+
     /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
-    /// of two, at least @dev's logical block; past what its layout allows,
-    /// -ENOSPC. And with it, a bio of as many bvecs as that maps to: made
-    /// apart from the buffer, so one that failed is made again next time.
-    fn realloc(&mut self, bdev: Option<&BlockDevice>, u64s: u32) -> Result<(), BchError> {
+    /// of two, at least its device's logical block; past what its layout
+    /// allows, -ENOSPC. And with it, a bio of as many bvecs as that maps to:
+    /// made apart from the buffer, so one that failed is made again next time.
+    fn realloc(&mut self, u64s: u32) -> Result<(), BchError> {
+        let bdev = self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev);
         let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
         if let Some(bdev) = bdev {
             bytes = bytes.max(crate::os::blkdev::logical_block_size(bdev) as usize);
@@ -1088,7 +1090,7 @@ impl c::bch_sb_io {
         let size = bytes.next_power_of_two();
 
         if self.buf.buffer_size() < size {
-            self.grow(bdev, bytes, size)?;
+            grow(&mut self.buf, self.bits.have_layout() != 0, bdev, bytes, size)?;
         }
 
         if self.bits.have_bio() != 0 {
@@ -1106,33 +1108,34 @@ impl c::bch_sb_io {
         Ok(())
     }
 
-    /// The buffer grown to @size, for a superblock of @bytes: past what its
-    /// layout allows, -ENOSPC.
-    fn grow(&mut self, bdev: Option<&BlockDevice>, bytes: usize, size: usize) -> Result<(), BchError> {
-        if self.buf.is_allocated() && self.bits.have_layout() != 0 {
-            let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
-            if bytes as u64 > max {
-                crate::util::log::log_no_fs(crate::util::log::LogLevel::ERR, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
-                    crate::util::printbuf::prt_bdevname(out, bdev);
-                    write!(out, ": superblock too big: want {bytes} but have {max}");
-                }));
-                return Err(c::Errcode::ENOSPC_sb.into());
-            }
-        }
-
-        self.buf.grow(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
-    }
-
     /// The buffer and bio freed and the device closed: it zeroed.
     pub(crate) fn free(&mut self) {
         *self = Self::default();
     }
 }
 
+/// @buf grown to @size, for a superblock of @bytes: past what its layout
+/// allows, if it has one, -ENOSPC.
+fn grow(buf: &mut bch_sb_buf, have_layout: bool, bdev: Option<&BlockDevice>, bytes: usize, size: usize)
+    -> Result<(), BchError>
+{
+    if buf.is_allocated() && have_layout {
+        let max = 512u64 << buf.sb().layout.sb_max_size_bits;
+        if bytes as u64 > max {
+            crate::util::log::log_no_fs(crate::util::log::LogLevel::ERR, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
+                crate::util::printbuf::prt_bdevname(out, bdev);
+                write!(out, ": superblock too big: want {bytes} but have {max}");
+            }));
+            return Err(c::Errcode::ENOSPC_sb.into());
+        }
+    }
+
+    buf.grow(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
+}
+
 impl bch_sb_handle {
     pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        let (io, bdev) = self.parts_mut();
-        io.realloc(bdev, u64s)
+        self.io_mut().realloc(u64s)
     }
 
     /// The defaults an older version left unset, filled in - before the
@@ -1208,25 +1211,26 @@ impl core::ops::DerefMut for bch_sb_handle {
 // ── Reading a device's superblock ────────────────────────────────────────
 
 impl c::bch_sb_io {
-    /// The bio, set up for an IO by @opf - with the buffer it maps, borrowed
-    /// apart.
-    fn bio(&mut self, opf: u32) -> (&mut BioBox<'static, Bio>, &mut [u8]) {
+    /// The bio, set up for an IO by @opf - with the buffer it maps, and the
+    /// device it's to, borrowed apart.
+    fn bio(&mut self, opf: u32) -> (&mut BioBox<'static, Bio>, &mut [u8], &BlockDevice) {
         let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
         bio.reset(opf);
-        (bio, self.buf.buffer_mut())
+        let bdev = self.s_bdev_file.as_ref().expect("superblock IO with no device open").bdev();
+        (bio, self.buf.buffer_mut(), bdev)
     }
 
-    /// @bytes from @sector of @bdev into the buffer.
-    fn read(&mut self, bdev: &BlockDevice, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (bio, buf) = self.bio(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
+    /// @bytes from @sector of its device into the buffer.
+    fn read(&mut self, sector: u64, bytes: usize) -> Result<(), BchError> {
+        let (bio, buf, bdev) = self.bio(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
         // bound, so the Remapped drops before the bio it borrows
         let ret = bio.remap_read(&mut buf[..bytes]).expect(SB_BIO_FITS).submit_wait(bdev, sector);
         ret
     }
 
-    /// The buffer's first @bytes to @sector of @bdev, FUA.
-    fn write_fua(&mut self, bdev: &BlockDevice, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (bio, buf) = self.bio(c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA);
+    /// The buffer's first @bytes to @sector of its device, FUA.
+    fn write_fua(&mut self, sector: u64, bytes: usize) -> Result<(), BchError> {
+        let (bio, buf, bdev) = self.bio(c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA);
         // as read()'s
         let ret = bio.remap_write(&buf[..bytes]).expect(SB_BIO_FITS).submit_wait(bdev, sector);
         ret
@@ -1243,16 +1247,14 @@ impl bch_sb<Unvalidated> {
     }
 }
 
-const NO_BDEV: &str = "superblock IO on a handle with no device open";
-
 /// The superblock at @offset read into @sb's buffer - grown as it needs - and
 /// checked as far as that takes: that it's one, of a version we read, whole,
 /// and its checksum. Not validated.
 fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Result<(), BchError> {
     loop {
-        let (io, bdev) = sb.parts_mut();
+        let io = sb.io_mut();
         let len = io.buf.buffer_size();
-        io.read(bdev.expect(NO_BDEV), offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
+        io.read(offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
 
         let buf: &[u8] = io.buf.buffer_mut();
         let h = cast_plain::<Head<bch_sb>>(buf).expect("a superblock buffer, holding a header");
@@ -1294,8 +1296,8 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
 /// The layout, from its own sector - read through @sb's buffer, aligned for
 /// IO as one on the stack isn't - and validated.
 fn read_layout_sector(sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<c::bch_sb_layout, BchError> {
-    let (io, bdev) = sb.parts_mut();
-    io.read(bdev.expect(NO_BDEV), c::BCH_SB_LAYOUT_SECTOR.into(), size_of::<c::bch_sb_layout>())?;
+    let io = sb.io_mut();
+    io.read(c::BCH_SB_LAYOUT_SECTOR.into(), size_of::<c::bch_sb_layout>())?;
     let layout = read_past::<c::bch_sb_layout>(io.buf.buffer_mut(), 0);
     validate_layout(&layout, err)?;
     Ok(layout)
@@ -1359,17 +1361,16 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
 /// the next superblock write - which reads back slot 0 first, and would take
 /// a torn primary for another writer's.
 fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
-    let (io, bdev) = sb.parts_mut();
-    let bdev = bdev.expect(NO_BDEV);
+    let block = crate::os::blkdev::logical_block_size(sb.bdev()) as usize;
+    let io = sb.io_mut();
     let s = io.buf.sb_mut();
     s.offset = s.layout.sb_offset[0];
     let sector = s.offset.get();
     let csum = io.buf.sb().as_unvalidated().checksum();
     io.buf.sb_mut().csum = csum;
 
-    let bytes = io.buf.sb_bytes().len()
-        .next_multiple_of(crate::os::blkdev::logical_block_size(bdev) as usize);
-    io.write_fua(bdev, sector, bytes)
+    let bytes = io.buf.sb_bytes().len().next_multiple_of(block);
+    io.write_fua(sector, bytes)
 }
 
 /// The shim's buffered open, without direct_io: nothing, in the kernel.
@@ -1463,9 +1464,9 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         }
     })?;
 
-    io.s_bdev_file = file.as_ptr();
-    // SAFETY: the file just opened
-    sb.dev().bdev.set(unsafe { crate::os::blkdev::file_bdev(file) });
+    let bdev = core::ptr::from_ref(file.bdev()).cast_mut();
+    io.s_bdev_file = Some(file);
+    sb.dev().bdev.set(bdev);
 
     sb.sb_realloc(0)?;
 
@@ -1967,7 +1968,8 @@ impl SbResize for FsSbResize<'_> {
         // XXX: we're not checking that offline device have enough space
         for ca in self.fs.online_members() {
             let io = self.devs.get_mut(&ca);
-            io.realloc(Some(ca.bdev()), (io.buf.sb().u64s() as isize + d) as u32).ok()?;
+            let u64s = (io.buf.sb().u64s() as isize + d) as u32;
+            io.realloc(u64s).ok()?;
         }
         Some(())
     }
@@ -1979,8 +1981,6 @@ pub struct DevSbMut<'a> {
     fs_sb:   &'a bch_sb,
     io:      &'a mut c::bch_sb_io,
     ca:      &'a Dev,
-    /// ca's block device: published with its superblock, under sb_lock
-    bdev:    &'a BlockDevice,
     /// ca->sb_read_scratch, what the write's read back reads into
     scratch: &'a mut [u8],
 }
@@ -1994,10 +1994,7 @@ impl<'a> DevSbMut<'a> {
     {
         let io = devs.take(ca);
         let s = ca.sb_read_scratch.as_ref().expect("a device's sb_read_scratch, from its alloc");
-        io.buf.is_allocated().then(|| {
-            let bdev = unsafe { ca.disk_sb.bdev.get().as_ref() }.expect("an attached device with no block device");
-            DevSbMut { fs_sb, io, ca, bdev, scratch: unsafe { &mut *s.buf.get() } }
-        })
+        io.buf.is_allocated().then(|| DevSbMut { fs_sb, io, ca, scratch: unsafe { &mut *s.buf.get() } })
     }
 }
 
@@ -2066,14 +2063,13 @@ impl DevSbMut<'_> {
     }
 
     fn resize(&mut self) -> DevSbResize<'_> {
-        DevSbResize { io: self.io, bdev: self.bdev }
+        DevSbResize { io: self.io }
     }
 }
 
 /// A device's superblock, resized as its own: only DevSbMut's.
 struct DevSbResize<'a> {
-    io:   &'a mut c::bch_sb_io,
-    bdev: &'a BlockDevice,
+    io: &'a mut c::bch_sb_io,
 }
 
 impl core::ops::Deref for DevSbResize<'_> {
@@ -2092,7 +2088,7 @@ impl core::ops::DerefMut for DevSbResize<'_> {
 
 impl SbResize for DevSbResize<'_> {
     fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        self.io.realloc(Some(self.bdev), u64s)
+        self.io.realloc(u64s)
     }
 }
 
@@ -2169,8 +2165,7 @@ impl<'a> SbIos<'a> {
         let f = this.frozen.last_mut().expect("just pushed");
         let r = this.gather.get();
 
-        let bdev = f.sb.bdev;
-        let (bio, sb_buf) = f.sb.io.bio(opf);
+        let (bio, sb_buf, bdev) = f.sb.io.bio(opf);
         // frozen: nothing reaches its bio, buffer or scratch until wait() has
         // waited on the gather, nor closes its device
         unsafe {
@@ -2235,7 +2230,7 @@ impl DevSbMut<'_> {
         let csum = self.io.buf.sb().as_unvalidated().checksum();
         self.io.buf.sb_mut().csum = csum;
 
-        let block = crate::os::blkdev::logical_block_size(self.bdev) as usize;
+        let block = crate::os::blkdev::logical_block_size(self.io.bdev().expect("an attached device's superblock, with no device open")) as usize;
         (sector, self.io.buf.sb_bytes().len().next_multiple_of(block))
     }
 }
@@ -2432,7 +2427,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 
         if read != expected {
             let mut msg = LogMsg::new(fs);
-            crate::util::printbuf::prt_bdevname(&mut msg, Some(dev_sb.bdev));
+            crate::util::printbuf::prt_bdevname(&mut msg, dev_sb.io.bdev());
             if read < expected {
                 prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
                 if matches!(fs.opts().errors(), c::ErrorAction::continue_ |

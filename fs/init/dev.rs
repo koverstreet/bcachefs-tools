@@ -314,7 +314,7 @@ nest! {
         },
         /// The last seq written
         pub seq: u64,
-        pub s_bdev_file: *mut crate::os::blkdev::BdevFile,
+        pub s_bdev_file: Option<crate::os::blkdev::BdevFile>,
         /// The path it was opened by, NUL-terminated
         pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
         /// A ref, the handle's
@@ -330,7 +330,7 @@ impl Default for bch_sb_io {
             bio:         None,
             bits:        bch_sb_handle_bits::new(),
             seq:         0,
-            s_bdev_file: core::ptr::null_mut(),
+            s_bdev_file: None,
             sb_name:     None,
             holder:      core::ptr::null(),
             mode:        0,
@@ -373,16 +373,7 @@ impl bch_sb_handle {
     /// Its block device, which it has open: from read_super() till attaching
     /// it takes it.
     pub fn bdev(&self) -> &crate::os::blkdev::BlockDevice {
-        self.bdev_if_open().expect("a superblock handle with no device open")
-    }
-
-    fn bdev_if_open(&self) -> Option<&crate::os::blkdev::BlockDevice> {
-        unsafe { self.0.bdev.get().as_ref() }
-    }
-
-    pub fn parts_mut(&mut self) -> (&mut bch_sb_io, Option<&crate::os::blkdev::BlockDevice>) {
-        let (io, dev) = self.0.split_mut();
-        (io, unsafe { dev.bdev.get().as_ref() })
+        self.io().bdev().expect("a superblock handle with no device open")
     }
 }
 
