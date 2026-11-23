@@ -58,8 +58,8 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{ArmRef, FakeDst, InState, SizedArm, State, Unsized, Unvalidated, UnvalidatedSized,
-                            Validated, Whole};
+use crate::util::vstructs::{ArmRef, FakeDst, InState, SelfSized, SizedArm, State, Unsized, Unvalidated,
+                            UnvalidatedSized, VStruct, Validated, Whole};
 use core::marker::PhantomData;
 
 #[repr(C)]
@@ -127,6 +127,20 @@ unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
 impl FakeDst for c::bkey {
     fn bytes(&self) -> usize {
         c::bkey::bytes(self)
+    }
+}
+
+// XXX: what it reads its length from, k.u64s, can change through a &mut
+// Self - the XXX on BkeyI
+unsafe impl<F: 'static, S: State> SelfSized for BkeyI<FamilyVal<F, S>> {
+    unsafe fn from_thin(p: *const ()) -> *const Self {
+        <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<c::bkey>()).bytes() })
+    }
+}
+
+impl<F: 'static, S: State> VStruct for BkeyI<FamilyVal<F, S>> {
+    fn u64s(&self) -> usize {
+        self.k.u64s as usize
     }
 }
 
