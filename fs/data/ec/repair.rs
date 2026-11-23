@@ -354,7 +354,7 @@ fn stripe_repair_narrow(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
 /// counts.
 fn stripe_repair_reload(t: &TransAttempt<'_, '_>, key: &mut BkeyBuf, s: Bpos) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(t, Btree::stripes, s, BtreeIterFlags::empty());
-    key.reassemble(iter.peek_slot_typed::<c::Stripe>(t)?.untyped());
+    key.set_key(iter.peek_slot_typed::<c::Stripe>(t)?.untyped());
     Ok(())
 }
 

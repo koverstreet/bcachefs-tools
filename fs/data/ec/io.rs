@@ -369,7 +369,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
             let Some(s) = iter.peek_slot(t)?.expect("a slot always has a key").arm::<c::Stripe>() else {
                 return Ok(Some(false));
             };
-            key.reassemble(s.untyped());
+            key.set_key(s.untyped());
             stale = c::StripeBlockMask::default();
             let rcu = read_lock();
             for (i, p) in s.v().block_ptrs().iter().enumerate() {

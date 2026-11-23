@@ -251,7 +251,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
             return Err(topology_err(fs, b, out));
         }
 
-        prev.reassemble(k);
+        prev.set_key(k);
         iter.advance();
     }
 

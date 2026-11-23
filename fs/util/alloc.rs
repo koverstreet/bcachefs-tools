@@ -207,6 +207,14 @@ impl<U, A: Alloc> Box<[U], A> {
     }
 }
 
+impl<U: ::pin_init::Zeroable, A: Alloc> Box<[U], A> {
+    /// @len Us, zeroed - each a valid U.
+    pub fn try_zeroed_slice_in(len: usize, alloc: A) -> Result<Self, AllocError> {
+        // SAFETY: zeroed, a U is valid
+        Ok(unsafe { Self::try_new_zeroed_slice_in(len, alloc)?.assume_init() })
+    }
+}
+
 impl<U, A: Alloc> Box<[MaybeUninit<U>], A> {
     /// # Safety
     /// Every element is a valid U.

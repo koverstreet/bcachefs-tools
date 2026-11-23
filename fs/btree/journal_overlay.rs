@@ -838,7 +838,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
             let Some(b) = paths[idx].locked_btree_node(level as usize) else { break };
             let Some(k) = iter.peek(b) else { break };
 
-            tmp.reassemble(k);
+            tmp.set_key(k);
             let _ = self.trans.btree_node_prefetch(paths, None, tmp.as_ref(), iter.journal.btree_id, level as usize - 1);
         }
     }

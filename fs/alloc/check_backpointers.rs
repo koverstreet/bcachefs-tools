@@ -801,7 +801,7 @@ fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &TransGuard<'_>, pins: &Bt
             return Ok(ControlFlow::Break(()));
         }
 
-        tmp.reassemble(k);
+        tmp.set_key(k);
         iter.prefetch_child(t, tmp.as_ref())?;
         Ok(ControlFlow::Continue(()))
     })?;
@@ -821,7 +821,7 @@ fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &TransGuard<'_>, pins: &Bt
             return Ok(ControlFlow::Break(()));
         }
 
-        tmp.reassemble(k);
+        tmp.set_key(k);
         btree_node_get_and_pin(t, pins, tmp.as_ref(), Btree::backpointers, 0)?;
         pinned = tmp.as_ref().k.p;
         Ok(ControlFlow::Continue(()))

@@ -1647,7 +1647,7 @@ fn retry_fragment_of<'r, P: WalkPos>(t: &TransAttempt<'_, '_>, read: &'r Rbio, e
 {
     if !e.k.and_val_eq(BkeySC::from(&*prev_read)) {
         failed.io.reset_devs();
-        prev_read.reassemble(e.k);
+        prev_read.set_key(e.k);
     }
     let (range, step) = walk.fragment(&e);
     if let Some(p) = fragment_of(t, read, range, e, Some(&mut *failed), walk.flags, walk.split, u32::MAX)? {
@@ -1695,7 +1695,7 @@ fn retry_key(fs: &Fs, data_btree: Btree, data_pos: Bpos, pick: &c::extent_ptr_de
         let mut iter = BtreeIter::new(t, data_btree, data_pos, BtreeIterFlags::empty());
         if let Some(k) = iter.peek_slot(t)? {
             if k.arm::<Ptrs>().is_some_and(|kp| kp.matches_ptr(fs, &pick.ptr, data_offset)) {
-                sk.reassemble(k);
+                sk.set_key(k);
             }
         }
         Ok(())

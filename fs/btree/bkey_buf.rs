@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! An owned copy of a key, as C's struct bkey_buf: a small key is kept in the
-//! struct, a bigger one in a heap buffer with room for any key.
+//! struct, a bigger one on the heap.
 //!
 //! The C version points bkey_buf.k at whichever buffer is in use - into
-//! itself, while the key is small - so it can't be moved. Here the buffer in
-//! use is decided on each access, and a BkeyBuf moves like any other value.
+//! itself, while the key is small - so it can't be moved. Here it's a DstRoom
+//! over an InlineOrBoxed, which knows which it's in, and a BkeyBuf moves like
+//! any other value.
 //!
 //! As in C, copying a key in can't fail: the heap buffer is allocated
-//! __GFP_NOFAIL - kbox_zeroed_nofail(), and C's bkey_buf's by
+//! __GFP_NOFAIL - InlineOrBoxed's Storage::grow(), and C's bkey_buf's by
 //! kzalloc_nofail(), which kfree_unsized() takes back. Zeroed, so the whole
 //! buffer is initialized memory.
 
@@ -18,7 +19,9 @@ use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::c;
 use crate::format::Btree;
 use core::mem::size_of;
-use crate::util::alloc::{kbox_zeroed_nofail, kzalloc_nofail, KBox};
+use crate::data_structures::dst_room::DstRoom;
+use crate::data_structures::dst_room::InlineOrBoxed;
+use crate::util::alloc::kzalloc_nofail;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use cstruct_macros::MaybeZeroable;
 
@@ -35,56 +38,23 @@ const ONSTACK_U64S: usize = 12;
 /// C's kmalloc(2048).
 const HEAP_U64S: usize = 256;
 
-pub struct BkeyBuf {
-    onstack: [u64; ONSTACK_U64S],
-    heap:    Option<KBox<[u64; HEAP_U64S]>>,
-}
+pub type BkeyBuf = DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S>>;
 
-impl BkeyBuf {
-    /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
+impl DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S>> {
+    /// Holding a deleted key, as bch2_bkey_buf_init() leaves it. Out of line:
+    /// it zeroes the whole room, and no hot path makes one.
+    #[inline(never)]
     pub fn new() -> Self {
-        let mut b = BkeyBuf { onstack: [0; ONSTACK_U64S], heap: None };
-        crate::data_structures::dst_room::DstRoom::<BkeyI>::new_in(&mut b.onstack);
+        let mut b = Self::zeroed();
+        b.init();
         b
-    }
-
-    fn buf(&self) -> &[u64] {
-        match &self.heap {
-            Some(h) => &h[..],
-            None    => &self.onstack,
-        }
-    }
-
-    fn buf_mut(&mut self) -> &mut [u64] {
-        match &mut self.heap {
-            Some(h) => &mut h[..],
-            None    => &mut self.onstack,
-        }
-    }
-
-    /// Make room for a key of @u64s, as bch2_bkey_buf_realloc(): once on the
-    /// heap, a key stays there.
-    fn realloc(&mut self, u64s: usize) {
-        if self.heap.is_some() || u64s <= ONSTACK_U64S {
-            return;
-        }
-
-        let mut h = kbox_zeroed_nofail::<[u64; HEAP_U64S]>();
-        h[..ONSTACK_U64S].copy_from_slice(&self.onstack);
-        self.heap = Some(h);
     }
 
     /// A copy of @k.
     pub fn from_key(k: BkeySC<'_>) -> Self {
         let mut b = Self::new();
-        b.reassemble(k);
+        b.set_key(k);
         b
-    }
-
-    /// Copy @k in, as bch2_bkey_buf_reassemble().
-    pub fn reassemble(&mut self, k: BkeySC<'_>) {
-        self.realloc(k.k.u64s as usize);
-        copy_key(self.buf_mut(), k.k, k.val_bytes())
     }
 }
 
@@ -98,21 +68,6 @@ pub(crate) fn copy_key(dst: &mut [u64], k: &c::bkey, val: &[u8]) {
 impl<'a> From<&'a BkeyBuf> for BkeySC<'a> {
     fn from(b: &'a BkeyBuf) -> Self {
         BkeySC::from(b.as_ref())
-    }
-}
-
-/// The key, all of it, as long as its u64s say.
-impl core::ops::Deref for BkeyBuf {
-    type Target = BkeyI;
-
-    fn deref(&self) -> &BkeyI {
-        crate::data::keylist::keys(self.buf()).next().expect("a key in a key buffer")
-    }
-}
-
-impl core::ops::DerefMut for BkeyBuf {
-    fn deref_mut(&mut self) -> &mut BkeyI {
-        crate::data::keylist::key_mut(self.buf_mut())
     }
 }
 

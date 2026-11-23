@@ -159,7 +159,7 @@ impl<V: ?Sized + Unsized> DstRoom<BkeyI<V>> {
 
     /// A deleted key, in a room of @u64s from @alloc.
     pub fn new_boxed_in<A: Alloc>(u64s: usize, alloc: A) -> Result<Box<Self, A>, AllocError> {
-        let b = unsafe { Box::<[u64], A>::try_new_zeroed_slice_in(u64s, alloc)?.assume_init() };
+        let b = Box::<[u64], A>::try_zeroed_slice_in(u64s, alloc)?;
         let mut b = unsafe { Box::cast_unsized(b, Self::from_elems_raw) };
         b.init();
         Ok(b)
@@ -185,7 +185,7 @@ impl<V: ?Sized + Unsized, B: ?Sized + Storage<Elem = u64>> DstRoom<BkeyI<V>, B> 
     /// past the room, or what a key's u8 of u64s holds.
     pub fn set_val_u64s(&mut self, val_u64s: usize) -> Result<(), NoRoom> {
         let need_u64s = BKEY_U64S + val_u64s;
-        let have_u64s = self.elems().len().min(u8::MAX.into());
+        let have_u64s = self.grow(need_u64s).len().min(u8::MAX.into());
         if need_u64s > have_u64s {
             return Err(NoRoom { need_u64s, have_u64s });
         }
@@ -220,7 +220,7 @@ impl<V: ?Sized + Unsized, B: ?Sized + Storage<Elem = u64>> DstRoom<BkeyI<V>, B> 
     /// a call.
     pub fn set_key(&mut self, k: impl BkeyV) {
         let k = k.as_sc();
-        key_set(self.elems_mut(), k.k, k.val_bytes())
+        key_set(self.grow(k.k.u64s.into()), k.k, k.val_bytes())
     }
 }
 
