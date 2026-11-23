@@ -409,8 +409,11 @@ impl BtreeUpdate {
 
     /// One of the refs pending put: the last queues the completion.
     fn pending_put(&self) {
+        // before the put: once it's the last, a completion already running
+        // may take the update and free it
+        let fs = self.fs();
         if self.pending.fetch_sub(1, AcqRel) == 1 {
-            self.fs().btree.interior_updates.kick();
+            fs.btree.interior_updates.kick();
         }
     }
 
