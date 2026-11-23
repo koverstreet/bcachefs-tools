@@ -314,20 +314,20 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn path_prefetch(&self, paths: &mut Paths<'_>, idx: PathIdx) -> Result<(), BchError> {
         let level = paths[idx].level() as usize;
-        // the path holds it locked throughout, through node_prefetch()'s &mut paths
-        let b = unsafe { LockedNode::new(paths[idx].level_btree_node(level)) };
-        let keys = b.keys(b.contents());
         let mut node_iter = paths[idx].l[level].iter;
         let mut tmp = BkeyBuf::new();
 
         for _ in 0..self.prefetch_nr(level) {
-            assert!(paths[idx].locked(level));
+            {
+                let b = paths[idx].locked_btree_node(level).expect("a path prefetching from its node holds it");
+                let keys = b.keys(b.contents());
 
-            node_iter.advance(&keys);
-            let Some(k) = node_iter.peek(&keys) else { break };
+                node_iter.advance(&keys);
+                let Some(k) = node_iter.peek(&keys) else { break };
 
-            let mut u = c::bkey::new();
-            tmp.reassemble(keys.disassemble(k, &mut u));
+                let mut u = c::bkey::new();
+                tmp.reassemble(keys.disassemble(k, &mut u));
+            }
             self.node_prefetch(paths, idx, &tmp, level)?;
         }
 

@@ -1228,13 +1228,6 @@ impl BtreePath {
         Some((unsafe { LockedNode::new(&*b) }, &mut self.l[level].iter))
     }
 
-    /// # Safety
-    /// The level's node is locked - by this path, or for it - for 'n.
-    pub(crate) unsafe fn level_btree_node<'n>(&self, level: usize) -> &'n BtreeNode {
-        ebug_assert!(!self.cached());
-        unsafe { &*self.l[level].b.as_ptr().cast::<BtreeNode>() }
-    }
-
     /// A cached path's key cache entry, which it holds locked: None if it's
     /// not been traversed to one.
     pub(crate) fn key_cached(&self) -> Option<&c::bkey_cached> {
