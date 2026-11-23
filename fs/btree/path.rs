@@ -1715,6 +1715,9 @@ pub enum NodeHold<'p, T: PathNode> {
 // XXX: nor does anything stop two Intents of one node, and so two Writes: the
 // path table's getters hand them out for the attempt, as the writes under them
 // need the table
+// XXX: node() is the view's lifetime, though a btree node lives as long as its
+// Fs: with the Fs's lifetime there, a view wouldn't be held for the attempt
+// only for the node's identity and flags (the key cache's flush and drop)
 pub struct LockedNode<'p, T: PathNode, M = Held> {
     node:  &'p T,
     _mode: PhantomData<M>,
