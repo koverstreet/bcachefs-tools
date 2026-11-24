@@ -16,6 +16,7 @@
 use super::{Header, TaskRef};
 use crate::os::workqueue::{CancelledWork, Queue};
 use crate::util::futex::EventCount;
+use crate::util::rcu;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -65,6 +66,7 @@ impl RunQueue {
     /// As push()'s.
     pub(super) unsafe fn push_worked(&self, h: NonNull<Header>) {
         let q = *self.queue.as_ref().expect("an await resumed on a RunQueue with no work of its own");
+        let _rcu = rcu::read_lock();
         unsafe { self.push(h) };
         self.work.queue(q);
     }
@@ -81,6 +83,9 @@ impl RunQueue {
     /// # Safety
     /// @h is a live task's, owned and dispatched here.
     pub(super) unsafe fn push(&self, h: NonNull<Header>) {
+        // the task, once pushed, may run, finish and free us: drop() waits
+        // out what follows the push
+        let _rcu = rcu::read_lock();
         let hr = unsafe { h.as_ref() };
         let mut head = self.head.load(Ordering::Relaxed);
         loop {
@@ -120,5 +125,8 @@ impl RunQueue {
 impl PinnedDrop for RunQueue {
     fn drop(self: Pin<&mut Self>) {
         assert!(!self.has_ready(), "RunQueue dropped with tasks dispatched to it");
+        // dispatches out before the work's drop cancels it, so none queues
+        // it after
+        rcu::synchronize();
     }
 }
