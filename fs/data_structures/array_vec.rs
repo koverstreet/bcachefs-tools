@@ -36,6 +36,10 @@ pub trait LenUint: Copy + sealed::Sealed {
 
     fn from_usize(n: usize) -> Self;
     fn to_usize(self) -> usize;
+
+    /// One from the native-endian bytes at the start of @b, at any alignment:
+    /// None if there aren't enough.
+    fn read(b: &[u8]) -> Option<Self>;
 }
 
 macro_rules! len_uint {
@@ -60,6 +64,10 @@ macro_rules! len_uint {
             fn from_usize(n: usize) -> Self { n as $t }
             #[inline(always)]
             fn to_usize(self) -> usize { self as usize }
+
+            fn read(b: &[u8]) -> Option<Self> {
+                Some(<$t>::from_ne_bytes(b.get(..size_of::<$t>())?.try_into().ok()?))
+            }
         }
     )* };
 }

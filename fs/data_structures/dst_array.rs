@@ -21,7 +21,7 @@ use core::alloc::Layout;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::HasRcuHead;
 use crate::util::thin::ThinBox;
-use crate::util::vstructs::{align_max, DstHead, FlexArray, SelfSized};
+use crate::util::vstructs::{align_max, DstHead, FlexArray, SelfSized, VStructError};
 use core::ptr::{self, NonNull};
 
 /// The count is its own, after the header: written only as it's made, so
@@ -56,6 +56,21 @@ unsafe impl<H, T, L: LenUint> SelfSized for DstArray<H, T, L> {
         let nr = unsafe { *p.byte_add(Self::NR).cast::<L>() }.to_usize();
         // a slice pointer's length is the DST's tail's
         ptr::slice_from_raw_parts(p.cast::<T>(), nr) as *const Self
+    }
+
+    fn len_in(b: &[u8]) -> Result<usize, VStructError> {
+        let ty = core::any::type_name::<Self>();
+        if b.as_ptr() as usize % Self::ALIGN != 0 {
+            return Err(VStructError::Misaligned { ty, align: Self::ALIGN });
+        }
+        let nr = b.get(Self::NR..).and_then(L::read)
+            .ok_or(VStructError::Overrun { ty, want: Self::MIN_BYTES, have: b.len() })?;
+        let len = nr.to_usize().checked_mul(size_of::<T>()).and_then(|n| n.checked_add(Self::TAIL))
+            .and_then(|n| n.checked_next_multiple_of(Self::ALIGN)).unwrap_or(usize::MAX);
+        if len > b.len() {
+            return Err(VStructError::Overrun { ty, want: len, have: b.len() });
+        }
+        Ok(len)
     }
 }
 

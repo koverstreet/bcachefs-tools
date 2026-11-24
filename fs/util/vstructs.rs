@@ -171,7 +171,8 @@ native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, 
 /// # Safety
 /// from_thin() of the address of a valid Self is a pointer to all of it. What
 /// it reads to say how long it is can't change through a &Self, nor a &mut
-/// Self.
+/// Self. len_in() of bytes it says hold a Self says no fewer than from_thin()'s
+/// pointer to it spans: a room derefs what len_in() passed.
 pub unsafe trait SelfSized {
     /// Its alignment, which align_of() can't say of a DST.
     const ALIGN: usize;
@@ -185,6 +186,12 @@ pub unsafe trait SelfSized {
     /// # Safety
     /// @p points to a valid Self.
     unsafe fn from_thin(p: *const ()) -> *const Self;
+
+    /// How many of @b's bytes the value at their start spans: an error if
+    /// they don't hold its head, aligned, or as many as it says, or it says a
+    /// length no value is. What holds one in bytes - a room - asks this before
+    /// from_thin().
+    fn len_in(b: &[u8]) -> Result<usize, VStructError>;
 
     /// The bytes this value spans: vstruct_bytes().
     fn bytes(&self) -> usize {
@@ -439,10 +446,11 @@ impl core::fmt::Display for VStructError {
 #[cfg(feature = "std")]
 impl std::error::Error for VStructError {}
 
-/// The T at the start of @bytes, as many as @len says its head claims - a
-/// T's ArmAt::arm_at(), @len its own: an error if they don't hold its head,
-/// aligned, or that many, or it claims fewer than the least T.
-pub fn parse_at<T>(bytes: &[u8], len: impl FnOnce(&T::Head) -> usize) -> Result<&T, VStructError>
+/// How many of @bytes the T at their start spans, as many as @len says its
+/// head claims - a T's SelfSized::len_in(), @len its own: an error if they
+/// don't hold its head, aligned, or that many, or it claims fewer than the
+/// least T, or a length no T is.
+pub fn len_at<T>(bytes: &[u8], len: impl FnOnce(&T::Head) -> usize) -> Result<usize, VStructError>
 where
     T: Unsized + DstHead<Head: Plain> + ?Sized,
 {
@@ -459,7 +467,20 @@ where
     if len > bytes.len() {
         return Err(VStructError::Overrun { ty, want: len, have: bytes.len() });
     }
-    cast(&bytes[..len]).ok_or(VStructError::Ragged { ty, len })
+    if !fits::<T>(&bytes[..len]) {
+        return Err(VStructError::Ragged { ty, len });
+    }
+    Ok(len)
+}
+
+/// The T at the start of @bytes, as long as len_at() says: a T's
+/// ArmAt::arm_at().
+pub fn parse_at<T>(bytes: &[u8], len: impl FnOnce(&T::Head) -> usize) -> Result<&T, VStructError>
+where
+    T: Unsized + DstHead<Head: Plain> + ?Sized,
+{
+    let len = len_at::<T>(bytes, len)?;
+    Ok(cast(&bytes[..len]).expect("as len_at() checked"))
 }
 
 /// The plain T at the start of @b, by value, at any alignment: an error if
@@ -923,6 +944,10 @@ macro_rules! vstruct_family {
             unsafe fn from_thin(p: *const ()) -> *const Self {
                 let $h: &$head = unsafe { &*p.cast() };
                 <Self as Unsized>::from_raw(p.cast(), $len)
+            }
+
+            fn len_in(b: &[u8]) -> Result<usize, VStructError> {
+                len_at::<Self>(b, |$h: &$head| $len)
             }
         }
 

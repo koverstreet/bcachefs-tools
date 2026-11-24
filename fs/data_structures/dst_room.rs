@@ -199,44 +199,24 @@ impl<T: ?Sized, B: ?Sized + Storage> DstRoom<T, B> {
     }
 }
 
-// Out of line: every deref checks, and a panic's message is a call's worth
-// of arguments
-#[cold]
-#[inline(never)]
-fn room_short(cap: usize, min: usize, what: &str) -> ! {
-    panic!("a room of {cap} bytes, short of the {min} a {what} is at least")
-}
-
 impl<T: ?Sized + SelfSized, B: ?Sized + Storage> DstRoom<T, B> {
     const ALIGNED: () = assert!(T::ALIGN <= align_of::<B::Elem>(),
                                 "a DstRoom's storage, less aligned than what it holds");
-
-    /// A room made from a slice can be shorter than the least T: @e, the
-    /// storage the T's made from, checked.
-    fn check(e: &[B::Elem]) {
-        let () = Self::ALIGNED;
-        let cap = size_of_val(e);
-        if T::MIN_BYTES > cap {
-            room_short(cap, T::MIN_BYTES, core::any::type_name::<T>());
-        }
-    }
 }
 
 impl<T: ?Sized + SelfSized, B: ?Sized + Storage> Deref for DstRoom<T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        let e = self.buf.elems();
-        Self::check(e);
-        unsafe { &*T::from_thin(e.as_ptr().cast()) }
+        let () = Self::ALIGNED;
+        unsafe { &*T::from_thin(self.buf.elems().as_ptr().cast()) }
     }
 }
 
 impl<T: ?Sized + SelfSized, B: ?Sized + Storage> DerefMut for DstRoom<T, B> {
     fn deref_mut(&mut self) -> &mut T {
-        let e = self.buf.elems_mut();
-        Self::check(e);
-        unsafe { &mut *T::from_thin(e.as_mut_ptr().cast()).cast_mut() }
+        let () = Self::ALIGNED;
+        unsafe { &mut *T::from_thin(self.buf.elems_mut().as_mut_ptr().cast()).cast_mut() }
     }
 }
 

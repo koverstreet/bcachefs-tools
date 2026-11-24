@@ -257,6 +257,21 @@ pub(crate) fn derive_self_sized(input: TokenStream) -> Result<TokenStream, Strin
                 let last = unsafe { <#last_ty as #vs::SelfSized>::from_thin(p.byte_add(Self::#at)) };
                 ::core::ptr::slice_from_raw_parts(p, (last as *const [()]).len()) as *const Self
             }
+
+            fn len_in(b: &[u8]) -> Result<usize, #vs::VStructError> {
+                let ty = ::core::any::type_name::<Self>();
+                let align = <Self as #vs::SelfSized>::ALIGN;
+                if b.as_ptr() as usize % align != 0 {
+                    return Err(#vs::VStructError::Misaligned { ty, align });
+                }
+                let last = b.get(Self::#at..)
+                    .ok_or(#vs::VStructError::Overrun { ty, want: Self::#at, have: b.len() })?;
+                let len = (Self::#at + <#last_ty as #vs::SelfSized>::len_in(last)?).next_multiple_of(align);
+                if len > b.len() {
+                    return Err(#vs::VStructError::Overrun { ty, want: len, have: b.len() });
+                }
+                Ok(len)
+            }
         }
     })
 }
