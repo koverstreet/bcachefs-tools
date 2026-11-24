@@ -1743,11 +1743,11 @@ impl NodeMode for Write {
     }
 }
 
-/// A node a path has locked, borrowed from the attempt as a key is: good until
-/// the attempt's next unlock or error, which nothing checks (see TransRef).
+/// A node a path has locked, borrowed from the path table - or from the hold on
+/// its lock, before it's a path's - which keeps it locked while it's had.
 // XXX: node() is the view's lifetime, though a btree node lives as long as its
-// Fs: with the Fs's lifetime there, a view wouldn't be held for the attempt
-// only for the node's identity and flags (the key cache's flush and drop)
+// Fs: with the Fs's lifetime there, a view wouldn't be needed for the node's
+// identity and flags alone (the key cache's flush and drop, node_evict())
 pub struct LockedNode<'p, T: PathNode, M = Held> {
     node:  &'p T,
     _mode: PhantomData<M>,
@@ -1755,12 +1755,6 @@ pub struct LockedNode<'p, T: PathNode, M = Held> {
 copy!([T: PathNode] LockedNode<'_, T>);
 
 impl<'p, T: PathNode> LockedNode<'p, T> {
-    /// # Safety
-    /// @node is locked, any way, for 'p.
-    pub unsafe fn new(node: &'p T) -> Self {
-        LockedNode { node, _mode: PhantomData }
-    }
-
     /// @node, by @hold on its lock.
     pub fn of_hold(node: &'p T, hold: &'p SixHold<'_>) -> Self {
         assert!(ptr::eq(hold.lock().six(), node.common().lock.six()), "a LockedNode by a hold on another node's lock");
@@ -1992,7 +1986,7 @@ impl<T: PathNode> BtreePath<T> {
     /// The level's node, if the path holds its lock: what makes it the path's,
     /// and keeps it while the path's borrowed.
     pub fn locked_node(&self, level: usize) -> Option<LockedNode<'_, T>> {
-        self.locked(level).then(|| unsafe { LockedNode::new(self.held_node(level).as_ref()) })
+        self.locked(level).then(|| LockedNode { node: unsafe { self.held_node(level).as_ref() }, _mode: PhantomData })
     }
 
     /// The level's node, as far as it's known without its lock: its memory

@@ -271,9 +271,9 @@ impl BtreeTrans<'_> {
 
             match self.node_lock(paths, idx, &b.c, level, lock_type) {
                 Ok(hold) if packed == root_packed(fs, btree) && !race_fault() => {
-                    let b = unsafe { LockedNode::new(b) };
-                    if b.contents().data().min_key != POS_MIN || b.key().k.p != SPOS_MAX {
-                        let err = self.node_root_err(&b);
+                    let locked = LockedNode::of_hold(b, &hold);
+                    if locked.contents().data().min_key != POS_MIN || locked.key().k.p != SPOS_MAX {
+                        let err = self.node_root_err(&locked);
                         drop(hold);
                         return Err(err);
                     }
@@ -285,10 +285,11 @@ impl BtreeTrans<'_> {
                     for l in level + 1..c::BTREE_MAX_DEPTH as usize {
                         path.l[l].b = NodePtr::null();
                     }
+
+                    self.path_level_init(paths, idx, level, locked);
+                    let path = &mut paths[idx];
                     path.put_level(level, &b.c, hold);
                     path.lock_taken(level);
-
-                    self.path_level_init(paths, idx, level, b);
                     return Ok(());
                 }
                 Ok(hold) => drop(hold),
@@ -534,13 +535,12 @@ impl BtreeTrans<'_> {
         // the transaction's, not the path table's
         let k: *const BkeyI = paths.down_key();
         let (b, hold) = self.btree_node_get(paths, idx, unsafe { &*k }, level, lock_type, flags)?;
-        let b = unsafe { LockedNode::new(b) };
+        self.path_level_init(paths, idx, level, LockedNode::of_hold(b, &hold));
 
         let path = &mut paths[idx];
         path.put_level(level, &b.c, hold);
         path.lock_taken(level);
         path.bits.set_level(level as u8);
-        self.path_level_init(paths, idx, level, b);
 
         self.verify_path_locks(paths, idx);
         Ok(())
