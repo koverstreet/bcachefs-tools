@@ -15,7 +15,7 @@ use std::os::fd::AsFd;
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, ArmAt, CountedHead, FakeFlexArray, Plain, Unsized, Unvalidated, VStructError};
+use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, ArmAt, CountedHead, Plain, Unsized, Unvalidated, VStructError};
 
 /// Ioctl @I as rustix calls one: its opcode, its argument's address, and
 /// whether the kernel writes through it - rustix's own patterns take the
@@ -154,13 +154,6 @@ impl<H> IoctlBuf<H> {
     }
 }
 
-impl<H: FakeFlexArray + Plain> IoctlBuf<H> {
-    /// Room for the header and @nr elements of its array.
-    pub fn new(nr: usize) -> Self {
-        Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())
-    }
-}
-
 /// A header-plus-array ioctl with the capacity/total retry protocol: nr in
 /// is capacity, ERANGE reports the required total. Its array is the kernel's
 /// elements, from TAIL, stride() apart - not a DST of ours: the kernel's
@@ -233,8 +226,15 @@ impl<H: FlexArrayIoctl> IoctlBuf<H> {
 
 impl<H: CountedHead> IoctlBuf<H>
 where
-    H::Of<Unvalidated>: Unsized<Head = H> + ArmAt,
+    H::Of<Unvalidated>: ArmAt,
 {
+    /// Room for the header and @nr elements of its array.
+    pub fn new(nr: usize) -> Self {
+        let tail = <H::Of<Unvalidated> as Unsized>::TAIL;
+        let elem = std::mem::size_of::<<H::Of<Unvalidated> as Unsized>::Elem>();
+        Self::alloc(tail + nr * elem)
+    }
+
     /// The value, a #[counted] family's - its header, and its array as long
     /// as the header's count says: an error if the buffer doesn't hold that
     /// many, the kernel and us disagreeing. Unvalidated: the kernel's bytes.
