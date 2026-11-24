@@ -1433,19 +1433,22 @@ pub(crate) fn __write(mut op: Running<Op>) {
                 bio.bi_opf |= c::REQ_SYNC | c::REQ_IDLE;
             }
 
-            /*
-             * Internal moves can be issued FUA, making the journal's cache
-             * flush a no-op for them. Off by default: the per-write FUA
-             * regresses background-move throughput, and the journal flushes
-             * every device on commit regardless, so durability is unchanged.
-             */
-            if op.has(w::update) && fs.opts().move_writes_fua.get() != 0 {
-                bio.bi_opf |= c::REQ_FUA;
-            }
-
             op.closure().get().leak();
 
             let key_to_write = op.insert_keys.iter_from(key_to_write_offset).next().expect("a write with no key");
+
+            /*
+             * Rotational move writes are the usual source of dirty cache
+             * behind journal preflush stalls: complete them durably here so
+             * later journal commits do not have to drain them from every rw
+             * member. Non-rotational move writes stay on the old default
+             * (the per-write FUA regresses background-move throughput, and
+             * the journal flushes every device on commit regardless) unless
+             * move_writes_fua was explicitly enabled.
+             */
+            if move_write_should_fua(&op, fs, key_to_write) {
+                bio.bi_opf |= c::REQ_FUA;
+            }
 
             unsafe { submit_wbio_replicas(to_wbio::<c::DevWriteRefKind>(bio), fs, DataType::user, key_to_write, None) };
 
@@ -1472,6 +1475,22 @@ pub(crate) fn __write(mut op: Running<Op>) {
             return write_done(op);
         }
     }
+}
+
+/// Whether a move write of @k is issued FUA: always with move_writes_fua, and
+/// otherwise when any of its devices is rotational.
+fn move_write_should_fua(op: &Op, fs: &Fs, k: &BkeyI) -> bool {
+    if !op.has(w::update) {
+        return false;
+    }
+
+    if fs.opts().move_writes_fua.get() != 0 {
+        return true;
+    }
+
+    BkeySC::from(k).arm::<Ptrs>().is_some_and(|ptrs| {
+        ptrs.ptrs(fs).any(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID && fs.dev_rotational(p.dev().into()))
+    })
 }
 
 fn write_data_inline(mut op: Running<Op>, data_len: u32) {
