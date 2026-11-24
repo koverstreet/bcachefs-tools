@@ -117,7 +117,7 @@ impl DevDrop<'_> {
         -> Result<(), BchError>
     {
         /* a copy: drop_ptrs() looks up the io options */
-        let k = iter.node_key(t, &b, |k| BkeyBuf::from_key(k.untyped()));
+        let k = BkeyBuf::from_key(iter.node(t).expect("a node pointer's node, held by its iterator").key().untyped());
         let k = BkeySC::from(&*k).arm::<Ptrs>().expect("a btree node's key, a pointer");
         let Some(n) = self.drop_ptrs(t, k)? else { return Ok(()) };
         t.btree_node_update_key(iter, b, n, CommitFlags::empty(), false)

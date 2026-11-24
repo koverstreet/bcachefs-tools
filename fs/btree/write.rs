@@ -3,7 +3,8 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags};
 use crate::btree::cache::Bounce;
-use crate::btree::iter::{lockrestart_do, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt, Watermark};
+use crate::btree::iter::{lockrestart_do, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
+                         Watermark};
 use crate::btree::node::sort::{
     btree_node_compact, btree_node_set_needs_whiteout, btree_node_sort, build_aux_trees, drop_whiteouts,
     sort_whiteouts, CompactMode, WriteSortRuns,
@@ -140,11 +141,11 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_
         Err(e) if e == BchError::from(c::Errcode::btree_node_dying) => return Ok(()),
         r => r?,
     };
-    let node = iter.iter().node_at_iter_level(t).expect("the node the iterator was got for, at its level");
-
-    let mut n = iter.iter().node_key(t, &node, |k| {
-        t.bkey_reassemble_room(k.untyped(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())
-    })?;
+    let (node, mut n) = {
+        let l = iter.iter().node(t).expect("the node the iterator was got for, at its level");
+        (BtreeNodeRef::from(l.node()),
+         t.bkey_reassemble_room(l.key().untyped(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?)
+    };
 
     const V2: &str = "a written node's key a btree_ptr_v2: v1 nodes are need_rewrite from their read, never dirtied";
     let w = BkeySC::from(&**key).arm::<c::BtreePtrV2>().expect(V2);

@@ -18,7 +18,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeNodeRef, TransAttempt};
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -250,7 +250,7 @@ impl c::progress_indicator {
         passes::cancelled(fs)?;
         maybe_delay();
 
-        let Some((b, end)) = iter.node_end_at_iter_level(t) else {
+        let Some((b, end)) = iter.node(t).map(|l| (BtreeNodeRef::from(l.node()), l.key().k.p)) else {
             return Ok(());
         };
         let pos = c::bbpos { btree: iter.btree(), pos: end };

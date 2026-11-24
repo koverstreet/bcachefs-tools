@@ -5,7 +5,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
-    commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
+    commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::data::ec::open::OpenStripe;
@@ -516,8 +516,10 @@ fn test_btree_ptr_stale_dirty_key(
     iter.traverse(t)?;
     let fs = t.fs();
 
-    let b = fs.require(iter.node_at_iter_level(t), Errcode::ENOENT_bkey_type_mismatch)?;
-    let mut update = iter.node_key(t, &b, |k| t.bkey_make_mut_noupdate(k))?;
+    let (b, mut update) = {
+        let l = fs.require(iter.node(t), Errcode::ENOENT_bkey_type_mismatch)?;
+        (BtreeNodeRef::from(l.node()), t.bkey_make_mut_noupdate(l.key())?)
+    };
 
     let mut updated = false;
     for ptr_entry in update.ptrs_mut(t.fs()) {

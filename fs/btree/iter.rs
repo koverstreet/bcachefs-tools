@@ -2003,27 +2003,6 @@ impl<'t> BtreeIter<'t> {
         matches!(path.l[path.level() as usize].b.get(), Ok(Some(_)))
     }
 
-    /// The node the iterator's path holds at its level, if it has one - a
-    /// level without one holds NULL or an error pointer, as IS_ERR_OR_NULL().
-    pub(crate) fn node_at_iter_level<'a>(
-        &self,
-        t: &TransAttempt<'a, 't>,
-    ) -> Option<BtreeNodeRef> {
-        let paths = t.trans().paths();
-        let path = paths[self.path].downcast::<BtreeNode>()
-            .expect("node_at_iter_level() of a cached iterator, which holds no btree node");
-        path.l[path.level() as usize].b.get().ok()?.map(|raw| BtreeNodeRef { raw })
-    }
-
-    /// node_at_iter_level(), and where it ends - if the iterator's path holds
-    /// it: for a progress report.
-    pub(crate) fn node_end_at_iter_level(&self, t: &TransAttempt<'_, 't>) -> Option<(BtreeNodeRef, Bpos)> {
-        let paths = t.trans().paths();
-        let path = &paths[self.path];
-        let b = path.locked_btree_node(path.level() as usize)?;
-        Some((BtreeNodeRef::from(b), b.key().k.p))
-    }
-
     /// The key of the node the iterator's path holds at its level, as a key a
     /// peek returns: the iterator's key, good until it moves.
     pub(crate) fn node_key_at_iter_level(&mut self, t: &TransAttempt<'_, 't>) -> Option<BkeySC<'_>> {
@@ -2039,18 +2018,6 @@ impl<'t> BtreeIter<'t> {
         Some(self.found_i(b.key()))
     }
 
-    /// @f of @node's key: the node the iterator's path holds at its level,
-    /// borrowed from the path table for the call.
-    pub(crate) fn node_key<R>(&self, t: &TransAttempt<'_, 't>, node: &BtreeNodeRef,
-                              f: impl FnOnce(BkeySC<'_, BtreePtrs>) -> R) -> R {
-        let paths = t.trans().paths();
-        let path = &paths[self.path];
-        let b = path.locked_btree_node(path.level() as usize)
-            .filter(|b| ptr::eq(b.node(), node.as_ptr()))
-            .expect("a node's key, the node its iterator's path holds");
-        f(BkeySC::from(b.key()).arm::<BtreePtrs>().expect("a btree node's key, its pointer"))
-    }
-
     /// The btree's key at the iterator's path's position - not the journal
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
     pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
@@ -2059,12 +2026,13 @@ impl<'t> BtreeIter<'t> {
         unsafe { key_from_parts(u, v) }
     }
 
-    /// btree_iter_path()->l[0], under a borrow of the path table: None with no
-    /// node held there.
-    pub fn leaf<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<IterNode<'a>> {
+    /// The node the iterator's path holds at its level, under a borrow of the
+    /// path table: None with no btree node held there.
+    pub fn node<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<IterNode<'a>> {
         let paths = t.trans().paths();
-        paths[self.path].locked_btree_node(0)?;
-        Some(IterNode { paths, path: self.path, level: 0 })
+        let level = paths[self.path].level() as usize;
+        paths[self.path].locked_btree_node(level)?;
+        Some(IterNode { paths, path: self.path, level })
     }
 
     pub fn pos(&self) -> Bpos {
@@ -2445,6 +2413,10 @@ pub struct IterNode<'a> {
 impl IterNode<'_> {
     pub fn node(&self) -> LockedNode<'_, BtreeNode> {
         self.paths[self.path].locked_btree_node(self.level).expect("a node, held by its iterator's path")
+    }
+
+    pub fn key(&self) -> BkeySC<'_, BtreePtrs> {
+        BkeySC::from(self.node().key()).arm::<BtreePtrs>().expect("a btree node's key, its pointer")
     }
 
     /// Where the bset search tree failed at the path's key, if it did:
