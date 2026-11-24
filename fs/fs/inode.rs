@@ -379,12 +379,11 @@ fn v3_mut(k: &mut BkeyI) -> &mut c::InodeV3<Validated> {
 /// The key ends at the last nonzero field, and has_inode_opts is recomputed -
 /// pack is what maintains it.
 pub fn pack(inode: &c::bch_inode_unpacked) -> DstRoom<BkeyI, [u64; INODE_ROOM_U64S]> {
-    let mut out = DstRoom::<BkeyI, [u64; INODE_ROOM_U64S]>::zeroed();
+    let mut out = DstRoom::<BkeyI, [u64; INODE_ROOM_U64S]>::default();
 
     let mut flags = inode.flags();
     flags.set(c::InodeFlags::has_inode_opts, inode.has_opts());
 
-    out.k = c::bkey::new();
     out.k.set_key_type(BkeyType::inode_v3);
     out.k.set_val_bytes(size_of::<c::InodeV3>());
     out.k.p.offset = inode.bi_inum;

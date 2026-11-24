@@ -106,7 +106,8 @@ pub type AnyKey<S> = BkeyI<FamilyVal<AllTypes, S>>;
 /// AnyKey, as a header and a value pointer.
 pub type AnyKeySC<'a, S> = BkeySC<'a, FamilyVal<AllTypes, S>>;
 
-/* a zeroed key, its u64s 0, is a header with no value - as val_bytes() has it */
+/* u64s 0 is no key - a room starts as bkey_init()'s, and arm_at() refuses one -
+ * but from_raw() of it is total: the header, no value */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     type Head = c::bkey;
     type Elem = V::Elem;
