@@ -104,39 +104,6 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     pub unsafe fn from_raw(p: NonNull<T>) -> Self {
         Self { p, _p: PhantomData }
     }
-
-    /// T dropped now, and its memory given up to wait out readers by other
-    /// means than its own free's. A build error for a T that's not an
-    /// RcuMember's.
-    pub fn retire(self) -> Retired<T, A> {
-        let p = self.into_raw();
-        unsafe { <T as RcuFreeing>::retire(p) };
-        Retired(unsafe { Freeing::new(p) })
-    }
-}
-
-/// retire()'s memory, which readers may still be in: dropping it leaks it.
-pub struct Retired<T, A: Alloc = KVmalloc>(Freeing<T, RcuHead, A>);
-
-// memory, its T gone
-unsafe impl<T, A: Alloc> Sync for Retired<T, A> {}
-
-impl<T, A: Alloc> Retired<T, A> {
-    pub fn into_head(self) -> NonNull<c::rcu_head> {
-        <T as RcuHeadAt<RcuHead>>::head(&self.0).cast()
-    }
-
-    /// # Safety
-    /// @h is into_head()'s, of a Retired<T, A>, taken back once.
-    pub unsafe fn from_head(h: NonNull<c::rcu_head>) -> Self {
-        Retired(unsafe { Freeing::from_head(h.cast()) })
-    }
-
-    /// # Safety
-    /// Its readers are past it.
-    pub unsafe fn free(self) {
-        self.0.free_mem()
-    }
 }
 
 impl<T, A: Alloc> Deref for MaybeRcuAlloc<T, A> {
@@ -362,13 +329,6 @@ pub(crate) trait RcuFreeing {
     /// @p is @a's: alloc()'s, or a DST's at layout_of() its value's layout.
     /// Nothing but RCU readers uses it after.
     unsafe fn free<A: Alloc>(p: NonNull<Self>, a: &A);
-
-    /// An RcuMember's free, but for the memory: T dropped, its memory left
-    /// for the caller to free once readers are past it.
-    ///
-    /// # Safety
-    /// As free()'s.
-    unsafe fn retire(p: NonNull<Self>);
 }
 
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead>> RcuFreeing for T {
@@ -390,10 +350,6 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead>> RcuFreeing for T {
         PENDING.fetch_add(1, Relaxed);
         Flavor::RCU.call(unsafe { Freeing::<T, RcuWorkHead, A>::new(p) }, Freeing::queue);
     }
-
-    default unsafe fn retire(_p: NonNull<T>) {
-        let () = NotRetirable::<T>::ERR;
-    }
 }
 
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic> RcuFreeing for T {
@@ -413,10 +369,6 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic> RcuFr
     default unsafe fn free<A: Alloc>(p: NonNull<T>, _: &A) {
         <T as Detach>::detach(unsafe { p.as_ref() });
         Flavor::RCU.call(unsafe { Freeing::<T, RcuHead, A>::new(p) }, Freeing::drop_free);
-    }
-
-    default unsafe fn retire(_p: NonNull<T>) {
-        let () = NotRetirable::<T>::ERR;
     }
 }
 
@@ -438,10 +390,6 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + Drop
     default unsafe fn free<A: Alloc>(p: NonNull<T>, _: &A) {
         unsafe { core::ptr::drop_in_place(p.as_ptr()) };
         <T as RcuHeadAt<RcuHead>>::free_mem_rcu(unsafe { Freeing::<T, RcuHead, A>::new(p) });
-    }
-
-    default unsafe fn retire(p: NonNull<T>) {
-        unsafe { core::ptr::drop_in_place(p.as_ptr()) }
     }
 }
 
@@ -470,22 +418,12 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + Drop
             a.deallocate(p.cast(), layout);
         }
     }
-
-    unsafe fn retire(_p: NonNull<T>) {
-        let () = NotRetirable::<T>::ERR;
-    }
 }
 
 struct NotRcuFreed<T: ?Sized>(PhantomData<T>);
 
 impl<T: ?Sized> NotRcuFreed<T> {
     const ERR: () = panic!("what's read under RCU must be freed a grace period on - !FreeAnytime: it needs an RcuMember");
-}
-
-struct NotRetirable<T: ?Sized>(PhantomData<T>);
-
-impl<T: ?Sized> NotRetirable<T> {
-    const ERR: () = panic!("retire() is an RcuMember's free - dropped at once, its memory a grace period on");
 }
 
 /// RcuDropWorkMembers whose drop is still to come - the word their last write
