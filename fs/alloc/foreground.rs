@@ -630,15 +630,27 @@ impl Fs {
         let times = |t: c::TimeStat| self.times.get(t as usize);
         let dev = ca.dev_idx;
 
-        let mut g = a.freelist_lock.lock();
+        // Partial buckets nobody's using are free ones, but for the pin: before
+        // the pool's found short, or this waits on them. One put since the
+        // reclaim looked is on the list for another, but its wakeup is gone
+        // by the time the wait's registered: look again, under the lock.
+        let mut g = loop {
+            self.open_bucket_reclaim_unused_partials(open_buckets_reserved(req.watermark));
 
-        if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
-            times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
-            return Err(self.err(match req.block_on(self, &a.open_buckets_wait, Blocked::OpenBuckets) {
-                true  => Errcode::open_bucket_alloc_blocked,
-                false => Errcode::open_buckets_empty,
-            }));
-        }
+            let g = a.freelist_lock.lock();
+
+            if u32::from(a.freelist_lock.open_buckets_nr_free.get()) > open_buckets_reserved(req.watermark) {
+                break g;
+            }
+
+            if a.freelist_lock.open_buckets_partial_nr.get() == 0 {
+                times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
+                return Err(self.err(match req.block_on(self, &a.open_buckets_wait, Blocked::OpenBuckets) {
+                    true  => Errcode::open_bucket_alloc_blocked,
+                    false => Errcode::open_buckets_empty,
+                }));
+            }
+        };
 
         // Recheck under lock:
         if self.bucket_is_open(dev.into(), bucket) {
@@ -722,23 +734,62 @@ impl Fs {
     pub fn open_bucket_free_unused(&self, ob: OpenBucket) {
         let a = &self.allocator;
         let dev = ob.id().dev().into();
-        {
+        let ob = {
             let mut g = a.freelist_lock.lock();
             let (free, nr) = g.parts();
             let n = usize::from(nr.open_buckets_partial_nr.get());
-            assert!(n < free.open_buckets_partial.len(), "the partial list overflowing");
 
-            let ca = ob.ca();
-            ca.nr_partial_buckets.set(ca.nr_partial_buckets.get() + 1);
-            ob.set_flag(c::open_bucket::ON_PARTIAL_LIST, true);
-            free.open_buckets_partial[n] = Some(ob.into_idx());
-            *nr.open_buckets_partial_nr.place() += 1;
-        }
+            // Not an invariant violation: the list is as long as the table of
+            // open buckets, so full means every one is parked on it between
+            // its writers finishing and the next reclaim, which pressure can
+            // do for a moment. Put it - after the lock - and carry on.
+            if unlikely(n >= free.open_buckets_partial.len()) {
+                Some(ob)
+            } else {
+                let ca = ob.ca();
+                ca.nr_partial_buckets.set(ca.nr_partial_buckets.get() + 1);
+                ob.set_flag(c::open_bucket::ON_PARTIAL_LIST, true);
+                free.open_buckets_partial[n] = Some(ob.into_idx());
+                *nr.open_buckets_partial_nr.place() += 1;
+                None
+            }
+        };
+        drop(ob);
 
         closure_wake_up(&a.open_buckets_wait);
         a.open_buckets_events.wake();
         if let Some(ca) = self.dev_rcu(dev, &read_lock()) {
             ca.alloc_wake();
+        }
+    }
+
+    /// Partial buckets put, until more than @min_free open buckets are free or
+    /// the list is empty - and the allocator of each's device woken, as one
+    /// freed may be what it waits for.
+    pub fn open_bucket_reclaim_unused_partials(&self, min_free: u32) {
+        let a = &self.allocator;
+        loop {
+            // not under the lock if there's no pressure: callers are hot
+            if u32::from(a.freelist_lock.open_buckets_nr_free.get()) > min_free {
+                return;
+            }
+
+            // put without the lock, as the close takes it
+            let ob = {
+                let mut g = a.freelist_lock.lock();
+                let n = usize::from(a.freelist_lock.open_buckets_partial_nr.get());
+                if u32::from(a.freelist_lock.open_buckets_nr_free.get()) > min_free || n == 0 {
+                    return;
+                }
+                self.open_buckets_partial_take(&mut g, n - 1)
+            };
+
+            let dev = ob.id().dev().into();
+            drop(ob);
+
+            if let Some(ca) = self.dev_rcu(dev, &read_lock()) {
+                ca.alloc_wake();
+            }
         }
     }
 
