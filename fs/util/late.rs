@@ -72,18 +72,6 @@ impl<T: LateInit, L: LateLock> Late<T, L> {
             (**self).stop()
         }
     }
-
-    /// Dropped, and unmade again
-    ///
-    /// # Safety
-    /// Nothing uses it any more.
-    pub unsafe fn unmake(&self) {
-        let slot = self.0.get();
-        unsafe {
-            core::ptr::drop_in_place(slot);
-            core::ptr::write_bytes(slot, 0, 1);
-        }
-    }
 }
 
 impl<T: LateInit, L: LateLock> core::ops::Deref for Late<T, L> {

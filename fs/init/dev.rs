@@ -555,7 +555,6 @@ impl StateLockWrite<'_> {
         ca.io_ref_stop(READ);
 
         ca.sb_close();
-        unsafe { ca.journal.bio_set.unmake() };
     }
 }
 
