@@ -1037,13 +1037,12 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
         TransBkey { room: &mut *self.room, t: PhantomData, v: PhantomData }
     }
 
-    /// Its header - whatever its u64s say, which may be being set.
     pub fn k(&self) -> &c::bkey {
-        self.room.head()
+        &self.room.k
     }
 
     pub fn k_mut(&mut self) -> &mut c::bkey {
-        self.room.head_mut_rest().0
+        &mut self.room.k
     }
 
     /// Make it a deletion - KEY_TYPE_deleted, no value - in place, wherever
@@ -1170,7 +1169,8 @@ impl<V: ?Sized + BkeyVal> BkeyVMut for TransBkey<'_, '_, V> {
 
 /// The header, and where the value starts.
 fn room_sc(room: &DstRoom<BkeyI>) -> (&c::bkey, *const c::bch_val) {
-    (room.head(), room.elems()[BKEY_U64S..].as_ptr().cast())
+    let BkeyI { k, v } = &**room;
+    (k, (&raw const *v).cast())
 }
 
 /// The key, done with editing, to read for as long as the attempt's memory is
@@ -1194,8 +1194,8 @@ impl<'k, V: ?Sized + BkeyVal> From<&'k TransBkey<'_, '_, V>> for BkeySC<'k, V> {
 /// The key, to edit, keeping its type.
 impl<'k, V: ?Sized + BkeyVal> From<&'k mut TransBkey<'_, '_, V>> for BkeyS<'k, V> {
     fn from(k: &'k mut TransBkey<'_, '_, V>) -> Self {
-        let (k, v) = k.room.head_mut_rest();
-        BkeyS { k, v: v.as_mut_ptr().cast(), val: PhantomData }
+        let BkeyI { k, v } = &mut **k.room;
+        BkeyS { k, v: (&raw mut *v).cast(), val: PhantomData }
     }
 }
 

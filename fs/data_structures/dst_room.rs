@@ -11,7 +11,7 @@
 //! under a header of words, as a typed key's value is under its bkey.
 
 use crate::util::alloc::{flags, AllocGfp, Box, Kmalloc};
-use crate::util::vstructs::{FakeDst, Plain, Unsized};
+use crate::util::vstructs::{Plain, SelfSized, Unsized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
@@ -156,7 +156,7 @@ impl<T: ?Sized, B: ?Sized + Storage> DstRoom<T, B> {
     }
 
     /// All of its storage, the T first: for a T made in place, as by
-    /// unpacking one. What reads it checks its header against the room.
+    /// unpacking one.
     pub fn elems(&self) -> &[B::Elem] {
         self.buf.elems()
     }
@@ -174,76 +174,38 @@ fn room_short(cap: usize, min: usize, what: &str) -> ! {
     panic!("a room of {cap} bytes, short of the {min} a {what} is at least")
 }
 
-#[cold]
-#[inline(never)]
-fn room_overrun(bytes: usize, cap: usize) -> ! {
-    panic!("a value of {bytes} bytes in a room of {cap}")
-}
-
-impl<T: ?Sized + Unsized, B: ?Sized + Storage> DstRoom<T, B>
-where
-    T::Head: Plain + FakeDst,
-{
+// XXX: T's layout is Unsized's - its alignment its head's - till Unsized says
+// it without one
+impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> DstRoom<T, B> {
     const ALIGNED: () = assert!(align_of::<T::Head>() <= align_of::<B::Elem>(),
                                 "a DstRoom's storage, less aligned than what it holds");
 
-    fn check(&self) -> *const T::Head {
+    /// A room made from a slice can be shorter than the least T: @e, the
+    /// storage the T's made from, checked.
+    fn check(e: &[B::Elem]) {
         let () = Self::ALIGNED;
-        let cap = self.capacity();
+        let cap = size_of_val(e);
         if T::MIN_BYTES > cap {
             room_short(cap, T::MIN_BYTES, core::any::type_name::<T>());
         }
-
-        let head = self.buf.elems().as_ptr().cast::<T::Head>();
-        let bytes = unsafe { (*head).bytes() };
-        if bytes > cap {
-            room_overrun(bytes, cap);
-        }
-        head
-    }
-
-    /// The elements a head takes.
-    const HEAD_ELEMS: usize = size_of::<T::Head>().div_ceil(size_of::<B::Elem>());
-
-    /// Its T's head, whatever it says - which may be being set: for a T made
-    /// or edited in place.
-    pub fn head(&self) -> &T::Head {
-        let () = Self::ALIGNED;
-        let h = &self.buf.elems()[..Self::HEAD_ELEMS];
-        // SAFETY: a head's worth of plain storage, aligned for one
-        unsafe { &*h.as_ptr().cast() }
-    }
-
-    /// head(), to edit, and the storage past it.
-    pub fn head_mut_rest(&mut self) -> (&mut T::Head, &mut [B::Elem]) {
-        let () = Self::ALIGNED;
-        let (h, rest) = self.buf.elems_mut().split_at_mut(Self::HEAD_ELEMS);
-        // SAFETY: as head()'s
-        (unsafe { &mut *h.as_mut_ptr().cast() }, rest)
     }
 }
 
-impl<T: ?Sized + Unsized, B: ?Sized + Storage> Deref for DstRoom<T, B>
-where
-    T::Head: Plain + FakeDst,
-{
+impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> Deref for DstRoom<T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        let head = self.check();
-        // SAFETY: check()'s: a T, as long as its head says, within the room
-        unsafe { &*T::from_raw(head.cast(), (*head).bytes()) }
+        let e = self.buf.elems();
+        Self::check(e);
+        unsafe { &*T::from_thin(e.as_ptr().cast()) }
     }
 }
 
-impl<T: ?Sized + Unsized, B: ?Sized + Storage> DerefMut for DstRoom<T, B>
-where
-    T::Head: Plain + FakeDst,
-{
+impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> DerefMut for DstRoom<T, B> {
     fn deref_mut(&mut self) -> &mut T {
-        let head = self.check().cast_mut();
-        // SAFETY: as deref()'s, the room ours
-        unsafe { &mut *T::from_raw_mut(head.cast(), (*head).bytes()) }
+        let e = self.buf.elems_mut();
+        Self::check(e);
+        unsafe { &mut *T::from_thin(e.as_mut_ptr().cast()).cast_mut() }
     }
 }
 
