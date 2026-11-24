@@ -222,6 +222,25 @@ where
         unsafe { super::flush_work(self.work.get()) }
     }
 
+    /// Not queued any more, and not running - waiting out a run that is:
+    /// cancel_work_sync(). A pending run taken off has its refs put. Whether
+    /// it was pending.
+    pub(crate) fn cancel_sync(&self) -> bool {
+        // SAFETY: made in place, by new()
+        let pending = unsafe { super::cancel_work_sync(self.work.get()) };
+        if pending {
+            // SAFETY: the refs queue() took for the run taken off
+            drop(unsafe { R::adopt(self.container()) });
+        }
+        pending
+    }
+
+    /// Whether it's queued or running, as of the look: work_busy().
+    pub(crate) fn busy(&self) -> bool {
+        // SAFETY: made in place, by new()
+        unsafe { super::work_busy(self.work.get()) }
+    }
+
     /// # Safety
     /// @work is a ReffedWork<F, R>'s, queued by queue(), holding its refs.
     unsafe extern "C" fn work_fn(work: *mut c::work_struct) {

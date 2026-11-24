@@ -37,11 +37,10 @@ use crate::util::alloc::{flags, Flags, AllocError, KVVec};
 use crate::util::place::{Contained, FieldPath};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
-use crate::os::workqueue::{cancel_work_sync, run_raw, RawWork};
+use crate::os::workqueue::{OnQueue, Own, ReffedWork};
 use crate::util::{Printbuf, ToText};
 use crate::{btree_trans, new_lock, prt};
-use core::mem::{offset_of, size_of};
-use core::ptr::NonNull;
+use core::mem::size_of;
 use core::sync::atomic::fence;
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
 use nestify::nest;
@@ -199,8 +198,7 @@ pub struct bch_fs_btree_write_buffer {
     pub flushing_pin: Pin,
 
     #[pin]
-    #[init(crate::new_work!(run_raw::<c::bch_fs_btree_write_buffer>, "&wb->flush_work"))]
-    pub flush_work: c::work_struct,
+    pub(crate) flush_work: ReffedWork<flush_work_fn, OnQueue<crate::field!(super.write_buffer_wq)>>,
     /*
      * Set by the dispatcher (or auto-flush wakeup) before queue_work(),
      * read by the worker on each flush_locked call. Racy under concurrent
@@ -265,7 +263,7 @@ impl c::bch_fs_btree_write_buffer {
 
     fn queue_flush(&self, caller: c::WbFlushCaller) {
         self.flush_work_caller.set(caller as u32);
-        unsafe { self.fs().btree.write_buffer_wq.queue_work((&raw const self.flush_work).cast_mut()) };
+        self.flush_work.queue(Own);
     }
 
     fn is_empty(&self) -> bool {
@@ -523,14 +521,6 @@ fn flush_work_fn(wb: &c::bch_fs_btree_write_buffer) {
     fs.btree.write_buffer_flush_wait.wake();
 }
 
-impl RawWork for c::bch_fs_btree_write_buffer {
-    const WORK: usize = offset_of!(c::bch_fs_btree_write_buffer, flush_work);
-
-    unsafe fn run(this: NonNull<Self>) {
-        flush_work_fn(unsafe { this.as_ref() })
-    }
-}
-
 /// C's struct wb_maybe_flush: before an fsck pass calls a key missing that
 /// another key refers to, maybe_flush() flushes the write buffer - once per
 /// referring key - and has it look again.
@@ -686,8 +676,7 @@ impl Fs {
                 prt!(out, "avg shard size:\t{}\n",     f.nr_keys_flushed.get() / f.nr_shards_total.get());
             }
 
-            let busy = unsafe { crate::os::workqueue::work_busy((&raw const wb.flush_work).cast_mut()) };
-            prt!(out, "flush work:\t{}\n", if busy { "busy" } else { "idle" });
+            prt!(out, "flush work:\t{}\n", if wb.flush_work.busy() { "busy" } else { "idle" });
 
             prt!(out, "\n");
         }
@@ -699,7 +688,7 @@ impl Fs {
 
     pub fn btree_write_buffer_stop(&self) {
         for wb in &self.btree.write_buffer {
-            unsafe { cancel_work_sync((&raw const wb.flush_work).cast_mut()) };
+            wb.flush_work.cancel_sync();
         }
     }
 }
