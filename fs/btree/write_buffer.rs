@@ -42,7 +42,7 @@ use crate::util::{Printbuf, ToText};
 use crate::{btree_trans, new_lock, prt};
 use core::mem::size_of;
 use core::sync::atomic::fence;
-use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
+use cstruct_macros::{placed, MaybeZeroable, Init, SelfSized, TypeInfo, bch_enum};
 use pin_init::pin_data;
 
 /*
@@ -111,13 +111,18 @@ const _: () = assert!(REF_IDX.end - REF_IDX.start == size_of::<u32>() &&
                       REF_IDX.end - REF_IDX.start + REF_POS.end - REF_POS.start == size_of::<wb_key_ref>());
 
 #[repr(C)]
-#[derive(Default, MaybeZeroable)]
+#[derive(SelfSized)]
 pub struct btree_write_buffered_key {
     pub journal_seq: u64,
-
-    /* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
-    pub k: DstRoom<BkeyI, [u64; BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize]>,
+    pub k: BkeyI,
 }
+
+const SEQ_U64S: usize = btree_write_buffered_key::K_AT / size_of::<u64>();
+const _: () = assert!(SEQ_U64S == 1);
+
+/* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
+type AccountingKey =
+    DstRoom<btree_write_buffered_key, [u64; SEQ_U64S + BKEY_U64S + c::BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize]>;
 
 #[bch_enum(closed)]
 #[nr]
@@ -135,7 +140,7 @@ pub enum WbFlushCaller {
 #[derive(Default)]
 pub struct Inc {
     keys:       WbKeys,
-    accounting: KVVec<c::btree_write_buffered_key>,
+    accounting: KVVec<AccountingKey>,
 }
 
 /// What flushing.lock protects: the keys a flush has, and their refs, sorted.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::keys::{Shard, WbKeyMut};
+use super::keys::Shard;
 use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, FlushingGuard, IncGuard, WB_RESIZE_GFP};
 use crate::accounting;
 use crate::alloc::accounting_mem;
@@ -111,16 +111,16 @@ pub(super) fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_buffer, 
 }
 
 #[inline(never)]
-fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &mut WbKeyMut<'_>)
+fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &mut c::btree_write_buffered_key)
     -> Result<(), BchError>
 {
     let trans = t.trans();
 
     trans.node_unlock_write(&mut trans.paths(), iter.path, 0);
 
-    t.set_journal_seq_to_pin(wb.seq());
+    t.set_journal_seq_to_pin(wb.journal_seq);
 
-    t.update(iter, t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    t.update(iter, t.bkey_copy(&wb.k)?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(None, CommitOpts::new()
              .watermark(Watermark::reclaim)
              .flags(CommitFlags::NO_ENOSPC |
@@ -135,7 +135,7 @@ fn flush_one<'a>(
     t:                      &TransAttempt<'a, 'a>,
     wbb:                    &c::bch_fs_btree_write_buffer,
     iter:                   &mut BtreeIter<'a>,
-    wb:                     &mut WbKeyMut<'_>,
+    wb:                     &mut c::btree_write_buffered_key,
     write_locked:           &mut bool,
     accounting_accumulated: &mut bool,
     cnt:                    &mut FlushCounters,
@@ -143,20 +143,20 @@ fn flush_one<'a>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    ebug_assert!(wb.seq() != 0);
+    ebug_assert!(wb.journal_seq != 0);
     ebug_assert!(wbb.pin(Buf::Flushing).seq() != 0);
-    ebug_assert!(wbb.pin(Buf::Flushing).seq() <= wb.seq());
+    ebug_assert!(wbb.pin(Buf::Flushing).seq() <= wb.journal_seq);
 
     iter.traverse(t)?;
 
-    if !*accounting_accumulated && wb.k().k.key_type() == BkeyType::accounting {
+    if !*accounting_accumulated && wb.k.k.key_type() == BkeyType::accounting {
         let mut u = c::bkey::new();
         let k = iter.path_peek_slot(t, &mut u);
 
         if k.k.key_type() == BkeyType::accounting {
-            accounting::accumulate(wb.k_mut(), k);
-            if accounting::is_zero(BkeySC::from(wb.k())) {
-                accounting_mem::maybe_kill(fs, wb.k().k.p);
+            accounting::accumulate(&mut wb.k, k);
+            if accounting::is_zero(BkeySC::from(&wb.k)) {
+                accounting_mem::maybe_kill(fs, wb.k.k.p);
             }
         }
     }
@@ -178,9 +178,9 @@ fn flush_one<'a>(
     let mut old_u = c::bkey::new();
     let old = path.l[level].iter.peek_all()
         .map(|p| l.keys(l.contents()).disassemble(p, &mut old_u))
-        .filter(|old| old.k.p == wb.k().k.p);
+        .filter(|old| old.k.p == wb.k.k.p);
 
-    if old.is_some_and(|old| old.and_val_eq(BkeySC::from(wb.k()))) {
+    if old.is_some_and(|old| old.and_val_eq(BkeySC::from(&wb.k))) {
         cnt.noop += 1;
         return Ok(());
     }
@@ -191,16 +191,16 @@ fn flush_one<'a>(
     }
 
     let b = paths[iter.path].locked_btree_node(0).expect("a traversed path has its leaf");
-    if !b.insert_fits(b.contents(), usize::from(wb.k().k.u64s)) {
+    if !b.insert_fits(b.contents(), usize::from(wb.k.k.u64s)) {
         *write_locked = false;
         drop(paths);
         return flush_one_slowpath(t, iter, wb);
     }
 
-    ebug_assert!(wb.k().k.p == paths[iter.path].pos);
+    ebug_assert!(wb.k.k.p == paths[iter.path].pos);
 
-    let seq = wb.seq();
-    trans.insert_key_leaf(t, &mut paths.paths_and_updates(), iter.path, iter.path, wb.k_mut(), seq, |b| {
+    let seq = wb.journal_seq;
+    trans.insert_key_leaf(t, &mut paths.paths_and_updates(), iter.path, iter.path, &mut wb.k, seq, |b| {
         if b.needs_merge(b.contents(), fs, 0) {
             fs.async_btree_op(b.node(), b.contents(), AsyncBtreeOp::Merge);
         }
@@ -220,15 +220,15 @@ fn flush_one<'a>(
  * before the current transaction. If we were to journal this key again and
  * crash, recovery would process updates in the wrong order.
  */
-fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut WbKeyMut<'_>)
+fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut c::btree_write_buffered_key)
     -> Result<(), BchError>
 {
-    let mut iter = BtreeIter::new(t, btree, wb.k().k.start_pos(), BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, btree, wb.k.k.start_pos(), BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
 
-    t.set_journal_seq_to_pin(wb.seq());
+    t.set_journal_seq_to_pin(wb.journal_seq);
 
     iter.traverse(t)?;
-    t.update(&iter, t.bkey_copy(wb.k())?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter, t.bkey_copy(&wb.k)?, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// The flush's leave to begin attempts, which is trans_attempt.rs's alone
@@ -269,17 +269,17 @@ fn flush_sorted_range(
             shard.prefetch(n);
         }
 
-        let mut k = shard.key(i);
+        let k = shard.key(i);
 
-        ret = insert_checks(fs, btree, k.k());
+        ret = insert_checks(fs, btree, &k.k);
         if ret.is_err() {
             break;
         }
 
-        assert!(k.seq() != 0);
+        assert!(k.journal_seq != 0);
 
         if !accounting_replay_done &&
-            k.k().k.key_type() == BkeyType::accounting {
+            k.k.k.key_type() == BkeyType::accounting {
             cnt.slowpath += 1;
             continue;
         }
@@ -290,13 +290,13 @@ fn flush_sorted_range(
             if write_locked {
                 let leaf_end = paths[iter.path].locked_btree_node(0).expect("write locked").key().k.p;
 
-                if k.k().k.p > leaf_end {
+                if k.k.k.p > leaf_end {
                     trans.node_unlock_write(&mut paths, iter.path, 0);
                     write_locked = false;
                 }
             }
 
-            iter.set_pos_in(&mut paths, k.k().k.p);
+            iter.set_pos_in(&mut paths, k.k.k.p);
             paths[iter.path].bits.set_preserve(false);
         }
 
@@ -306,7 +306,7 @@ fn flush_sorted_range(
                 break fs.throw(Errcode::journal_reclaim_would_deadlock);
             }
 
-            let r = flush_one(&t, wb, &mut iter, &mut k, &mut write_locked,
+            let r = flush_one(&t, wb, &mut iter, k, &mut write_locked,
                               &mut accounting_accumulated, cnt);
             if !write_locked {
                 t = trans.begin_flush(FlushKey(()));
@@ -318,7 +318,7 @@ fn flush_sorted_range(
         };
 
         match r {
-            Ok(()) => k.set_seq(0),
+            Ok(()) => k.journal_seq = 0,
             Err(e) if e == Errcode::journal_reclaim_would_deadlock.into() => cnt.slowpath += 1,
             Err(e) => {
                 ret = Err(e);
@@ -433,7 +433,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
 
     sorted.clear();
     for i in keys.idxs() {
-        let r = c::wb_key_ref::new(i, keys.key(i).k.p);
+        let r = c::wb_key_ref::new(i, keys.key(i).k.k.p);
         if sorted.push_within_capacity(r).is_err() {
             panic!("Overflowed wb->sorted at {}, flushing size {}", sorted.len(), keys.len());
         }
@@ -484,16 +484,16 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
         if !wb_key_eq(newer, older) {
             return false;
         }
-        let (mut k, mut n) = keys.pair_mut(older.idx(), newer.idx());
+        let (k, n) = keys.pair_mut(older.idx(), newer.idx());
 
         /* Accounting: accumulate older delta into newer entry. */
-        if k.k().k.key_type() == BkeyType::accounting &&
-            n.k().k.key_type() == BkeyType::accounting {
-            accounting::accumulate(n.k_mut(), BkeySC::from(k.k()));
-            n.set_seq(n.seq().min(k.seq()));
+        if k.k.k.key_type() == BkeyType::accounting &&
+            n.k.k.key_type() == BkeyType::accounting {
+            accounting::accumulate(&mut n.k, BkeySC::from(&k.k));
+            n.journal_seq = n.journal_seq.min(k.journal_seq);
         }
         /* Drop older entry; newer wins. */
-        k.set_seq(0);
+        k.journal_seq = 0;
         *older = *newer;
         true
     });
@@ -521,21 +521,21 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
             heapsort_by_lt(sorted, |l, r| keys.seq(l.idx()) < keys.seq(r.idx()));
 
             for r in sorted.iter() {
-                let mut k = keys.get_mut(r.idx());
-                if k.seq() == 0 {
+                let k = keys.get_mut(r.idx());
+                if k.journal_seq == 0 {
                     continue;
                 }
 
-                assert!(k.seq() <= fs.journal_cur_seq());
+                assert!(k.journal_seq <= fs.journal_cur_seq());
 
                 if !accounting_replay_done &&
-                    k.k().k.key_type() == BkeyType::accounting {
+                    k.k.k.key_type() == BkeyType::accounting {
                     could_not_insert += 1;
                     continue;
                 }
 
                 if could_not_insert == 0 {
-                    wb.pin_update(Buf::Flushing, k.seq());
+                    wb.pin_update(Buf::Flushing, k.journal_seq);
                 }
 
                 let ret = commit_do(trans, None,
@@ -545,12 +545,12 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
                                            CommitFlags::NO_CHECK_RW |
                                            CommitFlags::NO_ENOSPC |
                                            CommitFlags::NO_JOURNAL_RES),
-                                    |t| btree_write_buffered_insert(t, btree, &mut k));
+                                    |t| btree_write_buffered_insert(t, btree, k));
                 if ret.is_err() {
                     break 'err ret;
                 }
 
-                k.set_seq(0);
+                k.journal_seq = 0;
             }
 
             /*

@@ -3,19 +3,19 @@
 use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::c;
 use crate::data::keylist;
+use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::{Flags, AllocError, KVVec};
 use crate::os::kernel::prefetch;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::format::Bpos;
-use super::{REF_HI_MI_LO, REF_IDX, REF_POS};
+use super::{REF_HI_MI_LO, REF_IDX, REF_POS, SEQ_U64S};
 use core::marker::PhantomData;
-use core::mem::{offset_of, size_of};
 use core::ops::{Deref, Range};
 use core::ptr::NonNull;
 
-const SEQ_U64S: usize = offset_of!(c::btree_write_buffered_key, k) / size_of::<u64>();
-const _: () = assert!(offset_of!(c::btree_write_buffered_key, journal_seq) == 0 && SEQ_U64S == 1);
+/// A key in the write buffer, over its u64s.
+type KeyRoom = DstRoom<c::btree_write_buffered_key>;
 
 /// Its size in the write buffer: the key, and its journal seq.
 pub(super) fn wb_key_u64s(k: &c::bkey) -> usize {
@@ -39,10 +39,9 @@ impl KeysLiveWriter {
     }
 }
 
-/// A write buffer's keys, as the journal intake stages them: each its
-/// journal seq, then the key - as many u64s as the key has, not a whole
-/// btree_write_buffered_key, whose padding may run past the end. A seq of 0
-/// is a key flushed, or dropped as a duplicate.
+/// A write buffer's keys, as the journal intake stages them: each a
+/// btree_write_buffered_key, its journal seq then the key, as many u64s as
+/// the key has. A seq of 0 is a key flushed, or dropped as a duplicate.
 ///
 /// What changes its length or capacity takes the KeysLive its lock
 /// publishes them in, and sets it.
@@ -90,12 +89,13 @@ impl WbKeys {
         self.0[idx]
     }
 
-    pub(super) fn key(&self, idx: usize) -> &BkeyI {
-        keylist::keys(&self.0[idx + SEQ_U64S..]).next().expect("a key at a write buffer key's index")
+    pub(super) fn key(&self, idx: usize) -> &c::btree_write_buffered_key {
+        KeyRoom::from_elems(&self.0[idx..self.next(idx)])
     }
 
     fn next(&self, idx: usize) -> usize {
-        idx + wb_key_u64s(&self.key(idx).k)
+        let k: &BkeyI = keylist::keys(&self.0[idx + SEQ_U64S..]).next().expect("a key at a write buffer key's index");
+        idx + wb_key_u64s(&k.k)
     }
 
     /// The u64 index of each key.
@@ -105,23 +105,26 @@ impl WbKeys {
         })
     }
 
-    pub(super) fn get_mut(&mut self, idx: usize) -> WbKeyMut<'_> {
+    pub(super) fn get_mut(&mut self, idx: usize) -> &mut c::btree_write_buffered_key {
         let end = self.next(idx);
-        WbKeyMut(&mut self.0[idx..end])
+        KeyRoom::from_elems_mut(&mut self.0[idx..end])
     }
 
     /// The keys at @a and @b, which are different keys.
-    pub(super) fn pair_mut(&mut self, a: usize, b: usize) -> (WbKeyMut<'_>, WbKeyMut<'_>) {
+    pub(super) fn pair_mut(&mut self, a: usize, b: usize)
+        -> (&mut c::btree_write_buffered_key, &mut c::btree_write_buffered_key)
+    {
         let (a_end, b_end) = (self.next(a), self.next(b));
         assert!(a_end <= b || b_end <= a, "write buffer keys at {a} and {b} overlap");
 
-        if a < b {
+        let (a, b) = if a < b {
             let (l, r) = self.0.split_at_mut(b);
-            (WbKeyMut(&mut l[a..a_end]), WbKeyMut(&mut r[..b_end - b]))
+            (&mut l[a..a_end], &mut r[..b_end - b])
         } else {
             let (l, r) = self.0.split_at_mut(a);
-            (WbKeyMut(&mut r[..a_end - a]), WbKeyMut(&mut l[b..b_end]))
-        }
+            (&mut r[..a_end - a], &mut l[b..b_end])
+        };
+        (KeyRoom::from_elems_mut(a), KeyRoom::from_elems_mut(b))
     }
 
     /// @k, from journal entry @seq, in room the caller checked.
@@ -178,27 +181,6 @@ impl WbKeys {
     }
 }
 
-/// A write buffer key had mutably: its u64s, seq then key.
-pub(super) struct WbKeyMut<'a>(&'a mut [u64]);
-
-impl WbKeyMut<'_> {
-    pub(super) fn seq(&self) -> u64 {
-        self.0[0]
-    }
-
-    pub(super) fn set_seq(&mut self, seq: u64) {
-        self.0[0] = seq
-    }
-
-    pub(super) fn k(&self) -> &BkeyI {
-        keylist::keys(&self.0[SEQ_U64S..]).next().expect("a key in its u64s")
-    }
-
-    pub(super) fn k_mut(&mut self) -> &mut BkeyI {
-        keylist::key_mut(&mut self.0[SEQ_U64S..])
-    }
-}
-
 /// A slice of a flush's sorted refs, and the flushing keys they refer to.
 /// split() hands each shard its own slice of the refs, and the refs are
 /// distinct, one for each key: so a key is reached by one shard, and that
@@ -247,7 +229,7 @@ impl<'a> Shard<'a> {
     }
 
     /// The key of the shard's @i'th ref.
-    pub(super) fn key(&mut self, i: usize) -> WbKeyMut<'_> {
+    pub(super) fn key(&mut self, i: usize) -> &mut c::btree_write_buffered_key {
         assert!(self.range.contains(&i));
         let idx = self.idx(i);
         if idx + BKEY_U64S > self.len {
@@ -258,7 +240,7 @@ impl<'a> Shard<'a> {
         let u64s = SEQ_U64S + usize::from(unsafe { (*k.add(SEQ_U64S).cast::<c::bkey>()).u64s });
         assert!(idx + u64s <= self.len, "write buffer key at {idx} of {} u64s overruns the {}", u64s, self.len);
 
-        WbKeyMut(unsafe { core::slice::from_raw_parts_mut(k, u64s) })
+        KeyRoom::from_elems_mut(unsafe { core::slice::from_raw_parts_mut(k, u64s) })
     }
 }
 

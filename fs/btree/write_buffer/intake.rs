@@ -2,11 +2,12 @@
 
 use super::flush::move_keys_from_inc_to_flushing;
 use super::keys::{wb_key_u64s, KeysLiveWriter, WbKeys};
-use super::{insert_checks, resize_gfp, wb_btree_idx, Buf, FlushingGuard, IncGuard, WB_RESIZE_GFP};
+use super::{insert_checks, resize_gfp, wb_btree_idx, AccountingKey, Buf, FlushingGuard, IncGuard, SEQ_U64S, WB_RESIZE_GFP};
 use crate::accounting::{self, DiskAccountingPos};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
 use crate::c;
 use crate::c::WbFlushCaller as Caller;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
@@ -224,7 +225,7 @@ impl<'a> Intake<'a> {
          * compact / sort — run with inc.lock held).
          */
         for i in self.btree(c::WbBtree::accounting).inc.accounting.iter_mut() {
-            (&mut &mut *i.k).val_bytes_mut().fill(0);
+            (&mut &mut i.k).val_bytes_mut().fill(0);
         }
     }
 
@@ -248,7 +249,7 @@ impl<'a> Intake<'a> {
 
         match Eytzinger0::find_by(&b.inc.accounting, |e| e.k.k.p.cmp(&p)) {
             Some(idx) => {
-                accounting::accumulate(&mut *b.inc.accounting[idx].k, BkeySC::from(k));
+                accounting::accumulate(&mut b.inc.accounting[idx].k, BkeySC::from(k));
                 Ok(())
             }
             None => {
@@ -257,8 +258,8 @@ impl<'a> Intake<'a> {
                     prt!(out, "{}", BkeySC::from(k).to_text(fs));
                 });
 
-                let mut new = c::btree_write_buffered_key::default();
-                new.k.set_key(k);
+                let mut new = AccountingKey::zeroed();
+                DstRoom::<BkeyI>::from_elems_mut(&mut new.elems_mut()[SEQ_U64S..]).set_key(k);
 
                 b.inc.accounting.push(new)?;
 
@@ -420,10 +421,10 @@ impl<'a> Intake<'a> {
 
             if ret.is_ok() {
                 for a in accounting.iter_mut() {
-                    if !accounting::is_zero(BkeySC::from(&*a.k)) {
+                    if !accounting::is_zero(BkeySC::from(&a.k)) {
                         a.journal_seq = seq;
                         live_accounting_keys += 1;
-                        ret = self.key_to_wb_idx(idx, &*a.k);
+                        ret = self.key_to_wb_idx(idx, &a.k);
                         if ret.is_err() {
                             break;
                         }
@@ -435,7 +436,7 @@ impl<'a> Intake<'a> {
             b.inc.accounting = accounting;
 
             if live_accounting_keys * 2 < b.inc.accounting.len() {
-                b.inc.accounting.retain(|a| !accounting::is_zero(BkeySC::from(&*a.k)));
+                b.inc.accounting.retain(|a| !accounting::is_zero(BkeySC::from(&a.k)));
                 b.accounting_sort();
             }
 
