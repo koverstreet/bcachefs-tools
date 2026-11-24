@@ -822,11 +822,8 @@ impl Fs {
                 ca.unlink();
             }
 
-            for i in 0..self.nr_devices() as usize {
-                let ca = self.state_lock_write().devs()[i].get();
-                if let Some(ca) = ca {
-                    ca.io_ref_stop(READ);
-                }
+            for ca in self.members() {
+                ca.io_ref_stop(READ);
             }
 
             self.kobj.del();
