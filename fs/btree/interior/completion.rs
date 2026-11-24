@@ -172,12 +172,16 @@ fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
     }))
 }
 
+/// A new node the commit changes the key of, held for intent through the
+/// commit by its iterator, and its pointer's index in new_nodes.
+type KeyChanged<'t> = ArrayVec<(BtreeNodeIter<'t>, usize), UPDATE_NODES_MAX>;
+
 /*
  * The transactional part of an interior btree node update, where we journal the
  * update we did to the interior node and update alloc info:
  */
-fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut super::CommitGuard<'_>)
-    -> Result<(), BchError>
+fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_lock: &mut super::CommitGuard<'_>)
+    -> Result<KeyChanged<'t>, BchError>
 {
     let fs = t.fs();
     let btree = u.btree;
@@ -206,7 +210,8 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
         t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, &*i.key)?;
     }
 
-    for i in u.new_nodes_locked(commit_lock).iter_mut() {
+    let mut key_changed = KeyChanged::new();
+    for (idx, i) in u.new_nodes_locked(commit_lock).iter_mut().enumerate() {
         let level = u32::from(i.level);
         if let Pointee::Node { update_node_key, .. } = &mut i.to {
             *update_node_key = false;
@@ -233,9 +238,12 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
                 panic!("a deleted pointer with reconcile state")
             };
             match BtreeNodeIter::at_node(t, unsafe { b.as_ref() }) {
-                Ok(_)                                                                => *update_node_key = true,
+                Ok(iter) => {
+                    *update_node_key = true;
+                    key_changed.push((iter, idx));
+                }
                 Err(e) if e == BchError::from(Errcode::btree_node_dying) => strip_reconcile(fs, k.as_s()),
-                Err(e)                                                               => return Err(e),
+                Err(e) => return Err(e),
             }
         }
 
@@ -268,7 +276,25 @@ fn nodes_written_trans(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &
         }
     }
 
-    Ok(())
+    Ok(key_changed)
+}
+
+/// The keys the commit changed given to their nodes, each write locked through
+/// the path that's held it since: nofail, as nothing after the commit can
+/// restart. Under commit_lock, as btree_node_update_key() changes a new node's
+/// key.
+fn new_node_keys_set(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut super::CommitGuard<'_>,
+                     key_changed: &KeyChanged<'_>) {
+    let trans = t.trans();
+    let mut paths = trans.paths();
+    let new_nodes = u.new_nodes_locked(commit_lock);
+
+    for (iter, i) in key_changed {
+        let (idx, level) = (iter.raw.path, usize::from(paths[iter.raw.path].level()));
+        trans.node_lock_write_nofail(&mut paths, idx, level);
+        paths[idx].locked_btree_node_mut(level).expect("a new node, write locked").set_key(&*new_nodes[*i].key);
+        trans.node_unlock_write(&mut paths, idx, level);
+    }
 }
 
 /* If the node has been reused, we might be reading uninitialized memory - that's fine: */
@@ -376,11 +402,12 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
         let mut commit_lock = fs.btree.interior_updates.commit_lock.lock();
 
         let ret = lockrestart_do(&trans, |t| {
-            nodes_written_trans(t, u, &mut commit_lock)?;
+            let key_changed = nodes_written_trans(t, u, &mut commit_lock)?;
             t.commit(Some(&u.disk_res), CommitOpts::new()
                      .watermark(Watermark::interior_updates)
                      .flags(CommitFlags::NO_ENOSPC | CommitFlags::NO_CHECK_RW | CommitFlags::JOURNAL_RECLAIM))?;
             journal_seq = t.journal_res_seq();
+            new_node_keys_set(t, u, &mut commit_lock, &key_changed);
             Ok(())
         });
         if let Err(e) = ret {
@@ -390,17 +417,12 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
         }
 
         /*
-         * Clear will_make_reachable while we still hold intent locks on
-         * all our new nodes, to avoid racing with
+         * Clear will_make_reachable under commit_lock, to avoid racing with
          * btree_node_update_key():
          */
         for i in u.new_nodes_locked(&mut commit_lock).iter() {
-            let Pointee::Node { b, update_node_key, .. } = i.to else { continue };
+            let Pointee::Node { b, .. } = i.to else { continue };
             let b = unsafe { b.as_ref() };
-
-            if update_node_key {
-                b.set_key(unsafe { b.contents_mut() }, &*i.key);
-            }
 
             b.will_make_reachable.clear(update);
             b.flags.set_will_make_reachable(false);
