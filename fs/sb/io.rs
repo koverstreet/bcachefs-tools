@@ -1121,7 +1121,7 @@ fn grow(buf: &mut bch_sb_buf, have_layout: bool, bdev: Option<&BlockDevice>, byt
         }
     }
 
-    buf.grow(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
+    buf.realloc(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
 }
 
 impl bch_sb_handle {
@@ -1764,14 +1764,17 @@ fn field_offset<S: SbState>(sb: &bch_sb<S>, ty: c::SbFieldType) -> Option<usize>
 }
 
 impl bch_sb_buf {
-    /// The buffer grown to @size bytes, the superblock kept and zeroes after.
-    fn grow(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
-        let old = self.buffer();
-        assert!(size >= old.len(), "a superblock buffer of {} bytes grown to {size}", old.len());
-        let mut new = AlignedBox::<[u64], IO_ALIGN>::try_new_zeroed_slice_gfp(size / size_of::<u64>(), Flags::empty())?;
-        plain_bytes_mut(&mut *new)[..old.len()].copy_from_slice(old);
-        self.data = Some(DstRoom::from_storage(new));
-        Ok(())
+    /// The buffer made @size bytes, the superblock kept and zeroes after.
+    fn realloc(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
+        let u64s = size / size_of::<u64>();
+        match &mut self.data {
+            Some(r) => r.realloc(u64s, Flags::empty()),
+            None => {
+                let b = AlignedBox::<[u64], IO_ALIGN>::try_new_zeroed_slice_gfp(u64s, Flags::empty())?;
+                self.data = Some(DstRoom::from_storage(b));
+                Ok(())
+            }
+        }
     }
 
     /// The buffer freed, and the superblock with it.
@@ -1948,7 +1951,7 @@ impl SbResize for FsSbResize<'_> {
         if self.buffer_size() >= size {
             return Ok(());
         }
-        self.grow(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
+        self.realloc(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
     }
 
     fn grow_with(&mut self, d: isize) -> Option<()> {
