@@ -96,7 +96,7 @@ pub struct bch_fs_btree_reserve_cache {
 const UPDATE_NODES_MAX: usize = (c::BTREE_MAX_DEPTH as usize - 2) * 2 + c::GC_MERGE_NODES as usize;
 
 /// An update made visible - its new nodes' pointers in memory - by what: on
-/// interior_updates.unwritten from then until it completes.
+/// interior_updates.unwritten from then until its completion takes it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /*
@@ -125,7 +125,8 @@ pub(crate) struct Updates {
     live:      KVVec<NonNull<BtreeUpdate>>,
     /*
      * Made visible, in the order they were: completed in that order. Each its
-     * update's owner, from updated_node() or updated_root() to its free
+     * update's owner, from updated_node() or updated_root() until the worker
+     * takes it to complete
      */
     unwritten: Fifo<UpdateBox>,
 }
@@ -913,18 +914,14 @@ impl Drop for InteriorUpdate<'_> {
         let mut paths = unsafe { Paths::lent(self.trans()) };
         self.put_paths(&mut paths);
         self.trans().unlock_write(&mut paths);
-        unsafe { update_free(self.raw, Some(owner)) }
+        update_free(self.t().fs(), owner)
     }
 }
 
-/// @update's resources released, and it freed - owned by @rollback, or else by
-/// its entry on unwritten, completing.
-///
-/// # Safety
-/// @update is live, and nothing uses it after.
-unsafe fn update_free(update: NonNull<BtreeUpdate>, rollback: Option<UpdateBox>) {
-    let u = unsafe { update.as_ref() };
-    let fs = unsafe { u.fs.get() };
+/// @owner's update's resources released, and it freed: rolled back, or
+/// completed.
+fn update_free(fs: &Fs, owner: UpdateBox) {
+    let u = &*owner;
 
     drop(u.owned.borrow_mut().gc_lock.take());
 
@@ -938,11 +935,7 @@ unsafe fn update_free(update: NonNull<BtreeUpdate>, rollback: Option<UpdateBox>)
     let updates = &fs.btree.interior_updates;
     let mut g = updates.lock.lock();
 
-    let owner = rollback.unwrap_or_else(|| {
-        let front = g.unwritten.pop_front().expect("an update completed, on unwritten");
-        assert!(ptr::eq(Box::as_ptr(&front), update.as_ptr()), "an update completed out of order");
-        front
-    });
+    let update = NonNull::from(u);
     g.live.retain(|p| *p != update);
     drop(owner);
 
