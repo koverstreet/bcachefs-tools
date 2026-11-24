@@ -19,7 +19,7 @@
 
 use crate::errcode::BchError;
 use crate::util::alloc::{init_at, init_with, Alloc, Kmalloc};
-use crate::util::rcu::{Flavor, HasRcuHead, RcuHead, RcuOwned};
+use crate::util::rcu::{DropAnytime, DropAtomic, Flavor, HasRcuHead, RcuHead, RcuOwned};
 use crate::os::workqueue::Queue;
 use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef};
 use core::alloc::Layout;
@@ -254,15 +254,17 @@ unsafe fn task_done<'q, H, F: Future<Output = ()>, A: Alloc + Copy>(task: NonNul
     }
 }
 
-/// A TaskSlot's free: the home made, the task never. The home is dropped now,
-/// and the memory given back to A a grace period on: what's in it may be
-/// found under RCU - by kvfree_rcu(), batched, if kvfree() frees it.
+/// A TaskSlot's free: the home made, the task never, or gone. What's in it may
+/// be found under RCU, so the memory's given back to A a grace period on.
 ///
 /// # Safety
 /// @home is a WithTask<H, F, A>'s, its task not made or dropped.
 unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>) {
     unsafe {
         let w = WithTask::<'_, H, F, A>::of_home(home);
+        if <H as HomeDrop>::deferred() {
+            return Flavor::RCU.call(SlotMem::<H, F, A>(w.cast()), SlotMem::drop_free);
+        }
         core::ptr::drop_in_place(home.as_ptr());
         #[cfg(kernel)]
         if A::KVFREE {
@@ -275,10 +277,45 @@ unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>
     }
 }
 
-/// A WithTask's memory, its home and task gone: A's again a grace period on.
+/// When a home's dropped, as RcuFreeing's markers say: at once - or, with an
+/// RcuDropMember, its readers reaching what its drop frees, a grace period on,
+/// in the RCU callback.
+trait HomeDrop {
+    fn deferred() -> bool;
+}
+
+impl<H> HomeDrop for H {
+    default fn deferred() -> bool {
+        let () = DropSleeps::<H>::ERR;
+        true
+    }
+}
+
+impl<H: DropAtomic> HomeDrop for H {
+    default fn deferred() -> bool {
+        true
+    }
+}
+
+impl<H: DropAtomic + DropAnytime> HomeDrop for H {
+    fn deferred() -> bool {
+        false
+    }
+}
+
+struct DropSleeps<H>(PhantomData<H>);
+
+impl<H> DropSleeps<H> {
+    const ERR: () = panic!("a task's home dropped a grace period on, on the free queue - an RcuDropWorkMember's: \
+                            not done yet");
+}
+
+/// A WithTask's memory, its task gone, and its home - but an RcuDropMember's,
+/// dropped with it: A's again a grace period on.
 struct SlotMem<H, F: Future<Output = ()>, A: Alloc + Copy>(NonNull<WithTask<'static, H, F, A>>);
 
-// memory, which any thread may give back to A
+// memory, which any thread may give back to A - and an RcuDropMember's home,
+// which any thread may drop: every home is Send, as TaskSlot's makers require
 unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> Send for SlotMem<H, F, A> {}
 
 // its home and task gone, the memory is free_slot()'s alone
@@ -293,6 +330,12 @@ unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> RcuOwned for SlotMem<H, 
 }
 
 impl<H, F: Future<Output = ()>, A: Alloc + Copy> SlotMem<H, F, A> {
+    /// An RcuDropMember's home dropped, then its memory freed.
+    fn drop_free(self) {
+        unsafe { core::ptr::drop_in_place(&raw mut (*self.0.as_ptr()).home) };
+        self.free()
+    }
+
     fn free(self) {
         let w = self.0.as_ptr();
         unsafe {
