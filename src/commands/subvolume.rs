@@ -11,11 +11,10 @@ use bcachefs_kernel::c::{
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
-use bcachefs_kernel::util::vstructs::{plain_bytes, FakeFlexArray, Plain, UnvalidatedEntries, Unvalidated};
+use bcachefs_kernel::util::vstructs::{plain_bytes, UnvalidatedEntries, Unvalidated};
 
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
-    BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
+use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, FlexArrayIoctl, IoctlBuf,
     BCH_IOCTL_SUBVOLUME_LIST, BCH_IOCTL_SUBVOLUME_TO_PATH};
 
 // ---- CLI definitions ----
@@ -176,20 +175,6 @@ struct SnapshotTreeResult {
 const BCH_SUBVOLUME_RO:       u32 = 1 << 0;
 const BCH_SUBVOLUME_UNLINKED: u32 = 1 << 2;
 
-/// A header-plus-flexible-array ioctl with capacity/total retry protocol:
-/// nr in is capacity, ERANGE reports the required total.
-trait FlexArrayIoctl: FakeFlexArray + Plain + Copy {
-    type Ioc: Ioctl<Arg = Self>;
-    fn set_capacity(&mut self, n: u32);
-    fn total(&self) -> u32;
-
-    /// Bytes from one element of the reply to the next, given the header we
-    /// sent: our element's size, unless the header says what the kernel's is.
-    fn stride(&self, _sent: &Self) -> usize {
-        mem::size_of::<Self::Elem>()
-    }
-}
-
 fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
     fd: &OwnedFd,
     mut arg: H,
@@ -198,7 +183,7 @@ fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
 
     loop {
         arg.set_capacity(capacity);
-        let mut buf = IoctlBuf::<H>::new(capacity as usize);
+        let mut buf = IoctlBuf::<H>::with_capacity(capacity as usize);
         *buf.hdr_mut() = arg;
 
         match unsafe { ioctl_ptr::<H::Ioc>(fd, buf.as_mut_ptr()) } {
@@ -214,24 +199,6 @@ fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
         ensure!(stride > 0, "{}: the kernel says its elements are 0 bytes", std::any::type_name::<H>());
         let nodes = buf.tail_strided(stride)?;
         return Ok((*buf.hdr(), nodes));
-    }
-}
-
-impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
-    type Ioc = BCH_IOCTL_SNAPSHOT_TREE;
-    fn set_capacity(&mut self, n: u32) { self.nr = n; }
-    fn total(&self) -> u32 { self.total }
-}
-
-impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
-    type Ioc = BCH_IOCTL_SNAPSHOT_TREE_v2;
-    fn set_capacity(&mut self, n: u32) { self.nr = n; }
-    fn total(&self) -> u32 { self.total }
-
-    /// node_size: ours going in, the kernel's coming back. It writes the
-    /// smaller of the two per node, and steps by that.
-    fn stride(&self, sent: &Self) -> usize {
-        self.node_size.min(sent.node_size) as usize
     }
 }
 

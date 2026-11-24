@@ -12,8 +12,8 @@
 //! from fewer bytes than the header.
 //!
 //! What a variable-size type can be, most general first:
-//!  - FakeFlexArray: sized, a #[counted_by] array running past its size_of -
-//!    a DST typed as its header, to be converted.
+//!  - FakeFlexArray: sized, a #[counted] family's head, its array running
+//!    past its size_of - the DST typed as its header, to be converted.
 //!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
 //!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
 //!    says how long it is, as an unsized vstruct's does.
@@ -39,7 +39,7 @@
 //!
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
-//!  - devs[]: #[counted]; FakeFlexArray where it's read by stride
+//!  - devs[]: #[counted]
 //!  - vstruct_for_each(), vstruct_next(), vstruct_last(): entries()
 //!
 //! What's trusted: Plain, that any bytes are a valid value - which
