@@ -788,7 +788,7 @@ impl Fs {
          * the node is currently DIRTY, so when reclaim moves a node to
          * FREEABLE while its write is still in flight the node legitimately
          * stays on bc->freeable until the write finishes. Going-RO needs
-         * drained writes for the asserts in btree_cache_exit()'s
+         * drained writes for the asserts in the cache's placed_drop()'s
          * freeable walk.
          *
          * One pass: a flagged node is waited on with RCU dropped - we don't

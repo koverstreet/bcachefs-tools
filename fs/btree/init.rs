@@ -271,46 +271,50 @@
  */
 
 use crate::btree::trans::cached_trans_retire;
+use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::util::place::{Contained, PlacedDrop};
 use crate::util::rcu::Flavor;
 use core::ptr::NonNull;
 
-/// # Safety
-/// Nothing uses @fs's transactions meanwhile, or after.
-unsafe fn btree_iter_exit(fs: &Fs) {
-    let t = &fs.btree.trans;
+impl PlacedDrop for c::bch_fs_btree_trans {
+    unsafe fn placed_drop(&self) {
+        let fs = self.container().container();
 
-    if t.bufs.allocated() {
-        for buf in t.bufs.get().cpus() {
-            if let Some(trans) = NonNull::new(buf.get().trans) {
-                cached_trans_retire(fs, trans);
+        if self.bufs.allocated() {
+            for buf in self.bufs.get().cpus() {
+                if let Some(trans) = NonNull::new(buf.get().trans) {
+                    cached_trans_retire(fs, trans);
+                }
             }
         }
+
+        fs.with_trans_list(|list| {
+            if let Some(trans) = list.first() {
+                panic!("{} leaked btree_trans", trans.fn_name());
+            }
+        });
+
+        /* Drain pending PooledTrans frees before the pool is gone. */
+        Flavor::RCU.barrier();
     }
-
-    fs.with_trans_list(|list| {
-        if let Some(trans) = list.first() {
-            panic!("{} leaked btree_trans", trans.fn_name());
-        }
-    });
-
-    /* Drain pending PooledTrans frees before the pool is gone. */
-    Flavor::RCU.barrier();
 }
 
-/// # Safety
-/// Nothing uses @fs's btrees after.
-pub(crate) unsafe fn btree_exit(fs: &Fs) {
-    fs.btree_write_buffer_exit();
-    fs.btree.key_cache.exit();
-    unsafe {
-        btree_iter_exit(fs);
-        fs.btree_cache_exit();
-    }
+impl PlacedDrop for c::bch_fs_btree {
+    unsafe fn placed_drop(&self) {
+        let fs = self.container();
 
-    if fs.btree.read_complete_wq.is_some() {
-        fs.btree.read_complete_wq.drain();
+        fs.btree_write_buffer_exit();
+        self.key_cache.exit();
+        unsafe {
+            self.trans.placed_drop();
+            self.cache.placed_drop();
+        }
+
+        if self.read_complete_wq.is_some() {
+            self.read_complete_wq.drain();
+        }
     }
 }
 

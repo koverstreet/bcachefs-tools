@@ -13,7 +13,7 @@ use crate::locking::six::six_lock_counts;
 use crate::prt;
 use crate::os::kernel::cond_resched;
 use crate::util::log::LogMsg;
-use crate::util::place::PlacedDrop;
+use crate::util::place::{Contained, PlacedDrop};
 use c::BtreeNodeCacheState as State;
 use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::ptr::NonNull;
@@ -113,11 +113,11 @@ impl Fs {
         drop(held);
         cond_resched();
     }
+}
 
-    /// # Safety
-    /// Nothing uses the cache after.
-    pub unsafe fn btree_cache_exit(&self) {
-        let bc = &self.btree.cache;
+impl PlacedDrop for c::bch_fs_btree_cache {
+    unsafe fn placed_drop(&self) {
+        let (fs, bc) = (self.container().container(), self);
 
         for s in bc.shrinkers.iter().rev() {
             unsafe { s.placed_drop() }
@@ -130,8 +130,8 @@ impl Fs {
          * walks below can rely on trylock succeeding without racing with
          * still-finishing post-write work.
          */
-        if self.btree.write_complete_wq.is_made() {
-            self.btree.write_complete_wq.drain();
+        if fs.btree.write_complete_wq.is_made() {
+            fs.btree.write_complete_wq.drain();
         }
 
         /* vfree() can allocate memory: */
@@ -145,17 +145,17 @@ impl Fs {
                     };
                     while let Some((lists, b)) = walk.next() {
                         b.flags.set_permanent(false);
-                        self.btree_cache_exit_drain_node(lists, b);
+                        fs.btree_cache_exit_drain_node(lists, b);
                     }
                 }
             }
 
             let mut walk = unsafe { Walk::new(&mut lists, |l| &mut l.freeable) };
             while let Some((lists, b)) = walk.next() {
-                self.btree_cache_exit_drain_node(lists, b);
+                fs.btree_cache_exit_drain_node(lists, b);
             }
 
-            assert!(self.journal.error().is_err() ||
+            assert!(fs.journal.error().is_err() ||
                     (bc.lock.live_nr[0].nr_dirty.get() == 0 && bc.lock.live_nr[1].nr_dirty.get() == 0),
                     "dirty nodes at cache exit, with the journal live");
 
@@ -163,7 +163,7 @@ impl Fs {
             for freed in [&mut l.freed_pcpu, &mut l.freed_nonpcpu] {
                 let mut cur = freed.cursor_mut();
                 while let Some(b) = cur.remove_current() {
-                    unsafe { node_mem_free(self, NonNull::from(b)) };
+                    unsafe { node_mem_free(fs, NonNull::from(b)) };
                 }
             }
 
