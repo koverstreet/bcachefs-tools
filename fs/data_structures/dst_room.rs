@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! DstRoom<T, B>: one T - an Unsized whose header says how long it is - at
-//! the front of its storage B, the rest room for it to grow into: ArrayVec's,
-//! for a single value. B is [E; N], its room a type parameter, or [E], a
-//! value's: one struct, either dereferencing to its T, and the first coercing
-//! to the second. Or B is an InlineOrBoxed - InlineVec's, for a single value:
-//! its room in itself, and once that's outgrown, a boxed slice.
+//! DstRoom<T, B>: one T - SelfSized, its head saying how long it is - at the
+//! front of its storage B, the rest room for it to grow into: ArrayVec's, for
+//! a single value. B is [E; N], its room a type parameter, or [E], a value's:
+//! one struct, either dereferencing to its T, and the first coercing to the
+//! second. Or B is an InlineOrBoxed - InlineVec's, for a single value: its
+//! room in itself, and once that's outgrown, a boxed slice. Or an
+//! AlignedBox<[E], A>, for storage IO needs aligned further.
 //!
 //! The storage is its own element type, not T's: a T's tail may be bytes
 //! under a header of words, as a typed key's value is under its bkey.
 
-use crate::util::alloc::{flags, AllocGfp, Box, Kmalloc};
+use crate::util::alloc::{flags, AlignedBox, AllocGfp, Box, Kmalloc};
 use crate::util::vstructs::{Plain, SelfSized, Unsized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
@@ -49,6 +50,18 @@ impl<E: Plain> Storage for [E] {
 }
 
 impl<E: Plain, const N: usize> Storage for [E; N] {
+    type Elem = E;
+
+    fn elems(&self) -> &[E] {
+        self
+    }
+
+    fn elems_mut(&mut self) -> &mut [E] {
+        self
+    }
+}
+
+impl<E: Plain, const A: usize> Storage for AlignedBox<[E], A> {
     type Elem = E;
 
     fn elems(&self) -> &[E] {
@@ -219,3 +232,13 @@ impl<T: ?Sized, E: Plain + Copy, const N: usize> Copy for DstRoom<T, [E; N]> {}
 
 // plain storage, every bit pattern of which is some T's room
 unsafe impl<T: ?Sized, E: Plain, const N: usize> ::pin_init::Zeroable for DstRoom<T, [E; N]> {}
+
+// #[repr(transparent)] over B: None is its None
+unsafe impl<T: ?Sized, B: ::pin_init::ZeroableOption> ::pin_init::ZeroableOption for DstRoom<T, B> {}
+
+impl<T: ?Sized, B: Storage> DstRoom<T, B> {
+    /// @buf as a room, holding what it holds.
+    pub fn from_storage(buf: B) -> Self {
+        DstRoom { _t: PhantomData, buf }
+    }
+}
