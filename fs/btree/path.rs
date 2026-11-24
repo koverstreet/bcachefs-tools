@@ -227,9 +227,9 @@ impl Paths<'_> {
     /// Write over the intent path @idx holds at @level, which nodes_locked
     /// already says is write - marked before the wait, for the cycle detector
     /// to see - waited for with @wait, the transaction's own read holds on the
-    /// node set aside meanwhile. On failure, six's error, and the level's back
-    /// to intent.
-    pub(crate) fn lock_write_marked(&mut self, idx: PathIdx, level: usize, wait: &c::six_lock_waiter,
+    /// node set aside meanwhile. On failure, six's error: the lock's back to
+    /// intent, and the caller marks the level so, after the wait.
+    pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &c::six_lock_waiter,
                                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
         ebug_assert!(self[idx].write_locked(level), "taking write at a level not marked for it");
         let node = self[idx].held_node(level);
@@ -244,7 +244,7 @@ impl Paths<'_> {
                 Ok(())
             }
             Err((intent, e)) => {
-                self[idx].mark_locked_noreset(level, BtreeNodeLockedType::from_six(intent.into_raw()));
+                intent.into_raw();
                 Err(e)
             }
         }

@@ -478,18 +478,10 @@ impl BtreeTrans<'_> {
     }
 
     /// The wait for a write lock BtreePath::try_lock_write() didn't get: @ip is
-    /// lockdep's.
+    /// lockdep's, C's _RET_IP_.
+    #[inline(never)]
     pub(crate) fn node_lock_write_wait(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
                                        lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
-        let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
-        let b = unsafe { &*ptr::from_ref(b.node()) };
-        self.node_lock_write_contended(paths, idx, b, lock_may_not_fail, ip)
-    }
-
-    /// @ip is lockdep's: C's _RET_IP_.
-    #[inline(never)]
-    fn node_lock_write_contended(&self, paths: &mut Paths<'_>, idx: PathIdx, b: &c::btree_bkey_cached_common,
-                                 lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
         self.locking_hash_val.set(0);
         self.locking_root_id.set(Btree(u32::MAX));
 
@@ -499,9 +491,18 @@ impl BtreeTrans<'_> {
          * goes to 0, and it's safe because we have the node intent
          * locked:
          */
-        self.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
-            paths.lock_write_marked(idx, b.level.get() as usize, wait, should_sleep_fn, ip)
-        })
+        let ret = {
+            let paths = &*paths;
+            let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
+            self.node_lock_nopath(b.node(), lock_may_not_fail, |wait, should_sleep_fn| {
+                paths.lock_write_marked(idx, level, wait, should_sleep_fn, ip)
+            })
+        };
+
+        if ret.is_err() {
+            paths[idx].mark_locked_noreset(level, BtreeNodeLockedType::BTREE_NODE_INTENT_LOCKED);
+        }
+        ret
     }
 
     /*
