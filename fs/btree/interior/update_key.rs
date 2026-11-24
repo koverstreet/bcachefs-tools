@@ -8,6 +8,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::path::Paths;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::c;
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
@@ -48,15 +49,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
     fn node_update_key(&self, iter: &mut BtreeIter<'a>, node: BtreeNodeRef, key: TransBkey<'_, 't>,
                        flags: CommitOpts, skip_triggers: bool) -> Result<(), BchError> {
         let trans = self.trans();
-        let level = usize::from(trans.paths()[iter.path].level());
+        {
+            let mut paths = trans.paths();
+            let level = usize::from(paths[iter.path].level());
 
-        /*
-         * Awkward - we can't rely on caller specifying BTREE_ITER_intent, and
-         * the commit will downgrade locks
-         */
-        trans.path_upgrade(&mut trans.paths(), iter.path, level + 1, crate::ret_ip!())?;
+            /*
+             * Awkward - we can't rely on caller specifying BTREE_ITER_intent, and
+             * the commit will downgrade locks
+             */
+            trans.path_upgrade(&mut paths, iter.path, level + 1, crate::ret_ip!())?;
 
-        trans.paths()[iter.path].intent_ref += 1;
+            paths[iter.path].intent_ref += 1;
+        }
         let ret = self.node_update_key_in(iter, node, key, flags, skip_triggers);
         trans.paths()[iter.path].intent_ref -= 1;
         ret
@@ -66,16 +70,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
                           flags: CommitOpts, skip_triggers: bool) -> Result<(), BchError> {
         let trans = self.trans();
         let fs = self.fs();
-        let level = usize::from(trans.paths()[iter.path].level());
-        let (btree, new_node, old) = {
+        let (level, btree, new_node, old) = {
             let paths = trans.paths();
+            let level = usize::from(paths[iter.path].level());
             let b = paths[iter.path].locked_btree_node(level)
                 .filter(|b| ptr::eq(b.node(), node.as_ptr()))
                 .expect("updating the key of a node its iterator doesn't hold");
             assert!(!b.is_fake(), "updating a fake node's key");
             assert!(paths[iter.path].intent_locked(level), "updating the key of a node not intent locked");
 
-            (Btree(b.c.btree_id.get().into()), b.will_make_reachable(), b.key_peek())
+            (level, Btree(b.c.btree_id.get().into()), b.will_make_reachable(), b.key_peek())
         };
 
         if new_node {
@@ -138,21 +142,19 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let res = DiskReservation::new(fs);
         self.commit(Some(&res), flags)?;
 
-        {
-            let paths = trans.paths();
-            let new_b = paths[iter.path].locked_btree_node(level).expect("a node held across the commit");
-            if !ptr::eq(new_b.node(), node.as_ptr()) {
-                /*
-                 * We were asked to update the key for a node that was
-                 * also modified during the commit (due to triggers),
-                 * and that node was freed:
-                 */
-                assert!(new_b.will_make_reachable(), "a node replaced in its key's commit, by one not yet reachable");
-                return Ok(());
-            }
+        let mut paths = trans.paths();
+        let new_b = paths[iter.path].locked_btree_node(level).expect("a node held across the commit");
+        if !ptr::eq(new_b.node(), node.as_ptr()) {
+            /*
+             * We were asked to update the key for a node that was
+             * also modified during the commit (due to triggers),
+             * and that node was freed:
+             */
+            assert!(new_b.will_make_reachable(), "a node replaced in its key's commit, by one not yet reachable");
+            return Ok(());
         }
 
-        self.node_key_set(iter, level, &key);
+        self.node_key_set(&mut paths, iter, level, &key);
         Ok(())
     }
 
@@ -163,11 +165,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         let trans = self.trans();
         let fs = self.fs();
-        let level = usize::from(trans.paths()[iter.path].level());
+        let mut paths = trans.paths();
+        let level = usize::from(paths[iter.path].level());
 
-        let mut commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
+        let mut commit_lock = trans.mutex_lock(&mut paths, &fs.btree.interior_updates.commit_lock)?;
 
-        let Some(update) = trans.paths()[iter.path].locked_btree_node(level)
+        let Some(update) = paths[iter.path].locked_btree_node(level)
             .expect("a new node, held by its path").will_make_reachable.update() else {
             return Err(trans.restart(Errcode::transaction_restart_nested));
         };
@@ -182,19 +185,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
          */
         strip_reconcile(fs, key.as_s());
 
-        self.node_key_set(iter, level, &key);
+        self.node_key_set(&mut paths, iter, level, &key);
 
         unsafe { update.as_ref() }.new_node_key_set(&mut commit_lock, node.as_ptr(), key.as_sc());
         Ok(())
     }
 
     /// The node at @level's own copy of its key made @key, under its write lock.
-    fn node_key_set(&self, iter: &BtreeIter<'a>, level: usize, key: &TransBkey<'_, 't>) {
+    fn node_key_set(&self, paths: &mut Paths<'_>, iter: &BtreeIter<'a>, level: usize, key: &TransBkey<'_, 't>) {
         let trans = self.trans();
-        let mut paths = trans.paths();
 
-        trans.node_lock_write_nofail(&mut paths, iter.path, level);
+        trans.node_lock_write_nofail(paths, iter.path, level);
         paths[iter.path].locked_btree_node_mut(level).expect("a node write locked for its key").set_key(key.as_sc());
-        trans.node_unlock_write(&mut paths, iter.path, level);
+        trans.node_unlock_write(paths, iter.path, level);
     }
 }
