@@ -14,8 +14,7 @@
 //! non-reentrant only on one.
 
 use super::{Header, TaskRef};
-use crate::c;
-use crate::os::workqueue::{run_raw, Queue, WorkAt};
+use crate::os::workqueue::{run_raw, Queue, RawWork, WorkAt};
 use crate::util::futex::EventCount;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
@@ -36,17 +35,12 @@ pub struct RunQueue {
     events:  EventCount,
     /// A worked one's, never queued for a thread's
     #[pin]
-    work:    c::work_struct,
+    work:    RawWork,
     /// A worked one's: where its work is queued, from set_queue()
     queue:   SetOnce<&'static Queue>,
     #[pin]
     _pinned: PhantomPinned,
 }
-
-// pushed to from any context; its work is only queued, by the workqueue's
-// rules, never touched in place
-unsafe impl Send for RunQueue {}
-unsafe impl Sync for RunQueue {}
 
 impl RunQueue {
     /// Made with its owner: a thread's, or a worked one's, whose queue's set
@@ -82,7 +76,7 @@ impl RunQueue {
         let q = *self.queue.as_ref().expect("an await resumed on a RunQueue with no work of its own");
         unsafe {
             self.push(h);
-            q.queue_work(core::ptr::from_ref(&self.work).cast_mut());
+            self.work.queue(q);
         }
     }
 

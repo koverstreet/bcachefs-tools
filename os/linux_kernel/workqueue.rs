@@ -16,11 +16,13 @@
 //! to it is had back as the ReffedWork, and its container() as the parent F
 //! runs on. DelayedWork<F, R> is the same, after a delay: both in work.rs.
 //!
-//! RawDelayedWork is struct delayed_work, bare, for a parent not made by
-//! #[derive(Init)]. The kernel crate's DelayedWork is for Arc-owned work
-//! items, and userspace has none: this is the bare struct, initialized with
-//! its function as C's INIT_DELAYED_WORK() - in-kernel with a lockdep class
-//! per call site, as the kernel crate's.
+//! RawWork and RawDelayedWork are struct work_struct and struct delayed_work,
+//! bare - under the works above, or for a parent not made by
+//! #[derive(Init)] - queued and cancelled through them, the C calls here
+//! alone. The kernel crate's are for Arc-owned work items, and userspace has
+//! none: these are the bare structs, initialized with their function as C's
+//! INIT_WORK() and INIT_DELAYED_WORK() - in-kernel with a lockdep class per
+//! call site, as the kernel crate's.
 
 use crate::c;
 use crate::util::alloc::AllocError;
@@ -176,54 +178,11 @@ impl Queue {
         // SAFETY: the system's
         unsafe { Self::from_raw(c::system_highpri_wq) }
     }
-
-    /// Run @work here: queue_work(). False if it was queued already - then
-    /// that run is the one there'll be.
-    ///
-    /// # Safety
-    /// @work is initialized, and lives until its function has run.
-    pub unsafe fn queue_work(&self, work: *mut c::work_struct) -> bool {
-        // SAFETY: the caller's
-        unsafe { c::queue_work(self.as_ptr(), work) }
-    }
-
-    /// queue_work(), to run on @cpu: queue_work_on().
-    ///
-    /// # Safety
-    /// As queue_work()'s.
-    pub unsafe fn queue_work_on(&self, cpu: u32, work: *mut c::work_struct) -> bool {
-        unsafe { kernel::bindings::queue_work_on(cpu as core::ffi::c_int, self.as_ptr().cast(), work.cast()) }
-    }
-}
-
-/// Wait for @work's last queueing to have run: flush_work().
-///
-/// # Safety
-/// @work is initialized.
-pub unsafe fn flush_work(work: *mut c::work_struct) {
-    unsafe { kernel::bindings::flush_work(work.cast()) };
-}
-
-/// Not queued any more, and not running - waiting out a run that is:
-/// cancel_work_sync(). Whether it was pending.
-///
-/// # Safety
-/// @work is initialized.
-pub unsafe fn cancel_work_sync(work: *mut c::work_struct) -> bool {
-    unsafe { kernel::bindings::cancel_work_sync(work.cast()) }
 }
 
 /// The running worker's description, as a hung task's report shows it.
 pub fn set_worker_desc(desc: &CStr) {
     unsafe { c::bch2_set_worker_desc(desc.as_ptr().cast()) }
-}
-
-/// Whether @work is queued or running, as of the look: work_busy().
-///
-/// # Safety
-/// @work is initialized.
-pub unsafe fn work_busy(work: *mut c::work_struct) -> bool {
-    unsafe { kernel::bindings::work_busy(work.cast()) != 0 }
 }
 
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
@@ -245,29 +204,12 @@ pub unsafe extern "C" fn run_raw<T: WorkAt>(work: *mut c::work_struct) {
     unsafe { T::run(NonNull::new_unchecked(work.byte_sub(T::WORK).cast())) }
 }
 
-/// INIT_WORK(): a C work_struct, in place, running C's @func - with a lockdep
-/// class of its own, @key, named @name: new_work!()'s.
-#[doc(hidden)]
-pub fn work_init(
-    func: WorkFn,
-    name: &'static core::ffi::CStr,
-    key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
-) -> impl ::pin_init::PinInit<c::work_struct> {
-    // SAFETY: initialized in place, all of it
-    unsafe {
-        ::pin_init::pin_init_from_closure(move |slot: *mut c::work_struct| {
-            c::init_work_with_key(slot, Some(func), false, name.as_ptr().cast(), key.as_ptr());
-            Ok(())
-        })
-    }
-}
-
-/// A C work_struct's initializer, running C's @func, its lockdep class the
-/// call site's, named @name: INIT_WORK().
+/// A RawWork's initializer, running C's @func, its lockdep class the call
+/// site's, named @name: INIT_WORK().
 #[macro_export]
 macro_rules! new_work {
     ($func:expr, $name:literal $(,)?) => {
-        $crate::os::workqueue::work_init(
+        $crate::os::workqueue::RawWork::new(
             $func,
             const { $crate::util::ffi::c_str(::core::concat!($name, "\0")) },
             ::kernel::static_lock_class!())
@@ -291,6 +233,70 @@ macro_rules! new_delayed_work {
 #[path = "../work.rs"]
 mod work;
 pub(crate) use work::{DelayedWork, OnQueue, Own, ReffedWork, WorkFunc};
+
+#[repr(transparent)]
+pub struct RawWork {
+    work: UnsafeCell<c::work_struct>,
+    _pin: PhantomPinned,
+}
+
+unsafe impl Send for RawWork {}
+unsafe impl Sync for RawWork {}
+
+impl RawWork {
+    /// The work, with a lockdep class of its own, @key, named @name.
+    #[doc(hidden)]
+    pub fn new(
+        func: WorkFn,
+        name: &'static core::ffi::CStr,
+        key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
+    ) -> impl ::pin_init::PinInit<Self> {
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                c::init_work_with_key(slot.cast(), Some(func), false, name.as_ptr().cast(), key.as_ptr());
+                Ok(())
+            })
+        }
+    }
+
+    fn as_ptr(&self) -> *mut c::work_struct {
+        self.work.get()
+    }
+
+    /// Run on @wq: queue_work(). False if it was queued already - then that
+    /// run is the one there'll be.
+    ///
+    /// # Safety
+    /// It lives until its function has run: the workqueue has it by address
+    /// till then.
+    pub unsafe fn queue(&self, wq: &Queue) -> bool {
+        unsafe { c::queue_work(wq.as_ptr(), self.as_ptr()) }
+    }
+
+    /// queue(), to run on @cpu: queue_work_on().
+    ///
+    /// # Safety
+    /// As queue()'s.
+    pub unsafe fn queue_on(&self, wq: &Queue, cpu: u32) -> bool {
+        unsafe { kernel::bindings::queue_work_on(cpu as c_int, wq.as_ptr().cast(), self.as_ptr().cast()) }
+    }
+
+    /// Its last queueing run: flush_work().
+    pub fn flush(&self) {
+        unsafe { kernel::bindings::flush_work(self.as_ptr().cast()) };
+    }
+
+    /// Not queued any more, and not running - waiting out a run that is:
+    /// cancel_work_sync(). Whether it was pending.
+    pub fn cancel_sync(&self) -> bool {
+        unsafe { kernel::bindings::cancel_work_sync(self.as_ptr().cast()) }
+    }
+
+    /// Whether it's queued or running, as of the look: work_busy().
+    pub fn busy(&self) -> bool {
+        unsafe { kernel::bindings::work_busy(self.as_ptr().cast()) != 0 }
+    }
+}
 
 #[repr(transparent)]
 pub struct RawDelayedWork {
@@ -332,13 +338,19 @@ impl RawDelayedWork {
 
     /// Run on @wq after @delay jiffies: queue_delayed_work(). False if it was
     /// already queued - then that run is the one there'll be.
-    pub fn queue(&self, wq: &Queue, delay: c_ulong) -> bool {
+    ///
+    /// # Safety
+    /// As RawWork::queue()'s.
+    pub unsafe fn queue(&self, wq: &Queue, delay: c_ulong) -> bool {
         unsafe { c::queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 
     /// Run on @wq after @delay jiffies, from now - re-armed if it was already
     /// queued: mod_delayed_work().
-    pub fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
+    ///
+    /// # Safety
+    /// As RawWork::queue()'s.
+    pub unsafe fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
         unsafe {
             kernel::bindings::mod_delayed_work_on(kernel::bindings::wq_misc_consts_WORK_CPU_UNBOUND as c_int,
                                                   wq.as_ptr().cast(), self.as_ptr().cast(), delay as usize)

@@ -16,8 +16,11 @@
 //! to it is had back as the ReffedWork, and its container() as the parent F
 //! runs on. DelayedWork<F, R> is the same, after a delay: both in work.rs.
 //!
-//! RawDelayedWork is struct delayed_work, bare, for a parent not made by
-//! #[derive(Init)]: initialized with its function as C's INIT_DELAYED_WORK().
+//! RawWork and RawDelayedWork are struct work_struct and struct delayed_work,
+//! bare - under the works above, or for a parent not made by
+//! #[derive(Init)] - queued and cancelled through them, the shim's calls here
+//! alone: initialized with their function as C's INIT_WORK() and
+//! INIT_DELAYED_WORK().
 //!
 //! The kernel port's interface, over the shim's workqueues: queues.rs.
 
@@ -170,55 +173,10 @@ impl Queue {
         // SAFETY: the system's
         unsafe { Self::from_raw((&raw mut queues::EVENTS_HIGHPRI).cast()) }
     }
-
-    /// Run @work here: queue_work(). False if it was queued already - then
-    /// that run is the one there'll be.
-    ///
-    /// # Safety
-    /// @work is initialized, and lives until its function has run.
-    pub unsafe fn queue_work(&self, work: *mut c::work_struct) -> bool {
-        // SAFETY: the caller's
-        unsafe { queues::queue_work(self.as_ptr(), work) }
-    }
-
-    /// queue_work(), to run on @cpu: queue_work_on(). There's no CPU to
-    /// choose here.
-    ///
-    /// # Safety
-    /// As queue_work()'s.
-    pub unsafe fn queue_work_on(&self, _cpu: u32, work: *mut c::work_struct) -> bool {
-        unsafe { self.queue_work(work) }
-    }
-}
-
-/// Wait for @work's last queueing to have run: flush_work().
-///
-/// # Safety
-/// @work is initialized.
-pub unsafe fn flush_work(work: *mut c::work_struct) {
-    unsafe { queues::flush_work(work) };
-}
-
-/// Not queued any more, and not running - waiting out a run that is:
-/// cancel_work_sync(). Whether it was pending.
-///
-/// # Safety
-/// @work is initialized.
-pub unsafe fn cancel_work_sync(work: *mut c::work_struct) -> bool {
-    unsafe { queues::cancel_work_sync(work) }
 }
 
 /// The running worker's description: userspace's workers have none.
 pub fn set_worker_desc(_desc: &CStr) {}
-
-/// Whether @work is queued or running, as of the look: work_busy(). The shim's
-/// workqueues don't say.
-///
-/// # Safety
-/// @work is initialized.
-pub unsafe fn work_busy(_work: *mut c::work_struct) -> bool {
-    false
-}
 
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
 
@@ -239,24 +197,12 @@ pub unsafe extern "C" fn run_raw<T: WorkAt>(work: *mut c::work_struct) {
     unsafe { T::run(NonNull::new_unchecked(work.byte_sub(T::WORK).cast())) }
 }
 
-/// INIT_WORK(): a C work_struct, in place, running C's @func: new_work!()'s.
-#[doc(hidden)]
-pub fn work_init(func: WorkFn) -> impl ::pin_init::PinInit<c::work_struct> {
-    // SAFETY: initialized in place, all of it
-    unsafe {
-        ::pin_init::pin_init_from_closure(move |slot: *mut c::work_struct| {
-            queues::init_work(slot, func);
-            Ok(())
-        })
-    }
-}
-
-/// A C work_struct's initializer, running C's @func: INIT_WORK(). @name is
-/// the kernel port's, for its lockdep class.
+/// A RawWork's initializer, running C's @func: INIT_WORK(). @name is the
+/// kernel port's, for its lockdep class.
 #[macro_export]
 macro_rules! new_work {
     ($func:expr, $name:literal $(,)?) => {
-        $crate::os::workqueue::work_init($func)
+        $crate::os::workqueue::RawWork::new($func)
     };
 }
 
@@ -272,6 +218,68 @@ macro_rules! new_delayed_work {
 #[path = "../work.rs"]
 mod work;
 pub(crate) use work::{DelayedWork, OnQueue, Own, ReffedWork, WorkFunc};
+
+#[repr(transparent)]
+pub struct RawWork {
+    work: UnsafeCell<c::work_struct>,
+    _pin: PhantomPinned,
+}
+
+unsafe impl Send for RawWork {}
+unsafe impl Sync for RawWork {}
+
+impl RawWork {
+    /// INIT_WORK().
+    #[doc(hidden)]
+    pub fn new(func: WorkFn) -> impl ::pin_init::PinInit<Self> {
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                queues::init_work(slot.cast(), func);
+                Ok(())
+            })
+        }
+    }
+
+    fn as_ptr(&self) -> *mut c::work_struct {
+        self.work.get()
+    }
+
+    /// Run on @wq: queue_work(). False if it was queued already - then that
+    /// run is the one there'll be.
+    ///
+    /// # Safety
+    /// It lives until its function has run: the workqueue has it by address
+    /// till then.
+    pub unsafe fn queue(&self, wq: &Queue) -> bool {
+        unsafe { queues::queue_work(wq.as_ptr(), self.as_ptr()) }
+    }
+
+    /// queue(), to run on @cpu: queue_work_on(). There's no CPU to choose
+    /// here.
+    ///
+    /// # Safety
+    /// As queue()'s.
+    pub unsafe fn queue_on(&self, wq: &Queue, _cpu: u32) -> bool {
+        unsafe { self.queue(wq) }
+    }
+
+    /// Its last queueing run: flush_work().
+    pub fn flush(&self) {
+        unsafe { queues::flush_work(self.as_ptr()) };
+    }
+
+    /// Not queued any more, and not running - waiting out a run that is:
+    /// cancel_work_sync(). Whether it was pending.
+    pub fn cancel_sync(&self) -> bool {
+        unsafe { queues::cancel_work_sync(self.as_ptr()) }
+    }
+
+    /// Whether it's queued or running, as of the look: work_busy(). The
+    /// shim's workqueues don't say.
+    pub fn busy(&self) -> bool {
+        false
+    }
+}
 
 #[repr(transparent)]
 pub struct RawDelayedWork {
@@ -302,13 +310,19 @@ impl RawDelayedWork {
 
     /// Run on @wq after @delay jiffies: queue_delayed_work(). False if it was
     /// already queued - then that run is the one there'll be.
-    pub fn queue(&self, wq: &Queue, delay: c_ulong) -> bool {
+    ///
+    /// # Safety
+    /// As RawWork::queue()'s.
+    pub unsafe fn queue(&self, wq: &Queue, delay: c_ulong) -> bool {
         unsafe { queues::queue_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 
     /// Run on @wq after @delay jiffies, from now - re-armed if it was already
     /// queued: mod_delayed_work().
-    pub fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
+    ///
+    /// # Safety
+    /// As RawWork::queue()'s.
+    pub unsafe fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
         unsafe { queues::mod_delayed_work(wq.as_ptr(), self.as_ptr(), delay) }
     }
 

@@ -3,14 +3,13 @@
 //! ReffedWork and DelayedWork, the same in both builds, over each one's
 //! workqueue - but their classes, in-kernel a lockdep class per field.
 
-use super::{Queue, RawDelayedWork, Workqueue};
+use super::{Queue, RawDelayedWork, RawWork, WorkFn, Workqueue};
 use crate::c;
 use crate::util::late::{Late, LateLock};
 use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
-use core::cell::UnsafeCell;
 use core::ffi::c_ulong;
-use core::marker::{PhantomData, PhantomPinned};
+use core::marker::PhantomData;
 use pin_init::{pin_data, pin_init};
 
 /// A field's work's class: in-kernel its lockdep class - @key, named @name.
@@ -18,6 +17,16 @@ use pin_init::{pin_data, pin_init};
 pub(crate) type WorkClass = (&'static core::ffi::CStr, core::pin::Pin<&'static kernel::sync::LockClassKey>);
 #[cfg(not(kernel))]
 pub(crate) type WorkClass = ();
+
+/// A placed work's RawWork, running @func, of its field's @class.
+#[cfg(kernel)]
+fn raw_work(func: WorkFn, (name, key): WorkClass) -> impl ::pin_init::PinInit<RawWork> {
+    RawWork::new(func, name, key)
+}
+#[cfg(not(kernel))]
+fn raw_work(func: WorkFn, (): WorkClass) -> impl ::pin_init::PinInit<RawWork> {
+    RawWork::new(func)
+}
 
 /// A ReffedWork's or DelayedWork's function as a type, and the field it runs
 /// from: for a field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes
@@ -51,13 +60,13 @@ pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 /// borrow held - so it's never copied, cloned or moved: it's not Copy or
 /// Clone, and !Unpin, checked below. A mem::swap() of two through &mut
 /// parents would still move one: place.rs's known gap, Fs never had by &mut.
+#[pin_data]
 #[repr(C)]
-pub(crate) struct ReffedWork<F: WorkFunc, R> {
-    work:       UnsafeCell<c::work_struct>,
+pub(crate) struct ReffedWork<F: WorkFunc, Refs> {
+    #[pin]
+    work:       RawWork,
     _placed_at: F::At,
-    _r:         PhantomData<fn() -> R>,
-    /// !Unpin - a PhantomData of it, as At's, for improper_ctypes
-    _pin:       PhantomData<PhantomPinned>,
+    _r:         PhantomData<fn() -> Refs>,
 }
 
 // Not Copy, Clone or Unpin: an impl of either trait makes check()'s call
@@ -77,10 +86,6 @@ const _: () = {
         let _ = <ReffedWork<F, R> as NotImpl<_>>::check;
     }
 };
-
-// SAFETY: the workqueue's to synchronize, from any thread
-unsafe impl<F: WorkFunc, R> Send for ReffedWork<F, R> {}
-unsafe impl<F: WorkFunc, R> Sync for ReffedWork<F, R> {}
 
 impl<F: WorkFunc, R> Contained for ReffedWork<F, R>
 where
@@ -207,8 +212,7 @@ where
         let wq = R::queue_of(p, on);
         // taken first: the run can start, and put them, as soon as it's queued
         let Some(r) = R::tryget_live(p) else { return false };
-        // SAFETY: made in place, by new(); the refs keep it, for the run
-        if unsafe { wq.queue_work(self.work.get()) } {
+        if unsafe { self.work.queue(wq) } {
             // the run's, which adopts them
             core::mem::forget(r);
         }
@@ -218,16 +222,14 @@ where
 
     /// Its last queueing run: flush_work().
     pub(crate) fn flush(&self) {
-        // SAFETY: made in place, by new()
-        unsafe { super::flush_work(self.work.get()) }
+        self.work.flush()
     }
 
     /// Not queued any more, and not running - waiting out a run that is:
     /// cancel_work_sync(). A pending run taken off has its refs put. Whether
     /// it was pending.
     pub(crate) fn cancel_sync(&self) -> bool {
-        // SAFETY: made in place, by new()
-        let pending = unsafe { super::cancel_work_sync(self.work.get()) };
+        let pending = self.work.cancel_sync();
         if pending {
             // SAFETY: the refs queue() took for the run taken off
             drop(unsafe { R::adopt(self.container()) });
@@ -237,8 +239,7 @@ where
 
     /// Whether it's queued or running, as of the look: work_busy().
     pub(crate) fn busy(&self) -> bool {
-        // SAFETY: made in place, by new()
-        unsafe { super::work_busy(self.work.get()) }
+        self.work.busy()
     }
 
     /// # Safety
@@ -256,22 +257,10 @@ where
     /// INIT_WORK(), of the field's class - in-kernel its lockdep class, a
     /// static per field in the parent's #[derive(Init)].
     #[doc(hidden)]
-    pub(crate) fn new<E>(at: F::At, class: WorkClass) -> impl ::pin_init::PinInit<Self, E> {
-        // SAFETY: the work_struct and the At, all of it, written in place
-        unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                #[cfg(kernel)]
-                c::init_work_with_key(slot.cast(), Some(Self::work_fn), false, class.0.as_ptr().cast(),
-                                      class.1.as_ptr());
-                #[cfg(not(kernel))]
-                {
-                    let () = class;
-                    super::queues::init_work(slot.cast(), Self::work_fn);
-                }
-                (&raw mut (*slot)._placed_at).write(at);
-                Ok(())
-            })
-        }
+    pub(crate) fn new<E: From<core::convert::Infallible>>(at: F::At, class: WorkClass)
+        -> impl ::pin_init::PinInit<Self, E>
+    {
+        pin_init!(Self { work <- raw_work(Self::work_fn, class), _placed_at: at, _r: PhantomData }? E)
     }
 }
 
@@ -281,6 +270,19 @@ where
 pub(crate) type DelayedClass = (WorkClass, WorkClass);
 #[cfg(not(kernel))]
 pub(crate) type DelayedClass = ();
+
+/// A placed delayed work's RawDelayedWork, running @func, of its field's
+/// @class.
+#[cfg(kernel)]
+fn raw_delayed_work(func: WorkFn, ((name, key), (timer_name, timer_key)): DelayedClass)
+    -> impl ::pin_init::PinInit<RawDelayedWork>
+{
+    RawDelayedWork::new(func, name, key, timer_name, timer_key)
+}
+#[cfg(not(kernel))]
+fn raw_delayed_work(func: WorkFn, (): DelayedClass) -> impl ::pin_init::PinInit<RawDelayedWork> {
+    RawDelayedWork::new(func)
+}
 
 /// struct delayed_work, placed as a ReffedWork is: F run after a delay,
 /// holding its Refs - or on its OnQueue - from its queueing to the run's end:
@@ -319,7 +321,7 @@ where
         let p = self.container();
         let wq = Refs::queue_of(p, on);
         let Some(r) = Refs::tryget_live(p) else { return false };
-        if self.work.queue(wq, delay) {
+        if unsafe { self.work.queue(wq, delay) } {
             core::mem::forget(r);
         }
         true
@@ -331,7 +333,7 @@ where
         let p = self.container();
         let wq = Refs::queue_of(p, on);
         let Some(r) = Refs::tryget_live(p) else { return false };
-        if !self.work.modify(wq, delay) {
+        if !unsafe { self.work.modify(wq, delay) } {
             // queued anew: the run's
             core::mem::forget(r);
         }
@@ -376,16 +378,6 @@ where
     pub(crate) fn new<E: From<core::convert::Infallible>>(at: F::At, class: DelayedClass)
         -> impl ::pin_init::PinInit<Self, E>
     {
-        #[cfg(kernel)]
-        let work = {
-            let ((name, key), (timer_name, timer_key)) = class;
-            RawDelayedWork::new(Self::work_fn, name, key, timer_name, timer_key)
-        };
-        #[cfg(not(kernel))]
-        let work = {
-            let () = class;
-            RawDelayedWork::new(Self::work_fn)
-        };
-        pin_init!(Self { work <- work, _placed_at: at, _r: PhantomData }? E)
+        pin_init!(Self { work <- raw_delayed_work(Self::work_fn, class), _placed_at: at, _r: PhantomData }? E)
     }
 }

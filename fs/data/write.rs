@@ -1202,7 +1202,7 @@ extern "C" fn write_index(mut op: Running<Op>) {
         unsafe { w.writes.push_back(op.as_ref()) };
     }
 
-    unsafe { wq.queue_work(core::ptr::from_ref(&wp.io.index_update_work).cast_mut()) };
+    unsafe { wp.io.index_update_work.queue(wq) };
 }
 
 fn write_queue(op: &mut Op, wp: &'static c::write_point) {

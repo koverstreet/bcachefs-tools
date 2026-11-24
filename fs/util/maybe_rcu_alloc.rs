@@ -26,7 +26,7 @@ use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, Has
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::SelfSized;
 use crate::os::module::Quiesced;
-use crate::os::workqueue::{Queue, Workqueue, WqFlags};
+use crate::os::workqueue::{Queue, RawWork, Workqueue, WqFlags};
 
 pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags)
     -> Result<NonNull<T>, E>
@@ -491,12 +491,12 @@ impl<T: ?Sized + RcuHeadAt<RcuWorkHead>, A: Alloc> Freeing<T, RcuWorkHead, A> {
     /// Its drop needs process context: on the free queue, the rcu_head's
     /// room become the work's.
     fn queue(self) {
-        let work = <T as RcuHeadAt<RcuWorkHead>>::head(&self).cast::<c::work_struct>().as_ptr();
+        let work = <T as RcuHeadAt<RcuWorkHead>>::head(&self).cast::<RawWork>().as_ptr();
         let init = crate::new_work!(work_fn::<T, A>, "rcu_free");
         let Ok(()) = unsafe { init_at(init, work) };
         let wq = FREE_WQ.load(Acquire);
         assert!(!wq.is_null(), "an RcuDropWorkMember's freed outside module init and exit");
-        unsafe { Queue::from_raw(wq).queue_work(work) };
+        unsafe { (*work).queue(Queue::from_raw(wq)) };
     }
 }
 

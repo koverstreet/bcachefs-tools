@@ -105,7 +105,7 @@ use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::Printbuf;
 use crate::prt;
-use crate::os::workqueue::{Queue, WorkAt};
+use crate::os::workqueue::{Queue, RawWork, WorkAt};
 use core::fmt;
 use core::future::Future;
 use core::cell::Cell;
@@ -332,7 +332,7 @@ pub enum Spawn<'q, 'n> {
 #[pin_data]
 struct Header {
     #[pin]
-    work:      c::work_struct,
+    work:      RawWork,
     waiting:   AtomicPtr<Done>,
     target:    Cell<Target>,
     runq:      Option<NonNull<RunQueue>>,
@@ -530,10 +530,10 @@ impl TaskRef {
                 unsafe { self.run(Target::Inline) };
             }
             Target::Queue(wq, cpu) => {
-                let work = unsafe { &raw mut (*self.0.as_ptr()).work };
+                let wq = unsafe { wq.as_ref() };
                 match cpu {
-                    Some(cpu) => unsafe { wq.as_ref().queue_work_on(cpu, work) },
-                    None      => unsafe { wq.as_ref().queue_work(work) },
+                    Some(cpu) => unsafe { header.work.queue_on(wq, cpu) },
+                    None      => unsafe { header.work.queue(wq) },
                 };
             }
             Target::Run(rq) => unsafe { rq.as_ref().push_worked(self.0) },

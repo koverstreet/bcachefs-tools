@@ -11,7 +11,7 @@ use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SeqLock, SpinLockIrq};
 use crate::{new_lock, new_work};
 use crate::types::CacheAligned;
 use crate::os::bio::BioSet;
-use crate::os::workqueue::ReffedWork;
+use crate::os::workqueue::{RawWork, ReffedWork};
 use crate::os::percpu::{Counters, PerCpu};
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
@@ -334,7 +334,7 @@ pub struct write_point_io {
     pub __align: CacheAligned,
     #[pin]
     #[init(new_work!(crate::data::write::write_point_do_index_updates, "&wp->index_update_work"))]
-    pub index_update_work: c::work_struct,
+    pub index_update_work: RawWork,
 
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->writes_lock"))]

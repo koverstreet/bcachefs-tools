@@ -275,7 +275,7 @@ impl InodeInfo {
         let timeout = fs.opts.writeback_timeout.get();
 
         if timeout != 0 {
-            self.ei_writeback_timer.queue(&fs.vfs.writeback_wq, c_ulong::from(timeout) * HZ);
+            unsafe { self.ei_writeback_timer.queue(&fs.vfs.writeback_wq, c_ulong::from(timeout) * HZ) };
         }
     }
 

@@ -28,7 +28,7 @@ use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
 use crate::util::rcu::{DropAnytime, Flavor, GpCookie, HasRcuHead, RcuHead, RcuOwned};
-use crate::os::workqueue::{flush_work, Queue};
+use crate::os::workqueue::{Queue, RawWork};
 
 const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 
@@ -324,7 +324,7 @@ struct Pcpu<'f, T: RcuRealloc, A: Alloc> {
     nr:     AtomicUsize,
     cpu:    c_uint,
     cb:     Opaque<c::rcu_head>,
-    work:   Opaque<c::work_struct>,
+    work:   RawWork,
 }
 
 /// A CPU's one callback, armed: whoever set cb_armed owns its head, until the
@@ -353,7 +353,7 @@ impl<T: RcuRealloc, A: Alloc> Armed<'_, T, A> {
         let p = unsafe { self.0.as_ref() };
         let pending = unsafe { &*p.parent };
 
-        unsafe { Queue::system().queue_work_on(p.cpu, p.work.as_ptr()) };
+        unsafe { p.work.queue_on(Queue::system(), p.cpu) };
 
         let mut s = p.lock.lock();
         if s.has_pending() {
@@ -653,7 +653,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
             (&raw mut (*slot).nr).write(AtomicUsize::new(0));
             (&raw mut (*slot).cpu).write(cpu);
             let Ok(()) = init_at(lock, &raw mut (*slot).lock);
-            let Ok(()) = init_at(work, (&raw mut (*slot).work).cast());
+            let Ok(()) = init_at(work, &raw mut (*slot).work);
         }
     }
 
@@ -679,12 +679,12 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
             self.srcu.barrier();
 
             for p in self.pcpu().each_cpu() {
-                unsafe { flush_work(p.work.as_ptr()) };
+                p.work.flush();
             }
         }
 
         for p in self.pcpu().each_cpu() {
-            unsafe { flush_work(p.work.as_ptr()) };
+            p.work.flush();
         }
     }
 

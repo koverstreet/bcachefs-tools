@@ -19,14 +19,13 @@ use pin_init::{pin_init_from_closure, PinInit};
 
 use super::percpu::{CpuGuard, PerCpu};
 use super::rcu::{self, Flavor, GpCookie, SrcuReadGuard};
-use super::workqueue::{flush_work, work_init, Queue};
+use super::workqueue::{Queue, RawWork};
 use crate::c;
 use crate::errcode::BchError;
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::os::lockdep::LockClass;
 use crate::util::alloc::init_at;
-use crate::util::ffi::Opaque;
 use crate::util::futex::EventCount;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
@@ -68,7 +67,7 @@ pub struct Srcu {
     done:   AtomicU64,
     /// done or gp_seq moved
     event:  EventCount,
-    work:   Opaque<c::work_struct>,
+    work:   RawWork,
 }
 
 // SAFETY: a domain is any thread's to read under and wait on; its counts are
@@ -90,7 +89,7 @@ impl Srcu {
             running: false,
             needed:  0,
         }, "srcu_struct.cbs");
-        let work = work_init(Self::work_fn);
+        let work = RawWork::new(Self::work_fn);
 
         // SAFETY: every field written, @slot pinned from here on
         unsafe {
@@ -102,7 +101,7 @@ impl Srcu {
                 (&raw mut (*slot).done).write(AtomicU64::new(0));
                 (&raw mut (*slot).event).write(EventCount::new());
                 let Ok(()) = init_at(cbs, &raw mut (*slot).cbs);
-                let Ok(()) = init_at(work, (&raw mut (*slot).work).cast());
+                let Ok(()) = init_at(work, &raw mut (*slot).work);
                 Ok(())
             })
         }
@@ -212,8 +211,7 @@ impl Srcu {
     fn kick(&self, cbs: &mut Callbacks) {
         if !cbs.running {
             cbs.running = true;
-            // SAFETY: Srcu::work, initialized; flushed before Srcu goes
-            unsafe { Queue::system_long().queue_work(self.work.as_ptr()) };
+            unsafe { self.work.queue(Queue::system_long()) };
         }
     }
 
@@ -271,8 +269,8 @@ impl Srcu {
 impl Drop for Srcu {
     fn drop(&mut self) {
         self.barrier();
-        // SAFETY: Srcu::work; nothing queues it now
-        unsafe { flush_work(self.work.as_ptr()) };
+        // nothing queues it now
+        self.work.flush();
 
         for idx in 0..2 {
             let (locks, unlocks) = (self.sum(LOCKS + idx), self.sum(UNLOCKS + idx));
