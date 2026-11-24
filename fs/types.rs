@@ -644,7 +644,7 @@ pub struct Fs {
     #[pin]
     #[init(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas"))]
     pub(crate) replicas: PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>,
-    pub disk_groups: LockedBy<(), c::DiskGroups, crate::at!(Fs.sb)>,
+    pub disk_groups: LockedBy<(), crate::alloc::disk_groups::DiskGroups, crate::at!(Fs.sb)>,
     #[pin]
     #[init(c::bch_fs_capacity::init())]
     pub capacity: c::bch_fs_capacity,

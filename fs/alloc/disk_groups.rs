@@ -6,9 +6,6 @@
 //!
 //! A group's parent is its index + 1, 0 for a root. Deleted groups stay in
 //! place, so indices are stable.
-//!
-//! The target lookups on hot paths - target_decode(), target_rw_devs(),
-//! bch2_dev_in_target() - stay static inlines in disk_groups.h.
 
 /* DOC_LATEX(failure-domains)
  * A \emph{failure domain} is a set of devices expected to fail together: a
@@ -67,8 +64,6 @@
  * what a future rewrite pass would need to move.
  */
 
-#![allow(non_camel_case_types)]
-
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
@@ -82,16 +77,17 @@ use crate::{prt, sb_err_on};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{Unvalidated, Validated};
 use crate::util::Printbuf;
-use cstruct_macros::{MaybeZeroable, TypeInfo};
+use cstruct_macros::TypeInfo;
 use crate::sb::io::SbResize;
 
 /* a target is 0 for none, then a device's index, then a disk group's */
 pub const TARGET_DEV_START: u32 = 1;
 pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, zerocopy_derive::FromZeros)]
-pub struct bch_disk_group_cpu {
+/// A group in c->disk_groups: its superblock entry's, and the devices in it
+/// or in a group under it.
+#[derive(Clone, Copy, Default, TypeInfo, zerocopy_derive::FromZeros)]
+pub struct DiskGroup {
     pub deleted: bool,
     pub parent: u16,
     pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
@@ -99,7 +95,7 @@ pub struct bch_disk_group_cpu {
 }
 
 /// c->disk_groups, published under RCU.
-pub type DiskGroups = crate::util::rcu::RcuArray<c::bch_disk_group_cpu>;
+pub type DiskGroups = crate::util::rcu::RcuArray<DiskGroup>;
 
 // ── Targets ──────────────────────────────────────────────────────────────
 
@@ -141,20 +137,20 @@ fn label_bytes(label: &[u8; c::BCH_SB_LABEL_SIZE as usize]) -> &[u8] {
 }
 
 /// A group in the superblock section or in c->disk_groups.
-trait DiskGroup {
+trait GroupEntry {
     fn deleted(&self) -> bool;
     /// Its parent's index plus one; 0 for a root.
     fn parent(&self) -> u32;
     fn label(&self) -> &[u8];
 }
 
-impl DiskGroup for c::bch_disk_group {
+impl GroupEntry for c::bch_disk_group {
     fn deleted(&self) -> bool { self.flags0.deleted() }
     fn parent(&self)  -> u32  { self.flags0.parent() }
     fn label(&self)   -> &[u8] { label_bytes(&self.label) }
 }
 
-impl DiskGroup for c::bch_disk_group_cpu {
+impl GroupEntry for DiskGroup {
     fn deleted(&self) -> bool { self.deleted }
     fn parent(&self)  -> u32  { self.parent.into() }
     fn label(&self)   -> &[u8] { label_bytes(&self.label) }
@@ -162,7 +158,7 @@ impl DiskGroup for c::bch_disk_group_cpu {
 
 /// "invalid label N" if the walk up hits a missing or deleted group (N), or
 /// nests too deep.
-fn disk_path_to_text_in<G: DiskGroup>(out: &mut Printbuf, groups: &[G], mut v: u32) {
+fn disk_path_to_text_in<G: GroupEntry>(out: &mut Printbuf, groups: &[G], mut v: u32) {
     let mut path = [0u16; DISK_PATH_MAX];
     let mut nr = 0;
 
@@ -364,6 +360,18 @@ impl Fs {
     fn dev_failure_domain(&self, dev: usize, rcu: &ReadGuard) -> u16 {
         self.dev_rcu(dev as u32, rcu).map_or(0, |ca| ca.mi.get().failure_domain)
     }
+
+    /// Spreading key for candidate device @dev: the number of copies already
+    /// chosen - @chosen - in its failure domain. Sorting candidates by this
+    /// ascending fills empty domains first, then doubles up. A device with no
+    /// failure domain (id 0) always keys 0: it never shares a domain, so it
+    /// sorts first and is never excluded.
+    pub(crate) fn dev_domain_key(&self, chosen: &c::bch_devs_mask, dev: u32, rcu: &ReadGuard) -> u64 {
+        match self.dev_failure_domain(dev as usize, rcu) {
+            0 => 0,
+            d => chosen.d.iter().filter(|&i| self.dev_failure_domain(i, rcu) == d).count() as u64,
+        }
+    }
 }
 
 /// A superblock's disk groups added to: which superblock it is says what
@@ -419,7 +427,7 @@ fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: 
 
 // ── The table ────────────────────────────────────────────────────────────
 
-fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], sb: &c::bch_sb) {
+fn groups_to_cpu(dst: &mut [DiskGroup], src: &[c::bch_disk_group], sb: &c::bch_sb) {
     for (d, s) in dst.iter_mut().zip(src.iter()) {
         d.deleted = s.flags0.deleted();
         d.parent  = s.flags0.parent() as u16;
@@ -483,25 +491,6 @@ impl Fs {
             }
 
             out.newline();
-        }
-    }
-}
-
-// ── Lookups, for C ───────────────────────────────────────────────────────
-//
-// C calls these holding rcu: the nested read lock each takes is so Rust can
-// borrow - what's returned is good for the caller's read side section.
-
-impl Fs {
-    /// Spreading key for candidate device @dev: the number of copies already
-    /// chosen - @chosen - in its failure domain. Sorting candidates by this
-    /// ascending fills empty domains first, then doubles up. A device with no
-    /// failure domain (id 0) always keys 0: it never shares a domain, so it
-    /// sorts first and is never excluded.
-    pub(crate) fn dev_domain_key(&self, chosen: &c::bch_devs_mask, dev: u32, rcu: &ReadGuard) -> u64 {
-        match self.dev_failure_domain(dev as usize, rcu) {
-            0 => 0,
-            d => chosen.d.iter().filter(|&i| self.dev_failure_domain(i, rcu) == d).count() as u64,
         }
     }
 }
@@ -708,7 +697,7 @@ mod tests {
         g
     }
 
-    fn path<G: DiskGroup>(groups: &[G], v: u32) -> String {
+    fn path<G: GroupEntry>(groups: &[G], v: u32) -> String {
         let mut out = Printbuf::new();
         disk_path_to_text_in(&mut out, groups, v);
         out.as_str().to_owned()
@@ -807,7 +796,7 @@ mod tests {
 
         let mut sb = new_sb();
         add_members(&mut sb, &[(true, 1)]);
-        let mut dst = [c::bch_disk_group_cpu::default(); 2];
+        let mut dst = [DiskGroup::default(); 2];
         groups_to_cpu(&mut dst, &groups, sb.sb());
         assert!(dst.iter().all(|d| d.devs.d.test(0)));
     }
@@ -818,7 +807,7 @@ mod tests {
         let mut sb = new_sb();
         add_members(&mut sb, &[(true, 2), (true, 3), (false, 2), (true, 0)]);
 
-        let mut dst = [c::bch_disk_group_cpu::default(); 3];
+        let mut dst = [DiskGroup::default(); 3];
         groups_to_cpu(&mut dst, &groups, sb.sb());
 
         let devs = |g: usize| dst[g].devs.d.iter().collect::<Vec<_>>();

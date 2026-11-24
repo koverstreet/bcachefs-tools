@@ -86,7 +86,6 @@ pub mod c {
     pub use crate::alloc::buckets::{BCH_DEV_POS_FRAC_BITS, BucketData, BucketGensArray, BucketGensHead, DiskReservation, RESERVE_FACTOR, bch_dev_usage, bch_dev_usage_full, bch_dev_usage_type, bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short, bucket};
     pub use crate::alloc::disk_groups::{ TARGET_DEV_START, TARGET_GROUP_START};
     pub use super::alloc_disk_groups_format::*;
-    pub use crate::alloc::disk_groups::{DiskGroups, bch_disk_group_cpu};
     pub use crate::alloc::foreground::{AllocBtreeBitmap, alloc_request, alloc_request_bits, alloc_trace_entry, alloc_trace_entry_bits, dev_alloc_list};
     pub use super::alloc_format::*;
     pub use super::alloc_lru_format::*;
