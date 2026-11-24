@@ -926,7 +926,6 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     fs.counters_recent.cancel_sync();
     unsafe { btree_exit(p) };
     fs.tasks().drain();
-    unsafe { fs.disk_groups.free() };
 }
 
 /// Which is the filesystem's superblock: the newest - highest seq, then write
