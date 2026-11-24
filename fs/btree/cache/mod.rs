@@ -94,7 +94,7 @@ mod reclaim;
 mod state;
 
 use bufs::{cache_node_struct_alloc, cached_node, new_node_lock};
-pub(crate) use alloc::UnhashedNode;
+pub(crate) use alloc::OwnedNode;
 pub use bufs::NodeBufs;
 pub use bufs::{bounce_bufs, node_data_free, node_mem_alloc, node_mem_free, node_scratch_alloc, node_struct_free,
                Bounce, BounceBufs};

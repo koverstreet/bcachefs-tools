@@ -971,8 +971,8 @@ impl Fs {
         let mut n = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
         n.locked().set_key(k);
         n.set_id(id, level as usize);
-        let (b, held) = n.hash(c::BtreeNodeCacheState::CLEAN)
-            .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}"));
+        let (b, held) = n.hash(self, c::BtreeNodeCacheState::CLEAN)
+            .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}")).into_held(self);
 
         let read = unsafe { ReadInFlightNode::new(b) };
 

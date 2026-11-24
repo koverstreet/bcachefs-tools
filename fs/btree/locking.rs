@@ -309,12 +309,6 @@ impl BtreeTrans<'_> {
         }
     }
 
-    /// A write lock taken outside any path released: __bch2_btree_node_unlock_write().
-    pub(crate) fn node_unlock_write_pathless(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common) {
-        self.node_write_unlock_seqs(paths, b, b.level.get() as usize, write_unlock_seq(b.lock.six()));
-        unsafe { crate::locking::six::six_unlock_ip(b.lock.six(), c::SixLockType::SIX_LOCK_write, crate::ret_ip!()) };
-    }
-
     pub(crate) fn node_unlock(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
         ebug_assert!(level < c::BTREE_MAX_DEPTH as usize, "unlocking level {level}");
 

@@ -1314,8 +1314,10 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
     }
 
     /// Another hold, as @ty, no stronger than this one: six_lock_increment().
+    /// A write hold's write increment recurses both the write lock and the
+    /// intent under it, as the write hold it gives releases both.
     pub fn increment(&self, ty: SixLockType) -> Self {
-        assert!(ty != SixLockType::SIX_LOCK_write && ty as u32 <= self.ty() as u32,
+        assert!(ty as u32 <= self.ty() as u32,
                 "a six lock held as {} incremented as {}", self.ty() as u32, ty as u32);
         unsafe {
             six_lock_increment_ip(self.lock().raw(), ty, 0);

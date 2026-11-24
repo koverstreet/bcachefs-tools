@@ -23,9 +23,10 @@ use crate::util::log::LogMsg;
 use crate::os::sched::current;
 use c::BtreeNodeCacheState as State;
 use c::SixLockType::{self, SIX_LOCK_read, SIX_LOCK_write};
+use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 
 /* Btree node alloc / lookup / evict */
@@ -73,71 +74,95 @@ impl Fs {
     }
 }
 
-/// A node the allocator handed out: in neither the table nor a list, NONE, and
-/// write locked - no one else can find it. Into the cache by hash(); dropped,
-/// it goes back FREEABLE.
-pub(crate) struct UnhashedNode<'a> {
-    fs:   &'a Fs,
-    b:    &'a BtreeNode,
-    held: ManuallyDrop<SixHold<'a>>,
+/// A node the allocator handed out, its lock held as @M - for Write, the write
+/// lock and the intent under it - and its owner's alone: in neither the table
+/// nor a list, NONE, no one else can find it until hash() puts it in the cache,
+/// still the owner's. Owned outside any borrow - an interior update's reserve
+/// has its nodes across calls - it's put back before the cache exits, by
+/// unlock(), free() or into_held(): dropped, it panics.
+pub(crate) struct OwnedNode<M = Write> {
+    b:     NonNull<BtreeNode>,
+    _mode: PhantomData<M>,
 }
 
-impl Deref for UnhashedNode<'_> {
+impl Deref for OwnedNode<Write> {
     type Target = BtreeNode;
 
     fn deref(&self) -> &BtreeNode {
-        self.b
+        unsafe { self.b.as_ref() }
     }
 }
 
-impl<'a> UnhashedNode<'a> {
-    /// What into_raw() gave up, taken back.
-    ///
-    /// # Safety
-    /// @b is a node into_raw() gave up, still NONE, its hold the caller's to give.
-    pub(crate) unsafe fn from_raw(fs: &'a Fs, b: NonNull<BtreeNode>) -> Self {
-        let b = unsafe { cached_node(fs, b.as_ptr()) };
-        let held = unsafe { SixHold::from_raw(&b.c.lock, SIX_LOCK_write) };
-        UnhashedNode { fs, b, held: ManuallyDrop::new(held) }
+impl OwnedNode<Write> {
+    fn new(b: &BtreeNode, held: SixHold<'_>) -> Self {
+        assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &b.c.lock),
+                "an owned node without its write lock");
+        held.into_raw();
+        OwnedNode { b: NonNull::from(b), _mode: PhantomData }
     }
 
     pub(crate) fn locked(&mut self) -> LockedNode<'_, BtreeNode, Write> {
-        // its hold is the only one on it, and no one else can find it
-        unsafe { LockedNode::new_write(self.b) }
+        unsafe { LockedNode::new_write(self.b.as_ref()) }
     }
 
     pub(crate) fn set_id(&mut self, btree: Btree, level: usize) {
-        self.b.c.level.set(level as u8);
-        self.b.c.btree_id.set(btree.0 as u8);
-    }
-
-    fn into_parts(self) -> (&'a BtreeNode, SixHold<'a>) {
-        let mut n = ManuallyDrop::new(self);
-        (n.b, unsafe { ManuallyDrop::take(&mut n.held) })
+        self.c.level.set(level as u8);
+        self.c.btree_id.set(btree.0 as u8);
     }
 
     /// Into the cache as @state, CLEAN or DIRTY, and found by lookups from
-    /// then. Failing, it's FREEABLE, and unlocked.
-    pub(crate) fn hash(self, state: State) -> Result<(&'a BtreeNode, SixHold<'a>), BchError> {
-        let fs = self.fs;
-        let (b, held) = self.into_parts();
-        fs.btree_node_transition_state(b, state)?;
-        Ok((b, held))
+    /// then - still the owner's, locked. Failing, it's put back.
+    pub(crate) fn hash(self, fs: &Fs, state: State) -> Result<Self, BchError> {
+        match fs.btree_node_transition_state(&self, state) {
+            Ok(()) => Ok(self),
+            Err(e) => {
+                self.free(fs);
+                Err(e)
+            }
+        }
     }
 
-    /// Given up, its hold too, to what keeps it unhashed: an interior update's
-    /// reserve.
-    pub(crate) fn into_raw(self) -> NonNull<BtreeNode> {
-        let (b, held) = self.into_parts();
-        held.into_raw();
-        NonNull::from(b)
+    /// Given to a holder that borrows the filesystem, as the node and its
+    /// hold: a cache node lives as long as its filesystem.
+    pub(crate) fn into_held<'f>(self, fs: &'f Fs) -> (&'f BtreeNode, SixHold<'f>) {
+        let this = ManuallyDrop::new(self);
+        unsafe {
+            let b = cached_node(fs, this.b.as_ptr());
+            (b, SixHold::from_raw(&b.c.lock, SIX_LOCK_write))
+        }
+    }
+
+    fn hold(&self) -> ManuallyDrop<SixHold<'_>> {
+        ManuallyDrop::new(unsafe { SixHold::from_raw(&self.c.lock, SIX_LOCK_write) })
+    }
+
+    /// A hold of its own, for a path the owner puts the node in: the write
+    /// lock and the intent under it, recursed.
+    pub(crate) fn path_hold(&self) -> SixHold<'_> {
+        self.hold().increment(SIX_LOCK_write)
+    }
+
+    pub(crate) fn as_ptr(&self) -> NonNull<BtreeNode> {
+        self.b
+    }
+
+    /// Its locks released. No path's lock seq moves: a path at the node holds
+    /// it too, and its own unlock moves them.
+    pub(crate) fn unlock(self) {
+        let this = ManuallyDrop::new(self);
+        drop(ManuallyDrop::into_inner(this.hold()));
+    }
+
+    /// Put back FREEABLE, its locks released.
+    pub(crate) fn free(self, fs: &Fs) {
+        let _ = fs.btree_node_transition_state(&self, State::FREEABLE);
+        self.unlock();
     }
 }
 
-impl Drop for UnhashedNode<'_> {
+impl<M> Drop for OwnedNode<M> {
     fn drop(&mut self) {
-        let _ = self.fs.btree_node_transition_state(self.b, State::FREEABLE);
-        unsafe { ManuallyDrop::drop(&mut self.held) };
+        panic!("an owned btree node dropped, not put back");
     }
 }
 
@@ -186,7 +211,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn btree_node_mem_alloc(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool)
-        -> Result<UnhashedNode<'_>, BchError>
+        -> Result<OwnedNode, BchError>
     {
         let fs = self.fs();
         let bc = &fs.btree.cache;
@@ -269,7 +294,7 @@ impl BtreeTrans<'_> {
         /* @b may have been a node our paths still have cached: */
         self.node_forget(paths, b);
 
-        let mut n = UnhashedNode { fs, b, held: ManuallyDrop::new(held) };
+        let mut n = OwnedNode::new(b, held);
 
         b.flags.store(Default::default());
         b.written.set(0);
@@ -294,7 +319,10 @@ impl BtreeTrans<'_> {
          */
         let _ = self.allocate_dropping_locks_norelock(paths, || bc.table.make_room().ok());
 
-        self.relock_from(paths)?;
+        if let Err(e) = self.relock_from(paths) {
+            n.free(fs);
+            return Err(e);
+        }
         Ok(n)
     }
 
@@ -354,7 +382,7 @@ impl BtreeTrans<'_> {
         n.locked().set_key(k);
         n.set_id(btree, level);
 
-        let ret = match n.hash(State::CLEAN) {
+        let ret = match n.hash(fs, State::CLEAN).map(|n| n.into_held(fs)) {
             Ok((b, held)) => {
                 /*
                  * Must be set with node write locked - b->data is not stable
