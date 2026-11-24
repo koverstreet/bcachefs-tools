@@ -54,7 +54,6 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
     assert!(!b.flags.write_blocked(), "freeing a write blocked node");
     assert!(!b.flags.need_write(), "freeing a node that needs writing");
     assert!(!fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b)), "freeing a root");
-    assert!(unsafe { (*b.write_blocked.data_ptr()).is_empty() }, "freeing a node interior updates are blocking");
 
     b.flags.set_permanent(false);
     b.flags.set_noevict(false);
