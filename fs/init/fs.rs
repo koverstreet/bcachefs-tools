@@ -804,7 +804,6 @@ impl Drop for OpenFs {
 impl Fs {
     pub fn stop(&self) -> Result<(), BchError> {
         use c::FsFlag as Flag;
-        let p = self.as_ptr();
 
         if !self.flags.swap(Flag::stopping, true) {
             self.ro_ref.stop();
@@ -840,7 +839,7 @@ impl Fs {
             /* btree prefetch might have kicked off reads in the background: */
             self.btree_flush_all_reads();
 
-            unsafe { crate::os::workqueue::flush_work(&raw mut (*p).btree.interior_updates.work) };
+            self.btree.interior_updates.work.flush();
         }
 
         if self.flags.get(Flag::emergency_ro) {

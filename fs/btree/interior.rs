@@ -42,7 +42,7 @@ use crate::util::futex::EventCount;
 use crate::util::sleep::Sleep;
 use crate::os::kernel::local_clock;
 use crate::util::place::{Contained, Placed};
-use crate::os::workqueue::{run_raw, RawWork, Workqueue, WqFlags};
+use crate::os::workqueue::{OnQueue, Own, ReffedWork, Workqueue, WqFlags};
 use crate::util::{late::Late, mempool::Mempool};
 use crate::prt;
 use pin_init::{init, init_zeroed, pin_data};
@@ -169,21 +169,16 @@ pub struct bch_fs_btree_interior_updates {
     #[late(Workqueue::new(c"btree_update", WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 8), ENOMEM_btree_interior_update_worker_init)]
     pub worker: Late<Workqueue>,
     #[pin]
-    #[init(crate::new_work!(run_raw::<bch_fs_btree_interior_updates>, "&c->btree.interior_updates.work"))]
-    pub work: c::work_struct,
+    pub(crate) work: ReffedWork<updates_work, OnQueue<crate::field!(worker)>>,
 }
 
-impl RawWork for bch_fs_btree_interior_updates {
-    const WORK: usize = core::mem::offset_of!(bch_fs_btree_interior_updates, work);
-
-    unsafe fn run(this: NonNull<Self>) {
-        completion::worker(unsafe { this.as_ref() }.container().container())
-    }
+fn updates_work(u: &bch_fs_btree_interior_updates) {
+    completion::worker(u.container().container())
 }
 
 impl bch_fs_btree_interior_updates {
     fn kick(&self) {
-        unsafe { self.worker.queue_work((&raw const self.work).cast_mut()) };
+        self.work.queue(Own);
     }
 }
 

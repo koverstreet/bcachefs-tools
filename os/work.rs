@@ -3,8 +3,9 @@
 //! ReffedWork, the same in both builds, over each one's workqueue - but its
 //! WorkClass, in-kernel a lockdep class per field.
 
-use super::Queue;
+use super::{Queue, Workqueue};
 use crate::c;
+use crate::util::late::{Late, LateLock};
 use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use core::cell::UnsafeCell;
@@ -93,10 +94,15 @@ where
 /// the parent for the run; a second's count need only outlive the parent -
 /// its path may go Through a BackRef. Taken in order; put in reverse, the
 /// parent's keeper last - Held's drop order. Held is guards on the refs
-/// tryget_live() takes, and adopt() makes.
+/// tryget_live() takes, and adopt() makes. Or none: OnQueue.
 pub(crate) trait WorkRefs<P> {
     /// The refs, held: put when it's dropped.
     type Held;
+
+    /// What queue() is handed: the queue to run on - but OnQueue's, Own.
+    type On<'a> where P: 'a;
+
+    fn queue_of<'a>(p: &'a P, on: Self::On<'a>) -> &'a Queue;
 
     fn tryget_live(p: &P) -> Option<Self::Held>;
 
@@ -111,6 +117,11 @@ where
     R::To: TryRefcount,
 {
     type Held = RefGuard<R::To>;
+    type On<'a> = &'a Queue where P: 'a;
+
+    fn queue_of<'a>(_: &'a P, on: &'a Queue) -> &'a Queue {
+        on
+    }
 
     fn tryget_live(p: &P) -> Option<Self::Held> {
         R::get(p).tryget_live()
@@ -128,6 +139,11 @@ where
     B::To: TryRefcount,
 {
     type Held = (RefGuard<B::To>, RefGuard<A::To>);
+    type On<'a> = &'a Queue where P: 'a;
+
+    fn queue_of<'a>(_: &'a P, on: &'a Queue) -> &'a Queue {
+        on
+    }
 
     fn tryget_live(p: &P) -> Option<Self::Held> {
         let a = A::get(p).tryget_live()?;
@@ -139,16 +155,56 @@ where
     }
 }
 
+/// A ReffedWork's R that's no ref: Q, the path from the parent to the queue
+/// it's run on - its own, queue(Own). A run can't outlive the parent, as
+/// the parent drains its queue before it goes: the Fs's late queues, by its
+/// teardown's stop_late(). That's the parent's to keep, unchecked.
+pub(crate) struct OnQueue<Q>(PhantomData<Q>);
+
+/// What queue() is handed for an OnQueue work: its queue's its own.
+pub(crate) struct Own;
+
+/// What an OnQueue's Q is: a workqueue, made late.
+pub(crate) trait OwnQueue {
+    fn queue(&self) -> &Queue;
+}
+
+impl<L: LateLock> OwnQueue for Late<Workqueue, L> {
+    fn queue(&self) -> &Queue {
+        self
+    }
+}
+
+impl<P, Q: Path<P> + OnePath + Within> WorkRefs<P> for OnQueue<Q>
+where
+    Q::To: OwnQueue + 'static,
+{
+    type Held = ();
+    type On<'a> = Own where P: 'a;
+
+    fn queue_of<'a>(p: &'a P, _: Own) -> &'a Queue {
+        Q::get(p).queue()
+    }
+
+    fn tryget_live(_: &P) -> Option<()> {
+        Some(())
+    }
+
+    unsafe fn adopt(_: &P) {}
+}
+
 impl<F: WorkFunc, R: WorkRefs<Parent<F>>> ReffedWork<F, R>
 where
     F::At: Place<Type = Self>,
 {
-    /// Run F on @wq, holding R's refs: false if they can't all be had -
-    /// tryget_live(). Queued already, the pending run's refs are the ones
+    /// Run F on @on's queue, holding R's refs: false if they can't all be had
+    /// - tryget_live(). Queued already, the pending run's refs are the ones
     /// there'll be.
-    pub(crate) fn queue(&self, wq: &Queue) -> bool {
+    pub(crate) fn queue<'a>(&'a self, on: R::On<'a>) -> bool {
+        let p = self.container();
+        let wq = R::queue_of(p, on);
         // taken first: the run can start, and put them, as soon as it's queued
-        let Some(r) = R::tryget_live(self.container()) else { return false };
+        let Some(r) = R::tryget_live(p) else { return false };
         // SAFETY: made in place, by new(); the refs keep it, for the run
         if unsafe { wq.queue_work(self.work.get()) } {
             // the run's, which adopts them
@@ -156,6 +212,12 @@ where
         }
         // else put: the pending run has its own
         true
+    }
+
+    /// Its last queueing run: flush_work().
+    pub(crate) fn flush(&self) {
+        // SAFETY: made in place, by new()
+        unsafe { super::flush_work(self.work.get()) }
     }
 
     /// # Safety

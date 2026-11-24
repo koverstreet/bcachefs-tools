@@ -289,7 +289,7 @@ macro_rules! new_delayed_work {
 
 #[path = "../work.rs"]
 mod work;
-pub(crate) use work::{ReffedWork, WorkFunc};
+pub(crate) use work::{OnQueue, Own, ReffedWork, WorkFunc};
 
 #[repr(transparent)]
 pub struct DelayedWork {
