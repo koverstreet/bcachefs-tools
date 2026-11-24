@@ -29,7 +29,7 @@
 use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
 use crate::c;
-use crate::util::vstructs::{bytes_of, plain_bytes, Unsized, Unvalidated, Validated};
+use crate::util::vstructs::{plain_bytes, Unvalidated, Validated, VStruct};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
@@ -172,9 +172,9 @@ impl Csum {
 
 /// The checksum of vstruct @v whose first field is its checksum: of all of it
 /// after that field - C's csum_vstruct(). @fs for an encryption type's key.
-pub fn csum_vstruct<T: Unsized + ?Sized>(fs: Option<&Fs>, ty: c::CsumType, nonce: Nonce,
+pub fn csum_vstruct<T: VStruct + ?Sized>(fs: Option<&Fs>, ty: c::CsumType, nonce: Nonce,
                                          v: &T) -> c::bch_csum {
-    checksum(fs, ty, nonce, &bytes_of(v)[size_of::<c::bch_csum>()..])
+    checksum(fs, ty, nonce, &v.as_bytes()[size_of::<c::bch_csum>()..])
 }
 
 /// @data's checksum: Fs::checksum()'s, and checksum_unkeyed()'s.

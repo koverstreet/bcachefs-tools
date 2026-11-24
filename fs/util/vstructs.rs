@@ -218,6 +218,9 @@ pub trait FlexArray: SelfSized {
 pub trait VStruct: SelfSized {
     /// Its header's count of u64s.
     fn u64s(&self) -> usize;
+
+    /// Its bytes, every one.
+    fn as_bytes(&self) -> &[u8];
 }
 
 /// A count a header's field holds - u64s, nr_devs - as a usize: a plain
@@ -725,7 +728,7 @@ macro_rules! vstruct_family {
         impl<$($g)*> $ty {
             /// Its bytes, every one.
             pub fn as_bytes(&self) -> &[u8] {
-                bytes_of(self)
+                unsafe { ::core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of_val(self)) }
             }
 
             /// Its bytes, to edit: for its own walks - a count may be in them.
@@ -1191,18 +1194,12 @@ pub unsafe fn assume_init_mut(b: &mut [core::mem::MaybeUninit<u8>]) -> &mut [u8]
     unsafe { &mut *(core::ptr::from_mut(b) as *mut [u8]) }
 }
 
-/// @v's bytes, every one: what its reference reaches - T::as_bytes().
-pub fn bytes_of<T: Unsized + ?Sized>(v: &T) -> &[u8] {
-    // SAFETY: the value's own bytes: Unsized's are its head's and its tail's,
-    // both Plain
-    unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of_val(v)) }
-}
-
-/// bytes_of(), mutably - for the walks over a container's entries, not for
+/// @v's bytes, mutably - for the walks over a container's entries, not for
 /// its owner to hand out: through them, a count could change.
 pub(crate) fn bytes_of_mut<T: Unsized + ?Sized>(v: &mut T) -> &mut [u8] {
     let len = size_of_val(v);
-    // SAFETY: as bytes_of()
+    // SAFETY: the value's own bytes: Unsized's are its head's and its tail's,
+    // both Plain, and any bytes are a value
     unsafe { core::slice::from_raw_parts_mut((v as *mut T).cast::<u8>(), len) }
 }
 

@@ -32,7 +32,7 @@ use core::sync::atomic::Ordering::Relaxed;
 fn replica_bset<H: BsetHolder + ?Sized>(fs: &Fs, buf: &[u8], written: usize, end: usize,
                                         err: &mut Printbuf) -> Option<usize> {
     let offset = written << 9;
-    let sectors = H::sectors(&buf[offset..], fs.block_bits());
+    let sectors = H::sectors_of(&buf[offset..], fs.block_bits());
 
     if written + sectors > end {
         prt!(err, "bset past end of btree node (offset {written} len {sectors} but written {end})");

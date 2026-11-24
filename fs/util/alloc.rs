@@ -13,7 +13,7 @@ use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::vstructs::{bytes_of, Unsized};
+use crate::util::vstructs::Unsized;
 use crate::util::rcu::FreeAnytime;
 
 // ── Allocators ───────────────────────────────────────────────────────────
@@ -212,10 +212,10 @@ impl<T: ?Sized + Unsized, A: Alloc> Box<T, A> {
     /// A copy of @v - every byte of which is a field's - from @alloc:
     /// Box::clone_from_ref(), for a DST of ours.
     pub fn try_clone_from_ref_in(v: &T, alloc: A) -> Result<Self, AllocError> {
-        let bytes = bytes_of(v);
+        let len = size_of_val(v);
         let mem = alloc.allocate(Layout::for_value(v))?;
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), mem.cast::<u8>().as_ptr(), bytes.len()) };
-        let ptr = NonNull::new(T::from_raw_mut(mem.cast().as_ptr(), bytes.len())).expect("an allocation, not null");
+        unsafe { core::ptr::copy_nonoverlapping(core::ptr::from_ref(v).cast::<u8>(), mem.cast::<u8>().as_ptr(), len) };
+        let ptr = NonNull::new(T::from_raw_mut(mem.cast().as_ptr(), len)).expect("an allocation, not null");
         Ok(Box { ptr, given: mem.len(), alloc })
     }
 }

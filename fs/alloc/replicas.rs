@@ -33,7 +33,7 @@ use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::strided::StridedBuf;
-use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain_mut, Head, State, Unsized, Unvalidated,
+use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, Head, State, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
 use core::fmt;
@@ -535,7 +535,7 @@ impl ReplicasCpu {
     /// The slot holding @e, if any.
     fn find(&self, e: &Entry) -> Option<usize> {
         verify_entry(e);
-        let want = bytes_of(e);
+        let want = e.as_bytes();
         if want.len() > self.entries.stride() {
             return None;
         }
@@ -544,7 +544,7 @@ impl ReplicasCpu {
 
     /// A copy, @e added - with room for it, if it's bigger than any: sorted.
     fn with(&self, e: &Entry) -> Result<Self, AllocError> {
-        let e = bytes_of(e);
+        let e = e.as_bytes();
         let mut new = ReplicasCpu {
             entries: self.entries.restrided(self.entries.stride().max(e.len()), 1)?,
             refs:    KVVec::with_capacity(self.len() + 1)?,
@@ -614,7 +614,7 @@ impl ReplicasCpu {
         /// @e as the section has it: v0's entries have no nr_required, the
         /// byte before the devices.
         fn parts(e: &Entry, v1: bool) -> [&[u8]; 2] {
-            let b = bytes_of(e);
+            let b = e.as_bytes();
             if v1 { [b, &[]] } else { [&b[..DEVS - 1], &b[DEVS..]] }
         }
 

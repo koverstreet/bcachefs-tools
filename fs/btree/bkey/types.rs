@@ -146,6 +146,10 @@ impl<F: 'static, S: State> VStruct for BkeyI<FamilyVal<F, S>> {
     fn u64s(&self) -> usize {
         self.k.u64s as usize
     }
+
+    fn as_bytes(&self) -> &[u8] {
+        Self::as_bytes(self)
+    }
 }
 
 impl<'a, V: ?Sized + BkeyVal> BkeySC<'a, V> {

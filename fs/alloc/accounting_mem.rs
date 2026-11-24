@@ -25,7 +25,7 @@ use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::os::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
 use crate::util::printbuf::{Join, Msg};
 use crate::util::rcu;
-use crate::util::vstructs::{bytes_of, plain_bytes, ArmError, Unvalidated, Validated};
+use crate::util::vstructs::{plain_bytes, ArmError, Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::{btree_trans, fsck_err, fsck_err_on, percpu_field};
 use zerocopy::IntoBytes;
@@ -187,7 +187,7 @@ pub fn replicas_usage_read(fs: &Fs) -> Result<KVVec<u8>, BchError> {
 
         let sectors = accounting::ReplicasCounters::from_slice(&e.sum(false)).sectors;
         out.extend_from_slice(&sectors.to_ne_bytes())?;
-        out.extend_from_slice(bytes_of(r))?;
+        out.extend_from_slice(r.as_bytes())?;
     }
     Ok(out)
 }

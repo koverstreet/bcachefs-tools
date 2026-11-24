@@ -14,7 +14,7 @@ use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members::DevName;
 use crate::util::log::LogMsg;
-use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
+use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
                             Head, Unvalidated, VStructError, from_bytes};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
@@ -451,7 +451,7 @@ impl EntryOps for c::jset_entry_data_usage<Unvalidated> {
     }
 
     fn to_text(&self, _e: &c::jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
-        match data_usage_replicas(bytes_of(self)) {
+        match data_usage_replicas(self.as_bytes()) {
             Some(r) => r.to_text(out),
             None    => prt!(out, "(invalid, replicas entry overruns jset_entry)"),
         }

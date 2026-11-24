@@ -59,8 +59,8 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
-use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
-                            ArmAt, Unsized, Unvalidated};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
+                            ArmAt, Unsized, Unvalidated, VStruct};
 use crate::util::{backref::BackRef, printbuf::Msg};
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
@@ -360,7 +360,7 @@ impl c::bset_head {
     }
 }
 
-pub trait BsetHolder: ArmAt + Unsized {
+pub trait BsetHolder: ArmAt + Unsized + VStruct {
     const BSET: usize;
     const KEYS: usize = Self::BSET + size_of::<Head<c::bset>>();
 
@@ -371,7 +371,7 @@ pub trait BsetHolder: ArmAt + Unsized {
     fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError>;
 
     fn bset(&self) -> &Head<c::bset> {
-        Self::head(bytes_of(self))
+        Self::head(self.as_bytes())
     }
 
     fn bset_mut(&mut self) -> &mut c::bset<Unvalidated> {
@@ -379,7 +379,7 @@ pub trait BsetHolder: ArmAt + Unsized {
     }
 
     fn csum(&self) -> c::bch_csum {
-        *cast_plain(bytes_of(self)).expect("a csum, at the start of what holds a bset")
+        *cast_plain(self.as_bytes()).expect("a csum, at the start of what holds a bset")
     }
 
     fn set_csum(&mut self, csum: c::bch_csum) {
@@ -401,7 +401,7 @@ pub trait BsetHolder: ArmAt + Unsized {
 
     /// As its bset's header says, before the bytes are known to hold it: its
     /// keys, and all of it before them.
-    fn sectors(bytes: &[u8], block_bits: u32) -> usize {
+    fn sectors_of(bytes: &[u8], block_bits: u32) -> usize {
         (Self::KEYS + Self::head(bytes).u64s() * size_of::<u64>()).next_multiple_of(512 << block_bits) >> 9
     }
 
@@ -466,7 +466,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
         return None;
     }
 
-    let sectors = H::sectors(bytes, fs.block_bits());
+    let sectors = H::sectors_of(bytes, fs.block_bits());
     let Some(bytes) = bytes.get_mut(..sectors << 9) else {
         prt!(out, "bset at offset {} past the end of the node\n", offset);
         return None;
@@ -590,7 +590,7 @@ fn read_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents: &mut No
                   id::bset_unknown_csum,
                   "unknown checksum type {}", i.csum_type())?;
 
-    let sectors = H::sectors(bytes, fs.block_bits());
+    let sectors = H::sectors_of(bytes, fs.block_bits());
 
     if btree_err_on!(v, written + sectors > p.end,
                      FsckFlags::CAN_FIX,

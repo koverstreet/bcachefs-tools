@@ -487,6 +487,10 @@ fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStre
                     // the count by value: a packed header's field can't be borrowed
                     #vs::Count::count(&{ (**self).#c })
                 }
+
+                fn as_bytes(&self) -> &[u8] {
+                    Self::as_bytes(self)
+                }
             }
         });
         quote!(#vs::vstruct!(unsized #head, #c #start); #(#impls)*)
@@ -599,6 +603,11 @@ fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenSt
         }
         None => quote!(0usize),
     };
+    let sizes = fields.iter().map(|f| {
+        let fty = &f.ty;
+        quote!(::core::mem::size_of::<#fty>())
+    });
+    let pad_msg = format!("{ty}: padding between its fields - its bytes aren't all its fields'");
     let tail_msg = format!("{ty}: its tail starts where its fields end, at TAIL");
     quote! {
         #[doc = #doc]
@@ -615,11 +624,11 @@ fn dst(ty: &Ident, generic: bool, doc: &str, shape: &Shape<'_>, methods: TokenSt
         const _: () = {
             #(#plain_fields)*
             #(#offsets)*
+            assert!(#tail_start == 0 #(+ #sizes)*, #pad_msg);
             // its tail starts at TAIL - where its head ends, or inside it:
-            // from_raw()'s length counts on it
-            assert!((#tail_start).next_multiple_of(::core::mem::align_of::<#elem>())
-                        == <#ty as #vs::Unsized>::TAIL,
-                    #tail_msg);
+            // from_raw()'s length counts on it - and right after its fields,
+            // so as_bytes() reads no padding
+            assert!(#tail_start == <#ty as #vs::Unsized>::TAIL, #tail_msg);
         };
 
         #methods
