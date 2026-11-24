@@ -309,8 +309,8 @@ fn own_head_free_mem_rcu<T: ?Sized + HasRcuHead + RcuHeadAt<H>, H: HeadKind, A: 
 /// period on the free queue; dropped after one in the RCU callback; dropped
 /// at once, its memory freed after one; freed at once.
 pub(crate) trait RcuFreeing {
-    /// A build error for a T that's dropped before RCU readers are done with
-    /// it: what an owning RcuPtr publishes is read whole.
+    /// A build error for a T that's freed before RCU readers are done with it:
+    /// FreeAnytime. What its drop frees is its members' to say.
     fn assert_rcu_freed();
 
     fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<Self, E>, gfp: Flags) -> Result<NonNull<Self>, E>
@@ -372,9 +372,7 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic> RcuFr
 }
 
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + DropAnytime> RcuFreeing for T {
-    default fn assert_rcu_freed() {
-        let () = NotRcuFreed::<T>::ERR;
-    }
+    default fn assert_rcu_freed() {}
 
     default fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E>
     where
@@ -397,6 +395,10 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + Drop
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + DropAnytime + FreeAnytime> RcuFreeing
     for T
 {
+    fn assert_rcu_freed() {
+        let () = NotRcuFreed::<T>::ERR;
+    }
+
     fn alloc<A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags) -> Result<NonNull<T>, E>
     where
         T: Sized,
@@ -420,7 +422,7 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + Drop
 struct NotRcuFreed<T: ?Sized>(PhantomData<T>);
 
 impl<T: ?Sized> NotRcuFreed<T> {
-    const ERR: () = panic!("what's read whole under RCU must be dropped a grace period on: it needs an RcuDropMember");
+    const ERR: () = panic!("what's read under RCU must be freed a grace period on - !FreeAnytime: it needs an RcuMember");
 }
 
 struct NotRetirable<T: ?Sized>(PhantomData<T>);

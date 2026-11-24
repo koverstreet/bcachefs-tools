@@ -29,9 +29,8 @@
 //!
 //! - RcuPtr<P> publishes a P, a single-word pointer - NonZeroWord - whose
 //!   drop frees its target as the target says: a MaybeRcuAlloc, a ThinBox, a
-//!   ref on a count. Readers read the target whole, so it must be
-//!   dropped a grace period on - an RcuDropMember's or an
-//!   RcuDropWorkMember's, a build error if not - and what's taken out may be
+//!   ref on a count. Its target must be freed a grace period on -
+//!   !FreeAnytime, a build error if not - and what's taken out may be
 //!   dropped at once. Its writer, an RcuPtrWriter, publishes, takes and
 //!   get()s.
 //! - RcuBuf<T> is a buffer its writer replaces whole, kvfree_rcu()ing the
