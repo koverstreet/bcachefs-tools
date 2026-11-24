@@ -28,7 +28,7 @@ use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{MemberState, SbFeature};
 use crate::fs::{Fs, StateLockWrite};
-use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
+use crate::sb::members::{btree_bitmap_gc_schedule, SbMembersMut};
 use crate::util::futex::EventCount;
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
@@ -353,7 +353,7 @@ impl StateLockWrite<'_> {
         fs.do_stripe_deletes();
         fs.run_pending_async_btree_ops();
         crate::data::scrub_journal::do_repairs(fs);
-        BtreeBitmapGcSchedule::run(fs);
+        btree_bitmap_gc_schedule(fs);
         Ok(())
     }
 

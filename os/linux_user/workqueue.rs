@@ -11,13 +11,13 @@
 //! its field's type saying all of it: F the function it runs, a plain fn of
 //! the parent, and R the refs it takes, a path from the parent -
 //! field!(super.writes), the write refs of the Fs it's in (util/place.rs's
-//! paths) - or a pair of them. Its parent's #[derive(Init)] makes it, placed
-//! at its field: so C's pointer to it is had back as the ReffedWork, and its
-//! container() as the parent F runs on.
+//! paths) - or a pair of them, or OnQueue, the parent's own queue it runs on.
+//! Its parent's #[derive(Init)] makes it, placed at its field: so C's pointer
+//! to it is had back as the ReffedWork, and its container() as the parent F
+//! runs on. DelayedWork<F, R> is the same, after a delay: both in work.rs.
 //!
-//! RawDelayedWork is struct delayed_work, in a struct Rust defines and C may
-//! share: the bare struct, initialized with its function as C's
-//! INIT_DELAYED_WORK(). fs_delayed_work!() declares one in bch_fs.
+//! RawDelayedWork is struct delayed_work, bare, for a parent not made by
+//! #[derive(Init)]: initialized with its function as C's INIT_DELAYED_WORK().
 //!
 //! The kernel port's interface, over the shim's workqueues: queues.rs.
 
@@ -271,7 +271,7 @@ macro_rules! new_delayed_work {
 
 #[path = "../work.rs"]
 mod work;
-pub(crate) use work::{OnQueue, Own, ReffedWork, WorkFunc};
+pub(crate) use work::{DelayedWork, OnQueue, Own, ReffedWork, WorkFunc};
 
 #[repr(transparent)]
 pub struct RawDelayedWork {

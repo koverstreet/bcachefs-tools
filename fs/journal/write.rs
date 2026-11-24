@@ -35,6 +35,7 @@ use crate::locking::MemallocFlags;
 use crate::sb::members::DevIoRef;
 use crate::os::blkdev::plugged;
 use crate::os::bio::bio_put;
+use crate::os::workqueue::Own;
 use crate::util::closure::Running;
 use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
                           WRITE};
@@ -1308,7 +1309,7 @@ impl c::journal {
              * journal_flush_delay.
              */
             if seq != fs.journal_cur_seq() {
-                self.write_work.modify(&self.wq, msecs_to_jiffies(fs.opts().journal_flush_delay.get().into()));
+                self.write_work.modify(Own, msecs_to_jiffies(fs.opts().journal_flush_delay.get().into()));
             } else {
                 self.write_work.cancel();
             }

@@ -808,6 +808,8 @@ impl Fs {
         if !self.flags.swap(Flag::stopping, true) {
             self.ro_ref.stop();
             self.ro_ref_events.wake();
+            // its pending run holds a ro_ref: put now, not waited out below
+            self.counters_recent.cancel_sync();
 
             if self.flags.get(Flag::started) {
                 bch_verbose!(self, "shutting down");
@@ -913,7 +915,6 @@ fn teardown(fs: &Fs) {
     fs.stop_late();
     reconcile_exit(fs);
     ec_exit(fs);
-    fs.counters_recent.cancel_sync();
     unsafe { btree_exit(fs) };
     fs.tasks().drain();
 }
@@ -1014,7 +1015,7 @@ impl Fs {
         self.may_start(err)?;
 
         crate::data::reconcile::work::reconcile_init(self)?;
-        crate::sb::counters::RecentCounters::queue(self);
+        crate::sb::counters::queue_recent(self);
 
         // now, so it's persisted before user-data accounting fires: a fresh
         // filesystem shut down before then would never record it, and its next
@@ -1141,58 +1142,6 @@ impl Fs {
             })
         }
     }
-}
-
-/// A delayed work item in bch_fs: a unit struct with init(), for the field's
-/// #[init], and run(). It holds no write ref: going read-only cancels it.
-///
-/// ```text
-/// fs_delayed_work! {
-///     pub(crate) work BtreeBitmapGcSchedule: field maybe_schedule_btree_bitmap_gc;
-///
-///     fn run(fs: &Fs) { ... }
-/// }
-/// ```
-#[macro_export]
-macro_rules! fs_delayed_work {
-    (
-        $(#[$attr:meta])*
-        $vis:vis work $name:ident: field $($field:ident).+;
-
-        fn run($fs:ident: &Fs) $body:block
-    ) => {
-        $(#[$attr])*
-        $vis struct $name;
-
-        impl $name {
-            $vis fn init() -> impl ::pin_init::PinInit<$crate::os::workqueue::RawDelayedWork> {
-                #[cfg(kernel)]
-                {
-                    $crate::os::workqueue::RawDelayedWork::new(
-                        Self::work_fn,
-                        const { $crate::util::ffi::c_str(concat!(stringify!($name), "\0")) },
-                        ::kernel::static_lock_class!(),
-                        const { $crate::util::ffi::c_str(concat!(stringify!($name), ".timer\0")) },
-                        ::kernel::static_lock_class!())
-                }
-                #[cfg(not(kernel))]
-                $crate::os::workqueue::RawDelayedWork::new(Self::work_fn)
-            }
-
-            $vis fn run($fs: &$crate::fs::Fs) $body
-
-            /// # Safety
-            /// @work is the field's.
-            unsafe extern "C" fn work_fn(work: *mut $crate::c::work_struct) {
-                let c = unsafe {
-                    work.byte_sub(::core::mem::offset_of!($crate::c::delayed_work, work))
-                        .byte_sub(::core::mem::offset_of!($crate::fs::Fs, $($field).+))
-                        .cast::<$crate::fs::Fs>()
-                };
-                Self::run(unsafe { $crate::fs::Fs::borrow_raw(c) })
-            }
-        }
-    };
 }
 
 #[cfg(kernel)]

@@ -31,7 +31,8 @@ use crate::os::kthread::Daemon;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
-use crate::os::workqueue::{RawDelayedWork, ReffedWork, Workqueue, WqFlags};
+use crate::journal::journal::journal_write_work;
+use crate::os::workqueue::{DelayedWork, OnQueue, ReffedWork, Workqueue, WqFlags};
 use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, BitfieldMembers};
 use nestify::nest;
 
@@ -491,6 +492,8 @@ pub struct PinRange {
 type FsWrites = crate::field!(super.writes);
 /* And its ro refs, for what doesn't need it rw */
 type FsRoRef = crate::field!(super.ro_ref);
+/* And its own queue */
+type JournalWq = OnQueue<crate::field!(wq)>;
 pub type ReclaimThread = Daemon;
 pub type RewindRanges = LockedBy<KVVec<c::journal_rewind_range>, (), NotRw<'static>>;
 
@@ -533,8 +536,7 @@ nest! {
         pub reclaim_flush_wait: EventCount,
 
         #[pin]
-        #[init(crate::journal::journal::WriteWork::init())]
-        pub write_work: RawDelayedWork,
+        pub(crate) write_work: DelayedWork<journal_write_work, JournalWq>,
         #[late(Workqueue::new(c"bcachefs_journal",
                               WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
                ENOMEM_fs_other_alloc)]

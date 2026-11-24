@@ -5,6 +5,8 @@
 use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
 use crate::init::error::io_error_work;
 use crate::init::rw::read_only_work;
+use crate::sb::counters::recent_counters;
+use crate::sb::members::btree_bitmap_gc_schedule;
 use crate::cstructs::c;
 use crate::new_lock;
 use crate::util::alloc::KVVec;
@@ -16,7 +18,7 @@ use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::time_stats::TimeStatsArray;
 use crate::util::refcount::AtomicRef;
-use crate::os::workqueue::{ReffedWork, Workqueue, WqFlags};
+use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
 use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem, SpinLockIrq};
 use crate::os::percpu::{Counters, PerCpu};
 use crate::os::unicode::UnicodeMap;
@@ -577,15 +579,13 @@ pub struct Fs {
     pub inode_shard_cpu: [AtomicU16; 256],
 
     #[pin]
-    #[init(crate::sb::members::BtreeBitmapGcSchedule::init())]
-    pub maybe_schedule_btree_bitmap_gc: crate::os::workqueue::RawDelayedWork,
+    pub(crate) maybe_schedule_btree_bitmap_gc: DelayedWork<btree_bitmap_gc_schedule, crate::field!(ro_ref)>,
 
     #[pin]
     #[init(crate::util::alloc::init_or(c::bch_fs_counters::init(), c::Errcode::ENOMEM_fs_counters_init))]
     pub counters: c::bch_fs_counters,
     #[pin]
-    #[init(crate::sb::counters::RecentCounters::init())]
-    pub counters_recent: crate::os::workqueue::RawDelayedWork,
+    pub(crate) counters_recent: DelayedWork<recent_counters, crate::field!(ro_ref)>,
     #[pin]
     #[init(TimeStatsArray::new())]
     pub times: TimeStatsArray<c::bch2_time_stats, { c::TimeStat::NR as usize }>,

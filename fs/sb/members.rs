@@ -882,40 +882,36 @@ impl Fs {
 
 crate::recovery_pass!(btree_bitmap_gc => |fs: &Fs| fs.btree_bitmap_gc());
 
-crate::fs_delayed_work! {
-    /// Daily, while rw: btree_bitmap_gc scheduled - ratelimited - if a
-    /// device's bitmap marks four times the sectors of its btree buckets.
-    pub(crate) work BtreeBitmapGcSchedule: field maybe_schedule_btree_bitmap_gc;
-
-    fn run(fs: &Fs) {
-        if passes::want_ratelimit(fs, RecoveryPass::btree_bitmap_gc, 1000) {
-            return;
-        }
-
-        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
-        msg.set_suppressed(true); // run_explicit() unsuppresses
-
-        let mut want_schedule = false;
-        for ca in fs.members() {
-            let u = ca.usage_read_fast();
-            let btree_sectors = ca.bucket_to_sector(u.buckets[DataType::btree]);
-            let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
-
-            if btree_sectors * 4 < bitmap_sectors {
-                prt!(msg, "{} has {} btree buckets and {} marked in bitmap\n", *ca,
-                     HumanReadable(btree_sectors << 9), HumanReadable(bitmap_sectors << 9));
-                want_schedule = true;
-            }
-        }
-
-        if want_schedule {
-            // Ignored, as C ignored it
-            let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::btree_bitmap_gc,
-                                         c::RunRecoveryPassFlags::ratelimit);
-        }
-
-        fs.maybe_schedule_btree_bitmap_gc.queue(Queue::system_long(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));
+/// Daily, while rw: btree_bitmap_gc scheduled - ratelimited - if a
+/// device's bitmap marks four times the sectors of its btree buckets.
+pub(crate) fn btree_bitmap_gc_schedule(fs: &Fs) {
+    if passes::want_ratelimit(fs, RecoveryPass::btree_bitmap_gc, 1000) {
+        return;
     }
+
+    let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+    msg.set_suppressed(true); // run_explicit() unsuppresses
+
+    let mut want_schedule = false;
+    for ca in fs.members() {
+        let u = ca.usage_read_fast();
+        let btree_sectors = ca.bucket_to_sector(u.buckets[DataType::btree]);
+        let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
+
+        if btree_sectors * 4 < bitmap_sectors {
+            prt!(msg, "{} has {} btree buckets and {} marked in bitmap\n", *ca,
+                 HumanReadable(btree_sectors << 9), HumanReadable(bitmap_sectors << 9));
+            want_schedule = true;
+        }
+    }
+
+    if want_schedule {
+        // Ignored, as C ignored it
+        let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::btree_bitmap_gc,
+                                     c::RunRecoveryPassFlags::ratelimit);
+    }
+
+    fs.maybe_schedule_btree_bitmap_gc.queue(Queue::system_long(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));
 }
 
 // ---------------------------------------------------------------------------

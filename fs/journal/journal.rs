@@ -144,6 +144,7 @@ use crate::util::closure::closure_fn_addr;
 use crate::util::task::{waiter, Select, WaitSync};
 use crate::util::timer::Timer;
 use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
+use crate::os::workqueue::Own;
 use crate::util::futex::EventCount;
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
@@ -801,7 +802,7 @@ impl c::journal {
 
         drop(early);
 
-        self.write_work.queue(&self.wq, msecs_to_jiffies(fs.opts().journal_flush_delay.get().into()));
+        self.write_work.queue(Own, msecs_to_jiffies(fs.opts().journal_flush_delay.get().into()));
 
         Ok(())
     }
@@ -1718,12 +1719,8 @@ impl c::journal {
  * actually fires once that long has passed with no commit - at which point we
  * close the open entry to get it written out.
  */
-crate::fs_delayed_work! {
-    pub(crate) work WriteWork: field journal.write_work;
-
-    fn run(fs: &Fs) {
-        fs.journal.flush_async();
-    }
+pub(crate) fn journal_write_work(j: &c::journal) {
+    j.flush_async();
 }
 
 impl NotRw<'_> {

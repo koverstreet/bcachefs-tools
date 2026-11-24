@@ -262,20 +262,14 @@ impl SbFieldOps for c::bch_sb_field_counters<Validated> {
     }
 }
 
-crate::fs_delayed_work! {
-    /// Every half second: the counters sampled into recent[], newest first.
-    pub(crate) work RecentCounters: field counters_recent;
-
-    fn run(fs: &Fs) {
-        fs.counters.sample();
-        Self::queue(fs);
-    }
+/// Every half second: the counters sampled into recent[], newest first.
+pub(crate) fn recent_counters(fs: &Fs) {
+    fs.counters.sample();
+    queue_recent(fs);
 }
 
-impl RecentCounters {
-    pub(crate) fn queue(fs: &Fs) {
-        fs.counters_recent.queue(Queue::system_dfl(), nsecs_to_jiffies(NSEC_PER_SEC / 2));
-    }
+pub(crate) fn queue_recent(fs: &Fs) {
+    fs.counters_recent.queue(Queue::system_dfl(), nsecs_to_jiffies(NSEC_PER_SEC / 2));
 }
 
 /// The superblock's counters into memory, as both the counts now and at

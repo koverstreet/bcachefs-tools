@@ -43,7 +43,8 @@
 //! in a Locked's data has the struct holding the lock for its parent.
 //!
 //! A field `w: ReffedWork<f, R>` - a work item, running fn f, holding a ref
-//! on R's count - is made here too, with all it needs, as the field is the
+//! on R's count - or a DelayedWork<f, R>, the same after a delay, its timer
+//! with a lockdep class too, is made here too, with all it needs, as the field is the
 //! one place it's declared: f as a type, a braced struct beside the fn f in
 //! scope here, and its WorkFunc - the field's At, and run(), the call to f;
 //! and the field's initializer, ReffedWork::new() given the At, with a
@@ -144,12 +145,12 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             },));
             continue;
         }
-        if let (None, Some(func)) = (&init, reffed_work_fn(&parent, name, ty)?) {
+        if let (None, Some((kind, func))) = (&init, reffed_work_fn(&parent, name, ty)?) {
             if has_lifetimes {
-                return Err(Error::new_spanned(name, format!("{parent}.{name}: a ReffedWork's parent has no lifetimes")));
+                return Err(Error::new_spanned(name, format!("{parent}.{name}: a {kind}'s parent has no lifetimes")));
             }
             field_impls.push(work_func(&cfg, &inst_ty, name, func));
-            let w = work_init(&parent, name)?;
+            let w = work_init(&parent, name, kind)?;
             inits.push(quote!(#name <- #w,));
             continue;
         }
@@ -283,17 +284,20 @@ fn is_journal_pin(ty: &Type) -> bool {
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────
 
-/// f, if field type @ty is a ReffedWork<f, R>: f a bare name, the fn in
-/// scope here that it runs - its type is made here, beside it.
-fn reffed_work_fn<'a>(parent: &str, name: &Ident, ty: &'a Type) -> syn::Result<Option<&'a Ident>> {
+/// The work type and f, if field type @ty is a ReffedWork<f, R> or a
+/// DelayedWork<f, R>: f a bare name, the fn in scope here that it runs - its
+/// type is made here, beside it.
+fn reffed_work_fn<'a>(parent: &str, name: &Ident, ty: &'a Type) -> syn::Result<Option<(&'a Ident, &'a Ident)>> {
     let Type::Path(p) = ty else { return Ok(None) };
-    let Some(last) = p.path.segments.last().filter(|s| s.ident == "ReffedWork") else { return Ok(None) };
+    let Some(last) = p.path.segments.last().filter(|s| s.ident == "ReffedWork" || s.ident == "DelayedWork") else {
+        return Ok(None)
+    };
     let PathArguments::AngleBracketed(args) = &last.arguments else { return Ok(None) };
     match args.args.first() {
         Some(GenericArgument::Type(Type::Path(f))) if f.qself.is_none() && f.path.get_ident().is_some() =>
-            Ok(f.path.get_ident()),
-        f => Err(Error::new_spanned(f, format!("{parent}.{name}: a ReffedWork's function is named bare, as the \
-                                                fn in scope here - its type is made beside it: `use` it"))),
+            Ok(f.path.get_ident().map(|f| (&last.ident, f))),
+        f => Err(Error::new_spanned(f, format!("{parent}.{name}: a {}'s function is named bare, as the fn in \
+                                                scope here - its type is made beside it: `use` it", last.ident))),
     }
 }
 
@@ -317,19 +321,27 @@ fn work_func(cfg: &TokenStream, inst_ty: &TokenStream, name: &Ident, f: &Ident) 
     }
 }
 
-/// Field @name's initializer, of @parent: the work, given its At, its
-/// lockdep class named for the field.
-fn work_init(parent: &str, name: &Ident) -> syn::Result<TokenStream> {
+/// Field @name's initializer, of @parent: the @kind work, given its At, its
+/// lockdep class named for the field - and a DelayedWork's timer's, for the
+/// field's timer.
+fn work_init(parent: &str, name: &Ident, kind: &Ident) -> syn::Result<TokenStream> {
     let n = name.to_string();
-    let class: Literal = format!("c\"{parent}.{name}\"").parse()
-        .map_err(|_| Error::new_spanned(name, format!("{parent}.{name}: no C string of the name")))?;
+    let c_str = |s: String| s.parse::<Literal>()
+        .map_err(|_| Error::new_spanned(name, format!("{parent}.{name}: no C string of the name")));
+    let work_class = c_str(format!("c\"{parent}.{name}\""))?;
+    let class = if kind == "DelayedWork" {
+        let timer_class = c_str(format!("c\"{parent}.{name}.timer\""))?;
+        quote!(((#work_class, ::kernel::static_lock_class!()), (#timer_class, ::kernel::static_lock_class!())))
+    } else {
+        quote!((#work_class, ::kernel::static_lock_class!()))
+    };
     Ok(quote! {
         {
             #[cfg(kernel)]
-            let class = (#class, ::kernel::static_lock_class!());
+            let class = #class;
             #[cfg(not(kernel))]
             let class = ();
-            let w = |at| crate::os::workqueue::ReffedWork::new(at, class);
+            let w = |at| crate::os::workqueue::#kind::new(at, class);
             // SAFETY: run into the field, by pin_init!()
             unsafe {
                 crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(w)

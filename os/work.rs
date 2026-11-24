@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! ReffedWork, the same in both builds, over each one's workqueue - but its
-//! WorkClass, in-kernel a lockdep class per field.
+//! ReffedWork and DelayedWork, the same in both builds, over each one's
+//! workqueue - but their classes, in-kernel a lockdep class per field.
 
-use super::{Queue, Workqueue};
+use super::{Queue, RawDelayedWork, Workqueue};
 use crate::c;
 use crate::util::late::{Late, LateLock};
 use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use core::cell::UnsafeCell;
+use core::ffi::c_ulong;
 use core::marker::{PhantomData, PhantomPinned};
+use pin_init::{pin_data, pin_init};
 
 /// A field's work's class: in-kernel its lockdep class - @key, named @name.
 #[cfg(kernel)]
@@ -17,10 +19,10 @@ pub(crate) type WorkClass = (&'static core::ffi::CStr, core::pin::Pin<&'static k
 #[cfg(not(kernel))]
 pub(crate) type WorkClass = ();
 
-/// A ReffedWork's function as a type, and the field it runs from: for a
-/// field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes f - a
-/// braced struct, a type only, beside the fn f - and this. At is that
-/// field's, and only its initializer makes a ReffedWork<Self, _>.
+/// A ReffedWork's or DelayedWork's function as a type, and the field it runs
+/// from: for a field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes
+/// f - a braced struct, a type only, beside the fn f - and this. At is that
+/// field's, and only its initializer makes a work of Self.
 pub(crate) trait WorkFunc: Sized + 'static {
     #[doc(hidden)]
     type At: Place<Base: Enclosing<Visible = <Self::At as Place>::Base>>;
@@ -251,5 +253,120 @@ where
                 Ok(())
             })
         }
+    }
+}
+
+/// A field's delayed work's class: in-kernel its work's lockdep class, and its
+/// timer's.
+#[cfg(kernel)]
+pub(crate) type DelayedClass = (WorkClass, WorkClass);
+#[cfg(not(kernel))]
+pub(crate) type DelayedClass = ();
+
+/// struct delayed_work, placed as a ReffedWork is: F run after a delay,
+/// holding its Refs - or on its OnQueue - from its queueing to the run's end:
+///
+/// ```text
+/// counters_recent: DelayedWork<recent_counters, field!(ro_ref)>,
+/// ```
+///
+/// A cancel that takes off a pending run puts the refs it held.
+#[pin_data]
+#[repr(C)]
+pub(crate) struct DelayedWork<F: WorkFunc, Refs> {
+    #[pin]
+    work:       RawDelayedWork,
+    _placed_at: F::At,
+    _r:         PhantomData<fn() -> Refs>,
+}
+
+impl<F: WorkFunc, Refs> Contained for DelayedWork<F, Refs>
+where
+    F::At: Place<Type = Self>,
+{
+    type Parent = Parent<F>;
+    type At = F::At;
+    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
+}
+
+impl<F: WorkFunc, Refs: WorkRefs<Parent<F>>> DelayedWork<F, Refs>
+where
+    F::At: Place<Type = Self>,
+{
+    /// Run F on @on's queue after @delay jiffies, holding its Refs:
+    /// queue_delayed_work(). False if they can't all be had, as ReffedWork's.
+    /// Queued already, that run, and its refs, are the ones there'll be.
+    pub(crate) fn queue<'a>(&'a self, on: Refs::On<'a>, delay: c_ulong) -> bool {
+        let p = self.container();
+        let wq = Refs::queue_of(p, on);
+        let Some(r) = Refs::tryget_live(p) else { return false };
+        if self.work.queue(wq, delay) {
+            core::mem::forget(r);
+        }
+        true
+    }
+
+    /// queue(), re-armed for @delay jiffies from now if it was queued:
+    /// mod_delayed_work().
+    pub(crate) fn modify<'a>(&'a self, on: Refs::On<'a>, delay: c_ulong) -> bool {
+        let p = self.container();
+        let wq = Refs::queue_of(p, on);
+        let Some(r) = Refs::tryget_live(p) else { return false };
+        if !self.work.modify(wq, delay) {
+            // queued anew: the run's
+            core::mem::forget(r);
+        }
+        true
+    }
+
+    /// Not queued any more - a run under way still runs:
+    /// cancel_delayed_work(). Whether it was pending.
+    pub(crate) fn cancel(&self) -> bool {
+        self.put_cancelled(self.work.cancel())
+    }
+
+    /// Not queued any more, and not running - waiting out a run that is:
+    /// cancel_delayed_work_sync(). Whether it was pending.
+    pub(crate) fn cancel_sync(&self) -> bool {
+        self.put_cancelled(self.work.cancel_sync())
+    }
+
+    fn put_cancelled(&self, pending: bool) -> bool {
+        if pending {
+            // SAFETY: the refs queue() took for the run taken off
+            drop(unsafe { Refs::adopt(self.container()) });
+        }
+        pending
+    }
+
+    /// # Safety
+    /// @work is a DelayedWork<F, Refs>'s, queued by queue() or modify(), holding
+    /// its refs.
+    unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
+        // SAFETY: only a DelayedWork<F, Refs> runs its work_fn - its delayed_work
+        // first, and that's work_struct first - and the refs it holds keep
+        // its parent
+        let p = unsafe { (*work.cast::<Self>()).container() };
+        // SAFETY: the refs queue() took for this run
+        let _r = unsafe { Refs::adopt(p) };
+        F::run(p);
+    }
+
+    /// INIT_DELAYED_WORK(), of the field's class.
+    #[doc(hidden)]
+    pub(crate) fn new<E: From<core::convert::Infallible>>(at: F::At, class: DelayedClass)
+        -> impl ::pin_init::PinInit<Self, E>
+    {
+        #[cfg(kernel)]
+        let work = {
+            let ((name, key), (timer_name, timer_key)) = class;
+            RawDelayedWork::new(Self::work_fn, name, key, timer_name, timer_key)
+        };
+        #[cfg(not(kernel))]
+        let work = {
+            let () = class;
+            RawDelayedWork::new(Self::work_fn)
+        };
+        pin_init!(Self { work <- work, _placed_at: at, _r: PhantomData }? E)
     }
 }
