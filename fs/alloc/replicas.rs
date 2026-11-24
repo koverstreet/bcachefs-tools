@@ -245,7 +245,7 @@ pub(crate) fn entry_acct(e: &Entry, data_type: DataType) -> DiskAccountingPos {
 
 /// @k's entry, as bkey_to_replicas() makes it: what gc keeps of a stripe's.
 pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_padded {
-    let mut r = c::bch_replicas_padded::zeroed();
+    let mut r = c::bch_replicas_padded::default();
     bkey_to_replicas(fs, &mut EntryBuf(&mut r), k);
     r
 }
@@ -260,7 +260,7 @@ impl DevlistEntry {
                 data_type.0 < c::DataType::NR,
                 "replicas entry of data type {}", data_type.0);
 
-        let mut r = c::bch_replicas_padded::zeroed();
+        let mut r = c::bch_replicas_padded::default();
         EntryBuf(&mut r).fill(data_type, 1, devs.as_slice());
         DevlistEntry(r)
     }
@@ -284,7 +284,7 @@ impl core::ops::Deref for DevlistEntry {
 /// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
 /// @data_type data.
 pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) -> DiskAccountingPos {
-    let mut r = c::bch_replicas_padded::zeroed();
+    let mut r = c::bch_replicas_padded::default();
     bkey_to_replicas(fs, &mut EntryBuf(&mut r), k);
     entry_acct(&r, data_type)
 }
@@ -972,7 +972,7 @@ mod tests {
     const USER: DataType = DataType::user;
 
     fn entry(data_type: DataType, nr_required: u8, devs: &[u8]) -> c::bch_replicas_padded {
-        let mut r = c::bch_replicas_padded::zeroed();
+        let mut r = c::bch_replicas_padded::default();
         EntryBuf(&mut r).fill(data_type, nr_required, devs);
         r
     }

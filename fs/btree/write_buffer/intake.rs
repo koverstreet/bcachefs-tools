@@ -258,7 +258,7 @@ impl<'a> Intake<'a> {
                     prt!(out, "{}", BkeySC::from(k).to_text(fs));
                 });
 
-                let mut new = AccountingKey::zeroed();
+                let mut new = AccountingKey::default();
                 DstRoom::<BkeyI>::from_elems_mut(&mut new.elems_mut()[SEQ_U64S..]).set_key(k);
 
                 b.inc.accounting.push(new)?;

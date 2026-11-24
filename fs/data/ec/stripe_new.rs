@@ -535,7 +535,7 @@ impl Internal {
             blocks:              Default::default(),
             res:                 None,
             buckets:             ArrayVec::new(),
-            new_stripe           <- pin_init::init_zeroed(),
+            new_stripe           <- StripeKey::empty(),
             new_buf:             None,
             slot_claim:          None,
             reuse:               None,

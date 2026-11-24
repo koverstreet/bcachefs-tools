@@ -203,7 +203,7 @@ pub struct bkey_format_bits {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
@@ -224,7 +224,7 @@ pub struct bkey {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
+#[derive(Clone, Copy, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,

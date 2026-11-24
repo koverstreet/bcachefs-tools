@@ -829,6 +829,15 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
         // a reference as long as its count says is a whole number of its
         // alignment only if its elements are: else it claims bytes past it
         const _: () = assert!(::core::mem::size_of::<#elem>() % ::core::mem::align_of::<#written>() == 0, #msg);
+
+        // zeroed, its head is zeroes - a count of none - and its elements
+        // zeroes too, if they're as long as that's held
+        unsafe impl<S: #vs::State> ::pin_init::Zeroable for #name<S>
+        where
+            #name<S>: #vs::DstHead + #vs::FlexArray,
+            <#name<S> as #vs::DstHead>::Head: ::pin_init::Zeroable,
+            <#name<S> as #vs::FlexArray>::Elem: ::pin_init::Zeroable,
+        {}
     });
     let len = quote!((#tail_at) + #vs::Count::count(&{ h.#count_path }) * ::core::mem::size_of::<#elem>());
     out.extend(own_count_family(name, &shape, len)?);

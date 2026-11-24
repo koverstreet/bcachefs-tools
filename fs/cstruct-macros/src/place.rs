@@ -293,15 +293,15 @@ pub(crate) fn field_impl(cfg: &TokenStream, impl_g: &impl quote::ToTokens, inst_
 }
 
 /// The initializer for field @name, without #[init]: InitAt's, if a placed
-/// type lives there, else zeroed - util/place.rs's Pick.
+/// type lives there, else zeroed, else its Default - util/place.rs's Pick.
 pub(crate) fn field_init(name: &Ident) -> TokenStream {
     let n = name.to_string();
     quote! {
         {
-            use crate::util::place::{PickPlaced as _, PickZeroed as _};
+            use crate::util::place::{PickDefault as _, PickPlaced as _, PickZeroed as _};
             // unsafe if it's PickPlaced's pick(): run into the field, by pin_init!()
             #[allow(unused_unsafe)]
-            let init = unsafe { (&crate::util::place::Pick::<Self, { crate::util::place::name(#n) }>::NEW).pick() };
+            let init = unsafe { (&&&crate::util::place::Pick::<Self, { crate::util::place::name(#n) }>::NEW).pick() };
             init
         }
     }

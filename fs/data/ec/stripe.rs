@@ -520,15 +520,23 @@ pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
 
 /// A stripe's key with room for all of its value - as much as any key holds,
 /// its u64s being a u8: the key of a stripe being made, edited as its blocks
-/// are allocated. Zeroed, it's a deleted key, no stripe.
+/// are allocated. Made empty, it's a deleted key, no stripe.
 #[repr(C)]
-#[derive(Clone, ::pin_init::Zeroable)]
-pub struct StripeKey(DstRoom<BkeyI, [u64; c::BKEY_U64s_MAX as usize]>);
+#[derive(Clone)]
+pub struct StripeKey {
+    room: DstRoom<BkeyI, [u64; c::BKEY_U64s_MAX as usize]>,
+}
 
 impl StripeKey {
+    /// A deleted key, no stripe, made in place: kilobytes, too many for the
+    /// stack.
+    pub(crate) fn empty() -> impl ::pin_init::Init<Self> {
+        ::pin_init::init!(StripeKey { room <- DstRoom::init_default() })
+    }
+
     /// Its stripe: the key, as long as its u64s say.
     pub(crate) fn stripe(&self) -> BkeySC<'_, c::Stripe<Validated>> {
-        BkeySC::from(&*self.0).arm::<c::Stripe>().expect("a StripeKey's key is a stripe")
+        BkeySC::from(&*self.room).arm::<c::Stripe>().expect("a StripeKey's key is a stripe")
     }
 
     /// Its slot: the stripe's index.
@@ -538,12 +546,12 @@ impl StripeKey {
 
     /// Make it a copy of @k, in place: it's too big to pass by value.
     pub(crate) fn copy_from(&mut self, k: &StripeKey) {
-        self.0 = k.0;
+        self.room = k.room;
     }
 
     /// Make it @k: bkey_reassemble().
     pub fn set(&mut self, k: BkeySC<'_, c::Stripe<Validated>>) {
-        self.0.set_key(k)
+        self.room.set_key(k)
     }
 
     /// Make it a new stripe, @v its header: bkey_stripe_init(), and the value
@@ -554,17 +562,17 @@ impl StripeKey {
         k.set_key_type(BkeyType::stripe);
         k.set_val_bytes(v.val_u64s() as usize * size_of::<u64>());
 
-        self.0.k = k;
-        plain_bytes_mut(self.0.val_mut())[..size_of::<c::Stripe>()].copy_from_slice(plain_bytes(v));
+        self.room.k = k;
+        plain_bytes_mut(self.room.val_mut())[..size_of::<c::Stripe>()].copy_from_slice(plain_bytes(v));
     }
 
     /// Its header, to edit: its position, say.
     pub(crate) fn k_mut(&mut self) -> &mut c::bkey {
-        &mut self.0.k
+        &mut self.room.k
     }
 
     /// Its stripe's value, to edit.
     pub(crate) fn stripe_mut(&mut self) -> &mut c::Stripe<Validated> {
-        cast_mut(plain_bytes_mut(self.0.val_mut())).expect("a stripe's value")
+        cast_mut(plain_bytes_mut(self.room.val_mut())).expect("a stripe's value")
     }
 }

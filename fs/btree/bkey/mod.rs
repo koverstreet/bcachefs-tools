@@ -106,13 +106,20 @@ use crate::format::{Bpos, BkeyType};
 
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
+/// The empty key - new()'s, not zeroes, which say it's shorter than itself.
+impl Default for c::bkey {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl c::bkey {
     /// Of type deleted, at POS_MIN, with no value: as bkey_init() sets.
     pub fn new() -> Self {
         Self {
             u64s:        BKEY_U64S as u8,
             format_bits: c::bkey_format_bits::new().with_format(c::KEY_FORMAT_CURRENT as u8),
-            ..Default::default()
+            ..::pin_init::zeroed()
         }
     }
 

@@ -78,18 +78,27 @@ pub const BTREE_NODE_RESERVE: u32 = c::BTREE_RESERVE_MAX * 4;
  * reserves fail halfway through) - instead, we can stick them here:
  */
 #[repr(C)]
-#[derive(MaybeZeroable)]
 pub struct BtreeReserveCache {
     pub nr: c_uint,
     pub data: [c::btree_alloc; c::BTREE_NODE_RESERVE as usize * 2],
 }
 
+impl BtreeReserveCache {
+    /// Empty, made in place: a stack frame's worth of keys.
+    fn init() -> impl ::pin_init::Init<Self> {
+        ::pin_init::init!(BtreeReserveCache {
+            nr: 0,
+            data <- ::pin_init::init_array_from_fn(|_| c::btree_alloc::default()),
+        })
+    }
+}
+
 #[pin_data]
 #[repr(C)]
-#[derive(MaybeZeroable, TypeInfo, Init)]
+#[derive(TypeInfo, Init)]
 pub struct bch_fs_btree_reserve_cache {
     #[pin]
-    #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&c->btree.reserve_cache.lock"))]
+    #[init(new_lock!(<- BtreeReserveCache::init(), (), "&c->btree.reserve_cache.lock"))]
     pub lock: Locked<Mutex, BtreeReserveCache>,
 }
 

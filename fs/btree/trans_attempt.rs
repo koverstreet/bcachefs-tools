@@ -709,7 +709,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let bytes = self.kmalloc(u64s as usize * size_of::<u64>())?;
         let words = cast_plain_slice_mut::<u64>(bytes).expect("transaction memory, word aligned");
 
-        Ok(TransBkey { room: DstRoom::from_elems_mut(words), t: PhantomData, v: PhantomData })
+        Ok(TransBkey { room: DstRoom::new_in(words), t: PhantomData, v: PhantomData })
     }
 
     pub fn bkey_alloc_typed<K: BkeyWhole>(&self) -> Result<TransBkey<'a, 't, K>, BchError> {

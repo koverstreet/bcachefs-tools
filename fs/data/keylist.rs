@@ -230,17 +230,6 @@ where
     }
 }
 
-/// A deleted key and no value, as bkey_init() leaves one.
-impl<V: ?Sized + Unsized, const N: usize> Default for DstRoom<BkeyI<V>, [u64; N]>
-where
-    BkeyI<V>: SelfSized,
-{
-    fn default() -> Self {
-        let mut k = Self::zeroed();
-        k.init();
-        k
-    }
-}
 
 /// A key - header @k, value @val - copied into @room: one copy of the code for
 /// every key type and room size.

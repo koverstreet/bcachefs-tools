@@ -35,7 +35,7 @@ use crate::util::alloc::{kbox_into_inner, kbox_pin_init, KBox};
 use crate::util::vstructs::Validated;
 use core::ops::ControlFlow;
 use core::pin::Pin;
-use pin_init::{init, init_zeroed, Init};
+use pin_init::{init, Init};
 use crate::format::Btree;
 
 /// The old stripe a stripe being made reuses - a stripe it's packed into, or
@@ -77,7 +77,7 @@ impl Reuse {
         let mut open = Some(open);
         let claim = &mut open;
         let init = init!(Reuse {
-            stripe <- init_zeroed(),
+            stripe <- StripeKey::empty(),
             open:   claim.take().expect("a claim, taken once"),
             buf:    None,
             read:   OldRead::NoBuf,

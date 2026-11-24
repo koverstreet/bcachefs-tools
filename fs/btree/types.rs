@@ -127,7 +127,7 @@ pub struct btree_cache_shrinker {
 
 /* On disk root - see async splits: */
 #[repr(C)]
-#[derive(MaybeZeroable)]
+#[derive(Default)]
 pub struct btree_root {
     pub key: DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
     pub level: u8,
@@ -141,6 +141,7 @@ pub struct btree_root {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct BtreeRoots {
+    #[init(::pin_init::init_array_from_fn(|_| cs::btree_root::default()))]
     pub roots_known: [cs::btree_root; Btree::NR as usize],
     #[pin]
     #[init(KVVec::new())]
@@ -175,7 +176,7 @@ impl BtreeRootsGuard<'_> {
     /// a btree past the known ones that the journal has a root for.
     pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
         while id >= self.roots_extra.len() as u32 + Btree::NR {
-            self.roots_extra.push(::pin_init::zeroed())?;
+            self.roots_extra.push(Default::default())?;
         }
         let nr = self.roots_extra.len() as u32;
         self.published().roots_nr_extra.set(nr);

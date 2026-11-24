@@ -349,9 +349,10 @@ pub(crate) trait InitAt<const N: u64, A = ()>: Field<N> {
 }
 
 /// #[derive(Init)]'s initializer for B's field N, without #[init]: its
-/// InitAt, if a placed type lives there, else zeroed - picked by which
-/// trait's pick() method resolution finds first, PickPlaced's on a Pick,
-/// before PickZeroed's on a &Pick. A wrong pick doesn't compile: a placed
+/// InitAt, if a placed type lives there, else zeroed, else its Default -
+/// picked by which trait's pick() method resolution finds first, called on
+/// a &&&Pick: PickPlaced's on a &&Pick, before PickZeroed's on a &Pick,
+/// before PickDefault's on a Pick. A wrong pick doesn't compile: a placed
 /// type isn't Zeroable, and its init() takes only its own field's At. A
 /// placed field must be #[pin]: its initializer's only a PinInit.
 #[doc(hidden)]
@@ -371,7 +372,7 @@ pub(crate) trait PickPlaced<T> {
     unsafe fn pick(&self) -> impl PinInit<T, BchError>;
 }
 
-impl<B: InitAt<N>, const N: u64> PickPlaced<B::Type> for Pick<B, N> {
+impl<B: InitAt<N>, const N: u64> PickPlaced<B::Type> for &&Pick<B, N> {
     unsafe fn pick(&self) -> impl PinInit<B::Type, BchError> {
         // SAFETY: the caller's
         unsafe { B::init(()) }
@@ -389,6 +390,22 @@ where
 {
     fn pick(&self) -> impl Init<B::Type> {
         pin_init::init_zeroed()
+    }
+}
+
+/// A field whose zeroes aren't a value of it, as a DstRoom's of a key: its
+/// Default.
+#[doc(hidden)]
+pub(crate) trait PickDefault<T> {
+    fn pick(&self) -> impl Init<T>;
+}
+
+impl<B: Field<N>, const N: u64> PickDefault<B::Type> for Pick<B, N>
+where
+    B::Type: Default,
+{
+    fn pick(&self) -> impl Init<B::Type> {
+        B::Type::default()
     }
 }
 

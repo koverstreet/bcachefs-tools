@@ -200,7 +200,7 @@ impl Working {
     /// Nothing yet: the fold and take() fill it.
     fn new() -> impl Init<Self> {
         init!(Working {
-            new_stripe      <- init_zeroed(),
+            new_stripe      <- StripeKey::empty(),
             new_buf:        None,
             reuse:          None,
             res:            None,

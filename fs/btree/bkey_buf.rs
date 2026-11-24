@@ -35,9 +35,7 @@ impl DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S, HEAP_U64S>> {
     /// it zeroes the whole room, and no hot path makes one.
     #[inline(never)]
     pub fn new() -> Self {
-        let mut b = Self::zeroed();
-        b.init();
-        b
+        Self::default()
     }
 
     /// A copy of @k.
@@ -73,11 +71,6 @@ impl AsMut<BkeyI> for BkeyBuf {
     }
 }
 
-impl Default for BkeyBuf {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// An owned copy of a key, and where it lives: its btree, and its level - 0
 /// for a leaf's key, a node pointer's the level above its node's.

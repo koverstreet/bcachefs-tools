@@ -42,7 +42,8 @@ use crate::util::{Printbuf, ToText};
 use crate::{btree_trans, new_lock, prt};
 use core::mem::size_of;
 use core::sync::atomic::fence;
-use cstruct_macros::{placed, MaybeZeroable, Init, SelfSized, TypeInfo, bch_enum};
+use cstruct_macros::{placed, MaybeZeroable, Init, Plain, SelfSized, TypeInfo, bch_enum};
+use crate::util::vstructs::DstHead;
 use pin_init::pin_data;
 
 /*
@@ -115,6 +116,18 @@ const _: () = assert!(REF_IDX.end - REF_IDX.start == size_of::<u32>() &&
 pub struct btree_write_buffered_key {
     pub journal_seq: u64,
     pub k: BkeyI,
+}
+
+/// What precedes a buffered key's value: its seq, and its key's header.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Plain)]
+pub struct WbKeyHead {
+    pub journal_seq: u64,
+    pub k: c::bkey,
+}
+
+impl DstHead for btree_write_buffered_key {
+    type Head = WbKeyHead;
 }
 
 const SEQ_U64S: usize = btree_write_buffered_key::K_AT / size_of::<u64>();
