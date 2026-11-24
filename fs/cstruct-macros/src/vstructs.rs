@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 //! What util/vstructs.rs's traits need of a type, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
-//! #[derive(FakeFlexArray)], from #[counted_by(FIELD)], #[derive(View)], its
-//! fields' projections on a View of it, and the families, a type's X<S> in
-//! each state: #[unsized_vstruct], an unsized vstruct's, and #[counted], a
-//! header and the array it counts - X<S> its own definition in every state;
-//! #[whole] and #[grown], a sized type's, which in place is a definition of
-//! its own.
+//! #[derive(View)], its fields' projections on a View of it, and the
+//! families, a type's X<S> in each state: #[unsized_vstruct], an unsized
+//! vstruct's, and #[counted], a header and the array it counts - X<S> its own
+//! definition in every state; #[whole] and #[grown], a sized type's, which in
+//! place is a definition of its own.
 //!
 //! Plain is a promise: every bit pattern of the type's bytes is a value of
 //! it, and every byte is a field's. These impls check it at compile time,
@@ -944,7 +943,7 @@ fn sized_family(def: &StructDef, item: TokenStream, grew: Option<(&Ident, usize)
     // X is generated: a derive vstruct_family! doesn't forward would be
     // X_whole's alone, out of X's reach. Ours of the struct as written are
     // X_whole's
-    let of_whole = ["MaybeZeroable", "BitfieldMembers", "FakeFlexArray"];
+    let of_whole = ["MaybeZeroable", "BitfieldMembers"];
     if let Some(d) = derives.iter()
         .find(|d| !of_whole.iter().chain(WHOLE_DERIVES).any(|w| d == w)) {
         return Err(format!("{name}: #[derive({d})], but {name} - {name}<Whole> - is generated, and has \
@@ -1173,24 +1172,6 @@ fn rename_struct(item: TokenStream, def: &StructDef, to: &Ident) -> Result<Token
     }
     out.extend(tts);
     Ok(out)
-}
-
-/// #[derive(FakeFlexArray)], from #[counted_by(FIELD)] on the trailing `[T; 0]`.
-pub(crate) fn flex_array(def: &StructDef) -> Result<TokenStream, String> {
-    let name = &def.ident;
-    let Some((i, f, count)) = def.fields.iter().enumerate().find_map(|(i, f)| Some((i, f, f.counted_by.as_ref()?)))
-    else {
-        return Err(format!("{name}: no #[counted_by(FIELD)] field"));
-    };
-    let elem = match flex_elem(&f.ty) {
-        Some(elem) if i + 1 == def.fields.len() => elem,
-        _ => return Err(format!("{name}.{}: #[counted_by] is for the last field, a [T; 0]", f.ident)),
-    };
-    if !def.fields.iter().any(|g| g.ident == *count) {
-        return Err(format!("{name}.{}: #[counted_by({count})]: {name} has no field {count}", f.ident));
-    }
-    let field = &f.ident;
-    Ok(flex_impl(name, &quote!(::core::mem::offset_of!(#name, #field)), elem, std::slice::from_ref(count)))
 }
 
 /// FakeFlexArray for @name: @elem from @tail_at, as many as @count, a field's

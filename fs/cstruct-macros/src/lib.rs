@@ -8,8 +8,6 @@
 //!   #[derive(BitfieldMembers)]
 //!                        a #[members] field's bitfield members, on the
 //!                        struct
-//!   #[derive(FakeFlexArray)] #[counted_by] on a trailing [T; 0]: its FakeFlexArray
-//!                        (vstructs.rs)
 //!   #[bitfield(uN)]      bitfield_struct::bitfield, and forwarders for the
 //!                        struct that holds one in a #[members] field; with
 //!                        `atomic`, an atomic word of it (bitfield_atomic.rs)
@@ -124,14 +122,6 @@ pub fn derive_maybe_zeroable(input: proc_macro::TokenStream) -> proc_macro::Toke
 #[proc_macro_derive(BitfieldMembers, attributes(members))]
 pub fn derive_bitfield_members(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("#[derive(BitfieldMembers)]", || bitfield::bitfield_members(input.into()))
-}
-
-/// `#[derive(FakeFlexArray)]`: util/vstructs.rs's FakeFlexArray, from
-/// `#[counted_by(FIELD)]` on a trailing `[T; 0]`, FIELD its length - see
-/// vstructs.rs.
-#[proc_macro_derive(FakeFlexArray, attributes(counted_by))]
-pub fn derive_flex_array(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("#[derive(FakeFlexArray)]", || vstructs::flex_array(&parse_cstruct(&input.into())?))
 }
 
 /// `#[type_name(NAME)]`, before the derives, on a struct whose name isn't

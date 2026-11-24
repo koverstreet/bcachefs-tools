@@ -159,6 +159,62 @@ impl<H: FakeFlexArray + Plain> IoctlBuf<H> {
     pub fn new(nr: usize) -> Self {
         Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())
     }
+}
+
+/// A header-plus-array ioctl with the capacity/total retry protocol: nr in
+/// is capacity, ERANGE reports the required total. Its array is the kernel's
+/// elements, from TAIL, stride() apart - not a DST of ours: the kernel's
+/// elements needn't be our size.
+pub trait FlexArrayIoctl: Plain + Copy {
+    type Ioc: Ioctl<Arg = Self>;
+    /// What the array holds, as we have it.
+    type Elem: Plain;
+    /// Where the array starts: its `[Elem; 0]`'s offset.
+    const TAIL: usize;
+
+    /// How many elements the reply holds.
+    fn nr(&self) -> usize;
+    fn set_capacity(&mut self, n: u32);
+    fn total(&self) -> u32;
+
+    /// Bytes from one element of the reply to the next, given the header we
+    /// sent: our element's size, unless the header says what the kernel's is.
+    fn stride(&self, _sent: &Self) -> usize {
+        std::mem::size_of::<Self::Elem>()
+    }
+}
+
+impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
+    type Ioc = BCH_IOCTL_SNAPSHOT_TREE;
+    type Elem = bch_ioctl_snapshot_node;
+    const TAIL: usize = std::mem::offset_of!(Self, nodes);
+
+    fn nr(&self) -> usize { self.nr as usize }
+    fn set_capacity(&mut self, n: u32) { self.nr = n; }
+    fn total(&self) -> u32 { self.total }
+}
+
+impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
+    type Ioc = BCH_IOCTL_SNAPSHOT_TREE_v2;
+    type Elem = bch_ioctl_snapshot_node_v2;
+    const TAIL: usize = std::mem::offset_of!(Self, nodes);
+
+    fn nr(&self) -> usize { self.nr as usize }
+    fn set_capacity(&mut self, n: u32) { self.nr = n; }
+    fn total(&self) -> u32 { self.total }
+
+    /// node_size: ours going in, the kernel's coming back. It writes the
+    /// smaller of the two per node, and steps by that.
+    fn stride(&self, sent: &Self) -> usize {
+        self.node_size.min(sent.node_size) as usize
+    }
+}
+
+impl<H: FlexArrayIoctl> IoctlBuf<H> {
+    /// Room for the header and @nr of our elements.
+    pub fn with_capacity(nr: usize) -> Self {
+        Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())
+    }
 
     /// The array of a reply whose elements are @stride bytes apart - the
     /// kernel's size for them, where the header says, not necessarily ours -
@@ -203,7 +259,7 @@ mod tests {
     /// nodes are that size writes it: node i's id i + 1, every other byte of
     /// it 0xff.
     fn reply(nr: u32, stride: usize) -> IoctlBuf<Query> {
-        let mut buf = IoctlBuf::<Query>::new(4);
+        let mut buf = IoctlBuf::<Query>::with_capacity(4);
         buf.hdr_mut().nr = nr;
         let bytes = plain_bytes_mut(&mut buf.buf[..]);
         for i in 0..nr as usize {

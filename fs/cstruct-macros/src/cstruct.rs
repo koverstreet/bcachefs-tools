@@ -51,9 +51,6 @@ pub(crate) struct FieldDef {
     /// #[members]: its type is a #[bitfield] type, whose members are the
     /// struct's too.
     pub(crate) bitfield: bool,
-    /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
-    /// is, as the struct's FakeFlexArray impl.
-    pub(crate) counted_by: Option<syn::Ident>,
     /// #[placed_at]: the field #[placed] added, its place's At - which
     /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
     pub(crate) placed_at: bool,
@@ -168,17 +165,10 @@ fn parse_struct(d: syn::DeriveInput) -> Result<Option<StructDef>, String> {
 
     let mut fields = Vec::new();
     for f in fields_of {
-        let mut counted_by = None;
         let bare = |n: &str| f.attrs.iter().any(|a| matches!(&a.meta, syn::Meta::Path(p) if p.is_ident(n)));
-        for attr in &f.attrs {
-            if attr.path().is_ident("counted_by") {
-                counted_by = Some(attr.parse_args::<syn::Ident>()
-                    .map_err(|_| format!("{name}: #[counted_by(FIELD)] takes the field that counts it"))?);
-            }
-        }
         let (bitfield, placed_at) = (bare("members"), bare("placed_at"));
         let ident = f.ident.expect("named fields");
-        fields.push(FieldDef { ident, ty: f.ty, vis: f.vis, bitfield, counted_by, placed_at });
+        fields.push(FieldDef { ident, ty: f.ty, vis: f.vis, bitfield, placed_at });
     }
 
     // #[type_name], or what it expands to - a family's macro sees it
