@@ -32,25 +32,24 @@ pub struct PercpuRef {
 unsafe impl Send for PercpuRef {}
 unsafe impl Sync for PercpuRef {}
 
-/// What a PercpuRef's release does before wait() returns: its owner noticing
-/// the last ref is gone.
+/// What a PercpuRef's release does once it's released - is_released(), and
+/// wait() returning: its owner woken, if it waits on more than the ref. The
+/// ref may be gone by then, freed by its owner: so it isn't handed it.
 pub trait OnRelease {
-    /// # Safety
-    /// @r is the PercpuRef released, and still the owner's.
-    unsafe fn released(r: *mut PercpuRef);
+    fn released();
 }
 
 impl OnRelease for () {
-    unsafe fn released(_: *mut PercpuRef) {}
+    fn released() {}
 }
 
 unsafe extern "C" fn release<F: OnRelease>(r: *mut c::percpu_ref) {
     // r is a PercpuRef's, at its start
     let r = r.cast::<PercpuRef>();
-    unsafe { F::released(r) };
     let released = unsafe { &raw const (*r).released };
     unsafe { (*released).store(1, Release) };
     futex_wake(released.cast(), usize::MAX);
+    F::released();
 }
 
 impl PercpuRef {
@@ -82,6 +81,12 @@ impl PercpuRef {
     pub fn start(&self) {
         self.released.store(0, Relaxed);
         unsafe { c::percpu_ref_reinit(self.r.get()) }
+    }
+
+    /// Whether it's released: stopped, the last ref put, and its release run -
+    /// wait() won't wait.
+    pub fn is_released(&self) -> bool {
+        self.released.load(Acquire) != 0
     }
 
     /// Whether no ref is held: stopped, and the last one put.

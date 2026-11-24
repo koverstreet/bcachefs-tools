@@ -421,7 +421,6 @@ pub enum FsFlag {
     stopping,
     emergency_ro,
     going_ro,
-    write_disable_complete,
     clean_shutdown,
     in_recovery,
     running_recovery_passes,

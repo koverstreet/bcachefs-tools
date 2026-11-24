@@ -32,7 +32,7 @@ use crate::sb::members::{BtreeBitmapGcSchedule, SbMembersMut};
 use crate::util::futex::EventCount;
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::{OnRelease, PercpuRef, WaitableRef};
+use crate::util::refcount::{OnRelease, WaitableRef};
 use crate::util::sleep::Sleep;
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
@@ -155,7 +155,7 @@ impl StateLockWrite<'_> {
             return;
         }
 
-        assert!(!fs.flags.get(Flag::write_disable_complete));
+        assert!(!fs.writes.is_released());
 
         bch_verbose!(fs, "going read-only");
 
@@ -188,7 +188,7 @@ impl StateLockWrite<'_> {
          * we do need to wait on them before returning and signalling
          * that going RO is complete:
          */
-        let writes_stopped = || fs.flags.get(Flag::write_disable_complete);
+        let writes_stopped = || fs.writes.is_released();
         let Ok(()) = READ_ONLY_EVENTS.wait_until(Sleep::UNINTERRUPTIBLE, || {
             (writes_stopped() || fs.flags.get(Flag::emergency_ro)).then_some(())
         });
@@ -206,7 +206,6 @@ impl StateLockWrite<'_> {
             bch_verbose!(fs, "finished waiting for writes to stop");
         }
 
-        fs.flags.set(Flag::write_disable_complete, false);
         fs.flags.set(Flag::going_ro, false);
         fs.flags.set(Flag::rw, false);
 
@@ -390,9 +389,7 @@ pub(crate) fn read_only_work(fs: &Fs) {
 pub(crate) struct WritesDisabled;
 
 impl OnRelease for WritesDisabled {
-    unsafe fn released(writes: *mut PercpuRef) {
-        let fs = unsafe { &*writes.byte_sub(core::mem::offset_of!(Fs, writes)).cast::<Fs>() };
-        fs.flags.set(Flag::write_disable_complete, true);
+    fn released() {
         READ_ONLY_EVENTS.wake();
     }
 }
