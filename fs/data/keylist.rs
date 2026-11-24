@@ -20,7 +20,7 @@ use crate::data_structures::dst_room::{DstRoom, Storage};
 use crate::data_structures::inline_vec::InlineVec;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{Alloc, AllocError, Box};
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Unsized, Unvalidated, UnvalidatedEntries, UnvalidatedEntriesMut};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, SelfSized, Unsized, Unvalidated, UnvalidatedEntries, UnvalidatedEntriesMut};
 use core::mem::size_of;
 
 
@@ -150,8 +150,11 @@ impl<const N: usize> Keylist<N> {
 /// or a key kept in a struct - C's "struct bkey_i key; u64 key_pad[N];", a
 /// DstRoom<BkeyI, [u64; N]>, which zeroed is no key, its u64s 0, short of
 /// its own header, until one's written there. What grows it is checked
-/// against the room, and every view of it, its u64s.
-impl<V: ?Sized + Unsized> DstRoom<BkeyI<V>> {
+/// against the room.
+impl<V: ?Sized + Unsized> DstRoom<BkeyI<V>>
+where
+    BkeyI<V>: SelfSized,
+{
     /// A deleted key at the front of @buf, as bkey_init() leaves one.
     pub fn new_in(buf: &mut [u64]) -> &mut Self {
         Self::from_elems_mut(buf).init()
@@ -166,7 +169,10 @@ impl<V: ?Sized + Unsized> DstRoom<BkeyI<V>> {
     }
 }
 
-impl<V: ?Sized + Unsized, B: ?Sized + Storage<Elem = u64>> DstRoom<BkeyI<V>, B> {
+impl<V: ?Sized + Unsized, B: ?Sized + Storage<Elem = u64>> DstRoom<BkeyI<V>, B>
+where
+    BkeyI<V>: SelfSized,
+{
     /// A deleted key, as bkey_init() leaves one.
     pub fn init(&mut self) -> &mut Self {
         let have_u64s = self.elems().len();
@@ -225,7 +231,10 @@ impl<V: ?Sized + Unsized, B: ?Sized + Storage<Elem = u64>> DstRoom<BkeyI<V>, B> 
 }
 
 /// A deleted key and no value, as bkey_init() leaves one.
-impl<V: ?Sized + Unsized, const N: usize> Default for DstRoom<BkeyI<V>, [u64; N]> {
+impl<V: ?Sized + Unsized, const N: usize> Default for DstRoom<BkeyI<V>, [u64; N]>
+where
+    BkeyI<V>: SelfSized,
+{
     fn default() -> Self {
         let mut k = Self::zeroed();
         k.init();

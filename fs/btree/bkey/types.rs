@@ -58,7 +58,7 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{parse_at, ArmAt, ArmRef, FakeDst, InState, SelfSized, SizedArm, State, Unsized,
+use crate::util::vstructs::{parse_at, ArmAt, ArmRef, InState, SelfSized, SizedArm, State, Unsized,
                             Unvalidated, UnvalidatedSized, VStruct, VStructError, Validated, Whole};
 use core::marker::PhantomData;
 
@@ -122,12 +122,6 @@ unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
         let v = V::from_raw_mut(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
         v.wrapping_byte_sub(size_of::<c::bkey>()) as *mut Self
-    }
-}
-
-impl FakeDst for c::bkey {
-    fn bytes(&self) -> usize {
-        c::bkey::bytes(self)
     }
 }
 

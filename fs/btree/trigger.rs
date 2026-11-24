@@ -172,10 +172,8 @@ unsafe fn update_op<'a, 't>(t: &TransAttempt<'_, 't>, i: &c::btree_insert_entry,
 
 /// A deletion at @p: an op's new key, where it has none.
 pub(crate) fn deleted_room(p: Bpos) -> DstRoom<BkeyI, [u64; BKEY_U64S]> {
-    let mut room = DstRoom::<BkeyI, [u64; BKEY_U64S]>::zeroed();
-    let k = room.head_mut_rest().0;
-    *k = c::bkey::new();
-    k.p = p;
+    let mut room = DstRoom::<BkeyI, [u64; BKEY_U64S]>::default();
+    room.k.p = p;
     room
 }
 
