@@ -839,6 +839,7 @@ pub struct btree_transaction_stats {
 
 pub const BCH_TRANSACTIONS_NR: u32 = 128;
 
+#[placed(cs::bch_fs_btree.trans)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
@@ -1049,7 +1050,6 @@ pub struct bch_fs_btree {
      */
     pub write_buffer_flush_wait: crate::util::futex::EventCount,
     #[pin]
-    #[init(cs::bch_fs_btree_trans::init())]
     pub trans: cs::bch_fs_btree_trans,
     #[pin]
     #[init(cs::bch_fs_btree_reserve_cache::init())]

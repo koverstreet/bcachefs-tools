@@ -11,7 +11,7 @@ use crate::c;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::alloc::foreground::allocator_foreground_init;
 use crate::alloc::replicas::can_write_with_devs;
-use crate::btree::init::{btree_exit, btree_init};
+use crate::btree::init::btree_init;
 use crate::btree::journal_overlay::journal_keys_put_initial;
 use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
@@ -41,6 +41,7 @@ use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::os::module::ModuleRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::util::place::PlacedDrop;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
 use crate::util::refcount::{RefGuard, WaitableRef};
@@ -894,6 +895,7 @@ unsafe impl KobjOwner for Fs {
     fn release(mut this: MaybeRcuAlloc<Fs>) {
         teardown(&this);
         // after teardown(): what held &Fs - its threads, its work - is gone
+        unsafe { this.btree.placed_drop() };
         let module_ref = this.as_pin_mut().project().module_ref.take();
         drop(this);
         drop(module_ref);
@@ -912,7 +914,6 @@ fn teardown(fs: &Fs) {
     fs.stop_late();
     reconcile_exit(fs);
     ec_exit(fs);
-    unsafe { btree_exit(fs) };
     fs.tasks().drain();
 }
 
