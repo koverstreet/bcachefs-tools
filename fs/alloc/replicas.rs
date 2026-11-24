@@ -471,7 +471,7 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::Wr
 // atomics beside the table, taken and put under the read lock.
 
 pub struct ReplicasCpu {
-    entries: StridedBuf,
+    entries: StridedBuf<Entry>,
     refs:    KVVec<AtomicI32>,
 }
 
@@ -485,9 +485,7 @@ impl ReplicasCpu {
     }
 
     fn entry(&self, i: usize) -> &Entry {
-        // SAFETY: a slot holds an entry, as long as its nr_devs says - the
-        // stride is the biggest's - written there by from_entries() or with()
-        unsafe { &*Entry::from_thin(self.entries.slot(i).as_ptr().cast()) }
+        self.entries.slot(i)
     }
 
     fn entries(&self) -> impl Iterator<Item = &Entry> {
@@ -516,7 +514,7 @@ impl ReplicasCpu {
         let mut r = Self::zeroed(kept().count(), kept().map(|e| DEVS + e.devs.len()).max().unwrap_or(0))?;
 
         for (i, e) in kept().enumerate() {
-            let s = r.entries.slot_mut(i);
+            let s = r.entries.slot_mut(i).elems_mut();
             s[..DEVS].copy_from_slice(&[e.data_type.0 as u8, e.devs.len() as u8, e.nr_required.unwrap_or(1)]);
             let devs = &mut s[DEVS..DEVS + e.devs.len()];
             devs.copy_from_slice(e.devs);
@@ -527,7 +525,7 @@ impl ReplicasCpu {
 
     fn sort(&mut self) {
         Eytzinger0::<usize>::new(self.len()).sort(self,
-            |r, i, j| r.entries.slot(i).cmp(r.entries.slot(j)),
+            |r, i, j| r.entries.slot(i).elems().cmp(r.entries.slot(j).elems()),
             |r, i, j| {
                 r.entries.swap(i, j);
                 r.refs.swap(i, j);
@@ -541,7 +539,7 @@ impl ReplicasCpu {
         if want.len() > self.entries.stride() {
             return None;
         }
-        Eytzinger0::<usize>::new(self.len()).find(|i| self.entries.slot(i)[..want.len()].cmp(want))
+        Eytzinger0::<usize>::new(self.len()).find(|i| self.entries.slot(i).elems()[..want.len()].cmp(want))
     }
 
     /// A copy, @e added - with room for it, if it's bigger than any: sorted.
@@ -555,7 +553,7 @@ impl ReplicasCpu {
             new.refs.push(AtomicI32::new(r.load(Ordering::Relaxed)))?;
         }
         new.refs.push(AtomicI32::new(0))?;
-        new.entries.slot_mut(self.len())[..e.len()].copy_from_slice(e);
+        new.entries.slot_mut(self.len()).elems_mut()[..e.len()].copy_from_slice(e);
         new.sort();
         Ok(new)
     }
@@ -564,7 +562,7 @@ impl ReplicasCpu {
     fn filtered(&self, keep: impl Fn(&Entry) -> bool) -> Result<Self, AllocError> {
         let mut new = Self::zeroed(self.entries().filter(|e| keep(e)).count(), self.entries.stride())?;
         for (dst, i) in (0..self.len()).filter(|&i| keep(self.entry(i))).enumerate() {
-            new.entries.slot_mut(dst).copy_from_slice(self.entries.slot(i));
+            new.entries.slot_mut(dst).elems_mut().copy_from_slice(self.entries.slot(i).elems());
             new.refs[dst].store(self.refs[i].load(Ordering::Relaxed), Ordering::Relaxed);
         }
         new.sort();
@@ -655,7 +653,7 @@ impl ReplicasCpu {
             let e = self.entry(i);
             e.validate(|d| member_exists(sb, d.into()), err)?;
 
-            if let Some(p) = prev.filter(|&p| self.entries.slot(p) == self.entries.slot(i)) {
+            if let Some(p) = prev.filter(|&p| self.entries.slot(p).elems() == self.entries.slot(i).elems()) {
                 write!(err, "duplicate replicas entry ");
                 self.entry(p).to_text(err);
                 return Err(Errcode::invalid_sb_replicas.into());

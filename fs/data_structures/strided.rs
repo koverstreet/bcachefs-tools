@@ -9,11 +9,13 @@
 //! and is the T itself only if it holds all of it. Every slot is in the bytes,
 //! checked at new(): an index past them is None, never a read past the end.
 //!
-//! StridedBuf owns its slots, for a table built and rebuilt in memory -
-//! c->replicas, its entries all the size of the biggest. What a slot holds is
-//! its owner's to read; an index is one the owner has, so past the end is a
-//! bug, as a slice's.
+//! StridedBuf<T> owns its slots, for a table built and rebuilt in memory -
+//! c->replicas, its entries all the size of the biggest. Each slot is a room
+//! for a T (data_structures/dst_room.rs), the T at its start as long as it
+//! says; an index is one the owner has, so past the end is a bug, as a
+//! slice's.
 
+use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::util::projections::View;
 use crate::util::vstructs::{cast_plain_mut, Plain};
@@ -92,20 +94,21 @@ impl<'a, T: Plain> StridedMut<'a, T> {
     }
 }
 
-pub struct StridedBuf {
+pub struct StridedBuf<T: ?Sized> {
     bytes:  KVVec<u8>,
     stride: usize,
+    _t:     PhantomData<fn() -> *const T>,
 }
 
-impl StridedBuf {
+impl<T: ?Sized> StridedBuf<T> {
     pub const fn new() -> Self {
-        StridedBuf { bytes: KVVec::new(), stride: 0 }
+        StridedBuf { bytes: KVVec::new(), stride: 0, _t: PhantomData }
     }
 
     /// @nr slots of @stride bytes, zeroed.
     pub fn zeroed(nr: usize, stride: usize) -> Result<Self, AllocError> {
         let len = nr.checked_mul(stride).ok_or(AllocError)?;
-        Ok(StridedBuf { bytes: KVVec::from_elem(0, len)?, stride })
+        Ok(StridedBuf { bytes: KVVec::from_elem(0, len)?, stride, _t: PhantomData })
     }
 
     pub fn len(&self) -> usize {
@@ -120,15 +123,15 @@ impl StridedBuf {
         self.stride
     }
 
-    pub fn slot(&self, i: usize) -> &[u8] {
-        &self.bytes[i * self.stride..(i + 1) * self.stride]
+    pub fn slot(&self, i: usize) -> &DstRoom<T, [u8]> {
+        DstRoom::from_elems(&self.bytes[i * self.stride..(i + 1) * self.stride])
     }
 
-    pub fn slot_mut(&mut self, i: usize) -> &mut [u8] {
-        &mut self.bytes[i * self.stride..(i + 1) * self.stride]
+    pub fn slot_mut(&mut self, i: usize) -> &mut DstRoom<T, [u8]> {
+        DstRoom::from_elems_mut(&mut self.bytes[i * self.stride..(i + 1) * self.stride])
     }
 
-    pub fn slots(&self) -> impl Iterator<Item = &[u8]> {
+    pub fn slots(&self) -> impl Iterator<Item = &DstRoom<T, [u8]>> {
         (0..self.len()).map(|i| self.slot(i))
     }
 
@@ -155,7 +158,7 @@ impl StridedBuf {
         assert!(stride >= self.stride);
         let mut new = Self::zeroed(self.len() + extra, stride)?;
         for (i, s) in self.slots().enumerate() {
-            new.slot_mut(i)[..s.len()].copy_from_slice(s);
+            new.slot_mut(i).elems_mut()[..s.elems().len()].copy_from_slice(s.elems());
         }
         Ok(new)
     }
@@ -211,19 +214,19 @@ mod tests {
     /// copy move whole slots.
     #[test]
     fn buf() {
-        let mut b = StridedBuf::zeroed(3, 2).unwrap();
+        let mut b = StridedBuf::<[u8]>::zeroed(3, 2).unwrap();
         for i in 0..3 {
-            b.slot_mut(i).copy_from_slice(&[i as u8 + 1, 9]);
+            b.slot_mut(i).elems_mut().copy_from_slice(&[i as u8 + 1, 9]);
         }
         b.swap(0, 2);
         b.copy(1, 0);
-        assert!(b.slots().eq([&[2, 9][..], &[2, 9], &[1, 9]]));
+        assert!(b.slots().map(|s| s.elems()).eq([&[2, 9][..], &[2, 9], &[1, 9]]));
 
         let r = b.restrided(3, 1).unwrap();
-        assert!(r.slots().eq([&[2, 9, 0][..], &[2, 9, 0], &[1, 9, 0], &[0, 0, 0]]));
+        assert!(r.slots().map(|s| s.elems()).eq([&[2, 9, 0][..], &[2, 9, 0], &[1, 9, 0], &[0, 0, 0]]));
 
         b.truncate(1);
         assert_eq!(b.len(), 1);
-        assert_eq!(StridedBuf::new().len(), 0);
+        assert_eq!(StridedBuf::<[u8]>::new().len(), 0);
     }
 }
