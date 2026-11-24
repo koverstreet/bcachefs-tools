@@ -270,23 +270,21 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
+use crate::btree::trans::cached_trans_retire;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::rcu::Flavor;
 use core::ptr::NonNull;
 
 /// # Safety
-/// Nothing uses @fs's transactions after.
+/// Nothing uses @fs's transactions meanwhile, or after.
 unsafe fn btree_iter_exit(fs: &Fs) {
     let t = &fs.btree.trans;
 
     if t.bufs.allocated() {
         for buf in t.bufs.get().cpus() {
-            let trans = buf.get().trans;
-
-            if let Some(trans) = NonNull::new(trans) {
-                fs.with_trans_list(|list| unsafe { list.remove(trans.as_ref()) });
-                unsafe { t.pool.free_raw(trans.cast()) };
+            if let Some(trans) = NonNull::new(buf.get().trans) {
+                cached_trans_retire(fs, trans);
             }
         }
     }
