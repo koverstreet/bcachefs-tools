@@ -457,17 +457,6 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
             unsafe { kvfree_rcu(old) };
         }
     }
-
-    /// For owners C frees, which never run Drop.
-    ///
-    /// # Safety
-    /// No readers or writers are left.
-    pub unsafe fn free(&self) {
-        let p = self.p.swap(core::ptr::null_mut(), Ordering::Relaxed);
-        if !p.is_null() {
-            unsafe { crate::util::alloc::kvfree_unsized(p.cast()) };
-        }
-    }
 }
 
 impl<T: ?Sized + RcuPointee> Drop for RcuBuf<T> {
@@ -625,12 +614,6 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// As RcuBuf::clear().
     pub unsafe fn clear(&self) {
         unsafe { self.0.clear() }
-    }
-
-    /// # Safety
-    /// As RcuBuf::free().
-    pub unsafe fn free(&self) {
-        unsafe { self.0.free() }
     }
 }
 
