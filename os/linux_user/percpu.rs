@@ -537,6 +537,8 @@ pub struct PerCpu<T>(*mut T);
 // Null: not yet allocated, as C's init finds it.
 unsafe impl<T> ::pin_init::Zeroable for PerCpu<T> {}
 
+unsafe impl<T: Send> Sync for PerCpu<T> {}
+
 impl<T> Drop for PerCpu<T> {
     fn drop(&mut self) {
         self.free()
@@ -611,6 +613,8 @@ pub struct PerCpuU64s {
     p: NonNull<u64>,
     n: usize,
 }
+
+unsafe impl Sync for PerCpuU64s {}
 
 impl PerCpuU64s {
     pub fn new(n: usize) -> Result<Self, AllocError> {

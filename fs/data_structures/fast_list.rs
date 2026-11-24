@@ -25,7 +25,7 @@
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::AllocError;
-use crate::os::percpu::{free_percpu, IrqGuard, PerCpu, PerCpuRef};
+use crate::os::percpu::{IrqGuard, PerCpu};
 use crate::util::rcu::ReadGuard;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_void;
@@ -48,8 +48,7 @@ pub struct fast_list {
     pub items: SharedGenRadix<Item>,
     #[pin]
     pub slots_allocated: Ida,
-    /* new()'s PerCpu<Cache>, as a pointer: a PerCpu isn't Sync */
-    buffer: AtomicPtr<Cache>,
+    buffer: PerCpu<Cache>,
 }
 
 /// A slot's item, C's void *: other CPUs change it as it's read.
@@ -74,11 +73,9 @@ impl c::fast_list {
     /// @f on this CPU's cache, interrupts off.
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
-        // SAFETY: new()'s Caches, freed as the list drops
-        let caches = unsafe { PerCpuRef::<Cache>::from_raw(self.buffer.load(Relaxed)) };
         // SAFETY: only this CPU's own uses touch its copy, which interrupts
         // off keeps to this one
-        f(&mut unsafe { caches.this_cpu(&irq).as_mut() }.0)
+        f(&mut unsafe { self.buffer.this_cpu(&irq).as_mut() }.0)
     }
 
     fn free_slots(&self, idxs: impl IntoIterator<Item = u32>) {
@@ -175,13 +172,13 @@ impl c::fast_list {
         pin_init!(Self {
             items: SharedGenRadix::new(),
             slots_allocated <- Ida::new(),
-            buffer: AtomicPtr::new(PerCpu::<Cache>::alloc()?.into_raw()),
+            buffer: PerCpu::alloc()?,
         }? BchError)
     }
 
     /// Made: a static's is zeroed until it's made in place.
     pub fn is_made(&self) -> bool {
-        !self.buffer.load(Relaxed).is_null()
+        self.buffer.allocated()
     }
 }
 
@@ -189,13 +186,10 @@ impl c::fast_list {
 #[pinned_drop]
 impl PinnedDrop for fast_list {
     fn drop(self: Pin<&mut Self>) {
-        let buffer = self.buffer.load(Relaxed);
-
-        // SAFETY: new()'s, and no CPU's using it
-        for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer) }.cpus() {
+        // SAFETY: no CPU's using it
+        for lp in self.buffer.get().cpus() {
             self.free_slots(unsafe { lp.as_mut() }.0.drain(..));
         }
-        unsafe { free_percpu(buffer.cast()) };
 
         // a slot still allocated is an item still on the list
         crate::warn_on!(self.slots_allocated.find_first().is_some());
