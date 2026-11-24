@@ -557,7 +557,7 @@ fn jset_head(j: &[u8]) -> &Head<c::jset> {
     cast_plain(j).expect("a jset's header")
 }
 
-fn jset_head_mut(j: &mut [u8]) -> &mut Head<c::jset> {
+pub(crate) fn jset_head_mut(j: &mut [u8]) -> &mut Head<c::jset> {
     cast_plain_mut(j).expect("a jset's header")
 }
 
