@@ -326,9 +326,10 @@ fn work_init(parent: &str, name: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         {
             #[cfg(kernel)]
-            let w = |at| crate::os::workqueue::ReffedWork::new(at, #class, ::kernel::static_lock_class!());
+            let class = (#class, ::kernel::static_lock_class!());
             #[cfg(not(kernel))]
-            let w = |at| crate::os::workqueue::ReffedWork::new(at);
+            let class = ();
+            let w = |at| crate::os::workqueue::ReffedWork::new(at, class);
             // SAFETY: run into the field, by pin_init!()
             unsafe {
                 crate::util::place::at::<Self, { crate::util::place::name(#n) }, _, crate::errcode::BchError>(w)
