@@ -23,7 +23,7 @@ use core::marker::PhantomPinned;
 /// the second - as the kernel crate's Opaque<T>, which userspace doesn't have.
 ///
 /// There's no constructor: only C hands these out, so one always refers to a
-/// live, initialized object of its type - what Fs::from_c() relies on. Safe
+/// live, initialized object of its type - what a reference from one relies on. Safe
 /// code can't make one from a C struct with made-up fields. The exception is
 /// C's locks, which are Opaques as the structs C shares hold them
 /// (locking/raw.rs) - zeroed with the struct, and initialized by its init.

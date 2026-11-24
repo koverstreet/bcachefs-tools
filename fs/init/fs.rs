@@ -181,10 +181,6 @@ impl Fs {
         unsafe { &*raw }
     }
 
-    pub fn from_c(c: &crate::util::ffi::Opaque<Fs>) -> &Fs {
-        unsafe { Self::borrow_raw(c.as_ptr()) }
-    }
-
     pub fn version(&self) -> MetadataVersion {
         self.sb.version.get()
     }
