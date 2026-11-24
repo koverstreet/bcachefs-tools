@@ -898,7 +898,7 @@ unsafe impl KobjOwner for Fs {
     type Alloc = MaybeRcuAlloc<Fs>;
 
     fn release(mut this: MaybeRcuAlloc<Fs>) {
-        teardown(&mut this);
+        teardown(&this);
         // after teardown(): what held &Fs - its threads, its work - is gone
         let module_ref = this.as_pin_mut().project().module_ref.take();
         drop(this);
@@ -906,10 +906,7 @@ unsafe impl KobjOwner for Fs {
     }
 }
 
-fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
-    let p = this.as_non_null().as_ptr();
-    let fs = unsafe { &*p };
-
+fn teardown(fs: &Fs) {
     journal_keys_put_initial(fs);
 
     fs.reconcile_stop();
@@ -922,7 +919,7 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     reconcile_exit(fs);
     ec_exit(fs);
     fs.counters_recent.cancel_sync();
-    unsafe { btree_exit(p) };
+    unsafe { btree_exit(fs) };
     fs.tasks().drain();
 }
 

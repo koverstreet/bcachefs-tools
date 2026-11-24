@@ -277,9 +277,8 @@ use crate::util::rcu::Flavor;
 use core::ptr::NonNull;
 
 /// # Safety
-/// Nothing uses @c's transactions after.
-unsafe fn btree_iter_exit(c: *mut Fs) {
-    let fs = unsafe { &*c };
+/// Nothing uses @fs's transactions after.
+unsafe fn btree_iter_exit(fs: &Fs) {
     let t = &fs.btree.trans;
 
     if t.bufs.allocated() {
@@ -304,14 +303,12 @@ unsafe fn btree_iter_exit(c: *mut Fs) {
 }
 
 /// # Safety
-/// Nothing uses @c's btrees after.
-pub(crate) unsafe fn btree_exit(c: *mut Fs) {
-    let fs = unsafe { &*c };
-
+/// Nothing uses @fs's btrees after.
+pub(crate) unsafe fn btree_exit(fs: &Fs) {
     fs.btree_write_buffer_exit();
     fs.btree.key_cache.exit();
     unsafe {
-        btree_iter_exit(c);
+        btree_iter_exit(fs);
         fs.btree_cache_exit();
     }
 
