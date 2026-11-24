@@ -709,8 +709,6 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     let u64s_and_live = |b: &BtreeNode, contents: &NodeContents| {
         (b.keys(contents).bset(contents.last_set()).u64s(), contents.nr.live_u64s)
     };
-    let b = paths[path].locked_btree_node(level).expect("an interior update's node with no parent");
-    let (old_u64s, old_live_u64s) = u64s_and_live(&b, b.contents());
 
     assert!(level > 0, "inserting pointers into a leaf");
     assert!(!update.visible(), "an interior update inserting into a second existing node");
@@ -725,6 +723,9 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
         fs.emergency_read_only(&mut msg);
         return Err(BchError::from(c::EIO));
     }
+
+    let b = paths[path].locked_btree_node(level).expect("a node to insert into, intent locked");
+    let (old_u64s, old_live_u64s) = u64s_and_live(&b, b.contents());
 
     trans.node_lock_write_prep(update.t(), &mut paths.paths_and_updates(), path, level)?;
 
