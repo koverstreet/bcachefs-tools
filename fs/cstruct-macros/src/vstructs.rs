@@ -461,7 +461,8 @@ fn vstruct_len(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStr
 
 /// @name's vstruct!() and vstruct_container!(), from its attribute's `u64s =
 /// PATH[, start = EXPR]` and `entries = [thin] E`: an unsized type's, with
-/// @head, counted by its header - or, `bytes = FIELD`, its length in bytes.
+/// @head, counted by its header. A `bytes = FIELD` length is vstruct_len()'s
+/// alone.
 fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStream, String> {
     let vs = vs();
     if args.start.is_some() && args.u64s.is_none() {
@@ -470,13 +471,6 @@ fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStre
     if args.bytes.is_some() && args.u64s.is_some() {
         return Err(format!("{name}: bytes = and u64s = - its length is one or the other"));
     }
-    let bytes = args.bytes.as_ref().map(|c| quote! {
-        impl #vs::FakeDst for #head {
-            fn bytes(&self) -> usize {
-                #vs::Count::count(&{ self.#c })
-            }
-        }
-    });
     let start = args.start.as_ref().map(|s| quote!(, start = #s));
     let u64s = args.u64s.as_ref().map(|c| {
         let impls = states().map(|st| quote! {
@@ -490,7 +484,7 @@ fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStre
         quote!(#vs::vstruct!(unsized #head, #c #start); #(#impls)*)
     });
     let entries = args.entries.as_ref().map(|e| quote!(#vs::vstruct_container!(#name, #head, #e);));
-    Ok(quote!(#u64s #bytes #entries))
+    Ok(quote!(#u64s #entries))
 }
 
 /// The states an own-count family's X<S> is SelfSized in: those it's had
