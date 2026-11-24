@@ -18,7 +18,7 @@ use crate::new_lock;
 use crate::util::alloc::{flags, AllocError, Flags};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::slab::KmemCache;
-use crate::os::workqueue::{run_raw, RawWork};
+use crate::os::workqueue::{run_raw, WorkAt};
 use core::mem::offset_of;
 use core::ptr::NonNull;
 use pin_init::{pin_init, Zeroable};
@@ -116,7 +116,7 @@ impl NewInode {
 
 /// The writeback timer's: the inode written back, if it's live. Evict cancels
 /// it before the inode's freed.
-impl RawWork for InodeInfo {
+impl WorkAt for InodeInfo {
     const WORK: usize = offset_of!(InodeInfo, ei_writeback_timer) + offset_of!(c::delayed_work, work);
 
     unsafe fn run(this: NonNull<Self>) {

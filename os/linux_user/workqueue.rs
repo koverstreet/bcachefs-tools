@@ -224,7 +224,7 @@ pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
 
 /// A work_struct at a fixed place in Self, running Self::run(): new_work!()
 /// with run_raw::<Self>, the trampoline, which run() is inlined into.
-pub trait RawWork {
+pub trait WorkAt {
     /// offset_of!() the work_struct
     const WORK: usize;
 
@@ -234,7 +234,7 @@ pub trait RawWork {
 }
 
 #[doc(hidden)]
-pub unsafe extern "C" fn run_raw<T: RawWork>(work: *mut c::work_struct) {
+pub unsafe extern "C" fn run_raw<T: WorkAt>(work: *mut c::work_struct) {
     // SAFETY: T's work_struct, at T::WORK
     unsafe { T::run(NonNull::new_unchecked(work.byte_sub(T::WORK).cast())) }
 }

@@ -105,7 +105,7 @@ use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::Printbuf;
 use crate::prt;
-use crate::os::workqueue::{Queue, RawWork};
+use crate::os::workqueue::{Queue, WorkAt};
 use core::fmt;
 use core::future::Future;
 use core::cell::Cell;
@@ -607,7 +607,7 @@ impl TaskRef {
     }
 }
 
-impl RawWork for Header {
+impl WorkAt for Header {
     const WORK: usize = core::mem::offset_of!(Header, work);
 
     #[inline(always)]

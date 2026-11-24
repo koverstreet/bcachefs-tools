@@ -2,7 +2,7 @@
 
 //! Timers: struct timer_list, in a struct Rust defines, run from the timer
 //! softirq - as an endio is, so it doesn't sleep. Its function is the
-//! struct's RawTimer::run(), from run_raw::<Self>, as a RawWork's; made with
+//! struct's RawTimer::run(), from run_raw::<Self>, as a WorkAt's; made with
 //! new_timer!(), with a lockdep class per call site: timer_setup().
 
 use crate::c;

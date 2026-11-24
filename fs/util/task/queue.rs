@@ -15,7 +15,7 @@
 
 use super::{Header, TaskRef};
 use crate::c;
-use crate::os::workqueue::{run_raw, Queue, RawWork};
+use crate::os::workqueue::{run_raw, Queue, WorkAt};
 use crate::util::futex::EventCount;
 use crate::util::late::LateInit;
 use core::marker::PhantomPinned;
@@ -132,7 +132,7 @@ impl LateInit for RunQueue {
     }
 }
 
-impl RawWork for RunQueue {
+impl WorkAt for RunQueue {
     const WORK: usize = core::mem::offset_of!(RunQueue, work);
 
     unsafe fn run(rq: NonNull<Self>) {
