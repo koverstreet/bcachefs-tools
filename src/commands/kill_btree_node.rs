@@ -55,7 +55,6 @@ use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
-use bcachefs_kernel::os::bio::io_buf;
 
 use crate::util::write_all_at;
 
@@ -272,18 +271,18 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                         ErrorType::Csum | ErrorType::Keys => {
                             /* the whole written extent, so we can walk its bsets */
                             let written = b.written.get() as usize;
-                            let mut buf = io_buf((written * 512).max(block_size), Flags::empty())?;
+                            let mut buf = AlignedBox::<[u8], PAGE_SIZE>::try_new_zeroed_slice_gfp(
+                                (written * 512).max(block_size), Flags::empty())?;
                             let buf = &mut buf[..];
 
                             let mut got = 0;
                             while got < buf.len() {
-                                let (n, _) = rustix::io::pread(fd, &mut buf[got..], offset + got as u64)?;
-                                if n.is_empty() {
+                                let n = rustix::io::pread(fd, &mut buf[got..], offset + got as u64)?;
+                                if n == 0 {
                                     bail!("node at {offset} past the end of the device");
                                 }
-                                got += n.len();
+                                got += n;
                             }
-                            let buf = unsafe { crate::util::assume_init_mut(buf) };
 
                             let bset = first_bset_with_keys(&buf, written, fs.block_bits() as u32)
                                 .or_else(|| (cli.error == ErrorType::Csum)

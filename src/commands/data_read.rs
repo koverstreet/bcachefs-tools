@@ -22,8 +22,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use bcachefs_kernel::c;
 use clap::Parser;
 
-use bcachefs_kernel::util::alloc::Flags;
-use bcachefs_kernel::os::bio::io_buf;
+use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
+use bcachefs_kernel::os::bio::IO_ALIGN;
 use crate::wrappers::ioctl::{ioctl_rw, BCHFS_IOC_PREAD_RAW};
 
 const SECTOR_SIZE: u64 = 512;
@@ -132,7 +132,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         .custom_flags(libc::O_DIRECT)
         .open(&cli.file)?;
 
-    let mut buf = io_buf(cli.len.min(CHUNK) as usize, Flags::empty())?;
+    let mut buf = AlignedBox::<[u8], IO_ALIGN>::try_new_zeroed_slice_gfp(cli.len.min(CHUNK) as usize, Flags::empty())?;
     let mut err_msg_buf = vec![0u8; 4096];
 
     let mut sink = match cli.output {
@@ -185,9 +185,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
             }
         };
 
-        // what the kernel wrote
-        let data = unsafe { crate::util::assume_init_mut(&mut buf[..got as usize]) };
-        sink.write(cli.offset + pos, data)?;
+        sink.write(cli.offset + pos, &buf[..got as usize])?;
         pos += got;
 
         // Short of what was asked for, without an error: end of file.
