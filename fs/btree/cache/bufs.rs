@@ -240,8 +240,8 @@ fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNu
 ///
 /// # Safety
 /// @b is the cache's: cache_node_struct_alloc()'s, or found through its
-/// lists, its table or a key's mem_ptr.
-pub(super) unsafe fn cached_node<'f>(_fs: &'f Fs, b: *const BtreeNode) -> &'f BtreeNode {
+/// lists, its table, a key's mem_ptr or a path.
+pub(crate) unsafe fn cached_node<'f>(_fs: &'f Fs, b: *const BtreeNode) -> &'f BtreeNode {
     unsafe { &*b }
 }
 

@@ -187,7 +187,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         self.node_key_set(&mut paths, iter, level, &key);
 
-        unsafe { update.as_ref() }.new_node_key_set(&mut commit_lock, node.as_ptr(), key.as_sc());
+        unsafe { update.as_ref() }.new_node_key_set(&mut commit_lock, node, key.as_sc());
         Ok(())
     }
 

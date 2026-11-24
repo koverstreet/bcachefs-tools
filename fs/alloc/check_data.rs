@@ -474,13 +474,11 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
         new.into()
     };
     if !readable && new.k().is_btree_ptr() {
-        if btree_ptr_unreadable(t, btree, level, new.as_sc(), |_, b| {
-            // SAFETY: a cached node, held by the iterator for the calls
-            unsafe {
-                let b = &*b.as_ptr();
-                fs.btree_node_pin(b);
-                fs.async_btree_op(b, b.contents(), crate::btree::async_ops::AsyncBtreeOp::Rewrite);
-            }
+        if btree_ptr_unreadable(t, btree, level, new.as_sc(), |iter, _| {
+            let held = iter.node(t).expect("the node, held by its iterator");
+            let b = held.node();
+            fs.btree_node_pin(b.node());
+            fs.async_btree_op(b.node(), b.contents(), crate::btree::async_ops::AsyncBtreeOp::Rewrite);
             Ok(())
         })? {
             let mut msg = LogMsg::new(fs);

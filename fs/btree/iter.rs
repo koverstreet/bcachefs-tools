@@ -143,6 +143,7 @@ use super::bkey::*;
 pub use super::types::{BtreeIter, BtreeTrans};
 pub use super::for_each::*;
 pub use super::trans_attempt::*;
+use crate::btree::cache::cached_node;
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, PathIdx, Paths};
@@ -2378,19 +2379,27 @@ impl<'t> BtreeNodeIter<'t> {
 
 }
 
+/// A node of the cache's, held or not: its memory is there as long as the
+/// filesystem, but once it's let go it may be reused as another node.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BtreeNodeRef {
     raw: NonNull<BtreeNode>,
 }
 
 impl BtreeNodeRef {
     /// The node's identity, for telling whether it's the same node as
-    /// before - not for getting back to it.
+    /// before.
     pub(crate) fn addr(&self) -> usize {
         self.raw.as_ptr() as usize
     }
 
     pub(crate) fn as_ptr(&self) -> *mut BtreeNode {
         self.raw.as_ptr()
+    }
+
+    /// Whatever node is there now, unless something keeps it this one.
+    pub(crate) fn node<'f>(&self, fs: &'f Fs) -> &'f BtreeNode {
+        unsafe { cached_node(fs, self.raw.as_ptr()) }
     }
 }
 
