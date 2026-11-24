@@ -54,7 +54,7 @@ use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::place::Placed;
-use crate::util::rcu::{self, ReadGuard, RcuArray, RcuElement};
+use crate::util::rcu::{self, ReadGuard, RcuArray};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::{bch_err, field, prt, new_lock, published};
 use core::cmp::Ordering;
@@ -139,13 +139,11 @@ nest! {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, zerocopy_derive::FromBytes)]
 pub struct OverwriteRange {
     pub start: AtomicUsize,
     pub end:   AtomicUsize,
 }
-
-unsafe impl RcuElement for OverwriteRange {}
 
 /* overwrite_lock's: how many of the ranges are in use, the first a sentinel */
 #[repr(C)]

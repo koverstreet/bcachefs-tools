@@ -167,6 +167,7 @@ dependencies = [
  "twox-hash",
  "uuid",
  "zerocopy",
+ "zerocopy-derive",
  "zeroize",
 ]
 

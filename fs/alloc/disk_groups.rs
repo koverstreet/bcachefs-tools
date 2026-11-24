@@ -90,16 +90,13 @@ pub const TARGET_DEV_START: u32 = 1;
 pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, zerocopy_derive::FromZeros)]
 pub struct bch_disk_group_cpu {
     pub deleted: bool,
     pub parent: u16,
     pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
     pub devs: c::bch_devs_mask,
 }
-
-// SAFETY: plain data, a bitmap of devices among it; all zeroes is a group
-unsafe impl crate::util::rcu::RcuElement for bch_disk_group_cpu {}
 
 /// c->disk_groups, published under RCU.
 pub type DiskGroups = crate::util::rcu::RcuArray<c::bch_disk_group_cpu>;

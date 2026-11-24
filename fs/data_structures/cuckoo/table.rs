@@ -118,8 +118,7 @@ use crate::prt;
 use crate::os::kernel::random_u64;
 use crate::os::percpu::CpuGuard;
 use crate::util::projections::Publish;
-use crate::util::rcu::{read_lock, RcuArray, RcuArrayBox, RcuArrayBuf, RcuArrayHead, RcuArrayWriter, RcuElement,
-                       ReadGuard};
+use crate::util::rcu::{read_lock, RcuArray, RcuArrayBox, RcuArrayBuf, RcuArrayHead, RcuArrayWriter, ReadGuard};
 use crate::util::thin::{ThinBox, ThinRef};
 
 const MAX_KICKS: usize = 16;
@@ -155,10 +154,8 @@ fn key_of<I: CuckooItem>(item: &I) -> &I::Target {
 }
 
 #[repr(transparent)]
+#[derive(zerocopy_derive::FromZeros)]
 pub(super) struct Slot<I: CuckooItem>(I::Atomic);
-
-// SAFETY: CuckooItem's: owning nothing, and all zeroes empty
-unsafe impl<I: CuckooItem> RcuElement for Slot<I> {}
 
 impl<I: CuckooItem> Slot<I> {
     fn load(&self) -> Contents<I> {
@@ -207,10 +204,6 @@ pub(super) struct Head {
     seeds: Seeds,
     next:  AtomicPtr<RcuArrayHead<Head>>,
 }
-
-// SAFETY: integers, and a pointer to what the Cuckoo frees, not this: all
-// zeroes is no next
-unsafe impl RcuElement for Head {}
 
 /// A table's buffer, owned - by the RcuArray, or once linked by the Cuckoo,
 /// through the link's word.

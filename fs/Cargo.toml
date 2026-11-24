@@ -40,6 +40,9 @@ uuid     = "1.2.2"
 linux-raw-sys = { version = "0.12", default-features = false, features = ["errno", "general", "no_std"] }
 # Endian-typed integers for the on-disk format: byteorder::{little,big}_endian.
 zerocopy = "0.8"
+# Its derives, by their own crate's name, as the kernel has them: FromZeros
+# and FromBytes for an RcuArray's elements.
+zerocopy-derive = "0.8"
 # Userspace only: os/linux_user/kernel.rs's random_bytes(), the OS's CSPRNG.
 getrandom = "0.4"
 # Userspace only, util/prompt's: asking on the terminal - polled, echo off

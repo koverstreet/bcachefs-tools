@@ -255,9 +255,10 @@ quiet_cmd_bch_vr_mod = RUSTC M  $@
 	--crate-type rlib --crate-name bcachefs_mod \
 	--extern core=$(VRD)/libcore.rmeta --extern kernel=$(VRD)/libkernel.rmeta \
 	--extern pin_init=$(VRD)/libpin_init.rmeta --extern bindings=$(VRD)/libbindings.rmeta \
-	--extern zerocopy=$(VRD)/libzerocopy.rmeta \
+	--extern zerocopy=$(VRD)/libzerocopy.rmeta --extern zerocopy_derive=$(VRD)/libzerocopy_derive.so \
 	--emit=obj=$@ $<
-$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bindings.rs $(VRD)/kernel.o $(VRD)/zerocopy.o FORCE
+$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bindings.rs $(VRD)/kernel.o $(VRD)/zerocopy.o \
+	$(VRD)/libzerocopy_derive.so FORCE
 	$(call if_changed,bch_vr_mod)
 
 # The Rust goes into rust.o (Makefile.rust), its C helpers into the module.

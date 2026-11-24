@@ -45,7 +45,7 @@ pub enum SnapshotIdState {
  * atomic - C still sees plain integers.
  */
 #[repr(C)]
-#[derive(MaybeZeroable)]
+#[derive(MaybeZeroable, zerocopy_derive::FromBytes)]
 pub struct snapshot_t {
     pub state: AtomicU32,
     pub parent: AtomicU32,
@@ -58,9 +58,6 @@ pub struct snapshot_t {
     /* bit (ancestor - id - 1) set for ancestors within 128 IDs */
     pub is_ancestor: AtomicBitArray<{ bits_to_longs(c::IS_ANCESTOR_BITMAP as usize) }>,
 }
-
-// SAFETY: atomic integers; all zeroes is SNAPSHOT_ID_empty
-unsafe impl crate::util::rcu::RcuElement for snapshot_t {}
 
 /// c->snapshots.table, published under RCU.
 pub type SnapshotTable = crate::util::rcu::RcuArray<c::snapshot_t>;

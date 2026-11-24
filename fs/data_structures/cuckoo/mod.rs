@@ -71,7 +71,7 @@ impl<I> Contents<I> {
 /// Atomic owns nothing, so a bytewise copy is another; all zeroes is empty;
 /// load() gives back what store() stored.
 pub unsafe trait CuckooItem: Copy {
-    type Atomic: Send + Sync + FreeAnytime;
+    type Atomic: Send + Sync + FreeAnytime + zerocopy::FromZeros;
 
     /// What it is, or points to: hashed and compared as its key.
     type Target: ?Sized + Hash + Eq;

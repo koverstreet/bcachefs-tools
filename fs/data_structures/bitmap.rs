@@ -193,7 +193,7 @@ impl Eq for Bitmap {}
 // Written under a lock and read without it - a preference, the allocator's
 // placement - it can be read mid-write, each word as before or after
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, zerocopy_derive::FromZeros)]
 pub struct BitArray<const W: usize>([usize; W]);
 
 impl<const W: usize> crate::util::projections::TearSafe for BitArray<W> {}
@@ -313,6 +313,7 @@ impl AtomicBitmap {
 /// A fixed-size AtomicBitmap, of @W words: C's `unsigned long d[W]`, set_bit()
 /// on.
 #[repr(transparent)]
+#[derive(zerocopy_derive::FromBytes)]
 pub struct AtomicBitArray<const W: usize>([AtomicUsize; W]);
 
 impl<const W: usize> AtomicBitArray<W> {

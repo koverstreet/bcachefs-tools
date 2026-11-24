@@ -382,7 +382,7 @@ pub type DevsMask = BitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
 pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, zerocopy_derive::FromZeros)]
 pub struct bch_devs_mask {
     pub d: DevsMask,
 }

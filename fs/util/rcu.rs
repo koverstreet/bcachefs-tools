@@ -35,14 +35,15 @@
 //!   and get()s.
 //! - RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }` - the count
 //!   after H, DstArray's - an RcuPtr<ThinBox<..>>, read as a &[T] and grown
-//!   by copy and replace - its elements RcuElements, plain data or atomics,
-//!   copied bytewise. Its writer is an RcuArrayWriter.
+//!   by copy and replace - its elements zerocopy's FromZeros, made zeroed,
+//!   and FromBytes to grow, copied bytewise. Its writer is an RcuArrayWriter.
 
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use core::ops::Deref;
 use core::sync::atomic::{fence, AtomicPtr, Ordering};
+use zerocopy::{FromBytes, FromZeros};
 
 use crate::c;
 use crate::data_structures::dst_array::DstArray;
@@ -406,29 +407,15 @@ pub type RcuArrayBuf<T, H = ()> = DstArray<RcuArrayHead<H>, T>;
 /// An RcuArray's buffer, owned: freed as its head says, a grace period on.
 pub type RcuArrayBox<T, H = ()> = ThinBox<RcuArrayBuf<T, H>, KVmalloc>;
 
-/// # Safety
-/// A bytewise copy of a T is a valid T, owning nothing: no Drop. All-zero
-/// bytes are a valid T. A writer copies them into a grown buffer while
-/// readers still read the old one, so changing one in place, with readers
-/// looking, needs it to be atomics.
-pub unsafe trait RcuElement: Sync {}
-
-macro_rules! rcu_element {
-    ($($t:ty),*) => { $(unsafe impl RcuElement for $t {})* };
-}
-rcu_element!((), u8, u16, u32, u64, usize,
-             core::sync::atomic::AtomicU8, core::sync::atomic::AtomicU16,
-             core::sync::atomic::AtomicU32, core::sync::atomic::AtomicU64,
-             core::sync::atomic::AtomicUsize);
-
-unsafe impl<T: RcuElement, const N: usize> RcuElement for [T; N] {}
-
+/// Its elements and header Sync, as readers share them. A new buffer's
+/// elements are zeroes, so FromZeros; grow_to() copies them bytewise, so
+/// FromBytes there.
 #[repr(transparent)]
-pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuPtr<RcuArrayBox<T, H>>);
+pub struct RcuArray<T: Sync, H: Sync = ()>(RcuPtr<RcuArrayBox<T, H>>);
 
-unsafe impl<T: RcuElement, H: RcuElement> ::pin_init::Zeroable for RcuArray<T, H> {}
+unsafe impl<T: Sync, H: Sync> ::pin_init::Zeroable for RcuArray<T, H> {}
 
-impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
+impl<T: Sync, H: Sync> RcuArray<T, H> {
     /// None published reads as none.
     pub fn read<'a>(&'a self, g: &'a ReadGuard) -> &'a [T] {
         self.0.read(g).map_or(&[], |b| &b.elems)
@@ -446,12 +433,18 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// A zeroed buffer of exactly @nr elements and header @h, not published:
     /// the caller's to publish, to link from another buffer's header, or to
     /// drop.
-    pub fn alloc(nr: usize, h: H) -> Result<RcuArrayBox<T, H>, AllocError> {
+    pub fn alloc(nr: usize, h: H) -> Result<RcuArrayBox<T, H>, AllocError>
+    where
+        T: FromZeros,
+    {
         RcuArrayBuf::<T, H>::alloc_box(nr, RcuArrayHead::new(h))
     }
 
     /// alloc(), for what mustn't fail to allocate.
-    pub fn alloc_nofail(nr: usize, h: H) -> RcuArrayBox<T, H> {
+    pub fn alloc_nofail(nr: usize, h: H) -> RcuArrayBox<T, H>
+    where
+        T: FromZeros,
+    {
         RcuArrayBuf::<T, H>::alloc_box_nofail(nr, RcuArrayHead::new(h))
     }
 
@@ -462,16 +455,16 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     }
 }
 
-impl<T: RcuElement, H: RcuElement> Publish for RcuArray<T, H> {
+impl<T: Sync, H: Sync> Publish for RcuArray<T, H> {
     type Writer = RcuArrayWriter<T, H>;
 }
 
 /// Readers' methods, read() and with(), in a read-side section: nothing it's
 /// handed outlives one, so its own replace can't free what it's reading.
 #[repr(transparent)]
-pub struct RcuArrayWriter<T: RcuElement, H: RcuElement = ()>(RcuArray<T, H>);
+pub struct RcuArrayWriter<T: Sync, H: Sync = ()>(RcuArray<T, H>);
 
-impl<T: RcuElement, H: RcuElement> core::ops::Deref for RcuArrayWriter<T, H> {
+impl<T: Sync, H: Sync> core::ops::Deref for RcuArrayWriter<T, H> {
     type Target = RcuArray<T, H>;
 
     fn deref(&self) -> &RcuArray<T, H> {
@@ -479,7 +472,7 @@ impl<T: RcuElement, H: RcuElement> core::ops::Deref for RcuArrayWriter<T, H> {
     }
 }
 
-impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {
+impl<T: Sync, H: Sync> RcuArrayWriter<T, H> {
     fn ptr(&self) -> &RcuPtrWriter<RcuArrayBox<T, H>> {
         // SAFETY: we're the array's writer: its lock is held
         unsafe { self.0 .0.writer() }
@@ -521,6 +514,8 @@ impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {
     pub fn rebuild_head<E>(&self, nr: usize, h: H,
                            fill: impl FnOnce(Option<(&H, &[T])>, &mut [T]) -> Result<(), E>)
         -> Result<Result<(), E>, AllocError>
+    where
+        T: FromZeros,
     {
         let mut new = RcuArray::alloc(nr, h)?;
         // no reader sees @new until it's published; the old isn't freed till
@@ -535,16 +530,22 @@ impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {
 
 /// Without a header: a header's fields are its writer's to carry over, by
 /// rebuild_head().
-impl<T: RcuElement> RcuArrayWriter<T> {
+impl<T: Sync> RcuArrayWriter<T> {
     /// Allocates, and may sleep: not under a spinlock.
-    pub fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
+    pub fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError>
+    where
+        T: FromZeros,
+    {
         self.rebuild_head(nr, (), |_, s| Ok::<_, core::convert::Infallible>(fill(s))).map(|_| ())
     }
 
     /// Room for at least @nr elements: if there isn't, a new buffer, sized to
     /// a power of two bytes as C's tables are, the old elements copied and the
     /// rest zero, published. Allocates, and may sleep.
-    pub fn grow_to(&self, nr: usize) -> Result<(), AllocError> {
+    pub fn grow_to(&self, nr: usize) -> Result<(), AllocError>
+    where
+        T: FromBytes,
+    {
         // the old one isn't freed till after replace()
         let old = unsafe { self.get_locked() };
         if nr <= old.len() {
@@ -558,9 +559,9 @@ impl<T: RcuElement> RcuArrayWriter<T> {
             .ok_or(AllocError)?;
 
         let mut new = RcuArray::alloc((bytes - tail) / size_of::<T>(), ())?;
-        // RcuElements, copied bytewise - the old elements don't change under
-        // the writers' lock, and readers keep reading them until the grace
-        // period after replace()
+        // FromBytes, so a bytewise copy is one - the old elements don't
+        // change under the writers' lock, and readers keep reading them until
+        // the grace period after replace()
         unsafe { core::ptr::copy_nonoverlapping(old.as_ptr(), new.elems.as_mut_ptr(), old.len()) };
         self.replace(new);
         Ok(())

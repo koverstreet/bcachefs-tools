@@ -94,9 +94,6 @@ pub struct BucketGensHead {
     pub nbuckets_minus_first: usize,
 }
 
-// SAFETY: integers; all zeroes is an empty table
-unsafe impl crate::util::rcu::RcuElement for BucketGensHead {}
-
 /// ca->bucket_gens: a device's bucket generations, published under RCU -
 /// atomics, written in place with readers looking.
 pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::AtomicU8, c::BucketGensHead>;

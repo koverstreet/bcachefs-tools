@@ -44,7 +44,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::rcu::{RcuArray, RcuElement};
+use crate::util::rcu::RcuArray;
 use crate::util::Printbuf;
 use crate::util::projections::Publish;
 use crate::sb::io::SbResize;
@@ -108,15 +108,12 @@ impl SbFieldOps for Section {
 
 /// A blacklisted range, [start, end): dirty once a bset or journal entry in it
 /// has been found, so gc keeps it.
+#[derive(zerocopy_derive::FromZeros)]
 pub struct BlacklistEntry {
     start: u64,
     end:   u64,
     dirty: AtomicBool,
 }
-
-// SAFETY: integers and an atomic: a bytewise copy is one, owning nothing, and
-// zeroes are an empty range
-unsafe impl RcuElement for BlacklistEntry {}
 
 pub type JournalSeqBlacklist = RcuArray<BlacklistEntry>;
 
