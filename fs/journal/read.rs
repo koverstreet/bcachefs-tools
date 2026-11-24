@@ -25,19 +25,18 @@ use crate::journal::buckets::JournalRing;
 use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{init_at, kvzalloc, AllocError, Flags, KVVec};
+use crate::util::alloc::{kvzalloc, AllocError, Flags, KVVec, KVmalloc};
+use crate::util::thin::ThinBox;
 use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
 use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, Head, SelfSized,
-                            Unvalidated, Validated};
+                            Unvalidated};
 use crate::os::workqueue::Queue;
 use crate::util::ToText;
 use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
-use core::mem::offset_of;
 use core::ops::Range;
-use core::ptr::NonNull;
 use pin_init::stack_pin_init;
 use validate::Jset;
 
@@ -92,15 +91,34 @@ impl c::jset<Unvalidated> {
 }
 
 impl c::journal_replay {
-    /// @p's jset, as long as its header says: a replay is allocated to hold
-    /// it, past the struct's end - which a &journal_replay doesn't reach.
-    ///
-    /// # Safety
-    /// @p is a replay from the journal read, which validated its jset, live
-    /// for 'a.
-    pub unsafe fn jset<'a>(p: *const Self) -> &'a c::jset {
-        // SAFETY: the caller's
-        unsafe { &*c::jset::<Validated>::from_thin((&raw const (*p).j).cast()) }
+    /// A replay of jset @j, read with checksum @csum_good: no ptrs yet - its
+    /// fields zeroed are that.
+    fn alloc(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Replay, BchError> {
+        let p = kvzalloc(Self::J_AT + j.len()).map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))?;
+        let mut r: Replay = unsafe {
+            core::ptr::copy_nonoverlapping(j.as_ptr(), p.as_ptr().cast::<u8>().add(Self::J_AT), j.len());
+            ThinBox::from_raw(p.cast())
+        };
+        r.csum_good = csum_good;
+        Ok(r)
+    }
+
+    /// Not validated until the read's final pass: its readers come after.
+    pub fn jset(&self) -> &c::jset {
+        &self.j
+    }
+
+    pub(crate) fn jset_unvalidated(&self) -> &c::jset<Unvalidated> {
+        c::jset::<Unvalidated>::from_bytes(self.j.as_bytes()).expect("a replay holds its jset")
+    }
+
+    /// Its jset's datetime entry's, in seconds: 0 if it has none.
+    pub fn datetime(&self) -> u64 {
+        self.jset_unvalidated().datetime()
+    }
+
+    pub(crate) fn seq(&self) -> u64 {
+        self.j.seq.get()
     }
 
     pub fn ignored(&self) -> bool {
@@ -130,86 +148,10 @@ pub fn replay_devs(fs: &Fs, i: &c::journal_replay) -> c::bch_devs_list {
     devs
 }
 
-/// kvmalloc()'d with its jset past the struct's end: C's journal_replay *, null
-/// for an empty slot.
-#[repr(transparent)]
-pub struct Replay(NonNull<c::journal_replay>);
+/// kvmalloc()'d, its jset in it: C's journal_replay *, null for an empty slot.
+pub type Replay = ThinBox<c::journal_replay, KVmalloc>;
 
-unsafe impl Send for Replay {}
-unsafe impl Sync for Replay {}
-
-unsafe impl pin_init::ZeroableOption for Replay {}
 crate::genradix_entry!(Option<Replay>);
-
-impl Replay {
-    fn new(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Self, BchError> {
-        let bytes = offset_of!(c::journal_replay, j) + j.len();
-        let p = kvzalloc(bytes).map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))?
-            .cast::<c::journal_replay>();
-        unsafe {
-            let Ok(()) = init_at(KVVec::new(), &raw mut (*p.as_ptr()).ptrs);
-            (*p.as_ptr()).csum_good = csum_good;
-            core::ptr::copy_nonoverlapping(j.as_ptr(), (&raw mut (*p.as_ptr()).j).cast::<u8>(), j.len());
-        }
-        Ok(Replay(p))
-    }
-
-    /// Not validated until the read's final pass: its readers come after.
-    pub fn jset(&self) -> &c::jset {
-        unsafe { c::journal_replay::jset(self.0.as_ptr()) }
-    }
-
-    pub(crate) fn jset_unvalidated(&self) -> &c::jset<Unvalidated> {
-        c::jset::<Unvalidated>::from_bytes(self.jset_bytes()).expect("a replay holds its jset")
-    }
-
-    /// Its jset's datetime entry's, in seconds: 0 if it has none.
-    pub fn datetime(&self) -> u64 {
-        self.jset_unvalidated().datetime()
-    }
-
-    /// As its header says: what new() copied in.
-    fn jset_len(&self) -> usize {
-        size_of::<Head<c::jset>>() + self.j.u64s() * size_of::<u64>()
-    }
-
-    fn jset_bytes(&self) -> &[u8] {
-        let bytes = self.jset_len();
-        unsafe { core::slice::from_raw_parts((&raw const (*self.0.as_ptr()).j).cast(), bytes) }
-    }
-
-    fn jset_bytes_mut(&mut self) -> &mut [u8] {
-        let bytes = self.jset_len();
-        unsafe { core::slice::from_raw_parts_mut((&raw mut (*self.0.as_ptr()).j).cast(), bytes) }
-    }
-
-    pub(crate) fn seq(&self) -> u64 {
-        self.j.seq.get()
-    }
-}
-
-impl core::ops::Deref for Replay {
-    type Target = c::journal_replay;
-
-    fn deref(&self) -> &c::journal_replay {
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl core::ops::DerefMut for Replay {
-    fn deref_mut(&mut self) -> &mut c::journal_replay {
-        unsafe { self.0.as_mut() }
-    }
-}
-
-impl Drop for Replay {
-    fn drop(&mut self) {
-        unsafe {
-            core::ptr::drop_in_place(&raw mut (*self.0.as_ptr()).ptrs);
-            crate::util::alloc::kvfree_unsized(self.0.as_ptr().cast());
-        }
-    }
-}
 
 /// By seq, from journal_entries_base_seq - the fs's, not ours: C reads it too.
 #[repr(transparent)]
@@ -514,7 +456,7 @@ impl ReadState<'_> {
                 crate::warn_on!(true);
             }
 
-            let identical = dup.jset_bytes() == bytes;
+            let identical = dup.j.as_bytes() == bytes;
             let not_identical = !identical && entry_ptr.csum_good && dup.csum_good;
 
             let mut same_device = false;
@@ -548,7 +490,7 @@ impl ReadState<'_> {
             }
         }
 
-        let mut i = Replay::new(fs, bytes, entry_ptr.csum_good)?;
+        let mut i = c::journal_replay::alloc(fs, bytes, entry_ptr.csum_good)?;
 
         match slot.take() {
             /* The first ptr should represent the jset we kept: */
@@ -1261,7 +1203,7 @@ fn newest_flush(fs: &Fs, entries: &mut JournalEntries) -> Result<Newest, BchErro
             continue;
         }
 
-        validate::jset_last_seq_check(fs, &mut i.j, ValidateFlags::empty())?;
+        validate::jset_last_seq_check(fs, validate::jset_head_mut(i.j.as_bytes_mut()), ValidateFlags::empty())?;
 
         return Ok(Newest::Flush(c::journal_start_info {
             cur_seq,
@@ -1405,10 +1347,10 @@ fn validate_kept(fs: &Fs, rewind_ranges: &mut KVVec<c::journal_rewind_range>, en
 
         let p = i.ptrs()[0];
         let ca = fs.dev_get(p.dev.into());
-        match validate::jset_validate(fs, ca.as_deref(), i.jset_bytes_mut(), p.sector, ValidateFlags::empty())? {
+        match validate::jset_validate(fs, ca.as_deref(), i.j.as_bytes_mut(), p.sector, ValidateFlags::empty())? {
             Jset::Ok => {}
             /* its last_seq was past its seq, and repaired: its entries still need validating */
-            Jset::Bad => validate::jset_validate_entries(fs, i.jset_bytes_mut(), ValidateFlags::empty())?,
+            Jset::Bad => validate::jset_validate_entries(fs, i.j.as_bytes_mut(), ValidateFlags::empty())?,
             Jset::None => unreachable!("a kept entry's magic was checked when it was read"),
         }
 

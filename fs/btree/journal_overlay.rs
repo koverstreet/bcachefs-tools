@@ -62,7 +62,7 @@ use core::cmp::Ordering;
 use core::mem::{size_of, ManuallyDrop};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers};
+use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers, SelfSized};
 use c::Errcode as e;
 use c::FsFlag as f;
 use crate::journal::JournalEntries;
@@ -88,7 +88,7 @@ pub struct journal_ptr {
  * during cache_registration
  */
 #[repr(C)]
-#[derive(MaybeZeroable)]
+#[derive(SelfSized)]
 pub struct journal_replay {
     pub ptrs: KVVec<c::journal_ptr>,
 
@@ -96,7 +96,7 @@ pub struct journal_replay {
     pub ignore_blacklisted: bool,
     pub ignore_not_dirty: bool,
     /* must be last: */
-    pub j: Head<c::jset>,
+    pub j: c::jset,
 }
 
 nest! {
@@ -295,7 +295,9 @@ impl c::journal_keys {
             }
             let pos = k.src.journal;
             let i = self.entries().at_offset(pos.journal_seq_offset).expect("a journal key's entry");
-            (&raw const (**i).j._data).cast::<u64>().add(pos.journal_offset as usize).cast_mut().cast()
+            let at = c::journal_replay::J_AT + size_of::<Head<c::jset>>()
+                + pos.journal_offset as usize * size_of::<u64>();
+            ThinBox::as_ptr(i).as_ptr().byte_add(at)
         }
     }
 
@@ -993,7 +995,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                 let n = c::journal_key::new(
                     c::journal_key_src { journal: c::journal_key_journal_pos {
                         journal_seq_offset: (seq - fs.journal_entries_base_seq.get()) as u32,
-                        journal_offset: ((k.as_bytes().as_ptr() as usize - (&raw const i.j._data) as usize)
+                        journal_offset: ((k.as_bytes().as_ptr() as usize - i.j._data.as_ptr() as usize)
                                          / size_of::<u64>()) as u32,
                     } },
                     c::journal_key_id::new()
