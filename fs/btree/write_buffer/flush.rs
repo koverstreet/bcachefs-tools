@@ -285,18 +285,21 @@ fn flush_sorted_range(
             continue;
         }
 
-        if write_locked {
+        {
             let mut paths = trans.paths();
-            let leaf_end = paths[iter.path].locked_btree_node(0).expect("write locked").key().k.p;
 
-            if k.k().k.p > leaf_end {
-                trans.node_unlock_write(&mut paths, iter.path, 0);
-                write_locked = false;
+            if write_locked {
+                let leaf_end = paths[iter.path].locked_btree_node(0).expect("write locked").key().k.p;
+
+                if k.k().k.p > leaf_end {
+                    trans.node_unlock_write(&mut paths, iter.path, 0);
+                    write_locked = false;
+                }
             }
-        }
 
-        iter.set_pos(k.k().k.p);
-        trans.paths()[iter.path].bits.set_preserve(false);
+            iter.set_pos_in(&mut paths, k.k().k.p);
+            paths[iter.path].bits.set_preserve(false);
+        }
 
         let mut accounting_accumulated = false;
         let r = loop {

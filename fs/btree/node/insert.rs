@@ -212,8 +212,8 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
         let trans = crate::btree_trans!(fs);
         let ret = lockrestart_do(&trans, |t| {
             let trans = t.trans();
-            let path_idx = trans.node_lock_with_path(&mut trans.paths(), &self.c, c::SixLockType::SIX_LOCK_read,
-                                                     hash_val)?;
+            let mut paths = trans.paths();
+            let path_idx = trans.node_lock_with_path(&mut paths, &self.c, c::SixLockType::SIX_LOCK_read, hash_val)?;
 
             let _ = self.flags.fetch_update(Relaxed, Relaxed, |f| {
                 (f.dirty() && f.write_idx() as usize == I && self.writes[I].seq() == seq).then(|| {
@@ -222,7 +222,6 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
                 })
             });
 
-            let mut paths = trans.paths();
             let held = paths[path_idx].locked_btree_node(self.c.level.get().into())
                 .expect("the node, locked by node_lock_with_path()");
             node_write(fs, held, BtreeWriteType::initial, BtreeWriteFlags::only_if_need);

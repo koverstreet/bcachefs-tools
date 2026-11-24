@@ -143,17 +143,14 @@ fn split_at_shard_boundary(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos) ->
     iter.iter().traverse(t)?;
     let path = iter.iter().path;
 
-    let trans = t.trans();
-    {
-        let paths = trans.paths();
-        let b = paths[path].locked_btree_node(0).expect("the leaf its iterator traversed to");
-        let pivot = b.shard_pivot(b.contents(), t.fs());
-        if pivot == POS_MIN || pivot == b.key().k.p {
-            return Ok(false);
-        }
+    let mut paths = t.trans().paths();
+    let b = paths[path].locked_btree_node(0).expect("the leaf its iterator traversed to");
+    let pivot = b.shard_pivot(b.contents(), t.fs());
+    if pivot == POS_MIN || pivot == b.key().k.p {
+        return Ok(false);
     }
 
-    split_leaf(t, &mut trans.paths(), path, 0, CommitOpts::new())?;
+    split_leaf(t, &mut paths, path, 0, CommitOpts::new())?;
     Ok(true)
 }
 

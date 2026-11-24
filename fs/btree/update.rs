@@ -1073,14 +1073,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub(crate) fn update_grow(&self, btree: Btree, level: u32, pos: Bpos, needed_u64s: u32)
         -> Result<*mut c::bkey_i, BchError>
     {
-        let t = self.trans();
-        let i = t.paths().update_keys()
+        let mut paths = self.trans().paths();
+        let i = paths.update_keys()
             .position(|(e, k)| e.bits.btree_id() == btree && u32::from(e.bits.level()) == level && k.k.p == pos)
             .unwrap_or_else(|| panic!("growing an update not queued: {btree} level {level} at {pos}"));
 
         let mut new = self.bkey_alloc(needed_u64s)?;
 
-        let mut paths = t.paths();
         let u = paths.update_mut(i);
         let old = u.key().as_bytes();
         new.as_mut_u64s().as_mut_bytes()[..old.len()].copy_from_slice(old);
