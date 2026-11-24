@@ -25,7 +25,7 @@ use crate::c::JournalSpaceFrom::journal_space_discarded;
 use crate::c::JournalGuard;
 use crate::journal::flush_wait::{buf_waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
                                  JOURNAL_BUF_NOT_IN_FLIGHT};
-use crate::data::ptrs::{BkeyVPtrs, IoFailures, Ptrs};
+use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
@@ -92,7 +92,7 @@ pub struct Written {
     devs:         c::bch_devs_list,
     failed:       c::bch_io_failures,
     /* preflushes go to every rw member with unflushed writes */
-    flush_failed: IoFailures<{ c::BCH_SB_MEMBERS_MAX as usize }>,
+    flush_failed: PreflushErrs,
     /* no keys, and its last_seq its own: nothing at or before it to replay */
     empty:        bool,
 }
@@ -114,7 +114,7 @@ impl Written {
     fn note_failed(&mut self, fs: &Fs, errs: impl IntoIterator<Item = (u8, c::blk_status_t)>, preflush: bool) {
         for (dev, status) in errs {
             if preflush {
-                self.flush_failed.set_blk_status(fs, dev.into(), status);
+                self.flush_failed.0.push((dev, status));
             } else {
                 self.failed.set_blk_status(fs, dev.into(), status);
             }
