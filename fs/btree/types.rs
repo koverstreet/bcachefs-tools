@@ -690,10 +690,8 @@ pub struct btree_trans_bits {
 pub struct BtreeTrans<'f> {
     pub c: &'f Fs,
 
-    pub paths_allocated: Cell<*mut c_ulong>,
+    /* the path table, by its paths: TableLayout has the rest around them */
     pub paths: Cell<*mut BtreePath>,
-    pub sorted: Cell<*mut cs::PathIdx>,
-    pub updates: Cell<*mut cs::btree_insert_entry>,
 
     /* bump allocator, invalidated on transaction restart */
     pub mem: Cell<TransMem>,

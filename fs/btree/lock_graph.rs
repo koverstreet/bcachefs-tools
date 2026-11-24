@@ -6,7 +6,7 @@
 use crate::btree::iter::BtreeTrans;
 use crate::btree::locking::{BtreeNodeLockedType, btree_node_pos};
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{table_allocated, table_header, BtreePath, PathNode};
+use crate::btree::path::{table_arrays, table_header, BtreePath, PathNode};
 use crate::btree::trans::foreign_bits;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
@@ -119,7 +119,7 @@ unsafe fn path_locked_type(path: *const BtreePath, level: usize) -> BtreeNodeLoc
 /// @paths is a path table that stays live for 'a: the RCU read lock is held.
 unsafe fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
     let nr = unsafe { (*table_header(paths)).nr_paths } as usize;
-    let words = table_allocated(paths, nr).cast::<AtomicUsize>();
+    let words = table_arrays(paths, nr).0.cast::<AtomicUsize>();
     (AtomicBitmap::from_words(unsafe { core::slice::from_raw_parts(words, bits_to_longs(nr)) }), nr)
 }
 

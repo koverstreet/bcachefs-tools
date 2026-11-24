@@ -9,7 +9,7 @@ use super::iter::{CommitOpts, TransAttempt};
 use super::trans_attempt::AttemptKey;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
-use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, PathIdx, Paths};
+use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, table_arrays, PathIdx, Paths};
 use crate::c;
 use crate::journal::flush_wait::Flush;
 use crate::data_structures::bitmap::Bitmap;
@@ -179,7 +179,8 @@ impl<'f> BtreeTrans<'f> {
     /// Not held across anything that grows the path table or begins the
     /// transaction.
     pub(crate) unsafe fn updates_unguarded(&self) -> &[c::btree_insert_entry] {
-        unsafe { core::slice::from_raw_parts(self.updates.get(), self.nr_updates.get() as usize) }
+        let (_, _, updates) = table_arrays(self.paths.get(), self.nr_paths.get().into());
+        unsafe { core::slice::from_raw_parts(updates, self.nr_updates.get() as usize) }
     }
 
     /// Whether anything is queued for the next commit: key updates, journal
@@ -238,7 +239,8 @@ impl<'f> BtreeTrans<'f> {
 
     pub(crate) fn paths_allocated(&self) -> (&Bitmap, usize) {
         let nr = self.nr_paths.get() as usize;
-        let words = unsafe { core::slice::from_raw_parts(self.paths_allocated.get().cast::<usize>(), bits_to_longs(nr)) };
+        let (allocated, _, _) = table_arrays(self.paths.get(), nr);
+        let words = unsafe { core::slice::from_raw_parts(allocated.cast::<usize>(), bits_to_longs(nr)) };
         (Bitmap::from_words(words), nr)
     }
 
@@ -405,7 +407,7 @@ fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
 
     if let Some(trans) = NonNull::new(cached) {
         /* not ->c: it stays on the list, where walkers read it */
-        let start = offset_of!(BtreeTrans<'_>, paths_allocated);
+        let start = offset_of!(BtreeTrans<'_>, paths);
         unsafe { trans.cast::<u8>().add(start).write_bytes(0, offset_of!(BtreeTrans<'_>, list) - start) };
         return trans.cast();
     }

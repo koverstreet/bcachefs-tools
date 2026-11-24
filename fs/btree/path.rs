@@ -447,9 +447,14 @@ pub(crate) fn table_header(paths: *mut BtreePath) -> *mut c::btree_trans_paths {
     paths.wrapping_byte_sub(offset_of!(c::btree_trans_paths, paths)).cast()
 }
 
-/// Its allocated bitmap, of @nr paths: trans_paths_allocated()'s.
-pub(crate) fn table_allocated(paths: *mut BtreePath, nr: usize) -> *mut c_ulong {
-    table_header(paths).cast::<c_ulong>().wrapping_sub(bits_to_longs(nr))
+/// The rest of the table whose @nr paths start at @paths: its allocated
+/// bitmap - trans_paths_allocated()'s, its start - sorted and updates.
+pub(crate) fn table_arrays(paths: *mut BtreePath, nr: usize)
+    -> (*mut c_ulong, *mut PathIdx, *mut c::btree_insert_entry)
+{
+    let l = TableLayout::of(nr);
+    let start = paths.cast::<u8>().wrapping_sub(l.paths);
+    (start.cast(), start.wrapping_add(l.sorted).cast(), start.wrapping_add(l.updates).cast())
 }
 
 impl BtreeTrans<'_> {
@@ -469,20 +474,19 @@ impl Paths<'_> {
     /// - but a pointer C kept into it can.
     pub(crate) fn grow(&mut self) {
         let t = self.trans;
-        let (old_nr, nr) = (t.nr_paths.get() as usize, t.nr_paths.get() as usize * 2);
+        let (old_paths, old_nr) = (t.paths.get(), t.nr_paths.get() as usize);
+        let nr = old_nr * 2;
         let l = TableLayout::of(nr);
-        let p = kvzalloc_nofail(l.size).as_ptr();
-        let allocated = p.cast::<c_ulong>();
-        let paths     = p.wrapping_add(l.paths).cast::<BtreePath>();
-        let sorted    = p.wrapping_add(l.sorted).cast::<PathIdx>();
-        let updates   = p.wrapping_add(l.updates).cast::<c::btree_insert_entry>();
+        let paths = kvzalloc_nofail(l.size).as_ptr().wrapping_add(l.paths).cast::<BtreePath>();
+        let (old_allocated, old_sorted, old_updates) = table_arrays(old_paths, old_nr);
+        let (allocated, sorted, updates) = table_arrays(paths, nr);
 
         unsafe {
-            ptr::copy_nonoverlapping(t.paths_allocated.get(), allocated, bits_to_longs(old_nr));
+            ptr::copy_nonoverlapping(old_allocated, allocated, bits_to_longs(old_nr));
             (*table_header(paths)).nr_paths = nr as c_ulong;
-            ptr::copy_nonoverlapping(t.paths.get(), paths, old_nr);
-            ptr::copy_nonoverlapping(t.sorted.get(), sorted, t.nr_sorted.get() as usize);
-            ptr::copy_nonoverlapping(t.updates.get(), updates, old_nr);
+            ptr::copy_nonoverlapping(old_paths, paths, old_nr);
+            ptr::copy_nonoverlapping(old_sorted, sorted, t.nr_sorted.get() as usize);
+            ptr::copy_nonoverlapping(old_updates, updates, old_nr);
         }
 
         /*
@@ -511,16 +515,11 @@ impl Paths<'_> {
             }
         }
 
-        let old = t.paths_allocated.get();
-        rcu_assign_pointer(&t.paths_allocated, allocated);
         rcu_assign_pointer(&t.paths, paths);
-        rcu_assign_pointer(&t.sorted, sorted);
-        rcu_assign_pointer(&t.updates, updates);
-
         t.nr_paths.set(nr as PathIdx);
         self.table = Paths::table_of(t);
 
-        t.table_retire(old);
+        t.table_retire(old_allocated);
     }
 }
 
@@ -548,15 +547,41 @@ pub(in crate::btree) struct PathsUpdates<'a, 't> {
 }
 
 impl<'t> Paths<'t> {
+    /// The table's allocated bitmap's words and its sorted list's room, where
+    /// TableLayout has them for as many paths as there are. Not its updates:
+    /// paths_and_updates() lends those out beside the paths.
+    fn lists(&self) -> (&[usize], &[PathIdx]) {
+        let nr = self.table.len();
+        let (allocated, sorted, _) = table_arrays(self.table.cast(), nr);
+        unsafe {
+            (core::slice::from_raw_parts(allocated.cast(), bits_to_longs(nr)),
+             core::slice::from_raw_parts(sorted, nr + 4))
+        }
+    }
+
+    /// lists(), to edit.
+    fn lists_mut(&mut self) -> (&mut [usize], &mut [PathIdx]) {
+        let nr = self.table.len();
+        let (allocated, sorted, _) = table_arrays(self.table.cast(), nr);
+        unsafe {
+            (core::slice::from_raw_parts_mut(allocated.cast(), bits_to_longs(nr)),
+             core::slice::from_raw_parts_mut(sorted, nr + 4))
+        }
+    }
+
+    /// All the room for updates: one per path.
+    fn updates_buf(&mut self) -> &mut [c::btree_insert_entry] {
+        let (_, _, updates) = table_arrays(self.table.cast(), self.table.len());
+        unsafe { core::slice::from_raw_parts_mut(updates, self.table.len()) }
+    }
+
     pub(crate) fn sorted(&self) -> &[PathIdx] {
-        let t = self.trans;
-        unsafe { core::slice::from_raw_parts(t.sorted.get(), t.nr_sorted.get() as usize) }
+        &self.lists().1[..self.trans.nr_sorted.get() as usize]
     }
 
     /// All of the array: longer than the list, for list_add() to insert into.
     fn sorted_buf(&mut self) -> &mut [PathIdx] {
-        let t = self.trans;
-        unsafe { core::slice::from_raw_parts_mut(t.sorted.get(), t.nr_paths.get() as usize + 4) }
+        self.lists_mut().1
     }
 
     /// The key updates queued: trans_for_each_update(). They're in the
@@ -573,8 +598,8 @@ impl<'t> Paths<'t> {
     }
 
     pub(crate) fn update_mut(&mut self, i: usize) -> &mut c::btree_insert_entry {
-        let updates = self.paths_and_updates().updates;
-        &mut updates[i]
+        let nr = self.trans.nr_updates.get() as usize;
+        &mut self.updates_buf()[..nr][i]
     }
 
     /// @n queued at @i, the updates from @i on moved up one: there's room for
@@ -584,28 +609,21 @@ impl<'t> Paths<'t> {
         let nr = t.nr_updates.get() as usize;
         assert!(i <= nr, "queueing update {i} of {nr}");
         assert!(nr < t.nr_paths.get() as usize, "{nr} updates queued, and {} paths", t.nr_paths.get());
-        unsafe {
-            let p = t.updates.get().add(i);
-            ptr::copy(p, p.add(1), nr - i);
-            p.write(n);
-        }
+        let updates = self.updates_buf();
+        updates.copy_within(i..nr, i + 1);
+        updates[i] = n;
         t.nr_updates.set(t.nr_updates.get() + 1);
         self.update_mut(i)
     }
 
     pub(in crate::btree) fn paths_and_updates(&mut self) -> PathsUpdates<'_, 't> {
-        let t = self.trans;
-        PathsUpdates {
-            paths:   self,
-            updates: unsafe { core::slice::from_raw_parts_mut(t.updates.get(), t.nr_updates.get() as usize) },
-        }
+        let (_, _, updates) = table_arrays(self.table.cast(), self.table.len());
+        let nr = self.trans.nr_updates.get() as usize;
+        PathsUpdates { paths: self, updates: unsafe { core::slice::from_raw_parts_mut(updates, nr) } }
     }
 
     fn allocated_mut(&mut self) -> &mut Bitmap {
-        let t = self.trans;
-        Bitmap::from_words_mut(unsafe {
-            core::slice::from_raw_parts_mut(t.paths_allocated.get().cast::<usize>(), bits_to_longs(t.nr_paths.get().into()))
-        })
+        Bitmap::from_words_mut(self.lists_mut().0)
     }
 
     fn set_allocated(&mut self, idx: PathIdx, allocated: bool) {
@@ -1589,10 +1607,9 @@ fn path_verify_level_err(path: &BtreePath, level: usize, keys: &Keys<'_>, p: Opt
 /// A transaction's path table, as it starts: its own, embedded.
 pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
     trans.nr_paths.set(cs::BTREE_ITER_INITIAL as PathIdx);
-    trans.paths_allocated.set(trans._paths_allocated.as_ptr().cast());
-    trans.sorted.set(trans._sorted.as_ptr().cast());
     trans.paths.set(trans._paths.as_ptr().cast());
-    trans.updates.set(trans._updates.as_ptr().cast());
+    unsafe { (*trans.trans_paths.as_ptr()).nr_paths = cs::BTREE_ITER_INITIAL.into() };
+    let mut paths = trans.paths();
 
     /*
      * If this trans previously grew out of _paths, grow() poisoned it on the
@@ -1604,24 +1621,19 @@ pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
      * stale pointers most want catching.
      */
     if cfg!(CONFIG_BCACHEFS_DEBUG) {
-        for path in trans.paths().iter_mut() {
+        for path in paths.iter_mut() {
             for level in &mut path.l {
                 level.b = NodePtr::null();
             }
         }
     }
 
-    unsafe {
-        (*trans.trans_paths.as_ptr()).nr_paths = cs::BTREE_ITER_INITIAL.into();
-
-        /* Reserve path 0 for our sentinal value */
-        *trans.paths_allocated.get() = 1;
-    }
+    /* Reserve path 0 for our sentinal value */
+    paths.lists_mut().0[0] = 1;
 }
 
 pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
-    let allocated = trans.paths_allocated.replace(ptr::null_mut());
-    trans.paths.set(ptr::null_mut());
+    let (allocated, _, _) = table_arrays(trans.paths.replace(ptr::null_mut()), trans.nr_paths.get().into());
     trans.table_retire(allocated);
 }
 
