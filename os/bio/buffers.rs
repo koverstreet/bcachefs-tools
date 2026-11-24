@@ -146,9 +146,13 @@ unsafe impl<const A: usize> MapBuf for AlignedBox<[MaybeUninit<u8>], A> {
     }
 }
 
-/// A buffer for IO: page aligned, as userspace reads into it O_DIRECT. Not
-/// initialized: what reads into it, or writes it, has its bytes.
-pub type IoBuf = AlignedBox<[MaybeUninit<u8>], PAGE_SIZE>;
+/// What a buffer IO is done to is aligned to: a page, as userspace reads into
+/// it O_DIRECT.
+pub const IO_ALIGN: usize = PAGE_SIZE;
+
+/// A buffer for IO. Not initialized: what reads into it, or writes it, has
+/// its bytes.
+pub type IoBuf = AlignedBox<[MaybeUninit<u8>], IO_ALIGN>;
 
 /// An IoBuf of @bytes, with @gfp, not zeroed: as kvmalloc() leaves them, as
 /// C's buffers were.
