@@ -7,7 +7,8 @@
 //!
 //! Allocated as RcuArray's always were, by kvzalloc() - so kvfree_rcu() can
 //! free one - or by an allocator of its owner's; at least 8-aligned either
-//! way: a thin pointer's low bits are its holder's to tag.
+//! way: a thin pointer's low bits are its holder's to tag. Zeroed, so its
+//! elements are FromZeros.
 //!
 //! Freed as it says (RcuFreeing): at once, or - what an RCU reader may still
 //! be in, elements that aren't FreeAnytime - a grace period on. With no
@@ -23,6 +24,7 @@ use crate::util::rcu::HasRcuHead;
 use crate::util::thin::ThinBox;
 use crate::util::vstructs::{align_max, DstHead, FlexArray, SelfSized, VStructError};
 use core::ptr::{self, NonNull};
+use zerocopy::FromZeros;
 
 /// The count is its own, after the header: written only as it's made, so
 /// nothing holding one can change how long it says the array is. 8-aligned,
@@ -120,33 +122,51 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     }
 
     /// One of @nr elements, all zero, with @head.
-    pub fn alloc(nr: usize, head: H) -> Result<NonNull<H>, AllocError> {
+    pub fn alloc(nr: usize, head: H) -> Result<NonNull<H>, AllocError>
+    where
+        T: FromZeros,
+    {
         Self::alloc_gfp(nr, head, Flags::empty())
     }
 
     /// alloc(), for what mustn't fail to allocate: a size past isize::MAX
     /// bytes, or past what its count holds, is a bug.
-    pub fn alloc_nofail(nr: usize, head: H) -> NonNull<H> {
+    pub fn alloc_nofail(nr: usize, head: H) -> NonNull<H>
+    where
+        T: FromZeros,
+    {
         Self::alloc_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
+    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<NonNull<H>, AllocError>
+    where
+        T: FromZeros,
+    {
         let (layout, offset) = Self::layout(nr)?;
         let given = KVmalloc.allocate_zeroed_gfp(layout, gfp)?;
         Ok(Self::place(head, nr, given, offset))
     }
 
     /// alloc(), owned: freed as its markers say.
-    pub fn alloc_box(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError> {
+    pub fn alloc_box(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    where
+        T: FromZeros,
+    {
         Self::alloc_box_gfp(nr, head, Flags::empty())
     }
 
     /// alloc_box(), for what mustn't fail to allocate.
-    pub fn alloc_box_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc> {
+    pub fn alloc_box_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc>
+    where
+        T: FromZeros,
+    {
         Self::alloc_box_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_box_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError> {
+    fn alloc_box_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    where
+        T: FromZeros,
+    {
         let p = Self::alloc_gfp(nr, head, gfp)?;
         // KVmalloc's, ours, at layout()
         Ok(unsafe { ThinBox::from_raw(p.cast()) })
@@ -155,7 +175,10 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     /// alloc(), of room for @nr from @a, its count the room @a gave - which
     /// may be more, and is what it's freed as: a mempool tells its elements by
     /// their size.
-    pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<NonNull<H>, AllocError> {
+    pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<NonNull<H>, AllocError>
+    where
+        T: FromZeros,
+    {
         let (layout, offset) = Self::layout(nr)?;
         let given = a.allocate_zeroed(layout)?;
         let room = (given.len() - offset - Self::TAIL) / size_of::<T>();
@@ -171,6 +194,8 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     /// copied: they're not to be dropped in @old.
     pub unsafe fn realloc_in<A: Alloc>(old: NonNull<H>, keep: usize, nr: usize, head: H, a: &A)
         -> Result<NonNull<H>, AllocError>
+    where
+        T: FromZeros,
     {
         let new = Self::alloc_in(nr, head, a)?;
         unsafe {
