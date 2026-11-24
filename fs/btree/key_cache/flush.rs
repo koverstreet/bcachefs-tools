@@ -98,6 +98,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         }
     };
 
+    let flushed = flush.is_some();
     if let Some((pin_seq, k)) = flush {
         t.set_journal_seq_to_pin(pin_seq);
 
@@ -130,23 +131,23 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
                         CommitFlags::NO_ENOSPC |
                         CommitFlags::NO_SKIP_NOOPS |
                         commit_flags))?;
+    }
 
-        j.pin_drop(&trans.paths()[c_iter.path].locked_key_cached()
-                   .expect("a flushed cached path not locked").journal);
+    let mut paths = trans.paths();
+    let path = c_iter.path;
+
+    if flushed {
+        j.pin_drop(&paths[path].locked_key_cached().expect("a flushed cached path not locked").journal);
     }
 
     if !evict {
-        let paths = trans.paths();
-        let ck = paths[c_iter.path].locked_key_cached().expect("a flushed cached path not locked");
+        let ck = paths[path].locked_key_cached().expect("a flushed cached path not locked");
         if ck.dirty() {
             ck.clear_flag(c::BKEY_CACHED_DIRTY);
             bc.nr_dirty.fetch_sub(1, Relaxed);
         }
         bkey_cached_check_pin(fs, ck);
     } else {
-        let mut paths = trans.paths();
-        let path = c_iter.path;
-
         for i in trans.path_idxs() {
             if i != path {
                 trans.path_unlock(&mut paths, i);
