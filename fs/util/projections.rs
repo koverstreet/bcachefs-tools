@@ -141,6 +141,20 @@ impl<P: FakePlaceWrite> Drop for FakePlaceRef<'_, P> {
 /// or published as RCU publishes.
 pub trait Publish {
     type Writer;
+
+    /// Self as its writer has it: what the lock's guard hands out, for what
+    /// holds the lock another way - a Locked's or LockedBy's own, or a lock
+    /// of its owner's.
+    ///
+    /// # Safety
+    /// The lock that publishes it is held, for as long as the reference lives.
+    unsafe fn writer(&self) -> &Self::Writer
+    where
+        Self: Sized,
+    {
+        // Writer is laid out as Self
+        unsafe { &*core::ptr::from_ref(self).cast::<Self::Writer>() }
+    }
 }
 
 // nothing to write
