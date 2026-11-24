@@ -350,7 +350,7 @@ pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &
     });
 
     if !queued {
-        t.subbuf_push(accounting, &accounting_bkey(p, d.len()), |v| v.copy_from_slice(d))?;
+        t.subbuf_push(accounting, &accounting_bkey(p, d.len()), d.len(), |v| v.copy_from_slice(d))?;
     }
     Ok(())
 }

@@ -50,7 +50,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
-use bcachefs_kernel::util::vstructs::{cast_plain, FakeDst, Head};
+use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use clap::Parser;
 use bcachefs_kernel::format::{Bpos, Btree};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
@@ -177,10 +177,10 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) ->
     while off < written_sectors * 512 {
         // where the bset is, its u64s, and its container's sectors
         let (bset_at, u64s, sectors) = if off == 0 {
-            let n = cast_plain::<Head<c::btree_node>>(&node[off..])?;
+            let n = c::btree_node::<Unvalidated>::from_bytes(&node[off..]).ok()?;
             (std::mem::offset_of!(Head<c::btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
         } else {
-            let n = cast_plain::<Head<c::btree_node_entry>>(&node[off..])?;
+            let n = c::btree_node_entry::<Unvalidated>::from_bytes(&node[off..]).ok()?;
             (off + std::mem::offset_of!(Head<c::btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
         };
 

@@ -310,8 +310,9 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
     }
 
     if bk.k.key_type() == BkeyType::accounting {
-        return t.subbuf_push(&t.trans().accounting, &bk.k,
-                             |v| v.as_mut_bytes().copy_from_slice(&bk.as_bytes()[size_of::<c::bkey>()..]));
+        let val = &bk.as_bytes()[size_of::<c::bkey>()..];
+        return t.subbuf_push(&t.trans().accounting, &bk.k, val.len() / size_of::<u64>(),
+                             |v| v.as_mut_bytes().copy_from_slice(val));
     }
 
     let new = t.bkey_make_mut_noupdate(BkeySC::from(bk))?;

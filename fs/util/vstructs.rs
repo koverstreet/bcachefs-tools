@@ -452,9 +452,10 @@ pub enum VStructError {
     Overrun { ty: &'static str, want: usize, have: usize },
     /// They aren't aligned for @ty, which needs @align.
     Misaligned { ty: &'static str, align: usize },
-    /// @ty's header says it's @len bytes, fewer than the header itself: a
-    /// walk would never get past it.
-    Short { ty: &'static str, len: usize },
+    /// @ty's header says it's @len bytes, fewer than the @min any @ty is - a
+    /// header, and any value its type always has: a walk would never get past
+    /// a header that short.
+    Short { ty: &'static str, len: usize, min: usize },
     /// @ty's header says it's @len bytes, which no @ty is: not a whole number
     /// of its tail's elements, or of its alignment.
     Ragged { ty: &'static str, len: usize },
@@ -467,8 +468,8 @@ impl core::fmt::Display for VStructError {
                 write!(f, "{ty}: {want} bytes, but only {have} hold it"),
             Self::Misaligned { ty, align } =>
                 write!(f, "{ty}: bytes not aligned to {align}"),
-            Self::Short { ty, len } =>
-                write!(f, "{ty}: its header says {len} bytes, fewer than the header"),
+            Self::Short { ty, len, min } =>
+                write!(f, "{ty}: its header says {len} bytes, fewer than the {min} any is"),
             Self::Ragged { ty, len } =>
                 write!(f, "{ty}: its header says {len} bytes, not a whole number of its elements or alignment"),
         }
@@ -478,24 +479,28 @@ impl core::fmt::Display for VStructError {
 #[cfg(feature = "std")]
 impl std::error::Error for VStructError {}
 
-/// How many of @bytes a T at their start says are its: an error if they
-/// don't hold its header, aligned, or that many - or it says fewer than its
-/// header.
-fn checked_bytes<T: Plain + FakeDst>(bytes: &[u8]) -> Result<usize, VStructError> {
+/// The T at the start of @bytes, as many as @len says its head claims - a
+/// T's ArmAt::arm_at(), @len its own: an error if they don't hold its head,
+/// aligned, or that many, or it claims fewer than the least T.
+pub fn parse_at<T>(bytes: &[u8], len: impl FnOnce(&T::Head) -> usize) -> Result<&T, VStructError>
+where
+    T: Unsized + ?Sized,
+    T::Head: Plain,
+{
     let ty = core::any::type_name::<T>();
-    let len = cast_plain::<T>(bytes)
-        .ok_or_else(|| match bytes.len() < size_of::<T>() {
-            true  => VStructError::Overrun { ty, want: size_of::<T>(), have: bytes.len() },
-            false => VStructError::Misaligned { ty, align: align_of::<T>() },
-        })?
-        .bytes();
-    if len < size_of::<T>() {
-        return Err(VStructError::Short { ty, len });
+    let head = size_of::<T::Head>();
+    let len = len(cast_plain::<T::Head>(bytes)
+        .ok_or_else(|| match bytes.len() < head {
+            true  => VStructError::Overrun { ty, want: head, have: bytes.len() },
+            false => VStructError::Misaligned { ty, align: align_of::<T::Head>() },
+        })?);
+    if len < T::MIN_BYTES {
+        return Err(VStructError::Short { ty, len, min: T::MIN_BYTES });
     }
     if len > bytes.len() {
         return Err(VStructError::Overrun { ty, want: len, have: bytes.len() });
     }
-    Ok(len)
+    cast(&bytes[..len]).ok_or(VStructError::Ragged { ty, len })
 }
 
 /// The plain T at the start of @b, by value, at any alignment: an error if
@@ -686,7 +691,7 @@ macro_rules! vstruct_family {
 
         impl<S: $crate::util::vstructs::State> $crate::util::vstructs::ArmAt for $name<S> {
             fn arm_at(b: &[u8]) -> Result<&Self, $crate::util::vstructs::VStructError> {
-                $crate::util::vstructs::from_bytes::<Self>(b)
+                $crate::util::vstructs::parse_at::<Self>(b, |$h: &$head| $len)
             }
         }
 
@@ -1102,32 +1107,23 @@ pub unsafe trait Unsized {
 /// The T at the start of @bytes, as many as its count says - an error if they
 /// don't hold its header, aligned, or that many, or it says fewer than its
 /// header: T::from_bytes(), for an Unvalidated T.
-pub fn from_bytes<T>(bytes: &[u8]) -> Result<&T, VStructError>
-where
-    T: Unsized + ?Sized,
-    T::Head: Plain + FakeDst,
-{
-    let len = checked_bytes::<T::Head>(bytes)?;
-    cast(&bytes[..len]).ok_or(VStructError::Ragged { ty: core::any::type_name::<T>(), len })
+pub fn from_bytes<T: ArmAt + ?Sized>(bytes: &[u8]) -> Result<&T, VStructError> {
+    T::arm_at(bytes)
 }
 
 /// from_bytes(), mutably: T::from_bytes_mut().
-pub fn from_bytes_mut<T>(bytes: &mut [u8]) -> Result<&mut T, VStructError>
-where
-    T: Unsized + ?Sized,
-    T::Head: Plain + FakeDst,
-{
-    let len = checked_bytes::<T::Head>(bytes)?;
-    cast_mut(&mut bytes[..len]).ok_or(VStructError::Ragged { ty: core::any::type_name::<T>(), len })
+pub fn from_bytes_mut<T: ArmAt + Unsized + ?Sized>(bytes: &mut [u8]) -> Result<&mut T, VStructError> {
+    let len = size_of_val(T::arm_at(bytes)?);
+    Ok(cast_mut(&mut bytes[..len]).expect("as arm_at() took them"))
 }
 
-/// Whether @b can be a T, every byte of it: at least its head, aligned for
+/// Whether @b can be a T, every byte of it: at least MIN_BYTES, aligned for
 /// it, and a length a reference to one has - a whole number of its tail's
 /// elements past the head, and of its alignment, the head's, so
 /// size_of_val() is @b's length and the reference claims none past.
 fn fits<T: Unsized + ?Sized>(b: &[u8]) -> bool {
-    let (head, align) = (size_of::<T::Head>(), align_of::<T::Head>());
-    b.len() >= head
+    let align = align_of::<T::Head>();
+    b.len() >= T::MIN_BYTES
         && b.as_ptr() as usize % align == 0
         && b.len() % align == 0
         && (b.len() - T::TAIL) % size_of::<T::Elem>() == 0
@@ -1274,19 +1270,16 @@ impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
+impl<'a, E: ArmAt + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
     type Item = &'a E;
 
     fn next(&mut self) -> Option<&'a E> {
-        let Ok(len) = checked_bytes::<E::Head>(self.rest) else {
+        let Ok(e) = E::arm_at(self.rest) else {
             self.rest = &[];
             return None;
         };
-        let (e, rest) = self.rest.split_at(len);
-        self.rest = rest;
-        // SAFETY: checked_bytes(): its header is there, aligned, and the
-        // bytes it says are its - any bytes are an E
-        Some(unsafe { &*E::from_raw(e.as_ptr(), len) })
+        self.rest = &self.rest[size_of_val(e)..];
+        Some(e)
     }
 }
 
@@ -1303,17 +1296,17 @@ impl<'a, E: ?Sized> ValidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {
+impl<'a, E: ArmAt + Unsized + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {
     type Item = &'a mut E;
 
     fn next(&mut self) -> Option<&'a mut E> {
-        let Ok(len) = checked_bytes::<E::Head>(self.rest) else {
+        let Ok(len) = E::arm_at(self.rest).map(size_of_val) else {
             self.rest = &mut [];
             return None;
         };
         let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
         self.rest = rest;
-        Some(unsafe { &mut *E::from_raw_mut(e.as_mut_ptr(), len) })
+        Some(cast_mut(e).expect("as arm_at() took them"))
     }
 }
 
@@ -1333,12 +1326,12 @@ impl<'a, E: ?Sized> UnvalidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
+impl<'a, E: ArmAt + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
     type Item = Result<&'a E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.filter(|r| !r.is_empty())?;
-        match from_bytes::<E>(rest) {
+        match E::arm_at(rest) {
             Ok(e) => {
                 self.rest = Some(&rest[size_of_val(e)..]);
                 Some(Ok(e))
@@ -1365,21 +1358,18 @@ impl<'a, E: ?Sized> UnvalidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
+impl<'a, E: ArmAt + Unsized + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
     type Item = Result<&'a mut E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.take().filter(|r| !r.is_empty())?;
-        let len = match checked_bytes::<E::Head>(rest) {
-            Ok(len) => len,
+        let len = match E::arm_at(rest) {
+            Ok(e) => size_of_val(e),
             Err(err) => return Some(Err(err)),
         };
         let (e, rest) = rest.split_at_mut(len);
-        let Some(e) = cast_mut(e) else {
-            return Some(Err(VStructError::Ragged { ty: core::any::type_name::<E>(), len }));
-        };
         self.rest = Some(rest);
-        Some(Ok(e))
+        Some(Ok(cast_mut(e).expect("as arm_at() took them")))
     }
 }
 
@@ -1542,12 +1532,12 @@ unsafe impl<T: SizedArm> Unsized for T {
     }
 }
 
-/// An arm of a sized tagged union, from the storage's bytes past the tag:
-/// the storage doesn't say how long the arm is, as an unsized one's header
-/// does, so it's as long as the arm says - a plain one its size, a
-/// #[counted] one as many as its count says. An error if the bytes don't
-/// hold that many.
-pub trait ArmAt: ArmRef {
+/// It at the start of bytes that don't say how long it is, as long as it says
+/// - a plain one its size, a counted one as many as its count says: an arm
+/// of a sized tagged union, from the storage's bytes past the tag; an entry,
+/// from what's left of its container; bytes off a device. An error if they
+/// don't hold that many.
+pub trait ArmAt {
     fn arm_at(b: &[u8]) -> Result<&Self, VStructError>;
 }
 

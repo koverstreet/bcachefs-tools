@@ -60,7 +60,7 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
-                            FakeDst, Plain, Unsized, Unvalidated};
+                            ArmAt, Unsized, Unvalidated};
 use crate::util::{backref::BackRef, printbuf::Msg};
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
@@ -360,7 +360,7 @@ impl c::bset_head {
     }
 }
 
-pub trait BsetHolder: Unsized<Head: Plain + FakeDst> {
+pub trait BsetHolder: ArmAt + Unsized {
     const BSET: usize;
     const KEYS: usize = Self::BSET + size_of::<Head<c::bset>>();
 
@@ -399,8 +399,10 @@ pub trait BsetHolder: Unsized<Head: Plain + FakeDst> {
         cast_plain_mut(&mut bytes[Self::BSET..]).expect("a bset header, in its node's buffer")
     }
 
+    /// As its bset's header says, before the bytes are known to hold it: its
+    /// keys, and all of it before them.
     fn sectors(bytes: &[u8], block_bits: u32) -> usize {
-        cast_plain::<Self::Head>(bytes).expect("a header, in its node's buffer").sectors(block_bits)
+        (Self::KEYS + Self::head(bytes).u64s() * size_of::<u64>()).next_multiple_of(512 << block_bits) >> 9
     }
 
     fn of(bytes: &[u8]) -> &Self {
