@@ -972,6 +972,5 @@ impl PinnedDrop for c::bch_fs_capacity {
                 }
             }
         }
-        self.project().pcpu.free();
     }
 }

@@ -292,7 +292,6 @@ unsafe fn btree_iter_exit(c: *mut Fs) {
             }
         }
     }
-    unsafe { (*c).btree.trans.bufs.free() };
 
     fs.with_trans_list(|list| {
         if let Some(trans) = list.first() {

@@ -27,8 +27,8 @@
 //!
 //! The types:
 //!
-//! - PerCpu<T> is the field. alloc() - or C - allocates it at init, and
-//!   free() frees it at exit; between, it's live for every possible CPU,
+//! - PerCpu<T> is the field. alloc() - or C - allocates it at init, and it's
+//!   freed as it drops, or by free(); between, it's live for every possible CPU,
 //!   which every operation takes as given, as C's do. Not Copy: nothing holds
 //!   it past its struct.
 //! - PerCpuRef<'a, T> borrows it, or a part of it - at(i), percpu_field!() -
@@ -68,7 +68,7 @@
 use core::cell::Cell;
 use core::ffi::{c_uint, c_void};
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of, MaybeUninit};
+use core::mem::{align_of, size_of, ManuallyDrop, MaybeUninit};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -537,6 +537,12 @@ pub struct PerCpu<T>(*mut T);
 // Null: not yet allocated, as C's init finds it.
 unsafe impl<T> ::pin_init::Zeroable for PerCpu<T> {}
 
+impl<T> Drop for PerCpu<T> {
+    fn drop(&mut self) {
+        self.free()
+    }
+}
+
 /// A PerCpu, or a part of one, for as long as it's borrowed.
 pub struct PerCpuRef<'a, T>(*mut T, PhantomData<&'a PerCpu<T>>);
 
@@ -643,10 +649,11 @@ impl<T> PerCpu<T> {
 
     /// Its pointer, for a `T __percpu *` to own: freed with free_percpu().
     pub fn into_raw(self) -> *mut T {
-        self.0
+        ManuallyDrop::new(self).0
     }
 
-    /// free_percpu(): unallocated after, as before alloc().
+    /// free_percpu(): unallocated after, as before alloc(). Its copies aren't
+    /// dropped.
     pub fn free(&mut self) {
         unsafe { free_percpu(self.0.cast()) };
         self.0 = core::ptr::null_mut();

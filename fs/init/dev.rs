@@ -500,7 +500,6 @@ impl PinnedDrop for Dev {
 
         ca.disk_sb.get_mut().free();
 
-        ca.io_done.free();
         ca.buckets_free();
     }
 }

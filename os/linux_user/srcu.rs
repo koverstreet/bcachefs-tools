@@ -280,6 +280,5 @@ impl Drop for Srcu {
                 eprintln!("srcu_struct freed with {} readers on {idx}", locks.wrapping_sub(unlocks));
             }
         }
-        self.counts.free();
     }
 }

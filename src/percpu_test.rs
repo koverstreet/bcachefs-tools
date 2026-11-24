@@ -32,7 +32,7 @@ impl std::ops::Deref for Counter {
 
 #[test]
 fn percpu_slot_churn() {
-    let mut ctr = Counter(PerCpu::alloc().expect("alloc_percpu"));
+    let ctr = Counter(PerCpu::alloc().expect("alloc_percpu"));
 
     /*
      * Without slots coming back, thread number MAX_CPUS aborts the process.
@@ -47,12 +47,11 @@ fn percpu_slot_churn() {
     });
 
     assert_eq!(ctr.sum(), CHURN_THREADS as u64);
-    ctr.0.free();
 }
 
 #[test]
 fn percpu_slot_live_distinct() {
-    let mut ctr = Counter(PerCpu::alloc().expect("alloc_percpu"));
+    let ctr = Counter(PerCpu::alloc().expect("alloc_percpu"));
     let barrier = Barrier::new(LIVE_THREADS);
 
     let mut copies: Vec<usize> = thread::scope(|s| {
@@ -80,5 +79,4 @@ fn percpu_slot_live_distinct() {
     assert_eq!(copies.len(), LIVE_THREADS, "live threads share a copy");
 
     assert_eq!(ctr.sum(), (LIVE_THREADS * LIVE_ADDS) as u64);
-    ctr.0.free();
 }

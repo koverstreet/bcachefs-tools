@@ -37,16 +37,15 @@ use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
 use core::panic::Location;
-use core::pin::Pin;
 use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
 use cstruct_macros::{MaybeZeroable, Init};
-use pin_init::{pin_data, pinned_drop};
+use pin_init::pin_data;
 
 /* Amount to buffer up on a percpu counter */
 pub const IO_CLOCK_PCPU_SECTORS: u32 = 128;
 
 #[allow(non_camel_case_types)]
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct io_clock {
@@ -205,12 +204,5 @@ impl ToText for io_clock {
         for t in self.timers.lock().iter().rev() {
             prt!(out, "{}:\t{}\n", t.caller, t.expire);
         }
-    }
-}
-
-#[pinned_drop]
-impl PinnedDrop for io_clock {
-    fn drop(self: Pin<&mut Self>) {
-        self.project().pcpu_buf.free();
     }
 }
