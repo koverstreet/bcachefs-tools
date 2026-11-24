@@ -27,9 +27,9 @@
 //! is had from the lock that publishes it - a Locked's or LockedBy's
 //! published writer (Publish).
 //!
-//! - RcuPtr<P> publishes a P, an RcuPointer - a single-word pointer whose
-//!   drop frees its target as the target says: a MaybeRcuAlloc, a ref on a
-//!   count. Readers read the target whole, so it must be
+//! - RcuPtr<P> publishes a P, a single-word pointer - NonZeroWord - whose
+//!   drop frees its target as the target says: a MaybeRcuAlloc, a ThinBox, a
+//!   ref on a count. Readers read the target whole, so it must be
 //!   dropped a grace period on - an RcuDropMember's or an
 //!   RcuDropWorkMember's, a build error if not - and what's taken out may be
 //!   dropped at once. Its writer, an RcuPtrWriter, publishes, takes and
@@ -48,11 +48,11 @@ use core::sync::atomic::{fence, AtomicPtr, Ordering};
 
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
-use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::alloc::{AllocError, KVmalloc};
 use crate::util::vstructs::{NonZeroWord, SelfSized};
-use crate::util::maybe_rcu_alloc::{MaybeRcuAlloc, RcuFreeing};
+use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::projections::{Publish, Volatile};
-use crate::util::refcount::{ARef, AlwaysRefCounted, RefGuard, Refcount};
+use crate::util::refcount::{ARef, AlwaysRefCounted};
 
 // ── Reading, and grace periods ───────────────────────────────────────────
 
@@ -283,27 +283,15 @@ impl<T: ?Sized> NoDetach<T> {
 
 // ── RcuPtr ───────────────────────────────────────────────────────────────
 
-/// A pointer that owns what it derefs to, in a word - a NonZeroWord, so an
-/// Option of it is one too.
-///
-/// # Safety
-/// Its target lives as long as Self does, in place, and is dropped and freed
-/// only as its type says: a grace period on, if its members say so.
-pub unsafe trait RcuPointer: Deref + NonZeroWord {}
-
-unsafe impl<T, A: Alloc> RcuPointer for MaybeRcuAlloc<T, A> {}
-
-unsafe impl<T: Refcount> RcuPointer for RefGuard<T> {}
-
-/// A pointer walked under the RCU read lock alone. Its target is RCU-freed -
-/// !FreeAnytime - which publish() checks, a build error if not: Rust has no
-/// negative bound to say it here.
+/// A pointer walked under the RCU read lock alone - one word, so a reader
+/// loads it whole. Its target is RCU-freed - !FreeAnytime - which publish()
+/// checks, a build error if not: Rust has no negative bound to say it here.
 #[repr(transparent)]
-pub struct RcuPtr<P: RcuPointer>(Volatile<Option<P>>);
+pub struct RcuPtr<P: Deref + NonZeroWord>(Volatile<Option<P>>);
 
-unsafe impl<P: RcuPointer> ::pin_init::Zeroable for RcuPtr<P> {}
+unsafe impl<P: Deref + NonZeroWord> ::pin_init::Zeroable for RcuPtr<P> {}
 
-impl<P: RcuPointer> RcuPtr<P> {
+impl<P: Deref + NonZeroWord> RcuPtr<P> {
     /// Loaded relaxed, as rcu_dereference() is: its target is ordered after
     /// by the address dependency.
     pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a P::Target> {
@@ -319,14 +307,14 @@ impl<P: RcuPointer> RcuPtr<P> {
     }
 }
 
-impl<P: RcuPointer> Publish for RcuPtr<P> {
+impl<P: Deref + NonZeroWord> Publish for RcuPtr<P> {
     type Writer = RcuPtrWriter<P>;
 }
 
 #[repr(transparent)]
-pub struct RcuPtrWriter<P: RcuPointer>(RcuPtr<P>);
+pub struct RcuPtrWriter<P: Deref + NonZeroWord>(RcuPtr<P>);
 
-impl<P: RcuPointer> core::ops::Deref for RcuPtrWriter<P> {
+impl<P: Deref + NonZeroWord> core::ops::Deref for RcuPtrWriter<P> {
     type Target = RcuPtr<P>;
 
     fn deref(&self) -> &RcuPtr<P> {
@@ -334,12 +322,12 @@ impl<P: RcuPointer> core::ops::Deref for RcuPtrWriter<P> {
     }
 }
 
-impl<P: RcuPointer> RcuPtrWriter<P> {
+impl<P: Deref + NonZeroWord> RcuPtrWriter<P> {
     /// Into an empty slot: released, as rcu_assign_pointer() is, so a reader
     /// that sees it sees what was written to its target first.
-    pub fn publish(&self, p: P)
+    pub(crate) fn publish(&self, p: P)
     where
-        P::Target: Sized,
+        P::Target: RcuFreeing,
     {
         <P::Target as RcuFreeing>::assert_rcu_freed();
         fence(Ordering::Release);

@@ -104,6 +104,8 @@ impl<T: ?Sized + SelfSized> DerefMut for ThinMut<'_, T> {
 
 /// A Box<T, A>, thin: A has no state - stateless() - and T is freed as its
 /// markers say, by its reference's size.
+#[repr(transparent)]
+#[derive(cstruct_macros::NonZeroWord)]
 pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc> {
     p:  NonNull<()>,
     _t: PhantomData<(Box<T, A>, A)>,
