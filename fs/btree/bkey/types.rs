@@ -58,7 +58,7 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{parse_at, ArmAt, ArmRef, InState, SelfSized, SizedArm, State, Unsized,
+use crate::util::vstructs::{parse_at, ArmAt, ArmRef, DstHead, InState, SelfSized, SizedArm, State, Unsized,
                             Unvalidated, UnvalidatedSized, VStruct, VStructError, Validated, Whole};
 use core::marker::PhantomData;
 
@@ -106,13 +106,17 @@ pub type AnyKey<S> = BkeyI<FamilyVal<AllTypes, S>>;
 /// AnyKey, as a header and a value pointer.
 pub type AnyKeySC<'a, S> = BkeySC<'a, FamilyVal<AllTypes, S>>;
 
+impl<V: ?Sized> DstHead for BkeyI<V> {
+    type Head = c::bkey;
+}
+
 /* u64s 0 is no key - a room starts as bkey_init()'s, and arm_at() refuses one -
  * but from_raw() of it is total: the header, no value */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
-    type Head = c::bkey;
     type Elem = V::Elem;
     const TAIL: usize = size_of::<c::bkey>() + V::TAIL;
     const MIN_BYTES: usize = (size_of::<c::bkey>() + V::MIN_BYTES).next_multiple_of(align_of::<c::bkey>());
+    const ALIGN: usize = align_of::<c::bkey>();
 
     fn from_raw(p: *const u8, bytes: usize) -> *const Self {
         let v = V::from_raw(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
@@ -744,10 +748,10 @@ unsafe impl<const F: u32, S: KeyState> InFamily<AllTypes> for FamilyVal<ByFlag<F
 
 // SAFETY: the value's u64s, all of them
 unsafe impl<F: 'static, S: State> Unsized for FamilyVal<F, S> {
-    type Head = ();
     type Elem = u64;
     const TAIL: usize = 0;
     const MIN_BYTES: usize = 0;
+    const ALIGN: usize = 1;
 
     fn from_raw(p: *const u8, bytes: usize) -> *const Self {
         core::ptr::slice_from_raw_parts(p.cast::<u64>(), bytes / size_of::<u64>()) as *const Self
@@ -901,7 +905,7 @@ macro_rules! bkey_types {
         impl BkeyTag for $ty {
             const TYPE: BkeyType = BkeyType($nr);
             const MIN_VAL_SIZE: usize =
-                size_of::<<<Self as BkeyFamily>::Validated as Unsized>::Head>();
+                <<Self as BkeyFamily>::Validated as Unsized>::MIN_BYTES;
         }
         bkey_types!(@in $ty, AllTypes $(, ByFlag<{ crate::format::BkeyTypeFlags_bits::$flag }>)*);
         )*

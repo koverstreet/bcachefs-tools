@@ -20,7 +20,7 @@ use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::{FreeAnytime, HasRcuHead};
 use crate::util::thin::ThinBox;
-use crate::util::vstructs::{align_max, FlexArray, SelfSized};
+use crate::util::vstructs::{align_max, DstHead, FlexArray, SelfSized};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 
@@ -101,6 +101,10 @@ unsafe impl<H, T, L: LenUint> SelfSized for DstArray<H, T, L> {
         // a slice pointer's length is the DST's tail's
         ptr::slice_from_raw_parts(p.cast::<T>(), nr) as *const Self
     }
+}
+
+impl<H, T, L: LenUint> DstHead for DstArray<H, T, L> {
+    type Head = H;
 }
 
 impl<H, T, L: LenUint> FlexArray for DstArray<H, T, L> {

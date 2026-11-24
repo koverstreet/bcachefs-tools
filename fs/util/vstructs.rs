@@ -12,9 +12,11 @@
 //! from fewer bytes than the header.
 //!
 //! What a variable-size type can be, most general first:
-//!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
-//!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
-//!    says how long it is, as an unsized vstruct's does.
+//!  - Unsized: a DST of ours made from a byte count, its reference fat - an
+//!    unsized vstruct, a #[counted] array, a #[whole] or #[grown] value.
+//!  - SelfSized: one whose head says how long it is, so its address alone
+//!    reaches all of it - an unsized vstruct, a DstArray, a struct ending in
+//!    one (#[derive(SelfSized)]). Its head is DstHead's, Head<T>.
 //!  - A container: an unsized vstruct whose entries follow its start[]:
 //!    vstruct_container!()'s entries().
 //!
@@ -205,7 +207,7 @@ pub const fn align_max(a: usize, b: usize) -> usize {
 
 /// A header and the array after it, counted in elements: C's `T name[]`, as
 /// a DST - a #[counted] type, a DstArray.
-pub trait FlexArray: SelfSized {
+pub trait FlexArray: SelfSized + DstHead {
     /// What the array holds.
     type Elem;
 
@@ -215,7 +217,7 @@ pub trait FlexArray: SelfSized {
 
 /// A header and u64s after it holding DSTs - entries, keys: vstructs.h's, an
 /// #[unsized_vstruct].
-pub trait VStruct: SelfSized {
+pub trait VStruct: SelfSized + DstHead<Head: Plain> {
     /// Its header's count of u64s.
     fn u64s(&self) -> usize;
 
@@ -445,8 +447,7 @@ impl std::error::Error for VStructError {}
 /// aligned, or that many, or it claims fewer than the least T.
 pub fn parse_at<T>(bytes: &[u8], len: impl FnOnce(&T::Head) -> usize) -> Result<&T, VStructError>
 where
-    T: Unsized + ?Sized,
-    T::Head: Plain,
+    T: Unsized + DstHead<Head: Plain> + ?Sized,
 {
     let ty = core::any::type_name::<T>();
     let head = size_of::<T::Head>();
@@ -683,14 +684,18 @@ macro_rules! vstruct_family {
             }
         }
 
+        impl<$($g)*> DstHead for $ty {
+            type Head = $head;
+        }
+
         // SAFETY: its head's fields, each Plain, then its tail at TAIL - as
         // asserted where it's defined - Plain; from_raw() makes the tail as
         // long as @bytes past TAIL
         unsafe impl<$($g)*> Unsized for $ty {
-            type Head = $head;
             type Elem = $elem;
             const TAIL: usize = $tail_at;
             const MIN_BYTES: usize = size_of::<$head>();
+            const ALIGN: usize = align_of::<$head>();
             #[inline]
             fn from_raw(p: *const u8, bytes: usize) -> *const Self {
                 let n = (bytes - Self::TAIL) / size_of::<$elem>();
@@ -875,14 +880,18 @@ macro_rules! vstruct_family {
 
     // In state @st, Unsized as its definition there, @def, is
     (@unsized $name:ident, $st:ident, $def:ident) => { const _: () = {
-        use $crate::util::vstructs::{$st, Unsized};
+        use $crate::util::vstructs::{$st, DstHead, Unsized};
+
+        impl DstHead for $name<$st> {
+            type Head = <$def as DstHead>::Head;
+        }
 
         // SAFETY: #[repr(transparent)] over its definition, whose Unsized it is
         unsafe impl Unsized for $name<$st> {
-            type Head = <$def as Unsized>::Head;
             type Elem = <$def as Unsized>::Elem;
             const TAIL: usize = <$def as Unsized>::TAIL;
             const MIN_BYTES: usize = <$def as Unsized>::MIN_BYTES;
+            const ALIGN: usize = <$def as Unsized>::ALIGN;
             #[inline]
             fn from_raw(p: *const u8, bytes: usize) -> *const Self {
                 <$def as Unsized>::from_raw(p, bytes) as *const Self
@@ -911,7 +920,7 @@ macro_rules! vstruct_family {
         // SAFETY: its header's count says how long it is, and that's a
         // private field - Deref is to the header, to read
         unsafe impl SelfSized for $name<$st> {
-            const ALIGN: usize = align_max(align_of::<<Self as Unsized>::Head>(), align_of::<<Self as Unsized>::Elem>());
+            const ALIGN: usize = align_max(<Self as Unsized>::ALIGN, align_of::<<Self as Unsized>::Elem>());
             const MIN_BYTES: usize = <Self as Unsized>::MIN_BYTES;
 
             unsafe fn from_thin(p: *const ()) -> *const Self {
@@ -1020,17 +1029,23 @@ macro_rules! vstruct_family {
 /// it: where the array starts and what it holds are X<S>'s, its Unsized
 /// TAIL and Elem, and how many, the head's.
 pub trait CountedHead: Plain {
-    type Of<S: State>: ?Sized + Unsized<Head = Self>;
+    type Of<S: State>: ?Sized + Unsized + DstHead<Head = Self>;
 
     /// How many elements its array holds, by its count.
     fn nr(&self) -> usize;
 }
 
-/// Unsized type T's head, by T's name: for an unsized vstruct or a
-/// #[counted] type, the struct as written - the header, its tail a
-/// zero-length flexible array. What a pointer to one, and a struct that
-/// embeds one, names.
-pub type Head<T> = <T as Unsized>::Head;
+/// A DST's head: what precedes its tail, and what it derefs to. For an
+/// unsized vstruct or a #[counted] type, the struct as written - the header,
+/// its tail a zero-length flexible array; a grown type's floor; a DstArray's
+/// header.
+pub trait DstHead {
+    type Head;
+}
+
+/// T's head, by T's name: what a pointer to one, and a struct that embeds
+/// one, names.
+pub type Head<T> = <T as DstHead>::Head;
 
 /// A DST of ours, in a state: a sized head's fields, inline, then its tail -
 /// a slice. Its references are fat, with the tail's length, so a reference
@@ -1047,16 +1062,14 @@ pub type Head<T> = <T as Unsized>::Head;
 /// tail from where it starts, TAIL, inside its head (#[whole(tail = ..)]).
 ///
 /// # Safety
-/// Self is Head's fields, every bit pattern of each valid, then its tail at
-/// TAIL - size_of::<Head>(), or within it; from_raw() and from_raw_mut() make
-/// a pointer to all of @bytes, which are no fewer than MIN_BYTES - a sized
-/// Self's, to its first size_of::<Self>(), its MIN_BYTES: a reference from it
-/// claims them, and none past, if they're a whole number of Self's alignment
-/// long too. MIN_BYTES is no fewer than Head's.
+/// Self is its head's fields, every bit pattern of each valid, then its tail
+/// at TAIL - where the head ends, or within it; from_raw() and from_raw_mut()
+/// make a pointer to all of @bytes, which are no fewer than MIN_BYTES - a
+/// sized Self's, to its first size_of::<Self>(), its MIN_BYTES: a reference
+/// from it claims them, and none past, if they're a whole number of ALIGN
+/// long too. MIN_BYTES is no fewer than its head's size, and ALIGN is its
+/// head's alignment.
 pub unsafe trait Unsized {
-    /// What precedes the tail: what it derefs to.
-    type Head;
-
     /// What its tail holds.
     type Elem: Plain;
 
@@ -1066,6 +1079,9 @@ pub unsafe trait Unsized {
     /// The fewest bytes a reference from it claims: a sized Self's size, an
     /// unsized one's head's.
     const MIN_BYTES: usize;
+
+    /// Its alignment, its head's: what align_of() can't say of a DST.
+    const ALIGN: usize;
 
     /// The value at @p, @bytes long.
     fn from_raw(p: *const u8, bytes: usize) -> *const Self;
@@ -1092,10 +1108,9 @@ pub fn from_bytes_mut<T: ArmAt + Unsized + ?Sized>(bytes: &mut [u8]) -> Result<&
 /// elements past the head, and of its alignment, the head's, so
 /// size_of_val() is @b's length and the reference claims none past.
 fn fits<T: Unsized + ?Sized>(b: &[u8]) -> bool {
-    let align = align_of::<T::Head>();
     b.len() >= T::MIN_BYTES
-        && b.as_ptr() as usize % align == 0
-        && b.len() % align == 0
+        && b.as_ptr() as usize % T::ALIGN == 0
+        && b.len() % T::ALIGN == 0
         && (b.len() - T::TAIL) % size_of::<T::Elem>() == 0
 }
 
@@ -1104,11 +1119,11 @@ fn fits<T: Unsized + ?Sized>(b: &[u8]) -> bool {
 /// with a partial element at its end would take. None if not even its head
 /// fits.
 pub fn whole_len<T: Unsized + ?Sized>(len: usize) -> Option<usize> {
-    let (head, align, elem) = (size_of::<T::Head>(), align_of::<T::Head>(), size_of::<T::Elem>());
+    let elem = size_of::<T::Elem>();
     let mut n = len.checked_sub(T::TAIL)?.checked_div(elem).unwrap_or(0);
     loop {
         let l = T::TAIL + n * elem;
-        if l >= head && l % align == 0 {
+        if l >= T::MIN_BYTES && l % T::ALIGN == 0 {
             return Some(l);
         }
         n = n.checked_sub(1)?;
@@ -1359,7 +1374,7 @@ impl<'a, E: Unsized + SelfSized + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
     #[inline]
     fn next(&mut self) -> Option<&'a E> {
         // the end, or a section's padding past its last entry
-        if self.rest.len() < size_of::<E::Head>() {
+        if self.rest.len() < <E as SelfSized>::MIN_BYTES {
             return None;
         }
         let e = unsafe { ThinRef::<'a, E>::from_raw(NonNull::from(self.rest).cast()) }.get();
@@ -1395,7 +1410,7 @@ impl<'a, E: Unsized + SelfSized + ?Sized + 'a> Iterator for ViewEntriesMut<'a, E
 
     #[inline]
     fn next(&mut self) -> Option<&'a mut E> {
-        if self.rest.len() < size_of::<E::Head>() {
+        if self.rest.len() < <E as SelfSized>::MIN_BYTES {
             return None;
         }
         let len = size_of_val(unsafe { ThinRef::<E>::from_raw(NonNull::from(&*self.rest).cast()) }.get());
@@ -1481,11 +1496,16 @@ impl<T: SizedArm> ArmRef for T {
 
 // SAFETY: a reference from it claims size_of::<T>() of @bytes, the first -
 // which a valid one has, being all of it - not all of them
-unsafe impl<T: SizedArm> Unsized for T {
+// its own head, its tail empty
+impl<T: SizedArm> DstHead for T {
     type Head = T;
+}
+
+unsafe impl<T: SizedArm> Unsized for T {
     type Elem = u8;
     const TAIL: usize = size_of::<T>();
     const MIN_BYTES: usize = size_of::<T>();
+    const ALIGN: usize = align_of::<T>();
 
     fn from_raw(p: *const u8, _bytes: usize) -> *const Self {
         p.cast()

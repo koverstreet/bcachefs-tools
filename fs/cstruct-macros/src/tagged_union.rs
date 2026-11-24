@@ -683,7 +683,7 @@ impl Gen<'_> {
         let doc = format!(" One of {name}'s arms, with the bytes its header says are its - as\n \
                            many as there are, for one written before its type grew: what\n \
                            {name}'s typed() gives.");
-        let head = quote!(::core::mem::size_of::<<Self as #vs::Unsized>::Head>());
+        let head = quote!(::core::mem::size_of::<<Self as #vs::DstHead>::Head>());
         let mut out = self.given_storage(&storages);
         out.extend(self.arms_enum(en_ref, &doc, quote!(#[derive(Clone, Copy)]),
                                   quote!(<'a, St: #vs::State = #vs::Validated>), |a| {

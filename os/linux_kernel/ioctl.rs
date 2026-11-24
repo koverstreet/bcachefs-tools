@@ -19,7 +19,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KVVec;
 use crate::util::ioctl::{dir, Ioctl};
-use crate::util::vstructs::{CountedHead, Head, Unsized};
+use crate::util::vstructs::{CountedHead, DstHead, Head, Unsized};
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -103,7 +103,7 @@ pub fn vstruct<I, T, R>(user: UserPtr, f: impl FnOnce(UserVstruct<T>) -> Result<
     -> Result<c_long, BchError>
 where
     I: Ioctl<Arg = Head<T>>,
-    T: ?Sized + Unsized,
+    T: ?Sized + Unsized + DstHead,
     R: IoctlRet,
 {
     Ok(f(UserVstruct { at: user, _t: PhantomData })?.ret())
@@ -176,7 +176,7 @@ pub struct UserVstruct<T: ?Sized> {
     _t: PhantomData<T>,
 }
 
-impl<T: ?Sized + Unsized> UserVstruct<T> where Head<T>: CountedHead {
+impl<T: ?Sized + Unsized + DstHead> UserVstruct<T> where Head<T>: CountedHead {
     /// The array after the head, as long as @head says.
     pub fn tail(&self, head: &Head<T>) -> UserArray<T::Elem> {
         UserArray {
@@ -187,13 +187,13 @@ impl<T: ?Sized + Unsized> UserVstruct<T> where Head<T>: CountedHead {
     }
 }
 
-impl<T: ?Sized + Unsized> UserVstruct<T> where Head<T>: FromBytes {
+impl<T: ?Sized + Unsized + DstHead> UserVstruct<T> where Head<T>: FromBytes {
     pub fn head(&self) -> Result<Head<T>, BchError> {
         Ok(UserSlice::new(self.at, size_of::<Head<T>>()).reader().read()?)
     }
 }
 
-impl<T: ?Sized + Unsized> UserVstruct<T> where Head<T>: AsBytes {
+impl<T: ?Sized + Unsized + DstHead> UserVstruct<T> where Head<T>: AsBytes {
     pub fn set_head(&self, head: &Head<T>) -> Result<(), BchError> {
         Ok(UserSlice::new(self.at, size_of::<Head<T>>()).writer().write(head)?)
     }
