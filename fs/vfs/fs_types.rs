@@ -7,7 +7,7 @@ use crate::locking::{Locked, Mutex, SpinLockIrq};
 use crate::published;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
-use crate::os::workqueue::DelayedWork;
+use crate::os::workqueue::RawDelayedWork;
 use crate::os::vfs_inode::{Live, VfsInode};
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
@@ -73,7 +73,7 @@ pub struct InodeInfo<St = Live> {
     pub ei_inode: c::VolatileInodeUnpacked,
 
     #[pin]
-    pub ei_writeback_timer: DelayedWork,
+    pub ei_writeback_timer: RawDelayedWork,
 }
 
 #[bch_enum(closed)]

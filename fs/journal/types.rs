@@ -31,7 +31,7 @@ use crate::os::kthread::Daemon;
 use crate::util::late::Late;
 use crate::{new_lock, published};
 use pin_init::pin_data;
-use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
+use crate::os::workqueue::{RawDelayedWork, ReffedWork, Workqueue, WqFlags};
 use cstruct_macros::{bitfield, bch_enum, placed, MaybeZeroable, Init, Late, BitfieldMembers};
 use nestify::nest;
 
@@ -534,7 +534,7 @@ nest! {
 
         #[pin]
         #[init(crate::journal::journal::WriteWork::init())]
-        pub write_work: DelayedWork,
+        pub write_work: RawDelayedWork,
         #[late(Workqueue::new(c"bcachefs_journal",
                               WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
                ENOMEM_fs_other_alloc)]

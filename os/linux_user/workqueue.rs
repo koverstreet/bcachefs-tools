@@ -15,7 +15,7 @@
 //! at its field: so C's pointer to it is had back as the ReffedWork, and its
 //! container() as the parent F runs on.
 //!
-//! DelayedWork is struct delayed_work, in a struct Rust defines and C may
+//! RawDelayedWork is struct delayed_work, in a struct Rust defines and C may
 //! share: the bare struct, initialized with its function as C's
 //! INIT_DELAYED_WORK(). fs_delayed_work!() declares one in bch_fs.
 //!
@@ -260,12 +260,12 @@ macro_rules! new_work {
     };
 }
 
-/// A DelayedWork's initializer, running C's @func: INIT_DELAYED_WORK(). @name
+/// A RawDelayedWork's initializer, running C's @func: INIT_DELAYED_WORK(). @name
 /// is the kernel port's, for its lockdep classes.
 #[macro_export]
 macro_rules! new_delayed_work {
     ($func:expr, $name:literal $(,)?) => {
-        $crate::os::workqueue::DelayedWork::new($func)
+        $crate::os::workqueue::RawDelayedWork::new($func)
     };
 }
 
@@ -274,16 +274,16 @@ mod work;
 pub(crate) use work::{OnQueue, Own, ReffedWork, WorkFunc};
 
 #[repr(transparent)]
-pub struct DelayedWork {
+pub struct RawDelayedWork {
     work: UnsafeCell<c::delayed_work>,
     _pin: PhantomPinned,
 }
 
 // SAFETY: the workqueue's to synchronize, from any thread
-unsafe impl Send for DelayedWork {}
-unsafe impl Sync for DelayedWork {}
+unsafe impl Send for RawDelayedWork {}
+unsafe impl Sync for RawDelayedWork {}
 
-impl DelayedWork {
+impl RawDelayedWork {
     /// INIT_DELAYED_WORK().
     #[doc(hidden)]
     pub fn new(func: WorkFn) -> impl ::pin_init::PinInit<Self> {

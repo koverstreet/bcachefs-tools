@@ -1165,10 +1165,10 @@ macro_rules! fs_delayed_work {
         $vis struct $name;
 
         impl $name {
-            $vis fn init() -> impl ::pin_init::PinInit<$crate::os::workqueue::DelayedWork> {
+            $vis fn init() -> impl ::pin_init::PinInit<$crate::os::workqueue::RawDelayedWork> {
                 #[cfg(kernel)]
                 {
-                    $crate::os::workqueue::DelayedWork::new(
+                    $crate::os::workqueue::RawDelayedWork::new(
                         Self::work_fn,
                         const { $crate::util::ffi::c_str(concat!(stringify!($name), "\0")) },
                         ::kernel::static_lock_class!(),
@@ -1176,7 +1176,7 @@ macro_rules! fs_delayed_work {
                         ::kernel::static_lock_class!())
                 }
                 #[cfg(not(kernel))]
-                $crate::os::workqueue::DelayedWork::new(Self::work_fn)
+                $crate::os::workqueue::RawDelayedWork::new(Self::work_fn)
             }
 
             $vis fn run($fs: &$crate::fs::Fs) $body
