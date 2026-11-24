@@ -1997,6 +1997,27 @@ impl<'t> BtreeIter<'t> {
         path.l[path.level() as usize].b.get().ok()?.map(|raw| BtreeNodeRef { raw })
     }
 
+    /// node_at_iter_level(), and where it ends - if the iterator's path holds
+    /// it: for a progress report.
+    pub(crate) fn node_end_at_iter_level(&self, t: &TransAttempt<'_, 't>) -> Option<(BtreeNodeRef, Bpos)> {
+        let paths = t.trans().paths();
+        let path = &paths[self.path];
+        let b = path.locked_btree_node(path.level() as usize)?;
+        Some((BtreeNodeRef::from(b), b.key().k.p))
+    }
+
+    /// @f of @node's key: the node the iterator's path holds at its level,
+    /// borrowed from the path table for the call.
+    pub(crate) fn node_key<R>(&self, t: &TransAttempt<'_, 't>, node: &BtreeNodeRef,
+                              f: impl FnOnce(BkeySC<'_, BtreePtrs>) -> R) -> R {
+        let paths = t.trans().paths();
+        let path = &paths[self.path];
+        let b = path.locked_btree_node(path.level() as usize)
+            .filter(|b| ptr::eq(b.node(), node.as_ptr()))
+            .expect("a node's key, the node its iterator's path holds");
+        f(BkeySC::from(b.key()).arm::<BtreePtrs>().expect("a btree node's key, its pointer"))
+    }
+
     /// The btree's key at the iterator's path's position - not the journal
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
     pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
@@ -2363,26 +2384,6 @@ pub(crate) struct BtreeNodeRef {
 }
 
 impl BtreeNodeRef {
-    pub(crate) fn level(&self) -> u32 {
-        unsafe { self.raw.as_ref().c.level.get().into() }
-    }
-
-    pub(crate) fn key(&self) -> &BkeyI {
-        // SAFETY: a node we hold
-        unsafe {
-            let b = self.raw.as_ref();
-            b.key(b.contents())
-        }
-    }
-
-    pub(crate) fn key_sc(&self) -> BkeySC<'_, BtreePtrs> {
-        BkeySC::from(self.key()).arm::<BtreePtrs>().expect("a btree node's key, its pointer")
-    }
-
-    pub(crate) fn btree_id(&self) -> Btree {
-        Btree(unsafe { self.raw.as_ref().c.btree_id.get() }.into())
-    }
-
     /// The node's identity, for telling whether it's the same node as
     /// before - not for getting back to it.
     pub(crate) fn addr(&self) -> usize {

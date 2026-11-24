@@ -48,7 +48,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     fn node_update_key(&self, iter: &mut BtreeIter<'a>, node: BtreeNodeRef, key: TransBkey<'_, 't>,
                        flags: CommitOpts, skip_triggers: bool) -> Result<(), BchError> {
         let trans = self.trans();
-        let level = node.level() as usize;
+        let level = usize::from(trans.paths()[iter.path].level());
 
         /*
          * Awkward - we can't rely on caller specifying BTREE_ITER_intent, and
@@ -66,7 +66,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                           flags: CommitOpts, skip_triggers: bool) -> Result<(), BchError> {
         let trans = self.trans();
         let fs = self.fs();
-        let level = node.level() as usize;
+        let level = usize::from(trans.paths()[iter.path].level());
         let (btree, new_node, old) = {
             let paths = trans.paths();
             let b = paths[iter.path].locked_btree_node(level)
@@ -163,7 +163,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         let trans = self.trans();
         let fs = self.fs();
-        let level = node.level() as usize;
+        let level = usize::from(trans.paths()[iter.path].level());
 
         let mut commit_lock = trans.mutex_lock(&mut trans.paths(), &fs.btree.interior_updates.commit_lock)?;
 

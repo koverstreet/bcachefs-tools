@@ -250,10 +250,10 @@ impl c::progress_indicator {
         passes::cancelled(fs)?;
         maybe_delay();
 
-        let Some(b) = iter.node_at_iter_level(t) else {
+        let Some((b, end)) = iter.node_end_at_iter_level(t) else {
             return Ok(());
         };
-        let pos = c::bbpos { btree: b.btree_id(), pos: b.key().k.p };
+        let pos = c::bbpos { btree: iter.btree(), pos: end };
 
         let print = self.state.write(|s| {
             s.seen += (b.addr() != s.last_node && pos > s.pos) as u64;

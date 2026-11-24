@@ -846,8 +846,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, 0, level - 1, BtreeIterFlags::empty());
         let b = node_iter.peek_ref(self)?.expect("the node a btree node pointer points to");
-        let mut n = self.bkey_reassemble_room(b.key_sc(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?
-            .into();
+        let mut n = node_iter.raw.node_key(self, &b, |k| {
+            self.bkey_reassemble_room(k, c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())
+        })?.into();
         f(&mut n)?;
         self.btree_node_update_key(node_iter.iter(), b, n, CommitFlags::NO_ENOSPC, false)
     }
@@ -978,7 +979,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                                                        flags: impl Into<CommitOpts>) -> Result<(), BchError> {
         let mut node_iter = BtreeNodeIter::new(self, btree, k.k.p, c::BTREE_MAX_DEPTH, level, BtreeIterFlags::empty());
         match node_iter.peek_ref(self)? {
-            Some(b) if btree_ptr_hash_val(b.key_sc()) == btree_ptr_hash_val(k) =>
+            Some(b) if node_iter.raw.node_key(self, &b, |b_k| btree_ptr_hash_val(b_k)) == btree_ptr_hash_val(k) =>
                 self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::WriteFlags::empty()),
             _ => Err(BchError::from(c::ENOENT)),
         }
