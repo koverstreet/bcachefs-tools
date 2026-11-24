@@ -44,6 +44,16 @@ impl<'a, T: ?Sized + SelfSized> From<&'a T> for ThinRef<'a, T> {
 }
 
 impl<'a, T: ?Sized + SelfSized> ThinRef<'a, T> {
+    /// What a word that's a T's address - a ThinBox's into_raw(), linked from
+    /// something readers walk - refers to.
+    ///
+    /// # Safety
+    /// @p is a valid T's address, live and changed only through atomics for
+    /// 'a.
+    pub unsafe fn from_raw(p: NonNull<()>) -> Self {
+        ThinRef { p, _t: PhantomData }
+    }
+
     pub fn get(self) -> &'a T {
         // SAFETY: a &'a T's address
         unsafe { &*T::from_thin(self.p.as_ptr()) }
