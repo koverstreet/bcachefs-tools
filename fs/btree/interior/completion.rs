@@ -28,7 +28,7 @@ use crate::fs_fatal_error;
 use crate::types::Le64;
 use crate::util::vstructs::{Head, SelfSized};
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
-            UpdateBox, UPDATE_NODES_MAX};
+            UpdateBox, WriteBlocked, UPDATE_NODES_MAX};
 
 impl InteriorUpdate<'_> {
     /*
@@ -126,21 +126,16 @@ impl InteriorUpdate<'_> {
          * write out our new nodes, but we won't make them visible until those
          * operations complete
          */
-        {
-            let mut g = fs.btree.interior_updates.lock.lock();
-            let mut blocked = write_blocked(b.node(), &mut g).cursor_mut();
+        WriteBlocked::drain(&mut fs.btree.interior_updates.lock.lock(), |g| write_blocked(b.node(), g), |g, p| {
+            p.set_mode(g, Mode::Update);
+            fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other);
 
-            while let Some(p) = blocked.remove_current() {
-                *unsafe { p.mode.protected_mut() } = Some(Mode::Update);
-                fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other);
-
-                /*
-                 * for flush_held_btree_writes() waiting on updates to flush or
-                 * nodes to be writeable:
-                 */
-                fs.btree.interior_updates.wait.wake();
-            }
-        }
+            /*
+             * for flush_held_btree_writes() waiting on updates to flush or
+             * nodes to be writeable:
+             */
+            fs.btree.interior_updates.wait.wake();
+        });
 
         b.flags.set_dirty(false);
         b.flags.set_need_write(false);
