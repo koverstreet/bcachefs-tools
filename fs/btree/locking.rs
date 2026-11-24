@@ -245,6 +245,12 @@ struct GetLocksFail {
 
 /* Btree node locking: */
 
+/// @lock's seq, for the paths that have its node, as its write lock goes: none
+/// if it's held for write again inside.
+fn write_unlock_seq(lock: &c::six_lock) -> Option<u32> {
+    (lock.write_lock_recurse.get() == 0).then(|| lock.seq.get())
+}
+
 impl BtreeTrans<'_> {
     /// How the transaction's paths - but @skip - hold @b, at @level.
     pub(crate) fn node_lock_counts(&self, paths: &Paths<'_>, skip: Option<PathIdx>,
@@ -275,35 +281,37 @@ impl BtreeTrans<'_> {
     /// node_unlock_write(), for the commit's hot path.
     #[inline(always)]
     pub(crate) fn node_unlock_write_inlined(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
-        let b = {
+        let (b, seq) = {
             let path = &paths[idx];
             ebug_assert!(path.locked_node(level).is_some() && path.write_locked(level),
                          "unlocking a node for write that the path hasn't write locked");
             ebug_assert!(path.lock_seq_matches(level), "unlocking a node for write: path's lock seq stale");
-            path.node(level).as_ptr()
+            let lock = path.unlocked_node(level).expect("a write locked level has its node").lock();
+            (path.node(level).as_ptr().cast_const(), write_unlock_seq(lock.six()))
         };
 
-        self.node_write_unlock_seqs(paths, unsafe { &*b });
+        self.node_write_unlock_seqs(paths, b, level, seq);
         paths[idx].unlock_write_level(level);
     }
 
+    /// The lock seqs of the paths that have @b at @level, as of @seq, advanced
+    /// as its write lock goes: none if it's held for write again inside.
     #[inline]
-    fn node_write_unlock_seqs(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common) {
-        let (level, seq) = (b.level.get() as usize, b.lock.six().seq.get());
+    fn node_write_unlock_seqs(&self, paths: &mut Paths<'_>, b: *const c::btree_bkey_cached_common, level: usize,
+                              seq: Option<u32>) {
+        let Some(seq) = seq else { return };
 
-        if b.lock.six().write_lock_recurse.get() == 0 {
-            for i in self.path_idxs() {
-                let linked = &mut paths[i];
-                if linked.has_node(level, b, seq) {
-                    linked.l[level].lock_seq = linked.l[level].lock_seq.wrapping_add(1);
-                }
+        for i in self.path_idxs() {
+            let linked = &mut paths[i];
+            if linked.has_node(level, b, seq) {
+                linked.l[level].lock_seq = linked.l[level].lock_seq.wrapping_add(1);
             }
         }
     }
 
     /// A write lock taken outside any path released: __bch2_btree_node_unlock_write().
     pub(crate) fn node_unlock_write_pathless(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common) {
-        self.node_write_unlock_seqs(paths, b);
+        self.node_write_unlock_seqs(paths, b, b.level.get() as usize, write_unlock_seq(b.lock.six()));
         unsafe { crate::locking::six::six_unlock_ip(b.lock.six(), c::SixLockType::SIX_LOCK_write, crate::ret_ip!()) };
     }
 
