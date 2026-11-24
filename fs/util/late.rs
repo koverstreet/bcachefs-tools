@@ -19,6 +19,13 @@ pub trait LateInit: ::pin_init::Zeroable {
     fn is_made(&self) -> bool;
 }
 
+/// What a made T does as its filesystem stops, before teardown frees what its
+/// work uses: a workqueue drains, so its destroy, as it drops, has nothing
+/// left to run.
+pub trait LateStop {
+    fn stop(&self) {}
+}
+
 /// The lock a Late is made under: init() takes its guard.
 pub trait LateLock {
     type Guard<'a>;
@@ -57,6 +64,13 @@ impl<T: LateInit, L: LateLock> Late<T, L> {
 
     pub fn is_made(&self) -> bool {
         unsafe { (*self.0.get()).is_made() }
+    }
+
+    /// Its T stopped, if it's made: see LateStop.
+    pub fn stop(&self) where T: LateStop {
+        if self.is_made() {
+            (**self).stop()
+        }
     }
 
     /// Dropped, and unmade again

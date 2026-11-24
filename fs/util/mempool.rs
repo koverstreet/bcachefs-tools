@@ -58,6 +58,8 @@ impl<A: AllocGfp + Copy> LateInit for Mempool<A> {
     }
 }
 
+impl<A: AllocGfp + Copy> crate::util::late::LateStop for Mempool<A> {}
+
 /// @layout's bytes from @alloc: zeroed, if @gfp has __GFP_ZERO.
 fn element_alloc<A: AllocGfp>(alloc: &A, layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
     alloc.allocate_gfp(layout, gfp).ok().map(NonNull::cast)

@@ -3,9 +3,9 @@
 //! declared on its fields - `#[late(EXPR)]` on a `Late<T>`, made by EXPR, a
 //! PinInit<T, BchError>, or `#[late(EXPR, ERRCODE)]`, its failure
 //! Errcode::ERRCODE; a bare `#[late]` on a struct with its own - as
-//! `init_late()`, which makes them under the state lock, and `exit_late()`,
-//! which unmakes them where the struct's teardown wants them gone: a
-//! workqueue's destroy is its flush.
+//! `init_late()`, which makes them under the state lock, and `stop_late()`,
+//! which teardown calls before it frees what their work uses: each made one
+//! stopped - a workqueue drained - last first. They drop with the struct.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -20,7 +20,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     };
 
     let mut init = Vec::new();
-    let mut exit = Vec::new();
+    let mut stop = Vec::new();
     for f in fields {
         let Some(a) = f.attrs.iter().find(|a| a.path().is_ident("late")) else { continue };
         let Some(name) = &f.ident else {
@@ -29,14 +29,14 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         let cfg: Vec<_> = f.attrs.iter().filter(|a| a.path().is_ident("cfg")).collect();
         if let Meta::Path(_) = a.meta {
             init.push(quote!(#(#cfg)* self.#name.init_late(state)?;));
-            exit.push(quote!(#(#cfg)* unsafe { self.#name.exit_late() };));
+            stop.push(quote!(#(#cfg)* self.#name.stop_late();));
         } else {
             let expr = initializer(a, name)?;
             init.push(quote!(#(#cfg)* self.#name.init(state, || #expr)?;));
-            exit.push(quote!(#(#cfg)* unsafe { self.#name.unmake() };));
+            stop.push(quote!(#(#cfg)* self.#name.stop();));
         }
     }
-    exit.reverse();
+    stop.reverse();
 
     let (impl_g, ty_g, where_c) = input.generics.split_for_impl();
     Ok(quote! {
@@ -49,12 +49,9 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
                 Ok(())
             }
 
-            /// Its #[late] fields unmade, last first.
-            ///
-            /// # Safety
-            /// Nothing uses them any more.
-            pub unsafe fn exit_late(&self) {
-                #(#exit)*
+            /// Its made #[late] fields stopped, last first: see #[derive(Late)].
+            pub fn stop_late(&self) {
+                #(#stop)*
             }
         }
     })

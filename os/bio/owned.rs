@@ -602,6 +602,8 @@ impl<T: HasBio> crate::util::late::LateInit for BioSet<T> {
     }
 }
 
+impl<T: HasBio> crate::util::late::LateStop for BioSet<T> {}
+
 /// @A: what a box with its bvecs inline is freed to; a bioset's is put to its
 /// set. 'a: as long as what it was made of may be borrowed - a clone's
 /// source - for most, 'static.

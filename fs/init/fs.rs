@@ -917,9 +917,8 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     fs.btree_write_buffer_stop();
     fs.btree.async_ops.free_pending();
     free_fsck_errs(fs);
-    // each workqueue's destroy is its flush: before the exits free what their
-    // work uses
-    unsafe { fs.exit_late() };
+    // the workqueues drained, before the exits free what their work uses
+    fs.stop_late();
     reconcile_exit(fs);
     ec_exit(fs);
     fs.counters_recent.cancel_sync();

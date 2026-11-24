@@ -69,6 +69,12 @@ impl crate::util::late::LateInit for Workqueue {
     }
 }
 
+impl crate::util::late::LateStop for Workqueue {
+    fn stop(&self) {
+        self.drain()
+    }
+}
+
 impl Workqueue {
     /// Workqueue @name, running @max_active of its work at once (0: the
     /// default): alloc_workqueue(). Its failure is the caller's to name, as
