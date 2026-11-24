@@ -330,7 +330,7 @@ pub enum Spawn<'q, 'n> {
 
 #[repr(C)]
 #[pin_data]
-struct Header {
+pub(crate) struct Header {
     #[pin]
     work:      RawWork,
     waiting:   AtomicPtr<Done>,
