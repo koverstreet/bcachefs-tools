@@ -193,8 +193,73 @@ pub(crate) fn derive_tear_safe(input: TokenStream) -> Result<TokenStream, String
     })
 }
 
+/// #[derive(SelfSized)], on a #[repr(C)] struct ending in a SelfSized DST of
+/// ours: as long as that says, its fields before it sized. Its offset is
+/// LAST_AT, the last field's name uppercased: where it is in a sized twin of
+/// the struct whose last field has its head and its alignment.
+pub(crate) fn derive_self_sized(input: TokenStream) -> Result<TokenStream, String> {
+    let item: syn::DeriveInput = syn::parse2(input).map_err(|e| e.to_string())?;
+    let name = &item.ident;
+    if !has_attr(&item, "repr", "C") {
+        return Err(format!("{name}: not #[repr(C)] - its last field's offset is its twin's only if laid out as written"));
+    }
+    if has_attr(&item, "repr", "packed") {
+        return Err(format!("{name}: #[repr(packed)] - its fields aren't where its twin's are"));
+    }
+    if !item.generics.params.is_empty() {
+        return Err(format!("{name}: generic - a twin can't be made of it"));
+    }
+    let syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(f), .. }) = &item.data else {
+        return Err(format!("{name}: not a struct with named fields"));
+    };
+    let (last, sized) = f.named.iter().collect::<Vec<_>>().split_last()
+        .map(|(l, s)| (*l, s.to_vec()))
+        .ok_or_else(|| format!("{name}: no fields"))?;
+    let (last_ident, last_ty) = (last.ident.as_ref().expect("a named field"), &last.ty);
+    if let Some(a) = f.named.iter().flat_map(|f| &f.attrs).find(|a| a.path().is_ident("cfg_attr")) {
+        return Err(format!("{name}: {} - what it expands to can't be put on its twin", a.to_token_stream()));
+    }
+    if last.attrs.iter().any(|a| a.path().is_ident("cfg")) {
+        return Err(format!("{name}: its last field, {last_ident}, is #[cfg] - it's the DST it ends in"));
+    }
+    // as many as the struct has, where it has them: a field it's built without
+    // is one its twin is
+    let sized = sized.iter().map(|f| {
+        let (i, t) = (&f.ident, &f.ty);
+        let cfgs = f.attrs.iter().filter(|a| a.path().is_ident("cfg"));
+        quote!(#(#cfgs)* #i: #t)
+    });
+    let at = format_ident!("{}_AT", last_ident.to_string().to_uppercase());
+    let vis = &item.vis;
+    let vs = vs();
+    Ok(quote! {
+        impl #name {
+            #vis const #at: usize = {
+                #[repr(C)]
+                struct Tail(<#last_ty as #vs::Unsized>::Head, [<#last_ty as #vs::Unsized>::Elem; 0]);
+                #[allow(dead_code)]
+                #[repr(C)]
+                struct Twin { #(#sized,)* #last_ident: Tail }
+                ::core::mem::offset_of!(Twin, #last_ident)
+            };
+        }
+
+        unsafe impl #vs::SelfSized for #name {
+            unsafe fn from_thin(p: *const ()) -> *const Self {
+                let last = unsafe { <#last_ty as #vs::SelfSized>::from_thin(p.byte_add(Self::#at)) };
+                ::core::ptr::slice_from_raw_parts(p, (last as *const [()]).len()) as *const Self
+            }
+        }
+    })
+}
+
+/// Whether @item has #[@attr(.., @arg, ..)] - @arg bare, or with arguments of
+/// its own: repr(C, align(8)) has C, and align.
 fn has_attr(item: &syn::DeriveInput, attr: &str, arg: &str) -> bool {
-    item.attrs.iter().any(|a| a.path().is_ident(attr) && a.parse_args::<Ident>().is_ok_and(|r| r == arg))
+    item.attrs.iter().filter(|a| a.path().is_ident(attr)).any(|a| {
+        a.parse_args_with(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|args| args.iter().any(|m| m.path().is_ident(arg)))
+    })
 }
 
 fn bounded(where_clause: Option<&syn::WhereClause>, tys: &[&syn::Type], tr: TokenStream) -> syn::WhereClause {
