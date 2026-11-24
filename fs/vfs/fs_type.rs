@@ -32,6 +32,7 @@ use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs::{Claimed, OpenFs};
+use crate::util::refcount::RefGuard;
 use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
 use crate::OptId;
 use crate::os::fs_context::{FsContext, FsParam, ParamValue};
@@ -55,7 +56,8 @@ impl SuperData for OpenFs {
     }
 
     unsafe fn from_raw(p: NonNull<Fs>) -> Self {
-        unsafe { OpenFs::from_raw(p) }
+        // SAFETY: into_raw()'s ref, handed back once
+        OpenFs::from_ref(unsafe { RefGuard::adopt(&p.as_ref().kobj) })
     }
 
     fn mounted_on(fs: &Fs) -> &MountedOn<Fs> {

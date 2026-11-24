@@ -37,7 +37,7 @@ use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
 use crate::os::kernel::READ;
 use crate::os::sched;
-use crate::os::kobject::{GroupList, KobjOwner, Kobject};
+use crate::os::kobject::{into_ref, GroupList, KobjOwner, Kobject};
 use crate::os::module::ModuleRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
@@ -45,8 +45,9 @@ use crate::util::place::PlacedDrop;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
 use crate::util::refcount::{RefGuard, WaitableRef};
+use crate::util::place::Placed;
 #[cfg(kernel)]
-use crate::util::{place::Placed, refcount::AtomicRef};
+use crate::util::refcount::AtomicRef;
 use core::ffi::CStr;
 use core::future::Future;
 use core::pin::Pin;
@@ -424,11 +425,12 @@ impl Fs {
 /// leaving their handles zeroed; on failure, it's exited.
 fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Holder>,
          user_key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
-    let c = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::ENOMEM_fs_alloc)?;
-    // nothing else reaches it till init_from() registers it - the OpenFs
-    // isn't used till then, but exits it if init_early() fails
-    let (fs, this) = unsafe { (OpenFs::from_raw(NonNull::new_unchecked(c)), Pin::new_unchecked(&mut *c)) };
-    this.init_early(sbs, opts, holder)?;
+    let mut b = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::ENOMEM_fs_alloc)?;
+    // nothing else reaches it till init_from() registers it; if init_early()
+    // fails, the OpenFs exits it
+    let early = b.as_pin_mut().init_early(sbs, opts, holder);
+    let fs = OpenFs::from_ref(into_ref(b));
+    early?;
     fs.init_from(sbs, user_key, out)?;
     Ok(fs)
 }
@@ -677,17 +679,14 @@ impl Fs {
     }
 }
 
-/// Exits the filesystem when dropped
-pub struct OpenFs(core::ptr::NonNull<Fs>);
-
-// SAFETY: offline fsck opens it in the ioctl and exits it in its kthread
-unsafe impl Send for OpenFs {}
+/// Exits the filesystem when dropped: its ref, put after, is the last of
+/// those it's opened with. None once exit() has it.
+pub struct OpenFs(Option<FsRef>);
 
 impl OpenFs {
-    /// # Safety
-    /// @fs is open, and this takes over its ref.
-    pub unsafe fn from_raw(fs: core::ptr::NonNull<Fs>) -> Self {
-        OpenFs(fs)
+    /// Open with @fs: the ref alloc() made, or into_raw()'s, handed back.
+    pub(crate) fn from_ref(fs: FsRef) -> Self {
+        OpenFs(Some(fs))
     }
 
     /// @key unwraps the superblock's key, instead of the keyring
@@ -722,13 +721,17 @@ impl OpenFs {
         Ok(sbs)
     }
 
-    pub fn into_raw(self) -> core::ptr::NonNull<Fs> {
-        core::mem::ManuallyDrop::new(self).0
+    /// Its ref given up, for C to hold: from_ref() has it back.
+    pub fn into_raw(mut self) -> NonNull<Fs> {
+        let fs = self.0.take().expect("an OpenFs, exited");
+        let p = NonNull::from(&*fs);
+        fs.leak();
+        p
     }
 
     /// Drop discards the error
-    pub fn exit(self) -> i32 {
-        ret_to_c(unsafe { exit(self.into_raw()) })
+    pub fn exit(mut self) -> i32 {
+        ret_to_c(exit(self.0.take().expect("an OpenFs, exited")))
     }
 }
 
@@ -792,13 +795,15 @@ impl core::ops::Deref for OpenFs {
     type Target = Fs;
 
     fn deref(&self) -> &Fs {
-        unsafe { self.0.as_ref() }
+        self.0.as_deref().expect("an OpenFs, exited")
     }
 }
 
 impl Drop for OpenFs {
     fn drop(&mut self) {
-        let _ = unsafe { exit(self.0) };
+        if let Some(fs) = self.0.take() {
+            let _ = exit(fs);
+        }
     }
 }
 
@@ -855,16 +860,12 @@ impl Fs {
     }
 }
 
-/// Stopped, its devices freed, and its kobject's last ref put: its release
-/// frees it.
-///
-/// # Safety
-/// @p is the caller's to exit: nothing uses it after.
-unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
-    let fs = unsafe { p.as_ref() };
+/// Stopped, its devices freed, and @fs put: the last ref, its release frees
+/// it.
+fn exit(fs: FsRef) -> Result<(), BchError> {
     let ret = fs.stop();
 
-    crate::init::registry::deregister(fs);
+    crate::init::registry::deregister(&fs);
 
     fs.journal.writes_in_flight.stop();
     fs.journal.writes_in_flight.wait();
@@ -881,9 +882,9 @@ unsafe fn exit(p: NonNull<Fs>) -> Result<(), BchError> {
     // their drops are a grace period on, and need what the filesystem frees
     crate::util::maybe_rcu_alloc::barrier();
 
-    bch_verbose!(fs, "shutdown complete");
+    bch_verbose!(&*fs, "shutdown complete");
 
-    unsafe { Kobject::put((&raw const (*p.as_ptr()).kobj).cast()) };
+    drop(fs);
     ret
 }
 
@@ -1141,6 +1142,9 @@ impl Fs {
         }
     }
 }
+
+/// A ref on the Fs itself: its last put releases it.
+pub type FsRef = RefGuard<Placed<Kobject, crate::at!(Fs.kobj)>>;
 
 #[cfg(kernel)]
 pub(crate) type RoRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Fs.ro_ref)>>;

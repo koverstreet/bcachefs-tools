@@ -370,15 +370,9 @@ use crate::data_structures::array_vec::LenUint;
 pub type KVec<T> = Vec<T, Kmalloc>;
 pub type KVVec<T> = Vec<T, KVmalloc>;
 
-/// A @T for C to hold: a MaybeRcuAlloc's, kvmalloc()'d, given up to a raw
-/// pointer, which MaybeRcuAlloc::from_raw() takes back.
-pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
-    MaybeRcuAlloc::<T, KVmalloc>::new(init).map(|b| b.into_raw().as_ptr())
-}
-
-/// alloc_pinned(), the allocation failing with @err - @init with its own.
+/// A @T, kvmalloc()'d, the allocation failing with @err - @init with its own.
 pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::Errcode)
-    -> Result<*mut T, crate::errcode::BchError>
+    -> Result<MaybeRcuAlloc<T, KVmalloc>, crate::errcode::BchError>
 {
     enum Failed {
         Alloc,
@@ -391,7 +385,7 @@ pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchE
     }
 
     let init = unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(Failed::Init)) };
-    alloc_pinned(init).map_err(|e| match e {
+    MaybeRcuAlloc::new(init).map_err(|e| match e {
         Failed::Alloc   => err.into(),
         Failed::Init(e) => e,
     })
