@@ -26,7 +26,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
-use crate::util::vstructs::{FakeDst, Head};
+use crate::util::vstructs::Head;
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
             UpdateBox, WriteBlocked, UPDATE_NODES_MAX};
 
@@ -59,7 +59,8 @@ impl InteriorUpdate<'_> {
      */
     pub(super) fn emit_new_node_key(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
-        let sectors = (n.contents().data().bytes().next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
+        let bytes = size_of::<Head<c::btree_node>>() + n.contents().data().keys.u64s() * size_of::<u64>();
+        let sectors = (bytes.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
         n.update_key(|k| if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
             p.v_mut().sectors_written = crate::types::Le16::new(sectors);

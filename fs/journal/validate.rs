@@ -14,7 +14,7 @@ use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::SbErrorId;
 use crate::sb::members::DevName;
 use crate::util::log::LogMsg;
-use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef, FakeDst,
+use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
                             FakeVStruct, Head, Unvalidated, VStructError, from_bytes};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
@@ -666,7 +666,7 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
         return fs.throw(Errcode::EINVAL_journal_validate_version_incompatible);
     }
 
-    let bytes = h.bytes();
+    let bytes = size_of::<Head<c::jset>>() + h.u64s() * size_of::<u64>();
     let max = (bucket_sectors_left as usize) << 9;
 
     if journal_entry_err_on!(ctx, bytes > max, jset_past_bucket_end,

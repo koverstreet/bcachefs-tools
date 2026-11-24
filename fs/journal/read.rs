@@ -30,7 +30,7 @@ use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
-use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, FakeDst, FakeVStruct, Head, SelfSized,
+use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, FakeVStruct, Head, SelfSized,
                             Unvalidated, Validated};
 use crate::os::workqueue::Queue;
 use crate::util::ToText;
@@ -168,13 +168,18 @@ impl Replay {
         self.jset_unvalidated().datetime()
     }
 
+    /// As its header says: what new() copied in.
+    fn jset_len(&self) -> usize {
+        size_of::<Head<c::jset>>() + self.j.u64s() * size_of::<u64>()
+    }
+
     fn jset_bytes(&self) -> &[u8] {
-        let bytes = self.j.bytes();
+        let bytes = self.jset_len();
         unsafe { core::slice::from_raw_parts((&raw const (*self.0.as_ptr()).j).cast(), bytes) }
     }
 
     fn jset_bytes_mut(&mut self) -> &mut [u8] {
-        let bytes = self.j.bytes();
+        let bytes = self.jset_len();
         unsafe { core::slice::from_raw_parts_mut((&raw mut (*self.0.as_ptr()).j).cast(), bytes) }
     }
 
@@ -803,8 +808,8 @@ impl<'a> DevReader<'a> {
             let j = &mut buf[((offset - start) << 9) as usize..];
             let h = cast_plain_mut::<Head<c::jset>>(j).expect("a jset's header");
 
-            let sectors = match validate::jset_validate_early(fs, Some(ca), h, offset, (end - offset) as u32)? {
-                Jset::Ok => h.sectors(fs.block_bits()) as u64,
+            let j = match validate::jset_validate_early(fs, Some(ca), h, offset, (end - offset) as u32)? {
+                Jset::Ok => c::jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket"),
                 Jset::None | Jset::Bad => {
                     if !saw_bad {
                         return Ok(());
@@ -819,7 +824,8 @@ impl<'a> DevReader<'a> {
                 }
             };
 
-            let seq = h.seq.get();
+            let sectors = j.sectors(fs.block_bits()) as u64;
+            let seq = j.seq.get();
             if self.ring.set_cur_if_newest(bucket as u32, seq) {
                 ca.journal.sectors_free.set((end - offset - sectors) as u32);
             }
@@ -836,7 +842,6 @@ impl<'a> DevReader<'a> {
 
             self.ring.seqs_mut()[bucket] = seq;
 
-            let j = c::jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket");
             let (csum_good, csum) = jset_csum_good(fs, j);
 
             ca.account_io_completion(c::MemberErrorType::checksum, 0, csum_good);
@@ -1096,7 +1101,7 @@ fn journal_check_for_missing(fs: &Fs, entries: &JournalEntries, start_seq: u64, 
             if let Some(prev) = prev {
                 prt!(&mut buf, "\n{} at ", prev.seq());
                 journal_ptrs_to_text(&mut buf, fs, prev);
-                prt!(&mut buf, " size {}", prev.j.sectors(fs.block_bits()));
+                prt!(&mut buf, " size {}", prev.jset_unvalidated().sectors(fs.block_bits()));
             }
 
             prt!(&mut buf, "\n{} at ", i.seq());
