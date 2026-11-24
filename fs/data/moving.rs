@@ -242,7 +242,7 @@ impl<'a> MovingCtxt<'a> {
             wait_on_copygc,
             in_flight <- Gather::new(),
             io:             Default::default(),
-            runq:           pin_init::zeroed(),
+            runq           <- RunQueue::init(),
             updates:        UnsafeCell::new(Fifo::new()),
             write_next:     Cell::new(0),
         }? BchError);

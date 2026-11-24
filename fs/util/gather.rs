@@ -387,7 +387,7 @@ impl<T: Fold, W: Width> Gather<T, waiter::Async, W> {
         GatherWait { c: None, w: self.begin_wait() }.resume_on(at)
     }
 
-    /// wait(), resumed on @rq, a RunQueue::worked() one.
+    /// wait(), resumed on @rq, a worked one: set_queue()d.
     pub fn wait_on_run_queue<'a>(&'a self, rq: Pin<&'a RunQueue>) -> Resumed<'a, GatherWait<'a, T, W>> {
         GatherWait { c: None, w: self.begin_wait() }.resume_on_run_queue(rq)
     }

@@ -17,27 +17,28 @@ use super::{Header, TaskRef};
 use crate::c;
 use crate::os::workqueue::{run_raw, Queue, WorkAt};
 use crate::util::futex::EventCount;
-use crate::util::late::LateInit;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
-use cstruct_macros::MaybeZeroable;
+#[cfg(kernel)]
+use kernel::sync::SetOnce;
+#[cfg(not(kernel))]
+use bcachefs_shim::sync::SetOnce;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /// Pinned: its tasks hold its address. Its owner joins them all before it's
 /// gone.
 #[pin_data(PinnedDrop)]
-#[derive(MaybeZeroable)]
 pub struct RunQueue {
     /// Newest first, through runq_next.
     head:    AtomicPtr<Header>,
     events:  EventCount,
-    /// A worked one's: zeroed, and never queued, for a thread's
+    /// A worked one's, never queued for a thread's
     #[pin]
     work:    c::work_struct,
-    /// A worked one's: where its work is queued
-    queue:   Option<NonNull<Queue>>,
+    /// A worked one's: where its work is queued, from set_queue()
+    queue:   SetOnce<&'static Queue>,
     #[pin]
     _pinned: PhantomPinned,
 }
@@ -48,33 +49,40 @@ unsafe impl Send for RunQueue {}
 unsafe impl Sync for RunQueue {}
 
 impl RunQueue {
-    /// One run by a work item of its own, queued on @q.
+    /// Made with its owner: a thread's, or a worked one's, whose queue's set
+    /// once it's made.
+    pub fn init() -> impl PinInit<Self> {
+        pin_init!(RunQueue {
+            head:    AtomicPtr::new(core::ptr::null_mut()),
+            events:  EventCount::new(),
+            work     <- crate::new_work!(run_raw::<RunQueue>, "bcachefs run queue"),
+            queue:   SetOnce::new(),
+            _pinned: PhantomPinned,
+        })
+    }
+
+    /// Run by a work item of its own from here on, queued on @q - before
+    /// anything's dispatched on it.
     ///
     /// # Safety
     /// @q outlives every dispatch onto it, and is drained before the RunQueue's
     /// memory goes: a dispatch queues the work after pushing its task, which a
     /// run() under way may have taken already - so the work may still be
     /// queued, for nothing, once the last task's done.
-    pub unsafe fn worked(q: &Queue) -> impl PinInit<Self> {
-        let queue = Some(NonNull::from(q));
-        pin_init!(RunQueue {
-            head:    AtomicPtr::new(core::ptr::null_mut()),
-            events:  EventCount::new(),
-            work     <- crate::new_work!(run_raw::<RunQueue>, "bcachefs run queue"),
-            queue,
-            _pinned: PhantomPinned,
-        })
+    pub unsafe fn set_queue(&self, q: &Queue) {
+        let q: &'static Queue = unsafe { &*core::ptr::from_ref(q) };
+        assert!(self.queue.populate(q), "a RunQueue's queue set twice");
     }
 
-    /// A dispatch onto a worked() one: pushed, and its work queued.
+    /// A dispatch onto a worked one: pushed, and its work queued.
     ///
     /// # Safety
     /// As push()'s.
     pub(super) unsafe fn push_worked(&self, h: NonNull<Header>) {
-        let q = self.queue.expect("an await resumed on a RunQueue with no work of its own");
+        let q = *self.queue.as_ref().expect("an await resumed on a RunQueue with no work of its own");
         unsafe {
             self.push(h);
-            q.as_ref().queue_work(core::ptr::from_ref(&self.work).cast_mut());
+            q.queue_work(core::ptr::from_ref(&self.work).cast_mut());
         }
     }
 
@@ -122,13 +130,6 @@ impl RunQueue {
             oldest = unsafe { h.as_ref() }.runq_next.load(Ordering::Relaxed);
             unsafe { TaskRef(h).run(h.as_ref().target.get()) };
         }
-    }
-}
-
-/* a worked one's, made late: once it has its queue */
-impl LateInit for RunQueue {
-    fn is_made(&self) -> bool {
-        self.queue.is_some()
     }
 }
 

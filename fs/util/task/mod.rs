@@ -188,7 +188,7 @@ pub trait Resumable {
                   _pin: PhantomPinned }
     }
 
-    /// Resumed on @rq, a RunQueue::worked() one.
+    /// Resumed on @rq, a worked one: set_queue()d.
     fn resume_on_run_queue(self, rq: Pin<&RunQueue>) -> Resumed<'_, Self>
     where
         Self: Sized,
