@@ -174,7 +174,7 @@ impl BtreeTrans<'_> {
                 }
 
                 if needs_immediate_flush {
-                    paths[ck_path].key_cached().expect("a key cache entry, just created")
+                    paths[ck_path].locked_key_cached().expect("a key cache entry, just created")
                         .set_flag(c::BKEY_CACHED_IMMEDIATE_FLUSH);
                 }
 

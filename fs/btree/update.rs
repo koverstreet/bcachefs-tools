@@ -869,7 +869,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let u = &paths.updates()[i];
         if u.bits.cached() && (u.old_btree_u64s == 0 ||
                                key.k().key_type().is_deleted() ||
-                               paths[path_idx].key_cached().expect("a cached update's key cache entry")
+                               paths[path_idx].locked_key_cached().expect("a cached update's key cache entry")
                                    .immediate_flush()) {
             drop(paths);
             self.flush_new_cached_update(i, flags, ip)
@@ -1016,7 +1016,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             t.path_traverse(self, paths, iter.key_cache_path.get(), BtreeIterFlags::CACHED)?;
 
-            if paths[iter.key_cache_path.get()].key_cached().expect("a traversed key cache path's entry").dirty() {
+            if paths[iter.key_cache_path.get()].locked_key_cached().expect("a traversed key cache path's entry").dirty() {
                 self.fs().event_inc_trace(events::trans_restart_key_cache_raced, |out| prt!(out, "{}", t.fn_name()));
                 return Err(self.restart(Errcode::transaction_restart_key_cache_raced));
             }

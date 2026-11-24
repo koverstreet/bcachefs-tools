@@ -1252,14 +1252,6 @@ impl BtreePath {
         Some((LockedNode { node: unsafe { &*b }, _mode: PhantomData }, &mut self.l[level].iter))
     }
 
-    /// A cached path's key cache entry, which it holds locked: None if it's
-    /// not been traversed to one.
-    pub(crate) fn key_cached(&self) -> Option<&c::bkey_cached> {
-        ebug_assert!(self.cached());
-        let ck = self.l[0].b.get().ok().flatten()?;
-        Some(unsafe { &*ck.as_ptr().cast::<c::bkey_cached>() })
-    }
-
     pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
 
@@ -1472,7 +1464,7 @@ impl BtreeTrans<'_> {
         }
 
         let path = &paths[idx];
-        let key = path.key_cached().expect("a relocked key cache path's entry").key.get();
+        let key = path.locked_key_cached().expect("a relocked key cache path's entry").key.get();
         assert!(Btree(key.btree_id) == path.btree_id() && key.pos == path.pos);
 
         if !locked {
