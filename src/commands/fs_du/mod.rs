@@ -7,6 +7,7 @@
 //! snapshot lookup every snapshot-filtered query starts from.
 
 mod exact;
+mod unvalidated;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
