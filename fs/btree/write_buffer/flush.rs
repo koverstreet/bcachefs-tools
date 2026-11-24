@@ -14,7 +14,6 @@ use crate::c::JournalFlag as Journal;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Btree};
-use crate::util::vstructs::plain_bytes;
 use crate::locking::MemallocFlags;
 use crate::data_structures::sort::heapsort_by_lt;
 use crate::util::alloc::KVVec;
@@ -434,11 +433,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
 
     sorted.clear();
     for i in keys.idxs() {
-        let mut r = ::pin_init::zeroed::<c::wb_key_ref>();
-        let p = keys.key(i).k.p;
-        r.key.pos_idx.idx = i as u32;
-        r.key.pos_idx.pos = plain_bytes(&p).try_into().expect("a bpos's bytes");
-
+        let r = c::wb_key_ref::new(i, keys.key(i).k.p);
         if sorted.push_within_capacity(r).is_err() {
             panic!("Overflowed wb->sorted at {}, flushing size {}", sorted.len(), keys.len());
         }

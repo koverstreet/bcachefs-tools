@@ -43,7 +43,6 @@ use crate::{btree_trans, new_lock, prt};
 use core::mem::size_of;
 use core::sync::atomic::fence;
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
-use nestify::nest;
 use pin_init::pin_data;
 
 /*
@@ -84,49 +83,32 @@ pub const BTREE_WRITE_BUFERED_VAL_U64s_MAX: u32 = 4;
  * Each bch_fs_btree_write_buffer is per-btree, so individual key entries don't
  * need to carry a btree id — it's implicit in the containing buffer.
  */
-#[cfg(target_endian = "little")]
-nest! {
-    #[derive(Clone, Copy, MaybeZeroable)]*
-    #[repr(C)]
-    pub struct wb_key_ref {
-        #>[repr(C)]
-        pub key: pub union wb_key_ref_key {
-            #>[repr(C, packed)]
-            pub pos_idx: pub struct wb_key_ref_pos_idx {
-                pub idx: u32,
-                pub pos: [u8; size_of::<Bpos>()],
-            },
-            #>[repr(C)]
-            pub words: pub struct wb_key_ref_words {
-                pub lo: u64,
-                pub mi: u64,
-                pub hi: u64,
-            },
-        },
-    }
+/// A key's ref in a flush's sort: its pos's bytes and its index, laid over
+/// three words that compare as one 192 bit integer, hi:mi:lo - so by pos,
+/// then index, the index the low 32 bits of lo.
+#[derive(Clone, Copy, MaybeZeroable)]
+#[repr(C)]
+pub struct wb_key_ref {
+    words: [u64; 3],
 }
 
+/* Where the index and the pos are in a ref's bytes, and which word is which */
+#[cfg(target_endian = "little")]
+const REF_IDX: core::ops::Range<usize> = 0..4;
+#[cfg(target_endian = "little")]
+const REF_POS: core::ops::Range<usize> = 4..4 + size_of::<Bpos>();
+#[cfg(target_endian = "little")]
+const REF_HI_MI_LO: [usize; 3] = [2, 1, 0];
+
 #[cfg(target_endian = "big")]
-nest! {
-    #[derive(Clone, Copy, MaybeZeroable)]*
-    #[repr(C)]
-    pub struct wb_key_ref {
-        #>[repr(C)]
-        pub key: pub union wb_key_ref_key {
-            #>[repr(C, packed)]
-            pub pos_idx: pub struct wb_key_ref_pos_idx {
-                pub pos: [u8; size_of::<Bpos>()],
-                pub idx: u32,
-            },
-            #>[repr(C)]
-            pub words: pub struct wb_key_ref_words {
-                pub hi: u64,
-                pub mi: u64,
-                pub lo: u64,
-            },
-        },
-    }
-}
+const REF_POS: core::ops::Range<usize> = 0..size_of::<Bpos>();
+#[cfg(target_endian = "big")]
+const REF_IDX: core::ops::Range<usize> = size_of::<Bpos>()..size_of::<Bpos>() + 4;
+#[cfg(target_endian = "big")]
+const REF_HI_MI_LO: [usize; 3] = [0, 1, 2];
+
+const _: () = assert!(REF_IDX.end - REF_IDX.start == size_of::<u32>() &&
+                      REF_IDX.end - REF_IDX.start + REF_POS.end - REF_POS.start == size_of::<wb_key_ref>());
 
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]

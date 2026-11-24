@@ -7,6 +7,8 @@ use crate::util::alloc::{Flags, AllocError, KVVec};
 use crate::os::kernel::prefetch;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
+use crate::format::Bpos;
+use super::{REF_HI_MI_LO, REF_IDX, REF_POS};
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of};
 use core::ops::{Deref, Range};
@@ -261,12 +263,21 @@ impl<'a> Shard<'a> {
 }
 
 impl c::wb_key_ref {
+    /// The ref of the key at @idx, at @pos.
+    pub(super) fn new(idx: usize, pos: Bpos) -> Self {
+        let mut r = c::wb_key_ref { words: [0; 3] };
+        let b = plain_bytes_mut(&mut r.words[..]);
+        b[REF_IDX].copy_from_slice(&u32::try_from(idx).expect("a write buffer key's index, in 32 bits").to_ne_bytes());
+        b[REF_POS].copy_from_slice(plain_bytes(&pos));
+        r
+    }
+
     pub(super) fn idx(&self) -> usize {
-        unsafe { self.key.pos_idx.idx as usize }
+        u32::from_ne_bytes(plain_bytes(&self.words[..])[REF_IDX].try_into().expect("4 bytes")) as usize
     }
 
     pub(super) fn words(&self) -> (u64, u64, u64) {
-        let w = unsafe { self.key.words };
-        (w.hi, w.mi, w.lo)
+        let [hi, mi, lo] = REF_HI_MI_LO.map(|i| self.words[i]);
+        (hi, mi, lo)
     }
 }
