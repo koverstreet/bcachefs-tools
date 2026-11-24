@@ -130,7 +130,7 @@ impl c::btree_evicted_size {
     }
 
     fn slot(&self, hash: u64) -> Option<&AtomicU64> {
-        let t = self.entries.as_deref()?;
+        let t = self.entries.as_ref()?;
         Some(&t[hash as usize & (t.len() - 1)])
     }
 
@@ -147,8 +147,9 @@ impl c::btree_evicted_size {
         ((entry >> 16) == (hash & c::BTREE_EVICTED_SIZE_HASH_MASK)).then_some(entry as u16)
     }
 
-    /// The table for @fs, sized by its capacity: for btree_init_rw().
-    pub fn new(fs: &Fs) -> Result<Self, BchError> {
+    /// The table for @fs, sized by its capacity: for btree_init_rw(). Made
+    /// once - read meanwhile, by evictions, as none.
+    pub fn alloc(&self, fs: &Fs) -> Result<(), BchError> {
         /*
          * 128K-entry floor (1 MiB), then add one bit (double the table) for
          * each four doublings of the maximum possible btree node count above
@@ -166,7 +167,8 @@ impl c::btree_evicted_size {
             return fs.throw(Errcode::ENOMEM_fs_other_alloc);
         };
         // an AtomicU64 may be zero
-        Ok(Self { entries: Some(unsafe { entries.assume_init() }) })
+        self.entries.populate(unsafe { entries.assume_init() });
+        Ok(())
     }
 }
 

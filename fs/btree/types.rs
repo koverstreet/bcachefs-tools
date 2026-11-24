@@ -31,6 +31,10 @@ use crate::util::ratelimit::Ratelimit;
 use crate::util::vstructs::Validated;
 use crate::util::ffi::Opaque;
 use crate::os::percpu::PerCpu;
+#[cfg(kernel)]
+use kernel::sync::SetOnce;
+#[cfg(not(kernel))]
+use bcachefs_shim::sync::SetOnce;
 use crate::os::shrinker::Shrinker;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
@@ -951,13 +955,10 @@ pub enum BtreeNodeRewriteReason {
  * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
  */
 #[repr(C)]
-#[derive(pin_init::Zeroable)]
 pub struct btree_evicted_size {
     /* a power of 2 of them; none until btree_init_rw() */
-    pub entries: Option<Box<[AtomicU64], KVmalloc>>,
+    pub entries: SetOnce<Box<[AtomicU64], KVmalloc>>,
 }
-
-const _: () = assert!(size_of::<Option<Box<[AtomicU64], KVmalloc>>>() == size_of::<Box<[AtomicU64], KVmalloc>>());
 
 pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
 pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << cs::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
@@ -1006,6 +1007,7 @@ pub struct bch_fs_btree {
 
     #[pin]
     pub cache: cs::bch_fs_btree_cache,
+    #[init(cs::btree_evicted_size { entries: SetOnce::new() })]
     pub evicted_size: cs::btree_evicted_size,
     #[pin]
     pub key_cache: cs::bch_fs_btree_key_cache,

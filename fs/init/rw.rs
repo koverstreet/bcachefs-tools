@@ -235,18 +235,15 @@ impl StateLockWrite<'_> {
 
     pub fn init_rw(&self) -> Result<(), BchError> {
         let fs = self.fs();
-        let p = fs.as_ptr();
 
         if fs.flags.get(Flag::rw_init_done) {
             return Ok(());
         }
 
         fs.init_late(self).map_err(|e| fs.err(e))?;
-        unsafe {
-            btree_init_rw(p)?;
-            (*p).journal.init_rw()?;
-            (*p).journal.reclaim_start()?;
-        }
+        btree_init_rw(fs)?;
+        fs.journal.init_rw()?;
+        fs.journal.reclaim_start()?;
         fs.copygc_start()?;
         fs.reconcile_start()?;
 
