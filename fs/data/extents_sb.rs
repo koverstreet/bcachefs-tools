@@ -92,14 +92,14 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
 mod tests {
     use super::*;
     use crate::types::Le32;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, FakeVStruct, Head};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head};
 
     /// A section of @sizes, in @buf, as read: Unvalidated.
     fn section<'a>(buf: &'a mut [u64], sizes: &[u8]) -> &'a c::bch_sb_field_extent_type_u64s<Unvalidated> {
         let u64s = buf.len();
         let b = plain_bytes_mut(buf);
         let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
-        f.set_val_u64s(u64s);
+        f.set_u64s(u64s);
         f.type_ = Le32::new(c::SbFieldType::extent_type_u64s.0);
         b[size_of::<Head<c::bch_sb_field>>()..][..sizes.len()].copy_from_slice(sizes);
         c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap().arm().unwrap()
@@ -133,7 +133,7 @@ mod tests {
         // a superblock of no sections: its header
         let mut sb = [0u64; size_of::<Head<c::bch_sb>>() / size_of::<u64>()];
         let sb_bytes = plain_bytes_mut(&mut sb[..]);
-        cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_val_u64s(0);
+        cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_u64s(0);
         let sb = c::bch_sb::<Unvalidated>::from_bytes(sb_bytes).unwrap();
         let flags = ValidateFlags::from_bits_retain(0);
         let validate = |sizes: &[u8]| {

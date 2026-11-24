@@ -15,8 +15,6 @@
 //!  - FakeDst: sized, its own bytes say how far past them it runs - a DST
 //!    typed as its header, to be converted. A #[counted_by] array's
 //!    FakeFlexArray is; extent entries aren't - the superblock sizes those.
-//!  - FakeVStruct: a FakeDst by a count of u64s, vstructs.h's, 8 byte aligned:
-//!    vstruct!().
 //!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
 //!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
 //!    says how long it is, as an unsized vstruct's does.
@@ -229,15 +227,6 @@ pub trait FakeDst {
     }
 }
 
-/// vstructs.h's: a FakeDst by a count of u64s.
-///
-/// XXX: on the header, as FakeDst is; it goes for VStruct, a SelfSized DST
-/// counted in u64s.
-pub trait FakeVStruct: FakeDst {
-    /// Set the count; panics if its field can't hold @u64s.
-    fn set_val_u64s(&mut self, u64s: usize);
-}
-
 /// A type ending in a flexible array member, C's `T name[]`.
 ///
 /// XXX: sized, its array past its size_of, as FakeDst is; it goes for
@@ -315,8 +304,8 @@ pub(crate) use floored_by_self;
 /// the sized form: the count is its header's, T_head's, as the sized form
 /// has it - and each state's length is its reference's, size_of_val(). A
 /// count of its own reads as u64s(), on the header, which each state derefs
-/// to; it's no field to set but the container's, which has the room for it -
-/// FakeVStruct, on the header, builds one.
+/// to, and is set by set_u64s() on a header alone: no state derefs to it
+/// mutably, so it's set only by what has the room for it.
 macro_rules! vstruct {
     (unsized $head:ident, $($args:tt)*) => {
         $crate::util::vstructs::vstruct!($head, $($args)*);
@@ -331,10 +320,17 @@ macro_rules! vstruct {
     };
     (@count $head:ident, $count:ident $(, start = $start:expr)?) => {
         impl $head {
-            /// Its count, as a usize - to read: it changes only through what
-            /// holds the value, which has room for it to grow.
+            /// Its count, as a usize.
             pub fn $count(&self) -> usize {
                 $crate::util::vstructs::Count::count(&{ self.$count })
+            }
+
+            /// Set its count, by what holds it, which has room for it; panics
+            /// if its field can't hold @u64s.
+            #[inline]
+            pub fn set_u64s(&mut self, u64s: usize) {
+                self.$count = $crate::util::vstructs::Count::from_count(u64s).unwrap_or_else(||
+                    $crate::util::vstructs::count_overflow(stringify!($head), stringify!($count), u64s));
             }
         }
     };
@@ -362,17 +358,16 @@ macro_rules! vstruct {
                 ($start) + $crate::util::vstructs::Count::count(&{ self.$($count).+ }) * 8
             }
         }
-
-        impl $crate::util::vstructs::FakeVStruct for $t {
-            fn set_val_u64s(&mut self, u64s: usize) {
-                self.$($count).+ = $crate::util::vstructs::Count::from_count(u64s)
-                    .unwrap_or_else(|| panic!(concat!(stringify!($t), ": {} u64s don't fit in its ",
-                                                      stringify!($($count).+)), u64s));
-            }
-        }
     };
 }
 pub(crate) use vstruct;
+
+// Out of line: set_u64s() is on the btree's insert path
+#[cold]
+#[inline(never)]
+pub(crate) fn count_overflow(head: &str, field: &str, u64s: usize) -> ! {
+    panic!("{head}: {u64s} u64s don't fit in its {field}")
+}
 
 /// vstruct_container!(T, W, E): T's entries are unsized Es, from the start[]
 /// of W, the struct as written - an unsized vstruct's header, or a #[whole]
@@ -1758,7 +1753,7 @@ mod tests {
 
     fn entry(u64s: usize) -> Head<c::jset_entry> {
         let mut e = Head::<c::jset_entry>::default();
-        e.set_val_u64s(u64s);
+        e.set_u64s(u64s);
         e
     }
 
@@ -1769,7 +1764,7 @@ mod tests {
         let hdr = size_of::<Head<c::jset>>();
         let mut buf = vec![0u64; hdr / 8 + 6];
         let mut j = Head::<c::jset>::default();
-        j.set_val_u64s(6);
+        j.set_u64s(6);
         put(&mut buf, 0, &j);
         put(&mut buf, hdr, &entry(1));
         put(&mut buf, hdr + 16, &entry(second));
@@ -1831,15 +1826,15 @@ mod tests {
     #[test]
     fn vstruct_bytes() {
         let mut e = entry(0);
-        e.set_val_u64s(3);
+        e.set_u64s(3);
         assert_eq!(e.bytes(), 8 + 24);
 
         let mut f = Head::<c::bch_sb_field>::default();
-        f.set_val_u64s(3);
+        f.set_u64s(3);
         assert_eq!(f.bytes(), 24);
 
         let mut b = ::pin_init::zeroed::<Head<c::btree_node_entry>>();
-        b.set_val_u64s(3);
+        b.keys.set_u64s(3);
         assert_eq!(b.bytes(), 16 + 24 + 24);
     }
 
@@ -1848,10 +1843,10 @@ mod tests {
         let hdr = size_of::<Head<c::bch_sb>>();
         let mut buf = vec![0u64; hdr / 8 + 1];
         let mut sb = ::pin_init::zeroed::<Head<c::bch_sb>>();
-        sb.set_val_u64s(1);
+        sb.set_u64s(1);
         put(&mut buf, 0, &sb);
         let mut f = Head::<c::bch_sb_field>::default();
-        f.set_val_u64s(field_u64s);
+        f.set_u64s(field_u64s);
         put(&mut buf, hdr, &f);
         buf
     }
@@ -1910,7 +1905,7 @@ mod tests {
         let (hdr, start) = (size_of::<Head<c::bch_sb_field>>(), size_of::<c::bch_sb_field_clean>());
         let mut buf = vec![0u64; (hdr + start) / 8 + 2];
         let mut f = Head::<c::bch_sb_field>::default();
-        f.set_val_u64s(buf.len());
+        f.set_u64s(buf.len());
         f.type_ = Le32::new(c::SbFieldType::clean.0);
         put(&mut buf, 0, &f);
         put(&mut buf, hdr + start, &entry(1));
@@ -2022,13 +2017,13 @@ mod unsized_tests {
         let total: usize = sizes.iter().map(|&s| s as usize).sum();
         let mut buf = vec![0u64; 1 + total + extra];
         let mut h = Head::<tcont>::default();
-        h.set_val_u64s(total);
+        h.set_u64s(total);
         h.tag = 7;
         buf[0] = u64::from_le_bytes(plain_bytes(&h).try_into().unwrap());
         let mut at = 1;
         for (i, &s) in sizes.iter().enumerate() {
             let mut e = Head::<tent>::default();
-            e.set_val_u64s(s as usize);
+            e.set_u64s(s as usize);
             e.ty = i as u16 + 1;
             buf[at] = u64::from_le_bytes(plain_bytes(&e).try_into().unwrap());
             at += s as usize;

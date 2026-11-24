@@ -8,7 +8,7 @@ use core::mem::size_of;
 
 use crate::c;
 use crate::types::ArmOf;
-use crate::util::vstructs::{plain_bytes, FakeVStruct, Head, Plain};
+use crate::util::vstructs::{plain_bytes, Head, Plain};
 use zerocopy::IntoBytes;
 
 /// No room left in the buffer for the entry.
@@ -35,7 +35,7 @@ fn header(ty: c::JsetEntryType, btree_id: u8, level: u8, u64s: usize) -> u64 {
     e.type_ = ty.0 as u8;
     e.btree_id = btree_id;
     e.level = level;
-    e.set_val_u64s(u64s);
+    e.set_u64s(u64s);
 
     let mut h = 0u64;
     h.as_mut_bytes().copy_from_slice(plain_bytes(&e));

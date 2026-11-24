@@ -30,7 +30,7 @@ use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
-use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, FakeVStruct, Head, SelfSized,
+use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, Head, SelfSized,
                             Unvalidated, Validated};
 use crate::os::workqueue::Queue;
 use crate::util::ToText;
@@ -409,7 +409,7 @@ fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut c::jset<Unvalida
             src += len;
         }
 
-        cast_plain_mut::<Head<c::jset>>(j).expect("a jset's header").set_val_u64s((dst - JSET_HEAD) / 8);
+        cast_plain_mut::<Head<c::jset>>(j).expect("a jset's header").set_u64s((dst - JSET_HEAD) / 8);
     }
     c::jset::<Unvalidated>::from_bytes(j).expect("a jset, as long as its u64s says")
 }

@@ -15,7 +15,7 @@ use crate::sb::errors::SbErrorId;
 use crate::sb::members::DevName;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{bytes_of, cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
-                            FakeVStruct, Head, Unvalidated, VStructError, from_bytes};
+                            Head, Unvalidated, VStructError, from_bytes};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 
@@ -183,14 +183,14 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
     let next = HEAD + head(e).u64s() * 8;
 
     let cut = |e: &mut [u8]| {
-        head_mut(e).set_val_u64s((at - HEAD) / 8);
+        head_mut(e).set_u64s((at - HEAD) / 8);
         e[at..next].fill(0);
         journal_key_lost(ctx.fs, &ctx.from);
         Ok(Key::Deleted)
     };
     let drop = |e: &mut [u8], bytes: usize| {
         let u64s = head(e).u64s();
-        head_mut(e).set_val_u64s(u64s - bytes / 8);
+        head_mut(e).set_u64s(u64s - bytes / 8);
         e.copy_within(at + bytes..next, at);
         e[next - bytes..next].fill(0);
         journal_key_lost(ctx.fs, &ctx.from);
@@ -345,7 +345,7 @@ fn journal_entry_btree_root_validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), 
          * just the contents, so that later we can tell
          * we were _supposed_ to have a btree root
          */
-        head_mut(e).set_val_u64s(0);
+        head_mut(e).set_u64s(0);
         e[HEAD..].fill(0);
         return Ok(());
     }
@@ -587,7 +587,7 @@ pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: ValidateFlags)
     }
 
     if let Some(off) = cut {
-        jset_head_mut(j).set_val_u64s(off / 8);
+        jset_head_mut(j).set_u64s(off / 8);
     }
     Ok(())
 }
@@ -671,7 +671,7 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<c::jse
 
     if journal_entry_err_on!(ctx, bytes > max, jset_past_bucket_end,
                              "{} sector {} seq {}: journal entry too big ({} bytes)", name, sector, seq, bytes) {
-        h.set_val_u64s(h.u64s() - (bytes - max) / 8);
+        h.set_u64s(h.u64s() - (bytes - max) / 8);
     }
     Ok(Jset::Ok)
 }
