@@ -9,12 +9,13 @@
 
 use core::ffi::{c_uint, c_ulong};
 use core::mem::{size_of, ManuallyDrop};
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
 use cstruct_macros::{placed, MaybeZeroable, Init, Late, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
+use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeTrans, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
@@ -275,8 +276,8 @@ fn gc_read_lock(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, fs: &'static Fs) 
 /// buckets its space is in: the update's once the node's written, or the
 /// reserve cache's if it's not used.
 struct Reserved {
-    b:  NonNull<BtreeNode>,
-    ob: c::open_buckets,
+    node: OwnedNode,
+    ob:   c::open_buckets,
 }
 
 /// The update's own, in its foreground phase and then its completion's: never
@@ -284,10 +285,15 @@ struct Reserved {
 struct Owned {
     /*
      * Preallocated nodes we reserve when we start the update, leaf and
-     * interior: alloc_node() takes them from here, to @consumed.
+     * interior: alloc_node() takes them from here, to a NewNode.
      */
     reserve:      [ArrayVec<Reserved, UPDATE_NODES_MAX>; 2],
-    consumed:     ArrayVec<Reserved, UPDATE_NODES_MAX>,
+    /*
+     * The new nodes written, their NewNodes dropped: their holds released
+     * by done(), after the paths' - the last write hold goes where the paths
+     * at it are, to advance their lock seqs
+     */
+    written:      ArrayVec<OwnedNode, UPDATE_NODES_MAX>,
     /* take_path()'s, put before the update lets go of its nodes */
     paths:        ArrayVec<PathIdx, UPDATE_NODES_MAX>,
     old_nodes:    ArrayVec<OldNode, UPDATE_NODES_MAX>,
@@ -538,9 +544,48 @@ impl Deref for InteriorUpdate<'_> {
     }
 }
 
-/// A node from an interior update's reserve: intent and write locked, not yet
-/// reachable.
-pub(crate) type NewNode<'u> = LockedNode<'u, BtreeNode, Write>;
+/// A node from an interior update's reserve, its caller's to build, not yet
+/// reachable. Dropped once written, its hold is the update's, till done();
+/// dropped before, as when an error rolls the update back, it's freed.
+pub(crate) struct NewNode<'u> {
+    update: &'u BtreeUpdate,
+    view:   LockedNode<'u, BtreeNode, Write>,
+    node:   Option<OwnedNode>,
+    ob:     c::open_buckets,
+}
+
+impl<'u> NewNode<'u> {
+    fn new(update: &'u BtreeUpdate, Reserved { node, ob }: Reserved) -> Self {
+        let view = unsafe { LockedNode::new_write(node.as_ptr().as_ref()) };
+        NewNode { update, view, node: Some(node), ob }
+    }
+}
+
+impl<'u> Deref for NewNode<'u> {
+    type Target = LockedNode<'u, BtreeNode, Write>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.view
+    }
+}
+
+impl DerefMut for NewNode<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.view
+    }
+}
+
+impl Drop for NewNode<'_> {
+    fn drop(&mut self) {
+        let node = self.node.take().expect("a new node, until it's dropped");
+        if self.view.flags.will_make_reachable() {
+            assert!(self.ob.nr == 0, "a written node's open buckets, not the update's");
+            self.update.owned.borrow_mut().written.push(node);
+        } else {
+            self.update.reserve_free(Reserved { node, ob: core::mem::take(&mut self.ob) });
+        }
+    }
+}
 
 impl<'t> InteriorUpdate<'t> {
     /// An update for @path's node at @level, its reserve the worst case: every
@@ -698,7 +743,7 @@ impl<'t> InteriorUpdate<'t> {
             disk_res:     DiskReservation::new(fs_ref),
             owned <- RefCell::init(init!(Owned {
                 reserve      <- init_zeroed(),
-                consumed     <- init_zeroed(),
+                written      <- init_zeroed(),
                 paths        <- init_zeroed(),
                 old_nodes    <- init_zeroed(),
                 open_buckets <- init_zeroed(),
@@ -848,6 +893,15 @@ impl<'t> InteriorUpdate<'t> {
         }
     }
 
+    /// The written new nodes' holds released, after the paths' - so theirs
+    /// are the last write holds, and the paths still at them advanced.
+    fn written_put(&self, paths: &mut Paths<'_>) {
+        let written = core::mem::take(&mut self.owned.borrow_mut().written);
+        for n in written {
+            self.trans().node_unlock_owned(paths, n);
+        }
+    }
+
     pub(crate) fn done(self, paths: &mut Paths<'_>) {
         assert!(self.visible(), "an interior update done without making its nodes visible");
 
@@ -857,9 +911,10 @@ impl<'t> InteriorUpdate<'t> {
 
         this.put_paths(paths);
         this.trans().unlock_write(paths);
+        this.written_put(paths);
 
         drop(this.owned.borrow_mut().gc_lock.take());
-        this.reserve_put(this.trans(), paths, false);
+        this.reserve_put();
         this.pending_put();
 
         fs.times.get(c::TimeStat::btree_interior_update_foreground as usize).update(start_time);
@@ -875,18 +930,17 @@ impl Drop for InteriorUpdate<'_> {
         let mut paths = unsafe { Paths::lent(self.trans()) };
         self.put_paths(&mut paths);
         self.trans().unlock_write(&mut paths);
-        unsafe { update_free(self.raw, self.trans(), &mut paths, Some(owner)) }
+        self.written_put(&mut paths);
+        unsafe { update_free(self.raw, Some(owner)) }
     }
 }
 
-/// @update's resources released, and it freed - owned by @rollback, which
-/// frees the nodes it took from its reserve too, or else by its entry on
-/// unwritten, completing.
+/// @update's resources released, and it freed - owned by @rollback, or else by
+/// its entry on unwritten, completing.
 ///
 /// # Safety
 /// @update is live, and nothing uses it after.
-unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, paths: &mut Paths<'_>,
-                      rollback: Option<UpdateBox>) {
+unsafe fn update_free(update: NonNull<BtreeUpdate>, rollback: Option<UpdateBox>) {
     let u = unsafe { update.as_ref() };
     let fs = unsafe { u.fs.get() };
 
@@ -895,7 +949,7 @@ unsafe fn update_free(update: NonNull<BtreeUpdate>, trans: &BtreeTrans<'_>, path
     fs.journal.pin_drop(&u.journal);
     fs.journal.pin_flush(&u.journal);
     u.disk_res.put();
-    u.reserve_put(trans, paths, rollback.is_some());
+    u.reserve_put();
 
     fs.times.get(c::TimeStat::btree_interior_update_total as usize).update(u.start_time);
 

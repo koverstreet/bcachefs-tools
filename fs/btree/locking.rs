@@ -6,6 +6,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::util::alloc::Flags;
 use crate::btree::lock_graph::bch2_six_check_for_deadlock;
@@ -294,6 +295,16 @@ impl BtreeTrans<'_> {
         paths[idx].unlock_write_level(level);
     }
 
+    /// A node's write lock and intent, held by its owner and not a path - an
+    /// interior update's new node, once written - released: the paths at it
+    /// advanced, as a path's own write unlock would, if it's the last write
+    /// hold - which it is once its paths have let go of theirs.
+    pub(crate) fn node_unlock_owned(&self, paths: &mut Paths<'_>, n: OwnedNode) {
+        let seq = write_unlock_seq(n.c.lock.six());
+        self.node_write_unlock_seqs(paths, &n.c, n.c.level.get().into(), seq);
+        n.unlock();
+    }
+
     /// The lock seqs of the paths that have @b at @level, as of @seq, advanced
     /// as its write lock goes: none if it's held for write again inside.
     #[inline]
@@ -307,12 +318,6 @@ impl BtreeTrans<'_> {
                 linked.l[level].lock_seq = linked.l[level].lock_seq.wrapping_add(1);
             }
         }
-    }
-
-    /// A write lock taken outside any path released: __bch2_btree_node_unlock_write().
-    pub(crate) fn node_unlock_write_pathless(&self, paths: &mut Paths<'_>, b: &c::btree_bkey_cached_common) {
-        self.node_write_unlock_seqs(paths, b, b.level.get() as usize, write_unlock_seq(b.lock.six()));
-        unsafe { crate::locking::six::six_unlock_ip(b.lock.six(), c::SixLockType::SIX_LOCK_write, crate::ret_ip!()) };
     }
 
     pub(crate) fn node_unlock(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {

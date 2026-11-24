@@ -159,7 +159,7 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
     contents.set_format(format);
 
     let state = b.live_state();
-    let (n, held) = b.hash(state).unwrap_or_else(|e| panic!("a fake root's transition to live: {e}"));
+    let (n, held) = b.hash(fs, state).unwrap_or_else(|e| panic!("a fake root's transition to live: {e}")).into_held(fs);
 
     set_root_inmem(fs, n);
 

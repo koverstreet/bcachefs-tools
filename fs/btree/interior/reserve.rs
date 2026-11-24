@@ -11,7 +11,6 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::AllocWait;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
-use crate::btree::cache::UnhashedNode;
 use crate::btree::iter::CommitOpts;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
@@ -19,13 +18,11 @@ use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
-use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::{POS_MIN, SPOS_MAX};
 use crate::format::{BkeyType, Bpos, DataType};
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_increment_ip, six_unlock_ip, SixHold};
 use crate::prt;
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
@@ -272,9 +269,11 @@ impl<'t> InteriorUpdate<'t> {
          * in, or freshly hash-removed — so holding write blocks nothing).
          * Consumers can use them without any lock-take at pop time.
          */
-        ret?;
-        // the reserve's to hold, until its node is taken or freed
-        Ok(Reserved { b: b.into_raw(), ob })
+        if let Err(e) = ret {
+            b.free(fs);
+            return Err(e);
+        }
+        Ok(Reserved { node: b, ob })
     }
 
     pub(crate) fn alloc_node(&self, level: usize) -> NewNode<'_> {
@@ -282,22 +281,16 @@ impl<'t> InteriorUpdate<'t> {
 
         assert!(level < c::BTREE_MAX_DEPTH as usize, "allocating a node at level {level}");
 
-        let b = {
-            let mut o = self.owned.borrow_mut();
-            let r = o.reserve[usize::from(level != 0)].pop().expect("an interior update's reserve, used up");
-            let b = r.b;
-            o.consumed.push(r);
-            b
-        };
+        let Reserved { mut node, ob } = self.owned.borrow_mut().reserve[usize::from(level != 0)].pop()
+            .expect("an interior update's reserve, used up");
 
         /*
-         * @as keeps owning intent+write refs on @b until reserve_put runs at
-         * update_done/update_free time.  Consumers (this function's callers)
-         * additionally take their own intent+write recurses through the path
-         * machinery at the WRITE_LOCKED mark site.
+         * The NewNode keeps owning intent+write refs on @b until it's
+         * dropped.  Consumers (this function's callers) additionally take
+         * their own intent+write recurses through the path machinery at the
+         * WRITE_LOCKED mark site.
          */
 
-        let mut node = unsafe { UnhashedNode::from_raw(fs, b) };
         node.set_id(self.btree, level);
 
         let mut locked = node.locked();
@@ -328,12 +321,11 @@ impl<'t> InteriorUpdate<'t> {
         build_aux_trees(n, contents);
 
         let state = n.live_state();
-        let (n, held) = node.hash(state).unwrap_or_else(|e| panic!("a new node's transition to live: {e}"));
-        held.into_raw();
+        let node = node.hash(fs, state).unwrap_or_else(|e| panic!("a new node's transition to live: {e}"));
 
-        fs.event_inc_trace(events::btree_node_alloc, |out| prt!(out, "{}", n.pos_to_text(fs)));
+        fs.event_inc_trace(events::btree_node_alloc, |out| prt!(out, "{}", node.pos_to_text(fs)));
         fs.io_clock[WRITE].increment(fs.btree_sectors().into());
-        unsafe { NewNode::new_write(b.as_ref()) }
+        NewNode::new(self, Reserved { node, ob })
     }
 
     /// A copy of @b, compacted.
@@ -414,16 +406,12 @@ impl<'t> InteriorUpdate<'t> {
      * When the path eventually unlocks (trans teardown or explicit
      * bch2_path_put), btree_node_unlock for WRITE_LOCKED drops one intent +
      * one write balanced against the recurses we take here; the as-owned
-     * refs survive and are dropped by bch2_btree_update_done (success) or
-     * bch2_btree_reserve_put (err).
+     * refs are the NewNode's, dropped with it - written, under the path's;
+     * not, freed.
      */
     fn take_node(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) {
         let level = usize::from(n.c.level.get());
-        let hold = unsafe {
-            six_lock_increment_ip(n.c.lock.six(), c::SixLockType::SIX_LOCK_write, 0);
-            SixHold::from_raw(&n.c.lock, c::SixLockType::SIX_LOCK_write)
-        };
-        paths[path].put_level(level, &n.c, hold);
+        paths[path].put_level(level, &n.c, n.node.as_ref().expect("a new node, until it's dropped").path_hold());
         paths[path].lock_taken(level);
         self.trans().path_level_init(paths, path, level, n.held());
     }
@@ -444,46 +432,33 @@ impl<'t> InteriorUpdate<'t> {
 }
 
 impl BtreeUpdate {
-    /// The update's reserve given back - the nodes it didn't take, and on
-    /// rollback, @bailed, those it did - their space kept in the reserve
-    /// cache, and every reserved node's locks dropped.
-    pub(super) fn reserve_put(&self, trans: &crate::btree::iter::BtreeTrans<'_>, paths: &mut Paths<'_>,
-                              bailed: bool) {
-        let fs = self.fs();
-        let mut o = self.owned.borrow_mut();
-        let o = &mut *o;
-        let mut unused: ArrayVec<_, { super::UPDATE_NODES_MAX * 2 }> =
-            o.reserve.iter_mut().flat_map(|r| r.drain(..)).collect();
-
-        for (r, free) in unused.iter_mut().map(|r| (r, true)).chain(o.consumed.iter_mut().map(|r| (r, bailed))) {
-            let b = unsafe { r.b.as_ref() };
-
-            if free {
-                assert!(b.written.get() == 0, "a reserved node that's been written");
-
-                let mut cache = fs.btree.reserve_cache.lock.lock();
-                if (cache.nr as usize) < cache.data.len() {
-                    let nr = cache.nr as usize;
-                    cache.nr += 1;
-                    let a = &mut cache.data[nr];
-                    a.ob = core::mem::take(&mut r.ob);
-                    a.k.set_key(&*b.key_peek());
-                } else {
-                    r.ob.drain(fs).for_each(drop);
-                }
-                drop(cache);
-
-                b.flags.set_need_write(false);
-                node_free(fs, b);
-                let _ = fs.btree_node_transition_state(b, c::BtreeNodeCacheState::FREEABLE);
-            } else {
-                assert!(r.ob.nr == 0, "a node taken from the reserve, kept but never written");
-            }
-
-            trans.node_unlock_write_pathless(paths, &b.c);
-            unsafe { six_unlock_ip(b.c.lock.six(), c::SixLockType::SIX_LOCK_intent, crate::ret_ip!()) };
+    /// The nodes of the update's reserve it didn't take, freed.
+    pub(super) fn reserve_put(&self) {
+        for r in self.owned.borrow_mut().reserve.iter_mut().flat_map(|r| r.drain(..)) {
+            self.reserve_free(r);
         }
+    }
 
-        o.consumed.clear();
+    /// A node from the reserve, never written, freed: its space kept in the
+    /// reserve cache if there's room.
+    pub(super) fn reserve_free(&self, Reserved { node, mut ob }: Reserved) {
+        let fs = self.fs();
+        assert!(node.written.get() == 0, "a reserved node that's been written");
+
+        let mut cache = fs.btree.reserve_cache.lock.lock();
+        if (cache.nr as usize) < cache.data.len() {
+            let nr = cache.nr as usize;
+            cache.nr += 1;
+            let a = &mut cache.data[nr];
+            a.ob = core::mem::take(&mut ob);
+            a.k.set_key(&*node.key_peek());
+        } else {
+            ob.drain(fs).for_each(drop);
+        }
+        drop(cache);
+
+        node.flags.set_need_write(false);
+        node_free(fs, &node);
+        node.free(fs);
     }
 }

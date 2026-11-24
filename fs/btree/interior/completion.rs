@@ -100,14 +100,7 @@ impl InteriorUpdate<'_> {
         fs.btree_node_set_dirty(n);
         n.flags.set_need_write(true);
 
-        {
-            let mut o = self.owned.borrow_mut();
-            let super::Owned { consumed, open_buckets, .. } = &mut *o;
-            let r = consumed.iter_mut().find(|r| r.b == NonNull::from(n.node())).expect("a new node, consumed from the reserve");
-            for ob in r.ob.drain(fs) {
-                open_buckets.push(ob);
-            }
-        }
+        self.owned.borrow_mut().open_buckets.extend(n.ob.drain(fs));
 
         node_write_locked(self.trans(), n, BtreeWriteType::initial, BtreeWriteFlags::empty());
     }
@@ -538,7 +531,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
 
     u.owned.borrow_mut().open_buckets.clear();
 
-    unsafe { super::update_free(update, &trans, &mut trans.paths(), None) };
+    unsafe { super::update_free(update, None) };
 }
 
 /// The interior update worker: the updates on unwritten completed in order,
