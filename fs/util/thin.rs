@@ -17,8 +17,9 @@ use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
-use crate::util::alloc::{Alloc, Box};
+use crate::util::alloc::{stateless, Alloc, Box};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::rcu::FreeAnytime;
 use crate::util::vstructs::SelfSized;
 
 /// A &'a T, thin.
@@ -134,7 +135,12 @@ unsafe impl<T: ?Sized + SelfSized + Sync, A: Alloc> Sync for ThinBox<T, A> {}
 unsafe impl<T: ?Sized + SelfSized, A: Alloc> ::pin_init::ZeroableOption for ThinBox<T, A> {}
 
 impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
-    pub fn new(b: Box<T, A>) -> Self {
+    /// FreeAnytime: a Box has no head before it, for what waits out readers
+    /// with none of its own.
+    pub fn new(b: Box<T, A>) -> Self
+    where
+        T: FreeAnytime,
+    {
         const { assert!(size_of::<A>() == 0, "a ThinBox from an allocator with state: it keeps none") };
         // the Box's allocation, ours: A has no state
         let mut b = ManuallyDrop::new(b);
@@ -156,7 +162,7 @@ impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
     /// # Safety
     /// @p is a T that's had by nothing else: into_raw()'s, of a ThinBox<T, A>,
     /// this the one from_raw() of it - or A's allocation of a T, at
-    /// Layout::for_value()'s size.
+    /// RcuFreeing::layout_of() of its value's layout.
     pub unsafe fn from_raw(p: NonNull<()>) -> Self {
         ThinBox { p, _t: PhantomData }
     }
@@ -188,7 +194,8 @@ impl<T: ?Sized + SelfSized, A: Alloc> DerefMut for ThinBox<T, A> {
 
 impl<T: ?Sized + SelfSized, A: Alloc> Drop for ThinBox<T, A> {
     fn drop(&mut self) {
+        let a = stateless::<A>();
         // SAFETY: a Box<T, A>'s, ours
-        unsafe { <T as RcuFreeing>::free::<A>(NonNull::new_unchecked(T::from_thin(self.p.as_ptr()).cast_mut())) }
+        unsafe { <T as RcuFreeing>::free(NonNull::new_unchecked(T::from_thin(self.p.as_ptr()).cast_mut()), &a) }
     }
 }

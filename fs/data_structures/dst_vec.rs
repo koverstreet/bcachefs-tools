@@ -61,7 +61,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     /// What one with room for @cap is allocated as: a mempool's element, for
     /// a pool of them.
     pub fn alloc_size(cap: usize) -> usize {
-        Buf::<T, L, A>::layout(cap).expect("a DstVec's layout").size()
+        Buf::<T, L, A>::layout(cap).expect("a DstVec's layout").0.size()
     }
 
     fn buf(&self) -> &Buf<T, L, A> {

@@ -406,16 +406,12 @@ pub type RcuArrayBuf<T, H = ()> = DstArray<RcuArrayHead<H>, T>;
 /// An RcuArray's buffer, owned: freed as its head says, a grace period on.
 pub type RcuArrayBox<T, H = ()> = ThinBox<RcuArrayBuf<T, H>, KVmalloc>;
 
-/// FreeAnytime: the head is what makes a buffer wait out its readers, and
-/// elements that aren't would put DstArray's rcu_head before it, where the
-/// buffer's free doesn't look.
-///
 /// # Safety
 /// A bytewise copy of a T is a valid T, owning nothing: no Drop. All-zero
 /// bytes are a valid T. A writer copies them into a grown buffer while
 /// readers still read the old one, so changing one in place, with readers
 /// looking, needs it to be atomics.
-pub unsafe trait RcuElement: Sync + FreeAnytime {}
+pub unsafe trait RcuElement: Sync {}
 
 macro_rules! rcu_element {
     ($($t:ty),*) => { $(unsafe impl RcuElement for $t {})* };

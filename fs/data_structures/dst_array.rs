@@ -9,69 +9,25 @@
 //! free one - or by an allocator of its owner's; at least 8-aligned either
 //! way: a thin pointer's low bits are its holder's to tag.
 //!
-//! Freed as its elements say (util/rcu.rs): at once, or - what an RCU reader
-//! may still be in, elements that aren't FreeAnytime - a grace period on, by
-//! kvfree_rcu() of an rcu_head before the header, which only an allocator
-//! kvfree() frees for can do.
+//! Freed as it says (RcuFreeing): at once, or - what an RCU reader may still
+//! be in, elements that aren't FreeAnytime - a grace period on. With no
+//! rcu_head of its own, that's one before the header, where no reader looks:
+//! six's wait list and multimap's vals free what they've grown out of under a
+//! spinlock, where a kvfree_rcu() with no head to queue may sleep.
 
-use crate::c;
 use crate::data_structures::array_vec::LenUint;
 use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
-use crate::util::rcu::{FreeAnytime, HasRcuHead};
+use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::rcu::HasRcuHead;
 use crate::util::thin::ThinBox;
 use crate::util::vstructs::{align_max, DstHead, FlexArray, SelfSized};
-use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 
-/// How an array of these is freed: prefix(), the bytes before the header -
-/// the rcu_head - and free(), of the allocation's start.
-///
-/// Not RcuFreeing's dispatch, because of where it frees: six's wait list and
-/// multimap's vals free what they've grown out of under a spinlock, where a
-/// headless kvfree_rcu() may sleep, and DstVecHead has no rcu_head - and one
-/// over the header would be over the length readers are reading. So the head
-/// goes before the header, where no reader looks.
-///
-/// XXX: for RcuFreeing to free these, the head goes in the header instead -
-/// DstVecHead always carrying one, or DstVec taking its header type - and
-/// this goes.
-trait ArrayFreeing {
-    fn prefix() -> usize;
-    unsafe fn free<A: Alloc>(base: NonNull<u8>, layout: Layout, a: &A);
-    fn assert_rcu_freed();
-}
-
-impl<T> ArrayFreeing for T {
-    default fn prefix() -> usize { size_of::<c::rcu_head>().next_multiple_of(8) }
-    default unsafe fn free<A: Alloc>(base: NonNull<u8>, _: Layout, _: &A) {
-        const { assert!(A::KVFREE, "an array RCU readers may be in, from an allocator kvfree_rcu() can't free to") };
-        unsafe { crate::util::alloc::kvfree_rcu_head(base.as_ptr().cast(), base.as_ptr().cast()) }
-    }
-    default fn assert_rcu_freed() {}
-}
-
-impl<T: FreeAnytime> ArrayFreeing for T {
-    fn prefix() -> usize { 0 }
-    unsafe fn free<A: Alloc>(base: NonNull<u8>, layout: Layout, a: &A) { unsafe { a.deallocate(base, layout) } }
-    fn assert_rcu_freed() { let () = NotRcuFreed::<T>::ERR; }
-}
-
-struct NotRcuFreed<T>(PhantomData<T>);
-
-impl<T> NotRcuFreed<T> {
-    const ERR: () = panic!("read under RCU, an array's elements are freed a grace period on: not FreeAnytime");
-}
-
-/// A build error unless an array of @T is freed a grace period on, as what
-/// RCU readers read must be.
-pub fn assert_rcu_freed<T>() {
-    <T as ArrayFreeing>::assert_rcu_freed()
-}
-
 /// The count is its own, after the header: written only as it's made, so
-/// nothing holding one can change how long it says the array is.
-#[repr(C)]
+/// nothing holding one can change how long it says the array is. 8-aligned,
+/// as kvzalloc() aligns, so its size is what it's allocated as.
+#[repr(C, align(8))]
 pub struct DstArray<H, T, L: LenUint = usize> {
     head: H,
     nr: L,
@@ -93,7 +49,7 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
 // SAFETY: its count says how long the array is, and is written only as it's
 // made
 unsafe impl<H, T, L: LenUint> SelfSized for DstArray<H, T, L> {
-    const ALIGN: usize = align_max(align_max(align_of::<H>(), align_of::<L>()), align_of::<T>());
+    const ALIGN: usize = align_max(8, align_max(align_max(align_of::<H>(), align_of::<L>()), align_of::<T>()));
     const MIN_BYTES: usize = Self::TAIL.next_multiple_of(Self::ALIGN);
 
     unsafe fn from_thin(p: *const ()) -> *const Self {
@@ -122,26 +78,25 @@ impl<H: HasRcuHead, T, L: LenUint> HasRcuHead for DstArray<H, T, L> {
 }
 
 impl<H, T, L: LenUint> DstArray<H, T, L> {
-    /// What one of @nr elements is allocated as: its rcu_head, if it has one,
-    /// its header and count, and the array. An error past what its count
-    /// holds.
-    pub fn layout(nr: usize) -> Result<Layout, AllocError> {
+    /// What one of @nr elements is allocated as - its header, count and the
+    /// array, after an rcu_head if it needs one it hasn't - and the header's
+    /// offset. An error past what its count holds.
+    pub fn layout(nr: usize) -> Result<(Layout, usize), AllocError> {
         const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
         const { assert!(Self::ALIGN <= 8, "kvzalloc() aligns to 8") };
 
         if nr > L::MAX {
             return Err(AllocError);
         }
-        let bytes = nr.checked_mul(size_of::<T>())
-            .and_then(|b| b.checked_add(Self::TAIL + <T as ArrayFreeing>::prefix()))
-            .ok_or(AllocError)?;
-        // padded as size_of_val() pads it: what it's freed by, by RcuFreeing
-        Ok(Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?.pad_to_align())
+        let bytes = nr.checked_mul(size_of::<T>()).and_then(|b| b.checked_add(Self::TAIL)).ok_or(AllocError)?;
+        // as Layout::for_value() has it, which its free goes by
+        let value = Layout::from_size_align(bytes, Self::ALIGN).map_err(|_| AllocError)?.pad_to_align();
+        <Self as RcuFreeing>::layout_of(value)
     }
 
-    /// @head, and a count of @nr, at the start of @given past its rcu_head.
-    fn place(head: H, nr: usize, given: NonNull<[u8]>) -> NonNull<H> {
-        let p = unsafe { given.cast::<u8>().add(<T as ArrayFreeing>::prefix()) };
+    /// @head, and a count of @nr, at @offset in @given.
+    fn place(head: H, nr: usize, given: NonNull<[u8]>, offset: usize) -> NonNull<H> {
+        let p = unsafe { given.cast::<u8>().add(offset) };
         unsafe {
             p.cast::<H>().write(head);
             p.add(Self::NR).cast::<L>().write(L::from_usize(nr));
@@ -161,33 +116,24 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     }
 
     fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
-        let given = KVmalloc.allocate_zeroed_gfp(Self::layout(nr)?, gfp)?;
-        Ok(Self::place(head, nr, given))
+        let (layout, offset) = Self::layout(nr)?;
+        let given = KVmalloc.allocate_zeroed_gfp(layout, gfp)?;
+        Ok(Self::place(head, nr, given, offset))
     }
 
-    /// alloc(), owned: freed as its markers say. Its elements FreeAnytime, so
-    /// no rcu_head before the header: the allocation is the array.
-    pub fn alloc_box(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
-    where
-        T: FreeAnytime,
-    {
+    /// alloc(), owned: freed as its markers say.
+    pub fn alloc_box(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError> {
         Self::alloc_box_gfp(nr, head, Flags::empty())
     }
 
     /// alloc_box(), for what mustn't fail to allocate.
-    pub fn alloc_box_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc>
-    where
-        T: FreeAnytime,
-    {
+    pub fn alloc_box_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc> {
         Self::alloc_box_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_box_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
-    where
-        T: FreeAnytime,
-    {
+    fn alloc_box_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError> {
         let p = Self::alloc_gfp(nr, head, gfp)?;
-        // KVmalloc's, ours, at layout() - for_value()'s, padded as it pads
+        // KVmalloc's, ours, at layout()
         Ok(unsafe { ThinBox::from_raw(p.cast()) })
     }
 
@@ -195,9 +141,10 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     /// may be more, and is what it's freed as: a mempool tells its elements by
     /// their size.
     pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<NonNull<H>, AllocError> {
-        let given = a.allocate_zeroed(Self::layout(nr)?)?;
-        let room = (given.len() - <T as ArrayFreeing>::prefix() - Self::TAIL) / size_of::<T>();
-        Ok(Self::place(head, room.min(L::MAX), given))
+        let (layout, offset) = Self::layout(nr)?;
+        let given = a.allocate_zeroed(layout)?;
+        let room = (given.len() - offset - Self::TAIL) / size_of::<T>();
+        Ok(Self::place(head, room.min(L::MAX), given, offset))
     }
 
     /// One of room for @nr from @a, as alloc_in(), @old's first @keep elements
@@ -219,14 +166,13 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
         Ok(new)
     }
 
-    /// Now, or a grace period on: as its elements say.
+    /// Dropped and freed, now or a grace period on, as its markers say.
     ///
     /// # Safety
-    /// @p is @a's - alloc()'s are KVmalloc's - its nr() the room @a gave, its
-    /// elements dropped or moved, and nothing but RCU readers uses it after.
+    /// @p is @a's - alloc()'s are KVmalloc's - its nr() the room @a gave, and
+    /// nothing but RCU readers uses it after.
     pub unsafe fn free_in<A: Alloc>(p: NonNull<H>, a: &A) {
-        let layout = Self::layout(unsafe { &*Self::from_thin(p.as_ptr().cast()) }.nr()).expect("a DstArray's own layout");
-        let base = unsafe { p.cast::<u8>().byte_sub(<T as ArrayFreeing>::prefix()) };
-        unsafe { <T as ArrayFreeing>::free(base, layout, a) };
+        let p = unsafe { NonNull::new_unchecked(Self::from_thin(p.as_ptr().cast()).cast_mut()) };
+        unsafe { <Self as RcuFreeing>::free(p, a) };
     }
 }

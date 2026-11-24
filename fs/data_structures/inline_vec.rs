@@ -24,9 +24,9 @@
 //! period on if they aren't FreeAnytime.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::data_structures::dst_array::assert_rcu_freed;
 use crate::data_structures::dst_vec::{DstVec, DstVecHead};
 use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu;
 use core::mem::{offset_of, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -175,7 +175,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
     /// @v lives for 'a, its writer's stores to its elements are atomic, and
     /// it's had only through &mut by its writer and read_rcu() by readers.
     pub unsafe fn read_rcu<'a>(v: *const Self, _rcu: &'a rcu::ReadGuard) -> &'a [T] {
-        assert_rcu_freed::<MaybeUninit<T>>();
+        <MaybeUninit<T> as RcuFreeing>::assert_rcu_freed();
         const { assert!(offset_of!(Inline<T, N, L>, elems) >= size_of::<usize>(),
                         "InlineVec: RCU readers need its elements past the first word, which a spill rewrites") };
 
