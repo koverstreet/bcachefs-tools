@@ -12,9 +12,8 @@
 //! from fewer bytes than the header.
 //!
 //! What a variable-size type can be, most general first:
-//!  - FakeDst: sized, its own bytes say how far past them it runs - a DST
-//!    typed as its header, to be converted. A #[counted_by] array's
-//!    FakeFlexArray is; extent entries aren't - the superblock sizes those.
+//!  - FakeFlexArray: sized, a #[counted_by] array running past its size_of -
+//!    a DST typed as its header, to be converted.
 //!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
 //!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
 //!    says how long it is, as an unsized vstruct's does.
@@ -39,15 +38,15 @@
 //! bytes there are.
 //!
 //! vstructs.h, and where it goes:
-//!  - vstruct_bytes(), replicas_entry_bytes(): FakeDst::bytes(), SelfSized::bytes()
+//!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
 //!  - devs[]: #[counted]; FakeFlexArray where it's read by stride
 //!  - vstruct_for_each(), vstruct_next(), vstruct_last(): entries()
 //!
 //! What's trusted: Plain, that any bytes are a valid value - which
 //! #[derive(Plain)] checks at compile time, and zerocopy's FromBytes for the
 //! types we define - and, for a reference from a pointer to its header, the
-//! count FakeDst::bytes() reads, which vstruct!() and #[counted_by] generate
-//! from the field the struct declares.
+//! count a family's from_thin() reads, which #[unsized_vstruct] and
+//! #[counted] generate from the field the struct declares.
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
@@ -168,7 +167,7 @@ native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, 
 /// A DST whose head records its length: so a thin pointer, the value's
 /// address alone, reaches all of one (util/thin.rs's pointer types). Never a
 /// sized type - a pointer to one is already thin, and one that runs past its
-/// size_of is a FakeDst.
+/// size_of is a FakeFlexArray.
 ///
 /// # Safety
 /// from_thin() of the address of a valid Self is a pointer to all of it. What
@@ -212,27 +211,10 @@ pub trait VStruct: SelfSized {
     fn u64s(&self) -> usize;
 }
 
-/// A sized type whose fields say how far past its size_of its value runs: a
-/// DST typed as its header - a struct ending in a flexible array member, a
-/// key - or a family's head, standing in for the DST it heads.
-///
-/// XXX: what we're converting away from. Each goes as it becomes a DST of its
-/// own, SelfSized, or its family's length is read from the family; then this
-/// does.
-pub trait FakeDst {
-    /// vstruct_bytes(), replicas_entry_bytes().
-    fn bytes(&self) -> usize;
-
-    /// As SelfSized::sectors().
-    fn sectors(&self, block_bits: u32) -> usize {
-        self.bytes().next_multiple_of(512 << block_bits) >> 9
-    }
-}
-
 /// A type ending in a flexible array member, C's `T name[]`.
 ///
-/// XXX: sized, its array past its size_of, as FakeDst is; it goes for
-/// FlexArray, a SelfSized DST counted in elements.
+/// XXX: sized, its array past its size_of; it goes for FlexArray, a
+/// SelfSized DST counted in elements.
 pub trait FakeFlexArray {
     /// What the array holds.
     type Elem: Plain;
@@ -241,13 +223,6 @@ pub trait FakeFlexArray {
     const TAIL: usize;
     /// How many elements it holds, by the header's own fields.
     fn nr(&self) -> usize;
-}
-
-impl<T: FakeFlexArray> FakeDst for T {
-    #[inline]
-    fn bytes(&self) -> usize {
-        T::TAIL + self.nr() * size_of::<T::Elem>()
-    }
 }
 
 /// A count a header's field holds - u64s, nr_devs - as a usize: a plain
@@ -296,24 +271,20 @@ macro_rules! floored_by_self {
 }
 pub(crate) use floored_by_self;
 
-/// vstruct!(T, u64s): T is a vstruct, @u64s its count of the u64s past its
-/// header; vstruct!(T, hdr.u64s), past the header @hdr it embeds first;
+/// vstruct!(unsized T_head, u64s), for an unsized vstruct - what
+/// #[unsized_vstruct(u64s = ..)] makes: @u64s is its header's count of the
+/// u64s past the header; hdr.u64s, past the header @hdr it embeds first;
 /// `start = 0` where the count includes the header, as a superblock
-/// field's does.
-///
-/// vstruct!(unsized T_head, ..), for an unsized vstruct - what
-/// #[unsized_vstruct(u64s = ..)] makes, as a family's other attributes make
-/// the sized form: the count is its header's, T_head's, as the sized form
-/// has it - and each state's length is its reference's, size_of_val(). A
+/// field's does. Each state's length is its reference's, size_of_val(). A
 /// count of its own reads as u64s(), on the header, which each state derefs
 /// to, and is set by set_u64s() on a header alone: no state derefs to it
 /// mutably, so it's set only by what has the room for it.
 macro_rules! vstruct {
     (unsized $head:ident, $($args:tt)*) => {
-        $crate::util::vstructs::vstruct!($head, $($args)*);
+        $crate::util::vstructs::vstruct!(@start $head, $($args)*);
         $crate::util::vstructs::vstruct!(@count $head, $($args)*);
 
-        // its length - a count of u64s from a u64 aligned start, as @impl
+        // its length - a count of u64s from a u64 aligned start, as @aligned
         // asserts - is a whole number of its alignment, its head's, if that's
         // no more than 8: so a reference to one, as long as size_of_val(),
         // claims none past it, whatever its tail holds
@@ -339,27 +310,19 @@ macro_rules! vstruct {
     // counted past the header it embeds - a btree node's bset, its keys: the
     // count is that header's, read as it
     (@count $head:ident, $($embedded:tt)*) => {};
-    ($t:ty, $($count:ident).+, start = $start:expr) => {
-        $crate::util::vstructs::vstruct!(@impl $t, $start, $($count).+);
+    // where the u64s it counts start
+    (@start $t:ty, $($count:ident).+, start = $start:expr) => {
+        $crate::util::vstructs::vstruct!(@aligned $t, $start);
     };
-    ($t:ty, $count:ident) => {
-        $crate::util::vstructs::vstruct!(@impl $t, ::core::mem::size_of::<$t>(), $count);
+    (@start $t:ty, $count:ident) => {
+        $crate::util::vstructs::vstruct!(@aligned $t, ::core::mem::size_of::<$t>());
     };
-    ($t:ty, $hdr:ident . $count:ident) => {
-        $crate::util::vstructs::vstruct!(@impl $t,
-            ::core::mem::offset_of!($t, $hdr) + $crate::types::field_size(|p: $t| p.$hdr) as usize,
-            $hdr.$count);
+    (@start $t:ty, $hdr:ident . $count:ident) => {
+        $crate::util::vstructs::vstruct!(@aligned $t,
+            ::core::mem::offset_of!($t, $hdr) + $crate::types::field_size(|p: $t| p.$hdr) as usize);
     };
-    (@impl $t:ty, $start:expr, $($count:ident).+) => {
+    (@aligned $t:ty, $start:expr) => {
         const _: () = assert!(($start) % 8 == 0, concat!(stringify!($t), ": a vstruct's u64s start u64 aligned"));
-
-        impl $crate::util::vstructs::FakeDst for $t {
-            #[inline]
-            fn bytes(&self) -> usize {
-                // the count by value: a packed struct's field can't be borrowed
-                ($start) + $crate::util::vstructs::Count::count(&{ self.$($count).+ }) * 8
-            }
-        }
     };
 }
 pub(crate) use vstruct;
@@ -1805,17 +1768,20 @@ mod tests {
     /// (start = 0), past the header it embeds.
     #[test]
     fn vstruct_bytes() {
-        let mut e = entry(0);
-        e.set_u64s(3);
-        assert_eq!(e.bytes(), 8 + 24);
+        let mut buf = [0u64; 8];
+
+        put(&mut buf, 0, &entry(3));
+        assert_eq!(c::jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 8 + 24);
 
         let mut f = Head::<c::bch_sb_field>::default();
         f.set_u64s(3);
-        assert_eq!(f.bytes(), 24);
+        put(&mut buf, 0, &f);
+        assert_eq!(c::bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 24);
 
         let mut b = ::pin_init::zeroed::<Head<c::btree_node_entry>>();
         b.keys.set_u64s(3);
-        assert_eq!(b.bytes(), 16 + 24 + 24);
+        put(&mut buf, 0, &b);
+        assert_eq!(c::btree_node_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 16 + 24 + 24);
     }
 
     /// A superblock of one u64 past its header, and in it a field of @u64s.
