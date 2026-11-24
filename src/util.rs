@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::fs::File;
 use std::io;
 use std::os::fd::{BorrowedFd, OwnedFd};
@@ -56,6 +55,16 @@ pub fn open_dir(path: &Path) -> Result<OwnedFd> {
 /* Not in the libc crate yet; from linux/stat.h */
 const STATX_SUBVOL: core::ffi::c_uint = 0x8000;
 
+/// statx(2) of @path with @flags (AT_SYMLINK_NOFOLLOW, ...), or None if it
+/// isn't on a filesystem that reports subvolumes.
+pub fn statx_subvol(path: &Path, flags: rustix::fs::AtFlags) -> io::Result<Option<rustix::fs::Statx>> {
+    let stx = rustix::fs::statx(rustix::fs::CWD, path, flags,
+                                rustix::fs::StatxFlags::BASIC_STATS |
+                                rustix::fs::StatxFlags::from_bits_retain(STATX_SUBVOL))?;
+
+    Ok((stx.stx_mask & STATX_SUBVOL != 0).then_some(stx))
+}
+
 /// Which filesystem and subvolume @path is in, or None if it isn't on a
 /// filesystem that reports subvolumes.
 ///
@@ -65,15 +74,7 @@ const STATX_SUBVOL: core::ffi::c_uint = 0x8000;
 /// pair changes if and only if we cross into a different filesystem or a
 /// different subvolume.
 fn path_subvol(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::ffi::OsStrExt;
-
-    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
-    let stx = rustix::fs::statx(rustix::fs::CWD, c_path.as_c_str(), rustix::fs::AtFlags::empty(),
-                                rustix::fs::StatxFlags::from_bits_retain(STATX_SUBVOL)).ok()?;
-
-    if stx.stx_mask & STATX_SUBVOL == 0 {
-        return None;
-    }
+    let stx = statx_subvol(path, rustix::fs::AtFlags::empty()).ok()??;
 
     Some((rustix::fs::makedev(stx.stx_dev_major, stx.stx_dev_minor),
           stx.stx_subvol))
