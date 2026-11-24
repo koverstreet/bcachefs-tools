@@ -133,7 +133,14 @@ unsafe impl<A: AllocGfp + ?Sized> AllocGfp for &A {
 /// where it's used. Only those, for now.
 pub fn stateless<A: Alloc>() -> A {
     const { assert!(size_of::<A>() == 0, "an allocator with state, where nothing keeps it") };
-    unsafe { NonNull::<A>::dangling().read() }
+    try_stateless().expect("zero-sized")
+}
+
+/// stateless(), or None for an allocator with state: for a path a build
+/// makes whether or not it's taken - a drop an unwind may run - where an
+/// allocator with state is a bug only once it's reached.
+pub fn try_stateless<A: Alloc>() -> Option<A> {
+    (size_of::<A>() == 0).then(|| unsafe { NonNull::<A>::dangling().read() })
 }
 
 /// std's Box<T, A>, as much of it as is used, in both builds: the kernel has

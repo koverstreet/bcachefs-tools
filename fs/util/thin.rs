@@ -17,7 +17,7 @@ use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
-use crate::util::alloc::{stateless, Alloc, Box};
+use crate::util::alloc::{try_stateless, Alloc, Box};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::FreeAnytime;
 use crate::util::vstructs::SelfSized;
@@ -118,8 +118,11 @@ impl<T: ?Sized + SelfSized> DerefMut for ThinMut<'_, T> {
     }
 }
 
-/// A Box<T, A>, thin: A has no state - stateless() - and T is freed as its
-/// markers say, by its reference's size.
+/// A Box<T, A>, thin, T freed as its markers say, by its reference's size. It
+/// keeps no allocator: one with no state - stateless() - frees it as it
+/// drops; one with state, its holder's, by drop_in(), and dropping it is a
+/// bug - a panic, not a build error, which every unwind path holding one
+/// would be.
 #[repr(transparent)]
 #[derive(cstruct_macros::NonZeroWord)]
 pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc> {
@@ -174,6 +177,16 @@ impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
     pub fn as_mut(&mut self) -> ThinMut<'_, T> {
         ThinMut { p: self.p, _t: PhantomData }
     }
+
+    /// Freed by @a, as drop() frees by stateless(): for an A with state, which
+    /// its holder keeps.
+    ///
+    /// # Safety
+    /// @a is what @b was allocated from.
+    pub unsafe fn drop_in(b: Self, a: &A) {
+        let p = Self::into_raw(b);
+        unsafe { <T as RcuFreeing>::free(NonNull::new_unchecked(T::from_thin(p.as_ptr()).cast_mut()), a) }
+    }
 }
 
 impl<T: ?Sized + SelfSized, A: Alloc> Deref for ThinBox<T, A> {
@@ -194,7 +207,8 @@ impl<T: ?Sized + SelfSized, A: Alloc> DerefMut for ThinBox<T, A> {
 
 impl<T: ?Sized + SelfSized, A: Alloc> Drop for ThinBox<T, A> {
     fn drop(&mut self) {
-        let a = stateless::<A>();
+        let a = try_stateless::<A>()
+            .expect("a ThinBox from an allocator with state, dropped: its holder frees it, by drop_in()");
         // SAFETY: a Box<T, A>'s, ours
         unsafe { <T as RcuFreeing>::free(NonNull::new_unchecked(T::from_thin(self.p.as_ptr()).cast_mut()), &a) }
     }

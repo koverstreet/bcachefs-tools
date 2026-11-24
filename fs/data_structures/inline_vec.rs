@@ -8,8 +8,8 @@
 //! heap it's a DstVec, a pointer, its low bit clear; inline, that word's low
 //! bytes are an @L holding the length shifted up past a set low bit, and the
 //! elements follow. So an inline length is at most @L's half, and N may be no
-//! more. Spilling is a DstVec's allocation, from @A - kept beside the union
-//! for the first, and in the DstVec after - and fallible: an AllocError, where
+//! more. Spilling is a DstVec's allocation, from @A - kept beside the union,
+//! which the DstVec is grown and freed by - and fallible: an AllocError, where
 //! darray_make_room() is -ENOMEM. Once on the heap it stays there: shrinking
 //! back would move the elements again for nothing.
 //!
@@ -24,7 +24,7 @@
 //! period on if they aren't FreeAnytime.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::data_structures::dst_vec::{DstVec, DstVecHead};
+use crate::data_structures::dst_vec::DstVec;
 use crate::util::alloc::{Alloc, AllocError, KVmalloc};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu;
@@ -138,14 +138,15 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
     /// release - an RCU reader may be in the elements it had, and has to see
     /// what was copied into @heap once it sees @heap.
     fn set_heap(&mut self, heap: DstVec<T, L, A>) {
-        let word = unsafe { AtomicPtr::from_ptr((&raw mut self.repr.heap).cast::<*mut DstVecHead<L, A>>()) };
+        let word = unsafe { AtomicPtr::from_ptr((&raw mut self.repr.heap).cast::<*mut ()>()) };
         word.store(heap.into_raw().as_ptr(), Release);
     }
 
     /// Its elements moved into @into, if it has more room - allocated before,
     /// as under a spinlock it must be - and what they were in freed, as they
-    /// say; else @into back.
+    /// say; else @into back. Only for an @A with no state: @into's then is its.
     pub fn grow_into(&mut self, mut into: DstVec<T, L, A>) -> Result<(), DstVec<T, L, A>> {
+        const { assert!(size_of::<A>() == 0, "InlineVec::grow_into() with an allocator with state: @into could be another's") };
         let len = self.len();
         if into.capacity() <= self.capacity() || !into.is_empty() {
             return Err(into);
@@ -158,7 +159,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
         if self.spilled() {
             let old = unsafe { ManuallyDrop::take(&mut self.repr.heap) };
             self.set_heap(into);
-            unsafe { old.free_moved() };
+            unsafe { old.free_moved_in(&self.alloc) };
         } else {
             self.set_heap(into);
         }
@@ -185,7 +186,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
             if tag & 1 != 0 {
                 slice::from_raw_parts((&raw const (*inline).elems).cast::<T>(), tag >> 1)
             } else {
-                let word = AtomicPtr::from_ptr((&raw const (*v).repr.heap).cast::<*mut DstVecHead<L, A>>().cast_mut());
+                let word = AtomicPtr::from_ptr((&raw const (*v).repr.heap).cast::<*mut ()>().cast_mut());
                 DstVec::<T, L, A>::read_rcu(word.load(Acquire))
             }
         }
@@ -195,7 +196,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
     /// inline: darray_make_room().
     pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
         if self.spilled() {
-            return unsafe { (*self.repr.heap).reserve(additional) };
+            return unsafe { (*self.repr.heap).reserve_in(additional, &self.alloc) };
         }
 
         let want = self.len().checked_add(additional).ok_or(AllocError)?;
@@ -214,7 +215,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
         }
 
         self.reserve(1)?;
-        unsafe { (*self.repr.heap).push(x) }
+        unsafe { (*self.repr.heap).push_in(x, &self.alloc) }
     }
 
     /// Empty, keeping what it's allocated: a darray's nr = 0.
@@ -268,7 +269,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
 impl<T, const N: usize, L: LenUint, A: Alloc + Copy> Drop for InlineVec<T, N, L, A> {
     fn drop(&mut self) {
         if self.spilled() {
-            unsafe { ManuallyDrop::drop(&mut self.repr.heap) };
+            unsafe { ManuallyDrop::take(&mut self.repr.heap).drop_in(&self.alloc) };
         } else {
             self.clear();
         }

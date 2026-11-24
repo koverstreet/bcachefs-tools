@@ -437,7 +437,7 @@ impl<T: Sync, H: Sync> RcuArray<T, H> {
     where
         T: FromZeros,
     {
-        RcuArrayBuf::<T, H>::alloc_box(nr, RcuArrayHead::new(h))
+        RcuArrayBuf::<T, H>::alloc(nr, RcuArrayHead::new(h))
     }
 
     /// alloc(), for what mustn't fail to allocate.
@@ -445,7 +445,7 @@ impl<T: Sync, H: Sync> RcuArray<T, H> {
     where
         T: FromZeros,
     {
-        RcuArrayBuf::<T, H>::alloc_box_nofail(nr, RcuArrayHead::new(h))
+        RcuArrayBuf::<T, H>::alloc_nofail(nr, RcuArrayHead::new(h))
     }
 
     /// A buffer's header and elements: one not published here, but linked

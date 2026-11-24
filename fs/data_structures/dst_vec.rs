@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! DstVec<T, L, A>: a vector on a DstArray, its length and allocator the
-//! header and its capacity the count, so it's a single pointer, its low bit clear:
-//! InlineVec tags it. Its allocator is in its allocation - where it frees to
-//! travels with what it frees, as a bio's bi_pool does.
+//! DstVec<T, L, A>: a vector on a DstArray, its length the header and its
+//! capacity the count, owned by a ThinBox - so it's a single pointer, its low
+//! bit clear: InlineVec tags it. It keeps no allocator: one with no state
+//! frees it as it drops; one with state - a bio's BvecAlloc - is its holder's,
+//! handed to what allocates or frees: reserve_in(), push_in(), drop_in().
 
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::DstArray;
-use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::alloc::{stateless, Alloc, AllocError, KVmalloc};
+use crate::util::thin::ThinBox;
 use crate::util::vstructs::{FlexArray, SelfSized};
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
@@ -17,21 +19,17 @@ use core::slice;
 use core::sync::atomic::{AtomicPtr, Ordering::Release};
 
 #[repr(C)]
-pub struct DstVecHead<L, A> {
-    len:   L,
-    alloc: A,
+pub struct DstVecHead<L> {
+    len: L,
 }
 
-type Buf<T, L, A> = DstArray<DstVecHead<L, A>, MaybeUninit<T>, L>;
+type Buf<T, L> = DstArray<DstVecHead<L>, MaybeUninit<T>, L>;
 
 #[repr(transparent)]
 pub struct DstVec<T, L: LenUint = u32, A: Alloc + Copy = KVmalloc> {
-    head: NonNull<DstVecHead<L, A>>,
-    _t: PhantomData<T>,
+    buf: ThinBox<Buf<T, L>, A>,
+    _t:  PhantomData<T>,
 }
-
-unsafe impl<T: Send, L: LenUint, A: Alloc + Copy + Send> Send for DstVec<T, L, A> {}
-unsafe impl<T: Sync, L: LenUint, A: Alloc + Copy + Sync> Sync for DstVec<T, L, A> {}
 
 impl<T, L: LenUint> DstVec<T, L> {
     pub fn with_capacity(cap: usize) -> Result<Self, AllocError> {
@@ -42,8 +40,7 @@ impl<T, L: LenUint> DstVec<T, L> {
     /// type is a bug.
     pub fn with_capacity_nofail(cap: usize) -> Self {
         assert!(cap <= L::MAX, "a DstVec of {cap}, past its length type");
-        let head = Buf::<T, L, KVmalloc>::alloc_nofail(cap, DstVecHead { len: L::ZERO, alloc: KVmalloc });
-        Self { head, _t: PhantomData }
+        Self { buf: Buf::<T, L>::alloc_nofail(cap, DstVecHead { len: L::ZERO }), _t: PhantomData }
     }
 }
 
@@ -54,47 +51,45 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
         if cap > L::MAX {
             return Err(AllocError);
         }
-        let head = DstVecHead { len: L::ZERO, alloc };
-        Ok(Self { head: Buf::<T, L, A>::alloc_in(cap, head, &alloc)?, _t: PhantomData })
+        Ok(Self { buf: Buf::<T, L>::alloc_in(cap, DstVecHead { len: L::ZERO }, &alloc)?, _t: PhantomData })
     }
 
     /// What one with room for @cap is allocated as: a mempool's element, for
     /// a pool of them.
     pub fn alloc_size(cap: usize) -> usize {
-        Buf::<T, L, A>::layout(cap).expect("a DstVec's layout").0.size()
-    }
-
-    fn buf(&self) -> &Buf<T, L, A> {
-        unsafe { &*Buf::<T, L, A>::from_thin(self.head.as_ptr().cast()) }
-    }
-
-    fn buf_mut(&mut self) -> &mut Buf<T, L, A> {
-        unsafe { &mut *Buf::<T, L, A>::from_thin(self.head.as_ptr().cast()).cast_mut() }
+        Buf::<T, L>::layout(cap).expect("a DstVec's layout").0.size()
     }
 
     pub fn len(&self) -> usize {
-        self.buf().head().len.to_usize()
+        self.buf.head().len.to_usize()
     }
 
     pub fn capacity(&self) -> usize {
-        self.buf().nr()
+        self.buf.nr()
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.buf_mut().elems.as_mut_ptr().cast()
+        self.buf.elems.as_mut_ptr().cast()
     }
 
     /// # Safety
     /// The first @len are initialized, and @len is within its capacity.
     pub unsafe fn set_len(&mut self, len: usize) {
-        // through the buffer's own pointer to its header, not the buffer: it
-        // has its header only by &
-        unsafe { (*self.head.as_ptr()).len = L::from_usize(len) };
+        self.buf.head_mut().len = L::from_usize(len);
     }
 
     /// Room for @additional more: if there isn't, a new allocation at least
-    /// twice the size, from its allocator.
+    /// twice the size, from its allocator - none of its own, stateless().
     pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
+        unsafe { self.reserve_in(additional, &stateless::<A>()) }
+    }
+
+    /// reserve(), from @a; what it's grown out of freed by @a, as its
+    /// elements say.
+    ///
+    /// # Safety
+    /// @a is what it was allocated from.
+    pub unsafe fn reserve_in(&mut self, additional: usize, a: &A) -> Result<(), AllocError> {
         let len = self.len();
         let want = len.checked_add(additional).ok_or(AllocError)?;
         if want <= self.capacity() {
@@ -104,47 +99,68 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
             return Err(AllocError);
         }
 
-        let alloc = self.buf().head().alloc;
         let cap = want.max(self.capacity().saturating_mul(2)).min(L::MAX);
-        let head = DstVecHead { len: L::from_usize(len), alloc };
-        let new = unsafe { Buf::<T, L, A>::realloc_in(self.head, len, cap, head, &alloc)? };
-        let old = self.head;
+        let new = unsafe { Buf::<T, L>::realloc_in(&self.buf, len, cap, DstVecHead { len: L::from_usize(len) }, a)? };
         // by a release: an RCU reader that sees @new sees what was copied
-        unsafe { AtomicPtr::from_ptr((&raw mut self.head).cast::<*mut DstVecHead<L, A>>()) }.store(new.as_ptr(), Release);
-        unsafe { Buf::<T, L, A>::free_in(old, &alloc) };
+        let word = unsafe { AtomicPtr::from_ptr((&raw mut self.buf).cast::<*mut ()>()) };
+        let old = word.swap(ThinBox::into_raw(new).as_ptr(), Release);
+        unsafe { ThinBox::drop_in(ThinBox::<Buf<T, L>, A>::from_raw(NonNull::new_unchecked(old)), a) };
         Ok(())
     }
 
-    /// Its buffer, owned by the caller.
-    pub(crate) fn into_raw(self) -> NonNull<DstVecHead<L, A>> {
-        ManuallyDrop::new(self).head
+    /// Its buffer, owned by the caller, as a word: from_raw()'s to take back.
+    pub(crate) fn into_raw(self) -> NonNull<()> {
+        ThinBox::into_raw(self.into_buf())
     }
 
-    /// Its buffer freed, not its elements: they've been moved out.
-    ///
-    /// # Safety
-    /// Its first len() have been moved out, and nothing but RCU readers uses
-    /// it after.
-    pub(crate) unsafe fn free_moved(self) {
-        let alloc = self.buf().head().alloc;
-        unsafe { Buf::<T, L, A>::free_in(self.into_raw(), &alloc) };
+    fn into_buf(self) -> ThinBox<Buf<T, L>, A> {
+        let this = ManuallyDrop::new(self);
+        // its own, read out of what's never dropped
+        unsafe { ptr::read(&this.buf) }
     }
 
-    /// The elements of the buffer at @head, as an RCU reader sees them,
-    /// their length read whole: as InlineVec::read_rcu().
+    /// Its elements dropped and its buffer freed by @a: drop(), for an @A
+    /// with state.
     ///
     /// # Safety
-    /// As InlineVec::read_rcu()'s.
-    pub(crate) unsafe fn read_rcu<'a>(head: *mut DstVecHead<L, A>) -> &'a [T] {
+    /// @a is what it was allocated from.
+    pub(crate) unsafe fn drop_in(mut self, a: &A) {
+        self.clear();
+        unsafe { self.free_moved_in(a) }
+    }
+
+    /// Its buffer freed by @a, not its elements: they've been moved out.
+    ///
+    /// # Safety
+    /// @a is what it was allocated from; its first len() have been moved
+    /// out, and nothing but RCU readers uses it after.
+    pub(crate) unsafe fn free_moved_in(self, a: &A) {
+        unsafe { ThinBox::drop_in(self.into_buf(), a) }
+    }
+
+    /// The elements of the buffer at @p, as an RCU reader sees them, their
+    /// length read whole: as InlineVec::read_rcu().
+    ///
+    /// # Safety
+    /// As InlineVec::read_rcu()'s, @p a DstVec's into_raw().
+    pub(crate) unsafe fn read_rcu<'a>(p: *mut ()) -> &'a [T] {
         unsafe {
-            let buf = Buf::<T, L, A>::from_thin(head.cast());
-            let len = ptr::read_volatile(&raw const (*head).len).to_usize();
+            let buf = Buf::<T, L>::from_thin(p);
+            let len = ptr::read_volatile(&raw const (*p.cast::<DstVecHead<L>>()).len).to_usize();
             slice::from_raw_parts((&raw const (*buf).elems).cast::<T>(), len)
         }
     }
 
     pub fn push(&mut self, x: T) -> Result<(), AllocError> {
-        self.reserve(1)?;
+        unsafe { self.push_in(x, &stateless::<A>()) }
+    }
+
+    /// push(), growing from @a.
+    ///
+    /// # Safety
+    /// @a is what it was allocated from.
+    pub unsafe fn push_in(&mut self, x: T, a: &A) -> Result<(), AllocError> {
+        unsafe { self.reserve_in(1, a)? };
         let len = self.len();
         unsafe {
             self.as_mut_ptr().add(len).write(x);
@@ -165,8 +181,6 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
 impl<T, L: LenUint, A: Alloc + Copy> Drop for DstVec<T, L, A> {
     fn drop(&mut self) {
         self.clear();
-        let alloc = self.buf().head().alloc;
-        unsafe { Buf::<T, L, A>::free_in(self.head, &alloc) };
     }
 }
 
@@ -174,8 +188,7 @@ impl<T, L: LenUint, A: Alloc + Copy> Deref for DstVec<T, L, A> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        let buf = self.buf();
-        unsafe { slice::from_raw_parts(buf.elems.as_ptr().cast(), buf.head().len.to_usize()) }
+        unsafe { slice::from_raw_parts(self.buf.elems.as_ptr().cast(), self.len()) }
     }
 }
 
@@ -230,8 +243,8 @@ mod tests {
     fn freed_by_what_it_was_given() {
         let freed = core::cell::Cell::new(None);
         let v = DstVec::<u64, u16, _>::with_capacity_in(2, Rounding(&freed)).unwrap();
-        assert_eq!(v.capacity(), (256 - Buf::<u64, u16, Rounding<'_>>::TAIL) / 8, "its room is what the allocator gave");
-        drop(v);
+        assert_eq!(v.capacity(), (256 - Buf::<u64, u16>::TAIL) / 8, "its room is what the allocator gave");
+        unsafe { v.drop_in(&Rounding(&freed)) };
         assert_eq!(freed.get(), Some(256), "freed as the size it was given, not asked for");
     }
 }

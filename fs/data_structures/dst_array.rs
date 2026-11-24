@@ -46,6 +46,11 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     pub fn head(&self) -> &H {
         &self.head
     }
+
+    /// Its header, to edit: its count is its own, past it.
+    pub fn head_mut(&mut self) -> &mut H {
+        &mut self.head
+    }
 }
 
 // SAFETY: its count says how long the array is, and is written only as it's
@@ -111,18 +116,19 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
         <Self as RcuFreeing>::layout_of(value)
     }
 
-    /// @head, and a count of @nr, at @offset in @given.
-    fn place(head: H, nr: usize, given: NonNull<[u8]>, offset: usize) -> NonNull<H> {
+    /// @head, and a count of @nr, at @offset in @given - @a's, at layout() -
+    /// owned.
+    fn place<A: Alloc>(head: H, nr: usize, given: NonNull<[u8]>, offset: usize) -> ThinBox<Self, A> {
         let p = unsafe { given.cast::<u8>().add(offset) };
         unsafe {
             p.cast::<H>().write(head);
             p.add(Self::NR).cast::<L>().write(L::from_usize(nr));
+            ThinBox::from_raw(p.cast())
         }
-        p.cast()
     }
 
-    /// One of @nr elements, all zero, with @head.
-    pub fn alloc(nr: usize, head: H) -> Result<NonNull<H>, AllocError>
+    /// One of @nr elements, all zero, with @head: freed as its markers say.
+    pub fn alloc(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
     where
         T: FromZeros,
     {
@@ -131,14 +137,14 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
 
     /// alloc(), for what mustn't fail to allocate: a size past isize::MAX
     /// bytes, or past what its count holds, is a bug.
-    pub fn alloc_nofail(nr: usize, head: H) -> NonNull<H>
+    pub fn alloc_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc>
     where
         T: FromZeros,
     {
         Self::alloc_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<NonNull<H>, AllocError>
+    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
     where
         T: FromZeros,
     {
@@ -147,35 +153,10 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
         Ok(Self::place(head, nr, given, offset))
     }
 
-    /// alloc(), owned: freed as its markers say.
-    pub fn alloc_box(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
-    where
-        T: FromZeros,
-    {
-        Self::alloc_box_gfp(nr, head, Flags::empty())
-    }
-
-    /// alloc_box(), for what mustn't fail to allocate.
-    pub fn alloc_box_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc>
-    where
-        T: FromZeros,
-    {
-        Self::alloc_box_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
-    }
-
-    fn alloc_box_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
-    where
-        T: FromZeros,
-    {
-        let p = Self::alloc_gfp(nr, head, gfp)?;
-        // KVmalloc's, ours, at layout()
-        Ok(unsafe { ThinBox::from_raw(p.cast()) })
-    }
-
     /// alloc(), of room for @nr from @a, its count the room @a gave - which
     /// may be more, and is what it's freed as: a mempool tells its elements by
     /// their size.
-    pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<NonNull<H>, AllocError>
+    pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<ThinBox<Self, A>, AllocError>
     where
         T: FromZeros,
     {
@@ -186,33 +167,19 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     }
 
     /// One of room for @nr from @a, as alloc_in(), @old's first @keep elements
-    /// moved into it, the rest zero. @old stays allocated: freeing it is its
-    /// owner's, now or after a grace period.
+    /// moved into it, the rest zero. @old stays its owner's, to free now or
+    /// after a grace period.
     ///
     /// # Safety
-    /// @old is valid, and @keep within both. Its first @keep are moved, not
-    /// copied: they're not to be dropped in @old.
-    pub unsafe fn realloc_in<A: Alloc>(old: NonNull<H>, keep: usize, nr: usize, head: H, a: &A)
-        -> Result<NonNull<H>, AllocError>
+    /// @keep is within both. @old's first @keep are moved, not copied: they're
+    /// not to be dropped in @old.
+    pub unsafe fn realloc_in<A: Alloc>(old: &Self, keep: usize, nr: usize, head: H, a: &A)
+        -> Result<ThinBox<Self, A>, AllocError>
     where
         T: FromZeros,
     {
-        let new = Self::alloc_in(nr, head, a)?;
-        unsafe {
-            let from = (*Self::from_thin(old.as_ptr().cast())).elems.as_ptr();
-            let to = (*Self::from_thin(new.as_ptr().cast()).cast_mut()).elems.as_mut_ptr();
-            ptr::copy_nonoverlapping(from, to, keep);
-        }
+        let mut new = Self::alloc_in(nr, head, a)?;
+        unsafe { ptr::copy_nonoverlapping(old.elems.as_ptr(), new.elems.as_mut_ptr(), keep) };
         Ok(new)
-    }
-
-    /// Dropped and freed, now or a grace period on, as its markers say.
-    ///
-    /// # Safety
-    /// @p is @a's - alloc()'s are KVmalloc's - its nr() the room @a gave, and
-    /// nothing but RCU readers uses it after.
-    pub unsafe fn free_in<A: Alloc>(p: NonNull<H>, a: &A) {
-        let p = unsafe { NonNull::new_unchecked(Self::from_thin(p.as_ptr().cast()).cast_mut()) };
-        unsafe { <Self as RcuFreeing>::free(p, a) };
     }
 }
