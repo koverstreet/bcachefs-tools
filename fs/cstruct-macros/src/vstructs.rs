@@ -747,9 +747,8 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// attribute says - as #[unsized_vstruct]'s, `tail = [E]`, the states'
 /// `_tail`, or `tail = NAME: [E]`, a field of a field the states call NAME.
 ///
-/// The head gets FakeFlexArray from the count - its size, TAIL and the
-/// elements past it - and CountedHead, the way to its Unvalidated definition
-/// from what holds its bytes.
+/// The head gets CountedHead: the way to its definitions from what holds its
+/// bytes, and the count, for what has the head apart from its array.
 pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let vs = vs();
     let def = parse_cstruct(&item)?;
@@ -778,7 +777,6 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 
     let mut out = rename_struct(item, &def, &written)?;
     let msg = format!("{name}: its elements aren't a whole number of its alignment");
-    out.extend(flex_impl(&written, &tail_at, &elem, &count));
     let count_path = quote!(#(#count).*);
     out.extend(states().map(|st| quote! {
         impl #vs::FlexArray for #name<#vs::#st> {
@@ -793,6 +791,12 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     out.extend(quote! {
         impl #vs::CountedHead for #written {
             type Of<S: #vs::State> = #name<S>;
+
+            #[inline]
+            fn nr(&self) -> usize {
+                // the count by value: a packed header's field can't be borrowed
+                #vs::Count::count(&{ self.#count_path })
+            }
         }
 
         // a reference as long as its count says is a whole number of its
@@ -1172,20 +1176,4 @@ fn rename_struct(item: TokenStream, def: &StructDef, to: &Ident) -> Result<Token
     }
     out.extend(tts);
     Ok(out)
-}
-
-/// FakeFlexArray for @name: @elem from @tail_at, as many as @count, a field's
-/// path, says.
-fn flex_impl(name: &Ident, tail_at: &TokenStream, elem: &syn::Type, count: &[Ident]) -> TokenStream {
-    let vs = vs();
-    // the count by value: a reference to a packed struct's field may be
-    // unaligned
-    quote! {
-        impl #vs::FakeFlexArray for #name {
-            type Elem = #elem;
-            const TAIL: usize = #tail_at;
-            #[inline]
-            fn nr(&self) -> usize { #vs::Count::count(&{ self.#(#count).* }) }
-        }
-    }
 }

@@ -12,8 +12,6 @@
 //! from fewer bytes than the header.
 //!
 //! What a variable-size type can be, most general first:
-//!  - FakeFlexArray: sized, a #[counted] family's head, its array running
-//!    past its size_of - the DST typed as its header, to be converted.
 //!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
 //!    #[counted] array, a #[whole] or #[grown] value. SelfSized, if its head
 //!    says how long it is, as an unsized vstruct's does.
@@ -166,8 +164,7 @@ native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, 
 
 /// A DST whose head records its length: so a thin pointer, the value's
 /// address alone, reaches all of one (util/thin.rs's pointer types). Never a
-/// sized type - a pointer to one is already thin, and one that runs past its
-/// size_of is a FakeFlexArray.
+/// sized type: a pointer to one is already thin.
 ///
 /// # Safety
 /// from_thin() of the address of a valid Self is a pointer to all of it. What
@@ -209,20 +206,6 @@ pub trait FlexArray: SelfSized {
 pub trait VStruct: SelfSized {
     /// Its header's count of u64s.
     fn u64s(&self) -> usize;
-}
-
-/// A type ending in a flexible array member, C's `T name[]`.
-///
-/// XXX: sized, its array past its size_of; it goes for FlexArray, a
-/// SelfSized DST counted in elements.
-pub trait FakeFlexArray {
-    /// What the array holds.
-    type Elem: Plain;
-    /// Where it starts: offset_of!(), not size_of - a flexible array can
-    /// start in the struct's trailing padding.
-    const TAIL: usize;
-    /// How many elements it holds, by the header's own fields.
-    fn nr(&self) -> usize;
 }
 
 /// A count a header's field holds - u64s, nr_devs - as a usize: a plain
@@ -1014,9 +997,15 @@ macro_rules! vstruct_family {
 /// elements: the family's type in state S, X<S>, by its head - for what
 /// holds a value's bytes to hand it out as: an ioctl's buffer, Unvalidated,
 /// the count checked against them; a tagged union whose arm it is, in the
-/// union's state.
-pub trait CountedHead: FakeFlexArray + Plain {
-    type Of<S: State>: ?Sized;
+/// union's state. And for what has the head apart from its array - copied
+/// in, the array still in user memory; given by value, the array to put past
+/// it: where the array starts and what it holds are X<S>'s, its Unsized
+/// TAIL and Elem, and how many, the head's.
+pub trait CountedHead: Plain {
+    type Of<S: State>: ?Sized + Unsized<Head = Self>;
+
+    /// How many elements its array holds, by its count.
+    fn nr(&self) -> usize;
 }
 
 /// Unsized type T's head, by T's name: for an unsized vstruct or a
@@ -1524,14 +1513,16 @@ where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag>
 ///
 /// # Safety
 /// As from_arm()'s.
-pub unsafe fn from_arm_tailed<U, D, A>(arm: A, tail: &[A::Elem], at: usize) -> Result<U, VStructError>
-where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag> + FakeFlexArray
+pub unsafe fn from_arm_tailed<U, D, A>(arm: A, tail: &[<A::Of<Validated> as Unsized>::Elem], at: usize)
+    -> Result<U, VStructError>
+where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag> + CountedHead
 {
     assert_eq!(arm.nr(), tail.len(), "{}: its header's count, and the elements given",
                core::any::type_name::<A>());
-    let (tail_at, len) = (at + A::TAIL, size_of_val(tail));
+    let a_tail = <A::Of<Validated> as Unsized>::TAIL;
+    let (tail_at, len) = (at + a_tail, size_of_val(tail));
     if tail_at + len > size_of::<U>() {
-        return Err(VStructError::Overrun { ty: core::any::type_name::<A>(), want: A::TAIL + len,
+        return Err(VStructError::Overrun { ty: core::any::type_name::<A>(), want: a_tail + len,
                                            have: size_of::<U>() - at });
     }
     let mut u: U = unsafe { with_payload(arm, at) };

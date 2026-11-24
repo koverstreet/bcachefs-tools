@@ -1052,8 +1052,9 @@ impl Gen<'_> {
                 /// From an arm ending in a flexible array, and that array - as many
                 /// elements as the arm's header says: an error if the storage can't
                 /// hold them.
-                #vis fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, #vs::VStructError>
-                where A: crate::types::ArmOf<#s_ty, Tag = #tag_ty> + #vs::FakeFlexArray
+                #vis fn from_arm_tailed<A>(arm: A, tail: &[<A::Of<#vs::Validated> as #vs::Unsized>::Elem])
+                    -> Result<Self, #vs::VStructError>
+                where A: crate::types::ArmOf<#s_ty, Tag = #tag_ty> + #vs::CountedHead
                 {
                     // SAFETY: as from_arm()'s
                     unsafe { #vs::from_arm_tailed::<#s_ty, #determinant, A>(arm, tail, #payload_offset) }
