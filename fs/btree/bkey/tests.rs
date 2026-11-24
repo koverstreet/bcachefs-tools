@@ -1,7 +1,7 @@
 use super::*;
 use crate::c;
 use crate::format::BkeyType;
-use crate::util::vstructs::ArmRef;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmAt, ArmRef, VStructError};
 use crate::types::Le32;
 
 /// A snapshot key from before depth, skip and btime - 24 bytes of its 64 -
@@ -133,4 +133,18 @@ fn bpos_successor_of_max() {
 #[should_panic(expected = "no position before POS_MIN")]
 fn bpos_predecessor_of_min() {
     POS_MIN.predecessor();
+}
+
+/// A key whose u64s says no more than its header, parsed as a type with a
+/// sized value: shorter than any such key is, so an error - not a reference
+/// claiming the value past the bytes.
+#[test]
+fn bkey_arm_at_short() {
+    let mut k = c::bkey::default();
+    k.u64s = (size_of::<c::bkey>() / size_of::<u64>()) as u8;
+    let mut b = [0u64; size_of::<c::bkey>() / size_of::<u64>()];
+    plain_bytes_mut(&mut b).copy_from_slice(plain_bytes(&k));
+
+    assert!(matches!(BkeyI::<c::Lru>::arm_at(plain_bytes(&b)),
+                     Err(VStructError::Short { len: 40, min: 48, .. })));
 }

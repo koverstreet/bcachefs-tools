@@ -58,8 +58,8 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{ArmRef, FakeDst, InState, SelfSized, SizedArm, State, Unsized, Unvalidated,
-                            UnvalidatedSized, VStruct, Validated, Whole};
+use crate::util::vstructs::{parse_at, ArmAt, ArmRef, FakeDst, InState, SelfSized, SizedArm, State, Unsized,
+                            Unvalidated, UnvalidatedSized, VStruct, VStructError, Validated, Whole};
 use core::marker::PhantomData;
 
 #[repr(C)]
@@ -127,6 +127,12 @@ unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
 impl FakeDst for c::bkey {
     fn bytes(&self) -> usize {
         c::bkey::bytes(self)
+    }
+}
+
+impl<V: Unsized + ?Sized> ArmAt for BkeyI<V> {
+    fn arm_at(b: &[u8]) -> Result<&Self, VStructError> {
+        parse_at::<Self>(b, c::bkey::bytes)
     }
 }
 

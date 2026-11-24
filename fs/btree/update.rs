@@ -23,7 +23,7 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, Container, EntryWalk, FakeDst, Head, Plain, Unsized,
+use crate::util::vstructs::{plain_bytes, ArmAt, Container, EntryWalk, Head, Plain, Unsized,
                             Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -339,19 +339,24 @@ impl TransAttempt<'_, '_> {
         self.trans().updates_to_text(out)
     }
 
-    /// An entry with header @head at the sub-buffer's end, the rest of it - as
-    /// long as @head says - for @tail to write.
-    pub fn subbuf_push<T: Unsized<Head: Plain + FakeDst> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
-                                                                    head: &T::Head, tail: impl FnOnce(&mut [u64]))
+    /// An entry with header @head at the sub-buffer's end, and @tail_u64s past
+    /// it for @tail to write - as long as @head says, which is checked.
+    pub fn subbuf_push<T: ArmAt + Unsized<Head: Plain> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
+                                                                  head: &T::Head, tail_u64s: usize,
+                                                                  tail: impl FnOnce(&mut [u64]))
         -> Result<(), BchError>
     {
         const { assert!(size_of::<T::Head>() == T::TAIL && T::TAIL % size_of::<u64>() == 0 &&
                         size_of::<T::Elem>() == size_of::<u64>()) };
 
-        let mut p = self.subbuf_alloc(cell, head.bytes() / size_of::<u64>())?;
-        let (h, t) = unsafe { p.as_mut() }.split_at_mut(T::TAIL / size_of::<u64>());
+        let head_u64s = T::TAIL / size_of::<u64>();
+        let mut p = self.subbuf_alloc(cell, head_u64s + tail_u64s)?;
+        let e = unsafe { p.as_mut() };
+        let (h, t) = e.split_at_mut(head_u64s);
         h.as_mut_bytes().copy_from_slice(plain_bytes(head));
         tail(t);
+        assert!(T::arm_at(e.as_bytes()).is_ok_and(|v| size_of_val(v) == size_of_val(e)),
+                "a sub-buffer entry of {tail_u64s} u64s past its header, which says otherwise");
         Ok(())
     }
 
@@ -428,9 +433,10 @@ impl TransAttempt<'_, '_> {
         h.type_ = ty.0 as u8;
         h.btree_id = btree;
         h.level = level;
-        h.set_u64s(data.len().div_ceil(size_of::<u64>()));
+        let u64s = data.len().div_ceil(size_of::<u64>());
+        h.set_u64s(u64s);
 
-        self.subbuf_push(&self.trans().journal_entries, &h, |v| {
+        self.subbuf_push(&self.trans().journal_entries, &h, u64s, |v| {
             let (d, pad) = v.as_mut_bytes().split_at_mut(data.len());
             d.copy_from_slice(data);
             pad.fill(0);

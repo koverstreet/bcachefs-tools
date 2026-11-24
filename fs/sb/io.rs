@@ -154,7 +154,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, FakeDst, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmAt, ArmRef, Head, InPlace, InState, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -318,7 +318,7 @@ macro_rules! sb_err_on {
 /// Unvalidated.
 pub fn entries_end<E>(b: &[u8], head: usize, is_entry: impl Fn(&E) -> bool) -> Option<usize>
 where
-    E: Unsized<Head: Plain + FakeDst> + InState<State = Unvalidated> + ?Sized,
+    E: ArmAt + InState<State = Unvalidated> + ?Sized,
 {
     let entries = UnvalidatedEntries::<E>::new(b.get(head..)?).map_while(Result::ok);
     Some(head + entries.take_while(|e| is_entry(e)).map(size_of_val).sum::<usize>())
