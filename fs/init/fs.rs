@@ -41,7 +41,6 @@ use crate::os::kobject::{GroupList, KobjOwner, Kobject};
 use crate::os::module::ModuleRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::os::percpu::PerCpu;
 use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
 use crate::util::refcount::{RefGuard, WaitableRef};
@@ -443,8 +442,8 @@ fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Hold
 const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
 
 impl Fs {
-    /// What's set while nothing else can reach it: its @holder, its counters -
-    /// before any error's thrown - its superblock, and its name.
+    /// What's set while nothing else can reach it: its @holder, its superblock,
+    /// and its name.
     fn init_early(mut self: Pin<&mut Self>, sbs: &KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
                   holder: Arc<Holder>) -> Result<(), BchError> {
         *self.as_mut().project().holder = Some(holder);
@@ -453,10 +452,6 @@ impl Fs {
         *self.as_mut().project().module_ref = Some(ModuleRef::get());
 
         allocator_foreground_init(&self);
-
-        /* must be initialized before we throw any errors */
-        self.as_mut().project().counters.now =
-            PerCpu::alloc().map_err(|_| BchError::from(Errcode::ENOMEM_fs_counters_init))?;
 
         {
             let mut sb = self.sb_lock();
@@ -929,10 +924,7 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     unsafe { c::journal::exit(&raw mut (*p).journal) };
     ec_exit(fs);
     fs.counters_recent.cancel_sync();
-    unsafe {
-        (*p).counters.now.free();
-        btree_exit(p);
-    }
+    unsafe { btree_exit(p) };
     fs.tasks().drain();
     unsafe { fs.disk_groups.free() };
 }

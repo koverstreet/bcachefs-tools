@@ -581,6 +581,8 @@ pub struct Fs {
     #[init(crate::sb::members::BtreeBitmapGcSchedule::init())]
     pub maybe_schedule_btree_bitmap_gc: crate::os::workqueue::DelayedWork,
 
+    #[pin]
+    #[init(crate::util::alloc::init_or(c::bch_fs_counters::init(), c::Errcode::ENOMEM_fs_counters_init))]
     pub counters: c::bch_fs_counters,
     #[pin]
     #[init(crate::sb::counters::RecentCounters::init())]
