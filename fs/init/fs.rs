@@ -921,7 +921,6 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     // work uses
     unsafe { fs.exit_late() };
     reconcile_exit(fs);
-    unsafe { c::journal::exit(&raw mut (*p).journal) };
     ec_exit(fs);
     fs.counters_recent.cancel_sync();
     unsafe { btree_exit(p) };

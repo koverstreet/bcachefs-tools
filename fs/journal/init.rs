@@ -216,15 +216,6 @@ impl c::journal {
         drop(old);
         Ok(())
     }
-
-    /// # Safety
-    /// The filesystem's going away: nothing else touches the journal.
-    pub unsafe fn exit(j: *mut c::journal) {
-        let j = unsafe { &mut *j };
-
-        drop(core::mem::take(&mut j.lock.get_mut().early_journal_entries));
-        drop(core::mem::take(j.rewind_ranges.get_mut()));
-    }
 }
 
 impl Dev {
