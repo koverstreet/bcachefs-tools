@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! DstArray<H, T>: a header and the array after it in one allocation, reached
-//! by a thin pointer to the header, which says how long the array is - as C's
-//! flexible array members are sized by a field before them. For DstVec, and
-//! for util/rcu.rs's RcuArray.
+//! DstArray<H, T, L>: a header, a count and the array after it in one
+//! allocation, reached by a thin pointer to the header - the count says how
+//! long the array is, as C's flexible array members are sized by a field
+//! before them. For DstVec, and for util/rcu.rs's RcuArray.
 //!
 //! Allocated as RcuArray's always were, by kvzalloc() - so kvfree_rcu() can
 //! free one - or by an allocator of its owner's; at least 8-aligned either
@@ -15,6 +15,7 @@
 //! kvfree() frees for can do.
 
 use crate::c;
+use crate::data_structures::array_vec::LenUint;
 use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::{FreeAnytime, HasRcuHead};
@@ -68,64 +69,65 @@ pub fn assert_rcu_freed<T>() {
     <T as ArrayFreeing>::assert_rcu_freed()
 }
 
-/// A DstArray's header: nr() is the length of the array after it.
-///
-/// # Safety
-/// nr() reads nothing that changes through a &Self.
-pub unsafe trait DstHead {
-    fn nr(&self) -> usize;
-}
-
-/// Its header is had only by &: nothing holding a DstArray can change how
-/// long it says the array is.
+/// The count is its own, after the header: written only as it's made, so
+/// nothing holding one can change how long it says the array is.
 #[repr(C)]
-pub struct DstArray<H, T> {
+pub struct DstArray<H, T, L: LenUint = usize> {
     head: H,
+    nr: L,
     pub elems: [T],
 }
 
-impl<H, T> DstArray<H, T> {
+impl<H, T, L: LenUint> DstArray<H, T, L> {
+    /// The count's offset.
+    const NR: usize = size_of::<H>().next_multiple_of(align_of::<L>());
+
     /// The array's offset.
-    pub const TAIL: usize = size_of::<H>().next_multiple_of(align_of::<T>());
+    pub const TAIL: usize = (Self::NR + size_of::<L>()).next_multiple_of(align_of::<T>());
 
     pub fn head(&self) -> &H {
         &self.head
     }
 }
 
-// SAFETY: the header says how long the array is - nr(), which nothing
-// changes through it - and is had only by &
-unsafe impl<H: DstHead, T> SelfSized for DstArray<H, T> {
-    const ALIGN: usize = align_max(align_of::<H>(), align_of::<T>());
-    const MIN_BYTES: usize = size_of::<H>().next_multiple_of(Self::ALIGN);
+// SAFETY: its count says how long the array is, and is written only as it's
+// made
+unsafe impl<H, T, L: LenUint> SelfSized for DstArray<H, T, L> {
+    const ALIGN: usize = align_max(align_max(align_of::<H>(), align_of::<L>()), align_of::<T>());
+    const MIN_BYTES: usize = Self::TAIL.next_multiple_of(Self::ALIGN);
 
     unsafe fn from_thin(p: *const ()) -> *const Self {
+        let nr = unsafe { *p.byte_add(Self::NR).cast::<L>() }.to_usize();
         // a slice pointer's length is the DST's tail's
-        ptr::slice_from_raw_parts(p.cast::<T>(), unsafe { (*p.cast::<H>()).nr() }) as *const Self
+        ptr::slice_from_raw_parts(p.cast::<T>(), nr) as *const Self
     }
 }
 
-impl<H: DstHead, T> FlexArray for DstArray<H, T> {
+impl<H, T, L: LenUint> FlexArray for DstArray<H, T, L> {
     type Elem = T;
 
     fn nr(&self) -> usize {
-        self.head.nr()
+        self.nr.to_usize()
     }
 }
 
 // its head is first
-impl<H: HasRcuHead, T> HasRcuHead for DstArray<H, T> {
+impl<H: HasRcuHead, T, L: LenUint> HasRcuHead for DstArray<H, T, L> {
     const HEAD: usize = H::HEAD;
     const WORK: bool = H::WORK;
 }
 
-impl<H: DstHead, T> DstArray<H, T> {
+impl<H, T, L: LenUint> DstArray<H, T, L> {
     /// What one of @nr elements is allocated as: its rcu_head, if it has one,
-    /// its header, and the array.
+    /// its header and count, and the array. An error past what its count
+    /// holds.
     pub fn layout(nr: usize) -> Result<Layout, AllocError> {
         const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
-        const { assert!(align_of::<H>() <= 8 && align_of::<T>() <= 8, "kvzalloc() aligns to 8") };
+        const { assert!(Self::ALIGN <= 8, "kvzalloc() aligns to 8") };
 
+        if nr > L::MAX {
+            return Err(AllocError);
+        }
         let bytes = nr.checked_mul(size_of::<T>())
             .and_then(|b| b.checked_add(Self::TAIL + <T as ArrayFreeing>::prefix()))
             .ok_or(AllocError)?;
@@ -133,64 +135,65 @@ impl<H: DstHead, T> DstArray<H, T> {
         Ok(Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?.pad_to_align())
     }
 
-    /// @head of the room @given has for elements, at the start of @given past
-    /// its rcu_head.
-    fn place(head: impl FnOnce(usize) -> H, given: NonNull<[u8]>) -> NonNull<H> {
-        let prefix = <T as ArrayFreeing>::prefix();
-        let room = (given.len() - prefix - Self::TAIL) / size_of::<T>();
-        let p = unsafe { given.cast::<u8>().add(prefix) }.cast::<H>();
-        unsafe { p.write(head(room)) };
-        p
+    /// @head, and a count of @nr, at the start of @given past its rcu_head.
+    fn place(head: H, nr: usize, given: NonNull<[u8]>) -> NonNull<H> {
+        let p = unsafe { given.cast::<u8>().add(<T as ArrayFreeing>::prefix()) };
+        unsafe {
+            p.cast::<H>().write(head);
+            p.add(Self::NR).cast::<L>().write(L::from_usize(nr));
+        }
+        p.cast()
     }
 
-    /// One with @head, whose nr() it's sized by, and its elements all zero.
-    pub fn alloc(head: H) -> Result<NonNull<H>, AllocError> {
-        Self::alloc_gfp(head, Flags::empty())
+    /// One of @nr elements, all zero, with @head.
+    pub fn alloc(nr: usize, head: H) -> Result<NonNull<H>, AllocError> {
+        Self::alloc_gfp(nr, head, Flags::empty())
     }
 
     /// alloc(), for what mustn't fail to allocate: a size past isize::MAX
-    /// bytes is a bug.
-    pub fn alloc_nofail(head: H) -> NonNull<H> {
-        Self::alloc_gfp(head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes")
+    /// bytes, or past what its count holds, is a bug.
+    pub fn alloc_nofail(nr: usize, head: H) -> NonNull<H> {
+        Self::alloc_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_gfp(head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
-        let given = KVmalloc.allocate_zeroed_gfp(Self::layout(head.nr())?, gfp)?;
-        Ok(Self::place(|_| head, given))
+    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
+        let given = KVmalloc.allocate_zeroed_gfp(Self::layout(nr)?, gfp)?;
+        Ok(Self::place(head, nr, given))
     }
 
     /// alloc(), owned: freed as its markers say. Its elements FreeAnytime, so
     /// no rcu_head before the header: the allocation is the array.
-    pub fn alloc_box(head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    pub fn alloc_box(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
     where
         T: FreeAnytime,
     {
-        Self::alloc_box_gfp(head, Flags::empty())
+        Self::alloc_box_gfp(nr, head, Flags::empty())
     }
 
     /// alloc_box(), for what mustn't fail to allocate.
-    pub fn alloc_box_nofail(head: H) -> ThinBox<Self, KVmalloc>
+    pub fn alloc_box_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc>
     where
         T: FreeAnytime,
     {
-        Self::alloc_box_gfp(head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes")
+        Self::alloc_box_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_box_gfp(head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    fn alloc_box_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
     where
         T: FreeAnytime,
     {
-        let p = Self::alloc_gfp(head, gfp)?;
+        let p = Self::alloc_gfp(nr, head, gfp)?;
         // KVmalloc's, ours, at layout() - for_value()'s, padded as it pads
         Ok(unsafe { ThinBox::from_raw(p.cast()) })
     }
 
-    /// alloc(), of room for @nr from @a, its header @head of the room @a gave
-    /// - which may be more, and is what it's freed as: a mempool tells its
-    /// elements by their size.
-    pub fn alloc_in<A: Alloc>(nr: usize, head: impl FnOnce(usize) -> H, a: &A) -> Result<NonNull<H>, AllocError> {
+    /// alloc(), of room for @nr from @a, its count the room @a gave - which
+    /// may be more, and is what it's freed as: a mempool tells its elements by
+    /// their size.
+    pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<NonNull<H>, AllocError> {
         let given = a.allocate_zeroed(Self::layout(nr)?)?;
-        Ok(Self::place(head, given))
+        let room = (given.len() - <T as ArrayFreeing>::prefix() - Self::TAIL) / size_of::<T>();
+        Ok(Self::place(head, room.min(L::MAX), given))
     }
 
     /// One of room for @nr from @a, as alloc_in(), @old's first @keep elements
@@ -200,7 +203,7 @@ impl<H: DstHead, T> DstArray<H, T> {
     /// # Safety
     /// @old is valid, and @keep within both. Its first @keep are moved, not
     /// copied: they're not to be dropped in @old.
-    pub unsafe fn realloc_in<A: Alloc>(old: NonNull<H>, keep: usize, nr: usize, head: impl FnOnce(usize) -> H, a: &A)
+    pub unsafe fn realloc_in<A: Alloc>(old: NonNull<H>, keep: usize, nr: usize, head: H, a: &A)
         -> Result<NonNull<H>, AllocError>
     {
         let new = Self::alloc_in(nr, head, a)?;
@@ -218,7 +221,7 @@ impl<H: DstHead, T> DstArray<H, T> {
     /// @p is @a's - alloc()'s are KVmalloc's - its nr() the room @a gave, its
     /// elements dropped or moved, and nothing but RCU readers uses it after.
     pub unsafe fn free_in<A: Alloc>(p: NonNull<H>, a: &A) {
-        let layout = Self::layout(unsafe { p.as_ref() }.nr()).expect("a DstArray's own layout");
+        let layout = Self::layout(unsafe { &*Self::from_thin(p.as_ptr().cast()) }.nr()).expect("a DstArray's own layout");
         let base = unsafe { p.cast::<u8>().byte_sub(<T as ArrayFreeing>::prefix()) };
         unsafe { <T as ArrayFreeing>::free(base, layout, a) };
     }

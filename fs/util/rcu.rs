@@ -33,10 +33,10 @@
 //!   !FreeAnytime, a build error if not - and what's taken out may be
 //!   dropped at once. Its writer, an RcuPtrWriter, publishes, replaces, takes
 //!   and get()s.
-//! - RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }`, an
-//!   RcuPtr<ThinBox<..>>, read as a &[T] and grown by copy and replace - its
-//!   elements RcuElements, plain data or atomics, copied bytewise. Its writer
-//!   is an RcuArrayWriter.
+//! - RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }` - the count
+//!   after H, DstArray's - an RcuPtr<ThinBox<..>>, read as a &[T] and grown
+//!   by copy and replace - its elements RcuElements, plain data or atomics,
+//!   copied bytewise. Its writer is an RcuArrayWriter.
 
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -45,7 +45,7 @@ use core::ops::Deref;
 use core::sync::atomic::{fence, AtomicPtr, Ordering};
 
 use crate::c;
-use crate::data_structures::dst_array::{DstArray, DstHead};
+use crate::data_structures::dst_array::DstArray;
 use crate::util::alloc::{AllocError, KVmalloc};
 use crate::util::vstructs::NonZeroWord;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
@@ -392,20 +392,12 @@ pub fn rcu_dereference<T>(p: &AtomicPtr<T>) -> *mut T {
 pub struct RcuArrayHead<H = ()> {
     #[rcu_head]
     rcu: RcuMember<RcuHead>,
-    nr:  usize,
     h:   H,
 }
 
 impl<H> RcuArrayHead<H> {
-    fn new(nr: usize, h: H) -> Self {
-        Self { rcu: RcuMember::default(), nr, h }
-    }
-}
-
-// SAFETY: nr, a plain field, written only as it's made
-unsafe impl<H> DstHead for RcuArrayHead<H> {
-    fn nr(&self) -> usize {
-        self.nr
+    fn new(h: H) -> Self {
+        Self { rcu: RcuMember::default(), h }
     }
 }
 
@@ -459,12 +451,12 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// the caller's to publish, to link from another buffer's header, or to
     /// drop.
     pub fn alloc(nr: usize, h: H) -> Result<RcuArrayBox<T, H>, AllocError> {
-        RcuArrayBuf::<T, H>::alloc_box(RcuArrayHead::new(nr, h))
+        RcuArrayBuf::<T, H>::alloc_box(nr, RcuArrayHead::new(h))
     }
 
     /// alloc(), for what mustn't fail to allocate.
     pub fn alloc_nofail(nr: usize, h: H) -> RcuArrayBox<T, H> {
-        RcuArrayBuf::<T, H>::alloc_box_nofail(RcuArrayHead::new(nr, h))
+        RcuArrayBuf::<T, H>::alloc_box_nofail(nr, RcuArrayHead::new(h))
     }
 
     /// A buffer's header and elements: one not published here, but linked

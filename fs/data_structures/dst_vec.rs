@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! DstVec<T, L, A>: a vector on a DstArray, its length, capacity and
-//! allocator the header, so it's a single pointer, its low bit clear:
+//! DstVec<T, L, A>: a vector on a DstArray, its length and allocator the
+//! header and its capacity the count, so it's a single pointer, its low bit clear:
 //! InlineVec tags it. Its allocator is in its allocation - where it frees to
 //! travels with what it frees, as a bio's bi_pool does.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::data_structures::dst_array::{DstArray, DstHead};
+use crate::data_structures::dst_array::DstArray;
 use crate::util::alloc::{Alloc, AllocError, KVmalloc};
-use crate::util::vstructs::SelfSized;
+use crate::util::vstructs::{FlexArray, SelfSized};
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -19,18 +19,10 @@ use core::sync::atomic::{AtomicPtr, Ordering::Release};
 #[repr(C)]
 pub struct DstVecHead<L, A> {
     len:   L,
-    cap:   L,
     alloc: A,
 }
 
-// SAFETY: cap, a plain field, written only as it's made
-unsafe impl<L: LenUint, A> DstHead for DstVecHead<L, A> {
-    fn nr(&self) -> usize {
-        self.cap.to_usize()
-    }
-}
-
-type Buf<T, L, A> = DstArray<DstVecHead<L, A>, MaybeUninit<T>>;
+type Buf<T, L, A> = DstArray<DstVecHead<L, A>, MaybeUninit<T>, L>;
 
 #[repr(transparent)]
 pub struct DstVec<T, L: LenUint = u32, A: Alloc + Copy = KVmalloc> {
@@ -50,7 +42,7 @@ impl<T, L: LenUint> DstVec<T, L> {
     /// type is a bug.
     pub fn with_capacity_nofail(cap: usize) -> Self {
         assert!(cap <= L::MAX, "a DstVec of {cap}, past its length type");
-        let head = Buf::<T, L, KVmalloc>::alloc_nofail(DstVecHead { len: L::ZERO, cap: L::from_usize(cap), alloc: KVmalloc });
+        let head = Buf::<T, L, KVmalloc>::alloc_nofail(cap, DstVecHead { len: L::ZERO, alloc: KVmalloc });
         Self { head, _t: PhantomData }
     }
 }
@@ -62,7 +54,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
         if cap > L::MAX {
             return Err(AllocError);
         }
-        let head = |room: usize| DstVecHead { len: L::ZERO, cap: L::from_usize(room.min(L::MAX)), alloc };
+        let head = DstVecHead { len: L::ZERO, alloc };
         Ok(Self { head: Buf::<T, L, A>::alloc_in(cap, head, &alloc)?, _t: PhantomData })
     }
 
@@ -85,7 +77,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     }
 
     pub fn capacity(&self) -> usize {
-        self.buf().head().cap.to_usize()
+        self.buf().nr()
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut T {
@@ -114,7 +106,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
 
         let alloc = self.buf().head().alloc;
         let cap = want.max(self.capacity().saturating_mul(2)).min(L::MAX);
-        let head = |room: usize| DstVecHead { len: L::from_usize(len), cap: L::from_usize(room.min(L::MAX)), alloc };
+        let head = DstVecHead { len: L::from_usize(len), alloc };
         let new = unsafe { Buf::<T, L, A>::realloc_in(self.head, len, cap, head, &alloc)? };
         let old = self.head;
         // by a release: an RCU reader that sees @new sees what was copied
