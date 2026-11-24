@@ -31,14 +31,15 @@ use crate::os::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::eytzinger::Eytzinger0;
+use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::strided::StridedBuf;
-use crate::util::vstructs::{bytes_of, bytes_of_mut, Head, SelfSized, State, Unsized, Unvalidated,
+use crate::util::vstructs::{bytes_of, bytes_of_mut, cast_plain_mut, Head, State, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
 use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
+use cstruct_macros::bch_enum;
 use crate::sb::io::SbResize;
 
 #[bch_enum(closed)]
@@ -53,17 +54,13 @@ pub enum WriteCheck {
     BCH_WRITE_CHECK_dev_leaving_rw,
 }
 
-#[repr(C)]
-#[derive(Default, Clone, Copy, MaybeZeroable, TypeInfo)]
-pub struct bch_replicas_padded {
-    pub bytes: [u8; core::mem::size_of::<Head<c::bch_replicas_entry_v1>>()
-                    + c::BCH_BKEY_PTRS_MAX as usize * core::mem::size_of::<u8>()],
-}
-
 type Entry = c::bch_replicas_entry_v1<Validated>;
 
 /// Where an entry's devices start: after data_type, nr_devs, nr_required.
 const DEVS: usize = offset_of!(Head<c::bch_replicas_entry_v1>, devs);
+
+/// An entry in room for a key's worth of devices.
+pub type bch_replicas_padded = DstRoom<Entry, [u8; ENTRY_BYTES]>;
 
 /// Where a replicas section's entries start - either section's.
 const SECTION_HEAD: usize = size_of::<Head<c::bch_sb_field_replicas>>();
@@ -150,33 +147,47 @@ impl Entry {
     }
 }
 
-/// An entry with room for a key's worth of devices, in bytes: EntryBuf's, and
+/// An entry with room for a key's worth of devices, in bytes:
 /// bch_replicas_padded's.
 const ENTRY_BYTES: usize = DEVS + c::BCH_BKEY_PTRS_MAX as usize;
 
-/// An entry being built, in room for a key's worth of devices.
-struct EntryBuf<'a>(&'a mut [u8; ENTRY_BYTES]);
+/// An entry being built in its room: its head, then the devices past it -
+/// what has the room sets the count.
+struct EntryBuf<'a>(&'a mut DstRoom<Entry, [u8]>);
 
 impl EntryBuf<'_> {
+    fn head(&mut self) -> &mut Head<Entry> {
+        cast_plain_mut(self.0.elems_mut()).expect("a replicas entry's room holds its head")
+    }
+
     fn start(&mut self, data_type: DataType, nr_required: u8) {
-        self.0[..DEVS].copy_from_slice(&[data_type.0 as u8, 0, nr_required]);
+        let h = self.head();
+        h.data_type.set(data_type);
+        h.nr_devs     = 0;
+        h.nr_required = nr_required;
     }
 
     fn set_nr_required(&mut self, nr_required: u8) {
-        self.0[DEVS - 1] = nr_required;
+        self.head().nr_required = nr_required;
     }
 
     /// replicas_entry_add_dev(): past the room, a bug - a key has no more
     /// pointers than that.
     fn add_dev(&mut self, dev: u8) {
-        let nr = usize::from(self.0[1]);
-        self.0[DEVS + nr] = dev;
-        self.0[1] += 1;
+        let nr = usize::from(self.head().nr_devs);
+        self.0.elems_mut()[DEVS + nr] = dev;
+        self.head().nr_devs += 1;
     }
 
     fn sort(&mut self) {
-        let nr = usize::from(self.0[1]);
-        self.0[DEVS..DEVS + nr].sort_unstable();
+        self.0.devs.sort_unstable();
+    }
+
+    /// The entry for @data_type data on @devs, @nr_required of them needed.
+    fn fill(&mut self, data_type: DataType, nr_required: u8, devs: &[u8]) {
+        self.start(data_type, nr_required);
+        devs.iter().for_each(|&d| self.add_dev(d));
+        self.sort();
     }
 }
 
@@ -187,7 +198,7 @@ impl EntryBuf<'_> {
 fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
     type D = DataType;
 
-    e.0[1] = 0;
+    e.head().nr_devs = 0;
 
     if let Some(s) = k.arm::<c::Stripe>() {
         e.start(D::parity, s.v().nr_data() as u8);
@@ -227,17 +238,15 @@ pub(crate) fn try_replicas_acct(data_type: DataType, nr_required: u8, devs: &[u8
     DiskAccountingPos::from_arm_tailed(e, devs).ok()
 }
 
-/// replicas_acct() of the entry in @b - an EntryBuf's bytes, or a
-/// bch_replicas_padded's - for @data_type data, whatever type it says.
-pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: DataType) -> DiskAccountingPos {
-    let nr = usize::from(b[1]);
-    replicas_acct(data_type, b[2], &b[DEVS..DEVS + nr])
+/// replicas_acct() of @e, for @data_type data, whatever type it says.
+pub(crate) fn entry_acct(e: &Entry, data_type: DataType) -> DiskAccountingPos {
+    replicas_acct(data_type, e.nr_required, &e.devs)
 }
 
 /// @k's entry, as bkey_to_replicas() makes it: what gc keeps of a stripe's.
 pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_padded {
-    let mut r = c::bch_replicas_padded::default();
-    bkey_to_replicas(fs, &mut EntryBuf(&mut r.bytes), k);
+    let mut r = c::bch_replicas_padded::zeroed();
+    bkey_to_replicas(fs, &mut EntryBuf(&mut r), k);
     r
 }
 
@@ -251,13 +260,8 @@ impl DevlistEntry {
                 data_type.0 < c::DataType::NR,
                 "replicas entry of data type {}", data_type.0);
 
-        let mut r = c::bch_replicas_padded::default();
-        let mut e = EntryBuf(&mut r.bytes);
-        e.start(data_type, 1);
-        for &d in devs.as_slice() {
-            e.add_dev(d);
-        }
-        e.sort();
+        let mut r = c::bch_replicas_padded::zeroed();
+        EntryBuf(&mut r).fill(data_type, 1, devs.as_slice());
         DevlistEntry(r)
     }
 }
@@ -265,7 +269,7 @@ impl DevlistEntry {
 impl PartialEq for DevlistEntry {
     /* Zeroed, then filled in: bytewise is bch2_replicas_entry_eq() */
     fn eq(&self, other: &Self) -> bool {
-        self.0.bytes == other.0.bytes
+        self.0.elems() == other.0.elems()
     }
 }
 
@@ -273,16 +277,16 @@ impl core::ops::Deref for DevlistEntry {
     type Target = Entry;
 
     fn deref(&self) -> &Entry {
-        unsafe { &*Entry::from_thin(self.0.bytes.as_ptr().cast()) }
+        &self.0
     }
 }
 
 /// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
 /// @data_type data.
 pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: DataType) -> DiskAccountingPos {
-    let mut b = [0; ENTRY_BYTES];
-    bkey_to_replicas(fs, &mut EntryBuf(&mut b), k);
-    entry_acct(&b, data_type)
+    let mut r = c::bch_replicas_padded::zeroed();
+    bkey_to_replicas(fs, &mut EntryBuf(&mut r), k);
+    entry_acct(&r, data_type)
 }
 
 // ── The superblock's entries ─────────────────────────────────────────────
@@ -514,11 +518,7 @@ impl ReplicasCpu {
         let mut r = Self::zeroed(kept().count(), kept().map(|e| DEVS + e.devs.len()).max().unwrap_or(0))?;
 
         for (i, e) in kept().enumerate() {
-            let s = r.entries.slot_mut(i).elems_mut();
-            s[..DEVS].copy_from_slice(&[e.data_type.0 as u8, e.devs.len() as u8, e.nr_required.unwrap_or(1)]);
-            let devs = &mut s[DEVS..DEVS + e.devs.len()];
-            devs.copy_from_slice(e.devs);
-            devs.sort_unstable();
+            EntryBuf(r.entries.slot_mut(i)).fill(e.data_type, e.nr_required.unwrap_or(1), e.devs);
         }
         Ok(r)
     }
@@ -967,17 +967,14 @@ impl Fs {
 mod tests {
     use super::*;
 
-    const JOURNAL: u8 = DataType::journal.0 as u8;
-    const BTREE: u8 = DataType::btree.0 as u8;
-    const USER: u8 = DataType::user.0 as u8;
+    const JOURNAL: DataType = DataType::journal;
+    const BTREE: DataType = DataType::btree;
+    const USER: DataType = DataType::user;
 
-    fn bytes(data_type: u8, nr_required: u8, devs: &[u8]) -> Vec<u8> {
-        [&[data_type, devs.len() as u8, nr_required][..], devs].concat()
-    }
-
-    fn entry(b: &[u8]) -> &Entry {
-        // SAFETY: an entry, as long as its nr_devs says
-        unsafe { &*Entry::from_thin(b.as_ptr().cast()) }
+    fn entry(data_type: DataType, nr_required: u8, devs: &[u8]) -> c::bch_replicas_padded {
+        let mut r = c::bch_replicas_padded::zeroed();
+        EntryBuf(&mut r).fill(data_type, nr_required, devs);
+        r
     }
 
     fn same(a: &ReplicasCpu, b: &ReplicasCpu) -> bool {
@@ -989,18 +986,18 @@ mod tests {
     /// while every nr_required is 1.
     #[test]
     fn table() {
-        let es = [bytes(JOURNAL, 1, &[0, 1]), bytes(BTREE, 1, &[2]), bytes(USER, 1, &[0, 1, 2]),
-                  bytes(BTREE, 1, &[0, 1])];
+        let es = [entry(JOURNAL, 1, &[0, 1]), entry(BTREE, 1, &[2]), entry(USER, 1, &[0, 1, 2]),
+                  entry(BTREE, 1, &[0, 1])];
         let mut r = ReplicasCpu::new();
         for e in &es {
-            r = r.with(entry(e)).unwrap();
+            r = r.with(e).unwrap();
         }
-        assert!(es.iter().all(|e| r.find(entry(e)).is_some()));
-        assert!(r.find(entry(&bytes(BTREE, 1, &[0]))).is_none());
+        assert!(es.iter().all(|e| r.find(e).is_some()));
+        assert!(r.find(&entry(BTREE, 1, &[0])).is_none());
 
-        r.remove(r.find(entry(&es[1])).unwrap());
-        assert!(r.find(entry(&es[1])).is_none());
-        assert!([&es[0], &es[2], &es[3]].iter().all(|e| r.find(entry(e)).is_some()));
+        r.remove(r.find(&es[1]).unwrap());
+        assert!(r.find(&es[1]).is_none());
+        assert!([&es[0], &es[2], &es[3]].iter().all(|e| r.find(e).is_some()));
 
         let mut sb = c::bch_sb_handle::default();
         sb.sb_realloc(0).unwrap();
@@ -1014,7 +1011,7 @@ mod tests {
         assert!(sb.field::<c::bch_sb_field_replicas_v0>().is_some());
         assert!(same(&r, &back(&sb)));
 
-        r = r.with(entry(&bytes(USER, 2, &[0, 1, 2]))).unwrap();
+        r = r.with(&entry(USER, 2, &[0, 1, 2])).unwrap();
         assert!(r.to_sb(&mut sb));
         assert!(sb.field::<c::bch_sb_field_replicas>().is_some());
         assert!(sb.field::<c::bch_sb_field_replicas_v0>().is_none());
@@ -1028,12 +1025,12 @@ mod tests {
         let mut sb = c::bch_sb_handle::default();
         sb.sb_realloc(0).unwrap();
 
-        let e = bytes(BTREE, 1, &[invalid]);
-        let mut r = ReplicasCpu::new().with(entry(&e)).unwrap();
+        let e = entry(BTREE, 1, &[invalid]);
+        let mut r = ReplicasCpu::new().with(&e).unwrap();
         let mut err = Printbuf::new();
         assert!(r.validate(sb.sb(), &mut err).is_ok());
 
-        let mut r = r.with(entry(&e)).unwrap();
+        let mut r = r.with(&e).unwrap();
         assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(Errcode::invalid_sb_replicas));
     }
 
@@ -1047,12 +1044,12 @@ mod tests {
             let invalid = c::BCH_SB_MEMBER_INVALID as u8;
             let mut sb = c::bch_sb_handle::default();
             sb.sb_realloc(0).unwrap();
-            assert!(ReplicasCpu::new().with(entry(&bytes(BTREE, 1, &[invalid]))).unwrap().to_sb(&mut sb));
+            assert!(ReplicasCpu::new().with(&entry(BTREE, 1, &[invalid])).unwrap().to_sb(&mut sb));
 
             // a u64 more: past the whole entry, 3 bytes, the start of one
             // claiming 20 devices
             let f = sb.field_resize::<V0>(2).unwrap();
-            bytes_of_mut(f)[SECTION_HEAD + 3..][..2].copy_from_slice(&[BTREE, 20]);
+            bytes_of_mut(f)[SECTION_HEAD + 3..][..2].copy_from_slice(&[BTREE.0 as u8, 20]);
 
             let flags = if write { ValidateFlags::write } else { ValidateFlags::empty() };
             let mut err = Printbuf::new();

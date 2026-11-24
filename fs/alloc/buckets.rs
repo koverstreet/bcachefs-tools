@@ -613,7 +613,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
             let b = &mut m.block_sectors[usize::from(block)];
             *b = (i64::from(*b) + sectors) as u16;
 
-            entry_acct(&m.r.bytes, data_type)
+            entry_acct(&m.r, data_type)
         };
         accounting::add_at(t, &acct, &[sectors], true)?;
     }
