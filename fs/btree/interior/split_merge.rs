@@ -782,7 +782,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
         trans.node_reinit_iter(update.t(), &mut paths.paths_and_updates(), path, level);
     }
 
-    update.updated_node(paths[path].locked_btree_node(level).expect("an interior update's node").node());
+    update.updated_node(paths[path].locked_btree_node(level).expect("an interior update's node"));
     trans.node_unlock_write(paths, path, level);
 
     trans.revalidate_updates_at(update.t(), &mut paths.paths_and_updates(), path, level);

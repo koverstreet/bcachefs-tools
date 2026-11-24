@@ -16,7 +16,7 @@ use cstruct_macros::{placed, MaybeZeroable, Init, Late, TypeInfo};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::cache::OwnedNode;
-use crate::btree::iter::{BtreeTrans, CommitOpts, TransAttempt, Watermark};
+use crate::btree::iter::{BtreeNodeRef, BtreeTrans, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
@@ -106,7 +106,7 @@ enum Mode {
      * from writing by putting this btree_interior update on the
      * @b->write_blocked list with @write_blocked_list:
      */
-    Node(NonNull<BtreeNode>),
+    Node(BtreeNodeRef),
     Root,
     /* the node it updated freed, by the update it's now waiting on */
     Update,
@@ -194,7 +194,7 @@ fn node_key(b: LockedNode<'_, BtreeNode>) -> NodeKey {
 /// A node the update frees: its pointer, which the commit deletes, and its
 /// seq, to tell it from whatever reclaim reuses its memory for.
 struct OldNode {
-    b:     NonNull<BtreeNode>,
+    b:     BtreeNodeRef,
     level: u8,
     seq:   Le64,
     key:   NodeKey,
@@ -202,7 +202,7 @@ struct OldNode {
 
 impl OldNode {
     fn of(b: LockedNode<'_, BtreeNode>) -> Self {
-        OldNode { b: NonNull::from(b.node()), level: b.c.level.get(), seq: b.contents().data().keys.seq, key: node_key(b) }
+        OldNode { b: BtreeNodeRef::from(b), level: b.c.level.get(), seq: b.contents().data().keys.seq, key: node_key(b) }
     }
 }
 
@@ -216,7 +216,7 @@ struct NewPointer {
 enum Pointee {
     /// A new node, which the commit makes reachable
     Node {
-        b:               NonNull<BtreeNode>,
+        b:               BtreeNodeRef,
         root:            bool,
         /* the commit's: whether it changed the key, which the node's then given */
         update_node_key: bool,
@@ -231,14 +231,14 @@ impl NewPointer {
             level: b.c.level.get(),
             key:   node_key(b),
             to:    Pointee::Node {
-                b:               NonNull::from(b.node()),
+                b:               BtreeNodeRef::from(b),
                 root:            fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b.node())),
                 update_node_key: false,
             },
         }
     }
 
-    fn node_ptr(&self) -> Option<NonNull<BtreeNode>> {
+    fn node_ptr(&self) -> Option<BtreeNodeRef> {
         match self.to {
             Pointee::Node { b, .. } => Some(b),
             Pointee::Deleted        => None,
@@ -443,10 +443,9 @@ impl BtreeUpdate {
 
     /// @b's entry in the new nodes, its key made @k: btree_node_update_key()'s,
     /// on a node the update will make reachable.
-    pub(crate) fn new_node_key_set(&self, commit_lock: &mut CommitGuard<'_>, b: *const BtreeNode,
-                                   k: impl BkeyV) {
+    pub(crate) fn new_node_key_set(&self, commit_lock: &mut CommitGuard<'_>, b: BtreeNodeRef, k: impl BkeyV) {
         self.new_nodes_locked(commit_lock).iter_mut()
-            .find(|n| n.node_ptr().is_some_and(|nb| ptr::eq(nb.as_ptr(), b)))
+            .find(|n| n.node_ptr() == Some(b))
             .expect("a node its update will make reachable, in the update's new nodes")
             .key.set_key(k);
     }
