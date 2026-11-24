@@ -16,7 +16,10 @@ use crate::data_structures::array_vec::ArrayVec;
 use crate::util::gather::Fold;
 use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::sb::members::BlockDev;
-use crate::errcode::BchError;
+use crate::data::ptrs::dev_to_text;
+use crate::errcode::{blk_status_to_bch_err, BchError, Errcode};
+use crate::fs::Fs;
+use crate::util::Printbuf;
 use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data, Gathered, HoldsDev};
 use crate::os::blkdev::BlockDevice;
 
@@ -102,6 +105,31 @@ impl<B: BioOwns> Gathered<()> for DevBio<B> {
 /// The devices a gather of DevBios failed on, and their status.
 #[derive(Default)]
 pub struct DevErrs<const N: usize>(pub ArrayVec<(u8, c::blk_status_t), N>);
+
+impl<const N: usize> DevErrs<N> {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn err(status: c::blk_status_t) -> BchError {
+        BchError::from(blk_status_to_bch_err(status))
+    }
+
+    /// Whether every device that failed had been removed.
+    pub fn all_dev_removed(&self) -> bool {
+        self.0.iter().all(|&(_, status)| Self::err(status).matches(Errcode::BLK_STS_REMOVED))
+    }
+
+    /// A line per device: its name, and its error.
+    pub fn to_text(&self, out: &mut Printbuf, fs: &Fs) {
+        let mut out = out.indent(2);
+        for &(dev, status) in &self.0 {
+            dev_to_text(&mut out, fs, dev);
+            write!(out, " io: {}", Self::err(status).msg());
+            out.newline();
+        }
+    }
+}
 
 impl<const N: usize> Fold for DevErrs<N> {
     type Item = Option<(u8, c::blk_status_t)>;

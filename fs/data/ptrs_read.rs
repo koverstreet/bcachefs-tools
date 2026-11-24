@@ -183,13 +183,7 @@ impl<const N: usize> IoFailures<N> {
 
             for f in self.devs() {
                 out.make_room(1024);
-                {
-                    let rcu = read_lock();
-                    match fs.dev_rcu(f.dev.into(), &rcu) {
-                        Some(ca) => write!(out, "{ca}"),
-                        None => write!(out, "(invalid device {})", f.dev),
-                    }
-                }
+                dev_to_text(&mut out, fs, f.dev);
 
                 let err_str = |code: i16| BchError::from_raw(-i32::from(code)).msg();
                 if f.csum_nr == 0 && f.ec_errcode == 0 && f.errcode == 0 {
@@ -213,6 +207,15 @@ impl<const N: usize> IoFailures<N> {
             let mut out = out.indent(2);
             out.write_bytes(self.ec_msg.as_bytes());
         }
+    }
+}
+
+/// Device @dev's name, or that there's no such device.
+pub fn dev_to_text(out: &mut Printbuf, fs: &Fs, dev: u8) {
+    let rcu = read_lock();
+    match fs.dev_rcu(dev.into(), &rcu) {
+        Some(ca) => write!(out, "{ca}"),
+        None => write!(out, "(invalid device {dev})"),
     }
 }
 
