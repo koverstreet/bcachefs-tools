@@ -86,6 +86,21 @@ impl<'a, T: ?Sized + SelfSized> From<&'a mut T> for ThinMut<'a, T> {
     }
 }
 
+impl<'a, T: ?Sized + SelfSized> ThinMut<'a, T> {
+    /// ThinRef::from_raw(), mutably.
+    ///
+    /// # Safety
+    /// @p is a valid T's address, live and referred to by nothing else for
+    /// 'a.
+    pub unsafe fn from_raw(p: NonNull<()>) -> Self {
+        ThinMut { p, _t: PhantomData }
+    }
+
+    pub fn into_mut(self) -> &'a mut T {
+        unsafe { &mut *T::from_thin(self.p.as_ptr()).cast_mut() }
+    }
+}
+
 impl<T: ?Sized + SelfSized> Deref for ThinMut<'_, T> {
     type Target = T;
 
