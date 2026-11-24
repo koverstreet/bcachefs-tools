@@ -34,7 +34,7 @@ use crate::locking::{ByteLock, ExclusiveGuard, Locked};
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
-use crate::util::rcu::{read_lock, Detach, DetachMember, RcuArray, RcuMember, ReadGuard};
+use crate::util::rcu::{read_lock, Detach, DetachMember, FreeAnytime, RcuArray, RcuMember, ReadGuard};
 use crate::util::siphash::SipHash13Key;
 use table::{Head, Mirror, Slot};
 
@@ -71,7 +71,7 @@ impl<I> Contents<I> {
 /// Atomic owns nothing, so a bytewise copy is another; all zeroes is empty;
 /// load() gives back what store() stored.
 pub unsafe trait CuckooItem: Copy {
-    type Atomic: Send + Sync;
+    type Atomic: Send + Sync + FreeAnytime;
 
     /// What it is, or points to: hashed and compared as its key.
     type Target: ?Sized + Hash + Eq;

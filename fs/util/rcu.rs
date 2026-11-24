@@ -31,13 +31,12 @@
 //!   drop frees its target as the target says: a MaybeRcuAlloc, a ThinBox, a
 //!   ref on a count. Its target must be freed a grace period on -
 //!   !FreeAnytime, a build error if not - and what's taken out may be
-//!   dropped at once. Its writer, an RcuPtrWriter, publishes, takes and
-//!   get()s.
-//! - RcuBuf<T> is a buffer its writer replaces whole, kvfree_rcu()ing the
-//!   old; RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }`, read as
-//!   a &[T] and grown by copy and replace - its elements RcuElements, plain
-//!   data or atomics, copied bytewise. Its writer is an RcuArrayWriter;
-//!   without one, a writer's methods are unsafe, the caller holding the lock.
+//!   dropped at once. Its writer, an RcuPtrWriter, publishes, replaces, takes
+//!   and get()s.
+//! - RcuArray<T, H> is one of C's `{ rcu_head; nr; H; T s[] }`, an
+//!   RcuPtr<ThinBox<..>>, read as a &[T] and grown by copy and replace - its
+//!   elements RcuElements, plain data or atomics, copied bytewise. Its writer
+//!   is an RcuArrayWriter.
 
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -48,8 +47,9 @@ use core::sync::atomic::{fence, AtomicPtr, Ordering};
 use crate::c;
 use crate::data_structures::dst_array::{DstArray, DstHead};
 use crate::util::alloc::{AllocError, KVmalloc};
-use crate::util::vstructs::{NonZeroWord, SelfSized};
+use crate::util::vstructs::NonZeroWord;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::thin::ThinBox;
 use crate::util::projections::{Publish, Volatile};
 use crate::util::refcount::{ARef, AlwaysRefCounted};
 
@@ -334,6 +334,18 @@ impl<P: Deref + NonZeroWord> RcuPtrWriter<P> {
         assert!(old.is_none(), "publishing into a slot already holding one");
     }
 
+    /// @p in place of what's there, released as publish() is: readers see one
+    /// or the other, never none. What it held is the caller's - dropped, its
+    /// target freed as it says, past the readers that may still have it.
+    pub(crate) fn replace(&self, p: P) -> Option<P>
+    where
+        P::Target: RcuFreeing,
+    {
+        <P::Target as RcuFreeing>::assert_rcu_freed();
+        fence(Ordering::Release);
+        self.0 .0.replace(Some(p))
+    }
+
     pub fn take(&self) -> Option<P> {
         self.0 .0.replace(None)
     }
@@ -349,17 +361,7 @@ impl<P: Deref + NonZeroWord> RcuPtrWriter<P> {
     }
 }
 
-// ── RcuBuf ───────────────────────────────────────────────────────────────
-
-/// kvfree_rcu(), its rcu_head over the first bytes.
-///
-/// # Safety
-/// @p is kmalloc()'d or kvmalloc()'d, already dropped, and reached after
-/// only by readers under the RCU read lock - none of them reading its first
-/// bytes.
-pub unsafe fn kvfree_rcu<T>(p: *mut T) {
-    unsafe { crate::util::alloc::kvfree_rcu_head(p.cast(), p.cast()) };
-}
+// ── C's RCU pointers ─────────────────────────────────────────────────────
 
 /// rcu_assign_pointer(), into a pointer of C's that other threads
 /// rcu_dereference(): a release store, so a reader that sees @p sees what was
@@ -379,101 +381,26 @@ pub fn rcu_dereference<T>(p: &AtomicPtr<T>) -> *mut T {
     p.load(Ordering::Relaxed)
 }
 
-/// A buffer starting with an rcu_head, which a thin pointer - C's - reaches
-/// all of: SelfSized.
-///
-/// # Safety
-/// Head starts with a c::rcu_head, and is what a pointer to a Self points
-/// at. Self has no Drop.
-pub unsafe trait RcuPointee: SelfSized {
-    type Head;
-}
-
-#[repr(transparent)]
-pub struct RcuBuf<T: ?Sized + RcuPointee> {
-    p:  AtomicPtr<T::Head>,
-    _t: PhantomData<*const T>,
-}
-
-// readers on any thread share the T, and the writer's thread frees it
-unsafe impl<T: ?Sized + RcuPointee + Send + Sync> Send for RcuBuf<T> {}
-unsafe impl<T: ?Sized + RcuPointee + Send + Sync> Sync for RcuBuf<T> {}
-
-unsafe impl<T: ?Sized + RcuPointee> ::pin_init::Zeroable for RcuBuf<T> {}
-
-impl<T: ?Sized + RcuPointee> RcuBuf<T> {
-    pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a T> {
-        let p = rcu_dereference(&self.p);
-        (!p.is_null()).then(|| unsafe { &*T::from_thin(p.cast()) })
-    }
-
-    /// read(), in a section of its own for as long as @f runs.
-    pub fn with<R>(&self, f: impl FnOnce(Option<&T>) -> R) -> R {
-        let g = read_lock();
-        f(self.read(&g))
-    }
-
-    /// # Safety
-    /// The caller holds the writers' lock, and doesn't replace() - which
-    /// frees this one, and the writer isn't in a read-side section - until
-    /// it's done with the &T.
-    pub unsafe fn get_locked(&self) -> Option<&T> {
-        let p = self.p.load(Ordering::Relaxed);
-        (!p.is_null()).then(|| unsafe { &*T::from_thin(p.cast()) })
-    }
-
-    /// # Safety
-    /// The caller holds the writers' lock. @new is a valid T from
-    /// kvzalloc(), which this takes.
-    pub unsafe fn replace(&self, new: NonNull<T::Head>) {
-        let old = self.p.swap(new.as_ptr(), Ordering::Release);
-        if !old.is_null() {
-            unsafe { kvfree_rcu(old) };
-        }
-    }
-
-    /// # Safety
-    /// The caller holds the writers' lock.
-    pub unsafe fn clear(&self) {
-        let old = self.p.swap(core::ptr::null_mut(), Ordering::Release);
-        if !old.is_null() {
-            unsafe { kvfree_rcu(old) };
-        }
-    }
-}
-
-impl<T: ?Sized + RcuPointee> Drop for RcuBuf<T> {
-    /// No readers are left: whatever held this is going away.
-    fn drop(&mut self) {
-        let p = *self.p.get_mut();
-        if !p.is_null() {
-            unsafe { crate::util::alloc::kvfree_unsized(p.cast()) };
-        }
-    }
-}
-
 // ── RcuArray ─────────────────────────────────────────────────────────────
 
 /// The head of C's `struct { struct rcu_head rcu; size_t nr; T s[]; }`, what
 /// its pointer is to - with fields of its own between nr and s[] as @H:
-/// bucket gens' first_bucket.
+/// bucket gens' first_bucket. Published, it's read by readers till a grace
+/// period after it's replaced: an RcuMember's, freed by its own head.
 #[repr(C)]
+#[derive(RcuHead)]
 pub struct RcuArrayHead<H = ()> {
-    rcu: c::rcu_head,
+    #[rcu_head]
+    rcu: RcuMember<RcuHead>,
     nr:  usize,
     h:   H,
 }
 
 impl<H> RcuArrayHead<H> {
     fn new(nr: usize, h: H) -> Self {
-        // an rcu_head is two pointers, and kvfree_rcu() fills it in
-        Self { rcu: ::pin_init::zeroed(), nr, h }
+        Self { rcu: RcuMember::default(), nr, h }
     }
 }
-
-// as its header: rcu is touched only by kvfree_rcu(), freeing it
-unsafe impl<H: Send> Send for RcuArrayHead<H> {}
-unsafe impl<H: Sync> Sync for RcuArrayHead<H> {}
 
 // SAFETY: nr, a plain field, written only as it's made
 unsafe impl<H> DstHead for RcuArrayHead<H> {
@@ -484,16 +411,19 @@ unsafe impl<H> DstHead for RcuArrayHead<H> {
 
 pub type RcuArrayBuf<T, H = ()> = DstArray<RcuArrayHead<H>, T>;
 
-unsafe impl<T: RcuElement, H: RcuElement> RcuPointee for RcuArrayBuf<T, H> {
-    type Head = RcuArrayHead<H>;
-}
+/// An RcuArray's buffer, owned: freed as its head says, a grace period on.
+pub type RcuArrayBox<T, H = ()> = ThinBox<RcuArrayBuf<T, H>, KVmalloc>;
 
+/// FreeAnytime: the head is what makes a buffer wait out its readers, and
+/// elements that aren't would put DstArray's rcu_head before it, where the
+/// buffer's free doesn't look.
+///
 /// # Safety
 /// A bytewise copy of a T is a valid T, owning nothing: no Drop. All-zero
 /// bytes are a valid T. A writer copies them into a grown buffer while
 /// readers still read the old one, so changing one in place, with readers
 /// looking, needs it to be atomics.
-pub unsafe trait RcuElement: Sync {}
+pub unsafe trait RcuElement: Sync + FreeAnytime {}
 
 macro_rules! rcu_element {
     ($($t:ty),*) => { $(unsafe impl RcuElement for $t {})* };
@@ -506,7 +436,7 @@ rcu_element!((), u8, u16, u32, u64, usize,
 unsafe impl<T: RcuElement, const N: usize> RcuElement for [T; N] {}
 
 #[repr(transparent)]
-pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuBuf<RcuArrayBuf<T, H>>);
+pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuPtr<RcuArrayBox<T, H>>);
 
 unsafe impl<T: RcuElement, H: RcuElement> ::pin_init::Zeroable for RcuArray<T, H> {}
 
@@ -521,119 +451,26 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&[T]) -> R) -> R {
-        self.0.with(|b| f(b.map_or(&[], |b| &b.elems)))
-    }
-
-    /// # Safety
-    /// As RcuBuf::get_locked().
-    pub unsafe fn get_locked(&self) -> &[T] {
-        unsafe { self.0.get_locked() }.map_or(&[], |b| &b.elems)
-    }
-
-    /// # Safety
-    /// As RcuBuf::get_locked().
-    pub unsafe fn get_head_locked(&self) -> Option<(&H, &[T])> {
-        unsafe { self.0.get_locked() }.map(|b| (&b.head().h, &b.elems))
-    }
-
-    /// A zeroed buffer of exactly @nr elements, and header @h, filled by
-    /// @fill - the old one isn't copied - and published; if @fill fails,
-    /// freed unpublished. AllocError if there's no buffer, else @fill's
-    /// result.
-    ///
-    /// # Safety
-    /// As RcuBuf::replace(): the caller holds the writers' lock.
-    pub unsafe fn rebuild_head<E>(&self, nr: usize, h: H, fill: impl FnOnce(&mut [T]) -> Result<(), E>)
-        -> Result<Result<(), E>, AllocError>
-    {
-        let new = Self::alloc(nr, h)?;
-
-        // no reader sees it until replace() publishes it
-        unsafe {
-            if let Err(e) = fill(&mut (*RcuArrayBuf::<T, H>::from_thin(new.as_ptr().cast()).cast_mut()).elems) {
-                RcuArrayBuf::<T, H>::free_in(new, &KVmalloc);
-                return Ok(Err(e));
-            }
-            self.replace(new);
-        }
-        Ok(Ok(()))
+        let g = read_lock();
+        f(self.read(&g))
     }
 
     /// A zeroed buffer of exactly @nr elements and header @h, not published:
-    /// the caller's to replace() with, to link from another buffer's header,
-    /// or to free.
-    pub fn alloc(nr: usize, h: H) -> Result<NonNull<RcuArrayHead<H>>, AllocError> {
-        RcuArrayBuf::<T, H>::alloc(RcuArrayHead::new(nr, h))
+    /// the caller's to publish, to link from another buffer's header, or to
+    /// drop.
+    pub fn alloc(nr: usize, h: H) -> Result<RcuArrayBox<T, H>, AllocError> {
+        RcuArrayBuf::<T, H>::alloc_box(RcuArrayHead::new(nr, h))
     }
 
     /// alloc(), for what mustn't fail to allocate.
-    pub fn alloc_nofail(nr: usize, h: H) -> NonNull<RcuArrayHead<H>> {
-        RcuArrayBuf::<T, H>::alloc_nofail(RcuArrayHead::new(nr, h))
+    pub fn alloc_nofail(nr: usize, h: H) -> RcuArrayBox<T, H> {
+        RcuArrayBuf::<T, H>::alloc_box_nofail(RcuArrayHead::new(nr, h))
     }
 
-    /// # Safety
-    /// @p is alloc()'s, and isn't freed for 'a.
-    pub unsafe fn parts<'a>(p: NonNull<RcuArrayHead<H>>) -> (&'a H, &'a [T]) {
-        let b = unsafe { &*RcuArrayBuf::<T, H>::from_thin(p.as_ptr().cast()) };
+    /// A buffer's header and elements: one not published here, but linked
+    /// from another's header.
+    pub fn parts(b: &RcuArrayBuf<T, H>) -> (&H, &[T]) {
         (&b.head().h, &b.elems)
-    }
-
-    /// # Safety
-    /// As RcuBuf::replace(); @new is alloc()'s.
-    pub unsafe fn replace(&self, new: NonNull<RcuArrayHead<H>>) {
-        unsafe { self.0.replace(new) }
-    }
-
-    /// # Safety
-    /// @p is alloc()'s, and nothing - no reader either - reaches it any more.
-    pub unsafe fn free_now(p: NonNull<RcuArrayHead<H>>) {
-        unsafe { crate::util::alloc::kvfree_unsized(p.as_ptr().cast()) }
-    }
-
-    /// # Safety
-    /// As RcuBuf::clear().
-    pub unsafe fn clear(&self) {
-        unsafe { self.0.clear() }
-    }
-}
-
-/// Without a header: a header's fields are its writer's to carry over, by
-/// rebuild_head().
-impl<T: RcuElement> RcuArray<T> {
-    /// Room for at least @nr elements: if there isn't, a new buffer, sized to
-    /// a power of two bytes as C's tables are, the old elements copied and the
-    /// rest zero, published.
-    ///
-    /// # Safety
-    /// As RcuBuf::replace(): the caller holds the writers' lock.
-    pub unsafe fn grow_to(&self, nr: usize) -> Result<(), AllocError> {
-        let old = unsafe { self.get_locked() };
-        if nr <= old.len() {
-            return Ok(());
-        }
-
-        let tail = RcuArrayBuf::<T>::TAIL;
-        let bytes = nr.checked_mul(size_of::<T>())
-            .and_then(|b| b.checked_add(tail))
-            .and_then(usize::checked_next_power_of_two)
-            .ok_or(AllocError)?;
-
-        let nr = (bytes - tail) / size_of::<T>();
-        let head = RcuArrayHead::new(nr, ());
-        // the old elements don't change under the writers' lock, and readers
-        // keep reading them until the grace period after replace()
-        let new = match NonNull::new(self.0.p.load(Ordering::Relaxed)) {
-            Some(p) => unsafe { RcuArrayBuf::<T>::realloc_in(p, old.len(), nr, |_| head, &KVmalloc)? },
-            None => RcuArrayBuf::<T>::alloc(head)?,
-        };
-        unsafe { self.0.replace(new) };
-        Ok(())
-    }
-
-    /// # Safety
-    /// As RcuBuf::replace(): the caller holds the writers' lock.
-    pub unsafe fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
-        unsafe { self.rebuild_head(nr, (), |s| Ok::<_, core::convert::Infallible>(fill(s))) }.map(|_| ())
     }
 }
 
@@ -654,31 +491,90 @@ impl<T: RcuElement, H: RcuElement> core::ops::Deref for RcuArrayWriter<T, H> {
     }
 }
 
-impl<T: RcuElement> RcuArrayWriter<T> {
-    /// Allocates, and may sleep: not under a spinlock.
-    pub fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
-        unsafe { self.0.rebuild(nr, fill) }
-    }
-
-    /// Allocates, and may sleep.
-    pub fn grow_to(&self, nr: usize) -> Result<(), AllocError> {
-        unsafe { self.0.grow_to(nr) }
-    }
-}
-
 impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {
-    pub fn clear(&self) {
-        unsafe { self.0.clear() }
+    fn ptr(&self) -> &RcuPtrWriter<RcuArrayBox<T, H>> {
+        // SAFETY: we're the array's writer: its lock is held
+        unsafe { self.0 .0.writer() }
     }
 
-    /// rebuild_head(), @fill given the old header and elements too: still
-    /// published, and ours to read, as the writer, till the new replaces
-    /// them.
+    /// The buffer as it stands, outside a read-side section: the writer's to
+    /// read, as nothing else replaces it.
+    ///
+    /// # Safety
+    /// The &[T] isn't held across this writer's own replace or clear, which
+    /// free it a grace period on - one this read isn't in.
+    pub unsafe fn get_head_locked(&self) -> Option<(&H, &[T])> {
+        unsafe { self.0 .0.unguarded() }.map(|b| (&b.head().h, &b.elems))
+    }
+
+    /// As get_head_locked(), the elements alone.
+    ///
+    /// # Safety
+    /// As get_head_locked()'s.
+    pub unsafe fn get_locked(&self) -> &[T] {
+        unsafe { self.get_head_locked() }.map_or(&[], |(_, elems)| elems)
+    }
+
+    /// @new published in the old one's place, which is freed a grace period
+    /// on.
+    pub fn replace(&self, new: RcuArrayBox<T, H>) {
+        drop(self.ptr().replace(new));
+    }
+
+    pub fn clear(&self) {
+        drop(self.ptr().take());
+    }
+
+    /// A zeroed buffer of exactly @nr elements and header @h, filled by
+    /// @fill - given the old header and elements too, still published, and
+    /// ours to read till the new replaces them - and published; if @fill
+    /// fails, freed unpublished. AllocError if there's no buffer, else
+    /// @fill's result.
     pub fn rebuild_head<E>(&self, nr: usize, h: H,
                            fill: impl FnOnce(Option<(&H, &[T])>, &mut [T]) -> Result<(), E>)
         -> Result<Result<(), E>, AllocError>
     {
-        let old = unsafe { self.0.get_head_locked() };
-        unsafe { self.0.rebuild_head(nr, h, |new| fill(old, new)) }
+        let mut new = RcuArray::alloc(nr, h)?;
+        // no reader sees @new until it's published; the old isn't freed till
+        // after
+        if let Err(e) = fill(unsafe { self.get_head_locked() }, &mut new.elems) {
+            return Ok(Err(e));
+        }
+        self.replace(new);
+        Ok(Ok(()))
+    }
+}
+
+/// Without a header: a header's fields are its writer's to carry over, by
+/// rebuild_head().
+impl<T: RcuElement> RcuArrayWriter<T> {
+    /// Allocates, and may sleep: not under a spinlock.
+    pub fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
+        self.rebuild_head(nr, (), |_, s| Ok::<_, core::convert::Infallible>(fill(s))).map(|_| ())
+    }
+
+    /// Room for at least @nr elements: if there isn't, a new buffer, sized to
+    /// a power of two bytes as C's tables are, the old elements copied and the
+    /// rest zero, published. Allocates, and may sleep.
+    pub fn grow_to(&self, nr: usize) -> Result<(), AllocError> {
+        // the old one isn't freed till after replace()
+        let old = unsafe { self.get_locked() };
+        if nr <= old.len() {
+            return Ok(());
+        }
+
+        let tail = RcuArrayBuf::<T>::TAIL;
+        let bytes = nr.checked_mul(size_of::<T>())
+            .and_then(|b| b.checked_add(tail))
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or(AllocError)?;
+
+        let mut new = RcuArray::alloc((bytes - tail) / size_of::<T>(), ())?;
+        // RcuElements, copied bytewise - the old elements don't change under
+        // the writers' lock, and readers keep reading them until the grace
+        // period after replace()
+        unsafe { core::ptr::copy_nonoverlapping(old.as_ptr(), new.elems.as_mut_ptr(), old.len()) };
+        self.replace(new);
+        Ok(())
     }
 }

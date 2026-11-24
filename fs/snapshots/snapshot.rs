@@ -313,7 +313,8 @@ use crate::snapshots::{check_snapshots, delete, subvolume};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::alloc::{AllocError, KVVec};
 use crate::data_structures::bitmap::BitArray;
-use crate::util::rcu::RcuArray;
+use crate::util::projections::Publish;
+use crate::util::rcu::{RcuArray, RcuArrayWriter};
 use crate::os::kernel::{cold_path, likely, unlikely};
 use crate::util::place::Contained;
 use crate::util::{HumanReadable, Printbuf};
@@ -501,16 +502,20 @@ pub(crate) struct TableWrite<'a> {
 }
 
 impl TableWrite<'_> {
+    fn writer(&self) -> &RcuArrayWriter<c::snapshot_t> {
+        // SAFETY: we hold table_lock, for as long as we're borrowed
+        unsafe { self.table.writer() }
+    }
+
     /// As it stands: it can't grow while this is borrowed.
     fn table(&self) -> Table<'_> {
-        // SAFETY: we hold table_lock, and grow only through &mut self
-        Table(unsafe { self.table.get_locked() })
+        // SAFETY: we grow only through &mut self
+        Table(unsafe { self.writer().get_locked() })
     }
 
     /// Room for @id's entry: as bch2_snapshot_t_mut().
     fn make_room(&mut self, id: u32) -> Result<(), AllocError> {
-        // SAFETY: we hold table_lock
-        unsafe { self.table.grow_to(table_idx(id) + 1) }
+        self.writer().grow_to(table_idx(id) + 1)
     }
 }
 

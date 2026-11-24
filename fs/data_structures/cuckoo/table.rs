@@ -117,7 +117,10 @@ use crate::util::printbuf::{Printbuf, ToText};
 use crate::prt;
 use crate::os::kernel::random_u64;
 use crate::os::percpu::CpuGuard;
-use crate::util::rcu::{kvfree_rcu, read_lock, RcuArray, RcuArrayHead, RcuElement, ReadGuard};
+use crate::util::projections::Publish;
+use crate::util::rcu::{read_lock, RcuArray, RcuArrayBox, RcuArrayBuf, RcuArrayHead, RcuArrayWriter, RcuElement,
+                       ReadGuard};
+use crate::util::thin::{ThinBox, ThinRef};
 
 const MAX_KICKS: usize = 16;
 
@@ -209,6 +212,10 @@ pub(super) struct Head {
 // zeroes is no next
 unsafe impl RcuElement for Head {}
 
+/// A table's buffer, owned - by the RcuArray, or once linked by the Cuckoo,
+/// through the link's word.
+type TableBox<I> = RcuArrayBox<Slot<I>, Head>;
+
 pub(super) struct Mirror {
     seeds: [AtomicU64; 3],
     bits:  AtomicU32,
@@ -259,8 +266,11 @@ impl<'a, I: CuckooItem, S: CuckooHasher, const W: usize> Table<'a, I, S, W> {
     fn linked(&self, p: *mut RcuArrayHead<Head>) -> Option<Self> {
         // SAFETY: a table's newer ones outlive it - for a reader, its section;
         // under the rehash lock, until it unlinks them, oldest first
-        NonNull::new(p).map(|p| unsafe { RcuArray::<Slot<I>, Head>::parts(p) })
-            .map(|(head, slots)| Self::new(head, slots, self.faults))
+        NonNull::new(p).map(|p| unsafe { ThinRef::<RcuArrayBuf<Slot<I>, Head>>::from_raw(p.cast()) }.get())
+            .map(|b| {
+                let (head, slots) = RcuArray::parts(b);
+                Self::new(head, slots, self.faults)
+            })
     }
 
     fn next(&self) -> Option<Self> {
@@ -621,12 +631,17 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         }
     }
 
+    /// The tables' writer: the rehash lock's, which @g shows we hold.
+    fn writer(&self, g: &Held<'_>) -> &RcuArrayWriter<Slot<I>, Head> {
+        debug_assert!(core::ptr::eq(g.lock(), &self.lock));
+        // SAFETY: the rehash lock, held, publishes them
+        unsafe { self.tables.writer() }
+    }
+
     /// The oldest table. Not to be kept across a drain() or empty().
     fn locked<'a>(&'a self, g: &Held<'_>) -> Option<Table<'a, I, S, W>> {
-        debug_assert!(core::ptr::eq(g.lock(), &self.lock));
-        // SAFETY: we hold the rehash lock, and no replace() comes while the
-        // view is in use
-        unsafe { self.tables.get_head_locked() }
+        // SAFETY: no replace() comes while the view is in use
+        unsafe { self.writer(g).get_head_locked() }
             .map(|(head, slots)| Table::new(head, slots, &self.faults))
     }
 
@@ -728,9 +743,9 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
         };
 
         match self.tables_locked(g).last() {
-            Some(t) => t.head.next.store(new.as_ptr(), Release),
-            // SAFETY: we hold the rehash lock
-            None => unsafe { self.tables.replace(new) },
+            // the table's, linked: drain() or empty() makes it a ThinBox again
+            Some(t) => t.head.next.store(ThinBox::into_raw(new).as_ptr().cast(), Release),
+            None => self.writer(g).replace(new),
         }
         fence(SeqCst);
         self.mirror.store(&seeds, bits);
@@ -743,8 +758,10 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
             for s in old.slots {
                 self.retire(g, s, true)?;
             }
-            // SAFETY: we hold the rehash lock, and @old isn't used past this
-            unsafe { self.tables.replace(next) }
+            // @old isn't used past this, and keeps its link to @next for the
+            // readers still walking from it
+            let next = unsafe { TableBox::<I>::from_raw(next.cast()) };
+            self.writer(g).replace(next);
         }
         Ok(())
     }
@@ -805,17 +822,10 @@ impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Cuckoo<I, S, W, M>
             }
         }
 
-        let mut next = self.locked(g).and_then(|t| NonNull::new(t.head.next.load(Relaxed)));
-        // SAFETY: we hold the rehash lock
-        unsafe { self.tables.clear() }
-        while let Some(p) = next {
-            // SAFETY: linked, so alloc()'s, and freed only here: by the time
-            // it goes, so have the readers that could reach it
-            unsafe {
-                next = NonNull::new(RcuArray::<Slot<I>, Head>::parts(p).0.next.load(Relaxed));
-                kvfree_rcu(p.as_ptr());
-            }
-        }
+        let next = self.locked(g).map_or(core::ptr::null_mut(), |t| t.head.next.load(Relaxed));
+        self.writer(g).clear();
+        // SAFETY: links of the oldest's, and nothing has them after this
+        unsafe { drop_linked::<I>(next) }
     }
 
     /// With no writer running.
@@ -855,14 +865,22 @@ impl<I: CuckooItem, S, const W: usize, M: Mode> Drop for Cuckoo<I, S, W, M> {
     /// it are ours.
     fn drop(&mut self) {
         // SAFETY: &mut: no writer, and no reader
-        let mut next = unsafe { self.tables.get_head_locked() }
-            .and_then(|(head, _)| NonNull::new(head.next.load(Relaxed)));
-        while let Some(p) = next {
-            // SAFETY: linked, so alloc()'s, and nothing reaches it after this
-            unsafe {
-                next = NonNull::new(RcuArray::<Slot<I>, Head>::parts(p).0.next.load(Relaxed));
-                RcuArray::<Slot<I>, Head>::free_now(p);
-            }
-        }
+        let next = unsafe { self.tables.writer().get_head_locked() }
+            .map_or(core::ptr::null_mut(), |(head, _)| head.next.load(Relaxed));
+        // SAFETY: links of the oldest's, and nothing has them after this
+        unsafe { drop_linked::<I>(next) }
+    }
+}
+
+/// The tables linked from one, and each from the next, made ThinBoxes again
+/// and dropped: freed a grace period on.
+///
+/// # Safety
+/// @next is a link()'s, and nothing makes it, or what's linked from it, a
+/// ThinBox again.
+unsafe fn drop_linked<I: CuckooItem>(mut next: *mut RcuArrayHead<Head>) {
+    while let Some(p) = NonNull::new(next) {
+        let b = unsafe { TableBox::<I>::from_raw(p.cast()) };
+        next = RcuArray::parts(&b).0.next.load(Relaxed);
     }
 }

@@ -133,8 +133,9 @@ impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
     }
 
     /// # Safety
-    /// @p is into_raw()'s, of a ThinBox<T, A>, and this is the one
-    /// from_raw() of it.
+    /// @p is a T that's had by nothing else: into_raw()'s, of a ThinBox<T, A>,
+    /// this the one from_raw() of it - or A's allocation of a T, at
+    /// Layout::for_value()'s size.
     pub unsafe fn from_raw(p: NonNull<()>) -> Self {
         ThinBox { p, _t: PhantomData }
     }
