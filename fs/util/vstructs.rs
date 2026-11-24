@@ -218,9 +218,6 @@ pub trait FlexArray: SelfSized + DstHead {
 /// A header and u64s after it holding DSTs - entries, keys: vstructs.h's, an
 /// #[unsized_vstruct].
 pub trait VStruct: SelfSized + DstHead<Head: Plain> {
-    /// Its header's count of u64s.
-    fn u64s(&self) -> usize;
-
     /// Its bytes, every one.
     fn as_bytes(&self) -> &[u8];
 }
@@ -1368,7 +1365,7 @@ impl<'a, E: ?Sized> ViewEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized + SelfSized + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
+impl<'a, E: SelfSized + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
     type Item = &'a E;
 
     #[inline]
@@ -1385,7 +1382,7 @@ impl<'a, E: Unsized + SelfSized + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized + SelfSized + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
+impl<'a, E: SelfSized + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
@@ -2013,7 +2010,6 @@ mod unsized_tests {
 
         let c = tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         assert_eq!((c.u64s(), c.tag, c._data.len(), size_of_val(c)), (6, 7, 6, 56));
-        assert_eq!(c.u64s(), (**c).u64s(), "a VStruct's count, its header's");
         let e: Vec<(u16, usize)> = c.entries().map(|e| e.map(|e| (e.ty, e.as_bytes().len()))).collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(e, [(1, 8), (2, 24), (3, 16)]);
@@ -2027,7 +2023,6 @@ mod unsized_tests {
         assert_eq!(c.as_bytes().as_ptr(), buf.as_ptr().cast::<u8>());
         let e = c.entries().nth(1).unwrap();
         assert_eq!((e.u64s(), e._data.len()), (3, 2));
-        assert_eq!(e.u64s(), (**e).u64s(), "a VStruct's count, its header's");
     }
 
     /// An Unvalidated container's count past its bytes, or an entry's past

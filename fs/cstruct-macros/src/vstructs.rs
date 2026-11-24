@@ -483,11 +483,6 @@ fn vstruct_of(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStre
     let u64s = args.u64s.as_ref().map(|c| {
         let impls = states().map(|st| quote! {
             impl #vs::VStruct for #name<#vs::#st> {
-                fn u64s(&self) -> usize {
-                    // the count by value: a packed header's field can't be borrowed
-                    #vs::Count::count(&{ (**self).#c })
-                }
-
                 fn as_bytes(&self) -> &[u8] {
                     Self::as_bytes(self)
                 }

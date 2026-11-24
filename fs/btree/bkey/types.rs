@@ -147,10 +147,6 @@ unsafe impl<F: 'static, S: State> SelfSized for BkeyI<FamilyVal<F, S>> {
 }
 
 impl<F: 'static, S: State> VStruct for BkeyI<FamilyVal<F, S>> {
-    fn u64s(&self) -> usize {
-        self.k.u64s as usize
-    }
-
     fn as_bytes(&self) -> &[u8] {
         Self::as_bytes(self)
     }
