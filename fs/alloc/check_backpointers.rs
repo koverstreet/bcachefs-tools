@@ -646,14 +646,19 @@ fn check_btree_root_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToB
     let root_level = fs.btree_id_root(btree.0).expect("a btree with a root").c.level.get();
 
     let mut iter = BtreeIter::new_level(t, btree, POS_MIN, root_level.into(), BtreeIterFlags::empty());
-    let b = iter.peek_node(t)?.expect("a btree's root node");
+    let (level, key) = {
+        let n = iter.peek_node(t)?.expect("a btree's root node");
+        let b = n.node();
 
-    if !fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|root| core::ptr::eq(root, b.node())) {
-        return Err(t.restart(Errcode::transaction_restart_lock_root_race));
-    }
+        if !fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|root| core::ptr::eq(root, b.node())) {
+            return Err(t.restart(Errcode::transaction_restart_lock_root_race));
+        }
 
-    let level = u32::from(b.c.level.get());
-    check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(b.key()))?;
+        /* a copy: the check does btree updates */
+        (u32::from(b.c.level.get()), BkeyBuf::from_key(BkeySC::from(b.key())))
+    };
+
+    check_extent_to_backpointers(t, s, btree, level + 1, BkeySC::from(&*key))?;
     Ok(level)
 }
 
@@ -769,8 +774,8 @@ fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
 fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k: &BkeyI, btree: Btree,
                           level: u32) -> Result<(), BchError> {
     let mut iter = BtreeIter::new_level(t, btree, k.k.p, level, BtreeIterFlags::empty());
-    if let Some(b) = iter.peek_node(t)? {
-        pins.node(b.node());
+    if let Some(n) = iter.peek_node(t)? {
+        pins.node(n.node().node());
     }
     Ok(())
 }

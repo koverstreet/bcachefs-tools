@@ -13,7 +13,7 @@ use core::ffi::{c_int, CStr};
 use core::ops::ControlFlow;
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
+use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter};
 use crate::btree::BtreeIter;
 use crate::btree::node::BtreeNode;
 use crate::btree::trans::transaction_fn;
@@ -88,20 +88,32 @@ impl DebugFile for Formats {
             while level < c::BTREE_MAX_DEPTH as u32 {
                 let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), from, 0, level,
                                                   BtreeIterFlags::empty());
-                let full = iter.for_each(&trans, |b| {
-                    prt!(out, "{}", b.to_text(fs));
-                    let end = b.key().k.p;
-                    from = if end != SPOS_MAX { end.successor() } else { end };
+                loop {
+                    let step = lockrestart_do(&trans, |t| {
+                        let end = {
+                            let Some(n) = iter.peek(t)? else { return Ok(None) };
+                            let b = n.node();
+                            prt!(out, "{}", b.to_text(fs));
+                            b.key().k.p
+                        };
+                        from = if end != SPOS_MAX { end.successor() } else { end };
 
-                    // C's drop_locks_do(): the next level's iterator is made
-                    // from this trans, and needs it locked
-                    trans.unlock();
-                    let flow = out.try_flush()?;
-                    trans.relock()?;
-                    Ok(flow.map_break(|()| true))
-                })?;
-                if full {
-                    return Ok(true);
+                        // C's drop_locks_do(): the next level's iterator is made
+                        // from this trans, and needs it locked
+                        trans.unlock();
+                        let flow = out.try_flush()?;
+                        trans.relock()?;
+                        Ok(Some((end, flow)))
+                    })?;
+
+                    let Some((end, flow)) = step else { break };
+                    if flow.is_break() {
+                        return Ok(true);
+                    }
+                    if end == SPOS_MAX {
+                        break;
+                    }
+                    iter.iter().set_pos(end.successor());
                 }
 
                 level += 1;

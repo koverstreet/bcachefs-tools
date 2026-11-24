@@ -1745,9 +1745,6 @@ impl NodeMode for Write {
 
 /// A node a path has locked, borrowed from the attempt as a key is: good until
 /// the attempt's next unlock or error, which nothing checks (see TransRef).
-// XXX: a Write is borrowed from its path mutably, but a Held view not borrowed
-// from a path - BtreeNodeIter::peek()'s, PathLeaf::node()'s - can still be
-// beside one of the same node
 // XXX: node() is the view's lifetime, though a btree node lives as long as its
 // Fs: with the Fs's lifetime there, a view wouldn't be held for the attempt
 // only for the node's identity and flags (the key cache's flush and drop)

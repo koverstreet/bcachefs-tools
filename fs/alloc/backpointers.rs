@@ -39,12 +39,11 @@ use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
-use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeNodeRef, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbFlush;
-use crate::btree::node::BtreeNode;
-use crate::btree::path::LockedNode;
 use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
@@ -418,9 +417,8 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
 }
 
 /// None if it isn't there, which is reported.
-fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
-                    iter: &'i mut BtreeIter<'t>, last_flushed: Option<WbFlush<'_>>, commit: bool)
-    -> Result<Option<LockedNode<'i, BtreeNode>>, BchError>
+fn get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>, iter: &mut BtreeIter<'t>,
+                last_flushed: Option<WbFlush<'_>>, commit: bool) -> Result<Option<BtreeNodeRef>, BchError>
 {
     let fs = t.fs();
     let v = *bp.v();
@@ -429,25 +427,30 @@ fn get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
     assert!(v.level != 0, "a btree node's backpointer at level 0");
 
     *iter = BtreeIter::new_level(t, btree, v.pos, u32::from(v.level) - 1, BtreeIterFlags::empty());
-    let Some(b) = iter.peek_node(t)? else {
-        // Backpointer for nonexistent tree depth:
-        let hole = BkeyI::<c::Deleted>::at(v.pos);
-        backpointer_target_not_found(t, bp, BkeySC::<c::Deleted>::from(&hole).untyped(), last_flushed, commit)?;
-        return Ok(None);
+    let node_k = {
+        let Some(n) = iter.peek_node(t)? else {
+            // Backpointer for nonexistent tree depth:
+            let hole = BkeyI::<c::Deleted>::at(v.pos);
+            backpointer_target_not_found(t, bp, BkeySC::<c::Deleted>::from(&hole).untyped(), last_flushed, commit)?;
+            return Ok(None);
+        };
+        let b = n.node();
+
+        assert_eq!(u32::from(b.c.level.get()), u32::from(v.level) - 1, "node at the wrong level");
+
+        if extent_matches_bp(fs, btree, v.level.into(), BkeySC::from(b.key()), bp) {
+            return Ok(Some(BtreeNodeRef::from(b)));
+        }
+
+        if b.will_make_reachable() {
+            return fs.throw(Errcode::backpointer_to_overwritten_btree_node);
+        }
+
+        /* a copy: the report may commit */
+        BkeyBuf::from_key(BkeySC::from(b.key()))
     };
 
-    assert_eq!(u32::from(b.c.level.get()), u32::from(v.level) - 1, "node at the wrong level");
-
-    let node_k = BkeySC::from(b.key());
-    if extent_matches_bp(fs, btree, v.level.into(), node_k, bp) {
-        return Ok(Some(b));
-    }
-
-    if b.will_make_reachable() {
-        return fs.throw(Errcode::backpointer_to_overwritten_btree_node);
-    }
-
-    backpointer_target_not_found(t, bp, node_k, last_flushed, commit)?;
+    backpointer_target_not_found(t, bp, BkeySC::from(&*node_k), last_flushed, commit)?;
     Ok(None)
 }
 
@@ -483,7 +486,8 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
     }
 
     match get_node(t, bp, iter, last_flushed, commit) {
-        Ok(b) => Ok(b.map(|b| BkeySC::from(b.key()))),
+        Ok(Some(_)) => Ok(iter.node_key_at_iter_level(t)),
+        Ok(None) => Ok(None),
         Err(e) if e.matches(Errcode::backpointer_to_overwritten_btree_node) => Ok(None),
         Err(e) => Err(e),
     }
@@ -502,9 +506,9 @@ pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c
     Ok(k.map(|k| (&*iter, k)))
 }
 
-pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
-                                    iter: &'i mut BtreeIter<'t>, last_flushed: WbFlush<'_>)
-    -> Result<Option<LockedNode<'i, BtreeNode>>, BchError>
+pub(crate) fn backpointer_get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
+                                iter: &mut BtreeIter<'t>, last_flushed: WbFlush<'_>)
+    -> Result<Option<BtreeNodeRef>, BchError>
 {
     get_node(t, bp, iter, Some(last_flushed), true)
 }

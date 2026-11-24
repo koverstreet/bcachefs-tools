@@ -501,7 +501,8 @@ impl<'t> BtreeIter<'t> {
 
 impl<'t> BtreeNodeIter<'t> {
     /// for_each_btree_node(): @f's result as BtreeIter::for_each()'s body's. A
-    /// restart retries the node.
+    /// restart retries the node. @f has the node under the path table's
+    /// borrow: it doesn't use the transaction.
     pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(LockedNode<'a, BtreeNode>) -> Result<R, BchError>,
@@ -510,9 +511,12 @@ impl<'t> BtreeNodeIter<'t> {
         let mut paths = trans.paths();
         loop {
             let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
-                let Some(b) = self.raw.peek_node_in(t, paths)? else { return Ok(None) };
-                let end = b.key().k.p;
-                Ok(Some((end, paths.lend(|| f(b))?.into_step())))
+                if !self.raw.peek_node_in(t, paths)? {
+                    return Ok(None);
+                }
+                let path = &paths[self.raw.path];
+                let b = path.locked_btree_node(path.level() as usize).expect("a node peeked, held by its path");
+                Ok(Some((b.key().k.p, f(b)?.into_step())))
             })?;
 
             // peek_node() leaves iter->pos at the node's min_key (so a restart

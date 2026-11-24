@@ -464,19 +464,24 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
     *iter = BtreeIter::new_level(t, btree, v.pos, v.level.into(), BtreeIterFlags::empty());
 
     let mut node_iter = BtreeIter::new_level(t, btree, v.pos, u32::from(v.level) - 1, BtreeIterFlags::empty());
-    let b = node_iter.peek_node(t)?;
-    if let Some(b) = b {
-        if b.will_make_reachable() {
-            return Ok(None);
+    /* a copy: the fsck error unlocks */
+    let b = match node_iter.peek_node(t)? {
+        Some(n) => {
+            let b = n.node();
+            if b.will_make_reachable() {
+                return Ok(None);
+            }
+            let k = BkeyBuf::from_key(BkeySC::from(b.key()));
+            if BkeySC::from(&*k).arm::<Ptrs>().map_or(pos(0, 0), |k| k.reconcile_bp_pos(fs)) == bp.k.p {
+                return Ok(Some(k));
+            }
+            Some(k)
         }
-        let k = BkeySC::from(b.key());
-        if k.arm::<Ptrs>().map_or(pos(0, 0), |k| k.reconcile_bp_pos(fs)) == bp.k.p {
-            return Ok(Some(BkeyBuf::from_key(k)));
-        }
-    }
+        None => None,
+    };
 
-    let node_key = Msg(|out: &mut Printbuf| match b {
-        Some(b) => prt!(out, "{}", BkeySC::from(b.key()).to_text(fs)),
+    let node_key = Msg(|out: &mut Printbuf| match &b {
+        Some(k) => prt!(out, "{}", BkeySC::from(&**k).to_text(fs)),
         None    => prt!(out, "(no key)"),
     });
     if fsck_err!(t, id::reconcile_bp_to_missing_btree_ptr, "reconcile backpointer to missing/incorrect btree ptr\n{}\n{}",

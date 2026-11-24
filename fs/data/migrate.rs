@@ -316,7 +316,6 @@ impl DevDrop<'_> {
             let Some(b) = unless_overwritten(backpointer_get_node(t, bp, &mut iter, last_flushed))? else {
                 return Ok(());
             };
-            let b = BtreeNodeRef::from(b);
             self.btree_node(t, &mut iter, b)
         } else if k.k.key_type() == BkeyType::stripe {
             self.stripe(t, iter, k.untyped(), had_open_stripe, recorded_stripe)
