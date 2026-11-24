@@ -138,8 +138,6 @@ nest! {
     }
 }
 
-/// A run of overwritten keys, [start, end) by index, that a reader skips in
-/// one step: btree/journal_overlay.rs.
 #[repr(C)]
 #[derive(Default)]
 pub struct OverwriteRange {
@@ -147,7 +145,6 @@ pub struct OverwriteRange {
     pub end:   AtomicUsize,
 }
 
-// SAFETY: atomics, valid zeroed, owning nothing
 unsafe impl RcuElement for OverwriteRange {}
 
 /* overwrite_lock's: how many of the ranges are in use, the first a sentinel */
@@ -173,11 +170,6 @@ published! {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct journal_keys {
-    /*
-     * The keys, a gap buffer: data_structures/gap_buffer.rs, whose fields C reads as
-     * its own. Written only where nothing else reads them: before the
-     * filesystem can go rw - and by the last ref, and keys_mut()'s
-     */
     pub keys: LockedBy<GapBuffer<c::journal_key>, (), NotRw<'static>>,
     /* Bumped by each insert: an iterator that saw another searches again */
     pub seq: AtomicU64,
@@ -235,7 +227,6 @@ impl c::journal_key {
         c::journal_key { src, id, flags, overwritten: ::pin_init::zeroed(), overwritten_range: ::pin_init::zeroed() }
     }
 
-    /// For @k, a key of its own.
     fn new_allocated(btree: Btree, level: u32, k: KeyBox) -> Self {
         Self::new(c::journal_key_src { allocated_k: ManuallyDrop::new(k) },
                   c::journal_key_id::new().with_btree_id(btree).with_level(level as u8),
@@ -250,7 +241,6 @@ impl c::journal_key {
     /// Its own key, to edit: a key inserted since the journal was read.
     fn own_key_mut(&mut self) -> &mut BkeyI {
         assert!(self.allocated(), "a journal key's own key, of one read from the journal");
-        // SAFETY: allocated: new_allocated()'s
         unsafe { &mut self.src.allocated_k }
     }
 }
@@ -258,7 +248,6 @@ impl c::journal_key {
 impl Drop for c::journal_key {
     fn drop(&mut self) {
         if self.allocated() {
-            // SAFETY: allocated: new_allocated()'s, dropped once
             unsafe { ManuallyDrop::drop(&mut self.src.allocated_k) }
         }
     }
@@ -267,8 +256,6 @@ impl Drop for c::journal_key {
 /// A key a journal key has of its own, inserted since the journal was read.
 type KeyBox = ThinBox<BkeyI, Kmalloc>;
 
-/// Of a key at @level in @btree and key @r: which btree and level sorts
-/// first.
 #[inline]
 fn btree_cmp(btree: Btree, level: u32, r: &c::journal_key) -> Ordering {
     u32::from(r.level()).cmp(&level).then(btree.0.cmp(&r.btree_id().0))
@@ -283,8 +270,7 @@ impl Fs {
 }
 
 impl c::journal_keys {
-    /// Key @k: its own, or in the journal entry it was read from -
-    /// journal_key_k().
+    /// Key @k: its own, or in the journal entry it was read from.
     #[inline]
     fn key_k(&self, k: &c::journal_key) -> *mut () {
         // SAFETY: a key read from the journal is in an entry that lives as
@@ -320,8 +306,6 @@ impl c::journal_keys {
         self.key_cmp_pos(l.btree_id(), l.level().into(), self.key_pos(l), r)
     }
 
-    /// The index of the first key at or after @pos in @btree at @level:
-    /// __bch2_journal_key_search().
     pub(crate) fn search(&self, btree: Btree, level: u32, pos: Bpos) -> usize {
         let keys = self.keys();
         let (mut l, mut r) = (0, keys.len());
@@ -361,7 +345,6 @@ impl c::journal_keys {
     }
 
     pub fn keys(&self) -> &GapBuffer<c::journal_key> {
-        // written only with nothing reading
         unsafe { &*self.keys.data_ptr() }
     }
 
@@ -376,7 +359,6 @@ impl c::journal_keys {
         self.seq.load(Relaxed)
     }
 
-    /// Overwrite range @r, a key's that's overwritten.
     fn overwrite_range<'a>(&'a self, r: u32, rcu: &'a ReadGuard) -> &'a c::OverwriteRange {
         &self.overwrites.ranges.read(rcu)[r as usize]
     }
@@ -384,7 +366,7 @@ impl c::journal_keys {
     /// Key @idx overwritten: and in a neighbour's range, joining the two if
     /// both have one, or a new range with the neighbours that are overwritten.
     /// Without a new range if there's no memory for one - readers step over
-    /// it alone. __bch2_journal_key_overwritten().
+    /// it alone.
     fn overwrite(&self, g: &mut OverwriteGuard<'_>, idx: usize) {
         let keys = self.keys();
         let k = &keys[idx];
@@ -468,7 +450,7 @@ impl c::journal_keys {
     }
 
     /// The keys freed, what they own and the buffer, and the overwrite
-    /// ranges: bch2_journal_keys_reset().
+    /// ranges.
     fn reset(&self, keys: &mut GapBuffer<c::journal_key>) {
         keys.clear();
 
@@ -705,7 +687,6 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
     Ok(())
 }
 
-/// insert_take() of a copy of @k.
 pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
     let k = Box::try_clone_from_ref_in(k, Kmalloc).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
     insert_take(not_rw, btree, level, ThinBox::new(k))
@@ -911,7 +892,6 @@ fn sort_cmp(jk: &c::journal_keys, l: &c::journal_key, r: &c::journal_key) -> Ord
             return l.allocated().cmp(&r.allocated());
         }
 
-        // SAFETY: neither is allocated: both were read
         let (lp, rp) = unsafe { (l.src.journal, r.src.journal) };
         let o = (lp.journal_seq_offset, lp.journal_offset).cmp(&(rp.journal_seq_offset, rp.journal_offset));
         if l.flags.rewind() && r.flags.rewind() { o.reverse() } else { o }
