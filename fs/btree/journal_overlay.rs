@@ -49,8 +49,7 @@ use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
 use crate::util::projections::VolatilePublish;
 use crate::util::alloc::{Box, KVVec, Kmalloc};
-use crate::util::thin::ThinBox;
-use crate::util::vstructs::SelfSized;
+use crate::util::thin::{ThinBox, ThinMut, ThinRef};
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
 use crate::util::log::{LogLevel, LogMsg};
@@ -61,6 +60,7 @@ use crate::{bch_err, field, prt, new_lock, published};
 use core::cmp::Ordering;
 use core::mem::{size_of, ManuallyDrop};
 use core::pin::Pin;
+use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers, SelfSized};
 use c::Errcode as e;
@@ -272,24 +272,24 @@ impl Fs {
 impl c::journal_keys {
     /// Key @k: its own, or in the journal entry it was read from.
     #[inline]
-    fn key_k(&self, k: &c::journal_key) -> *mut () {
+    fn key_k(&self, k: &c::journal_key) -> NonNull<()> {
         // SAFETY: a key read from the journal is in an entry that lives as
         // long as the keys, at its offset
         unsafe {
             if k.allocated() {
-                return ThinBox::as_ptr(&k.src.allocated_k).as_ptr();
+                return ThinBox::as_ptr(&k.src.allocated_k);
             }
             let pos = k.src.journal;
             let i = self.entries().at_offset(pos.journal_seq_offset).expect("a journal key's entry");
             let at = c::journal_replay::J_AT + size_of::<Head<c::jset>>()
                 + pos.journal_offset as usize * size_of::<u64>();
-            ThinBox::as_ptr(i).as_ptr().byte_add(at)
+            ThinBox::as_ptr(i).byte_add(at)
         }
     }
 
     #[inline]
     pub(crate) fn key<'a>(&'a self, k: &'a c::journal_key) -> &'a BkeyI {
-        unsafe { &*BkeyI::from_thin(self.key_k(k)) }
+        unsafe { ThinRef::<BkeyI>::from_raw(self.key_k(k)) }.get()
     }
 
     #[inline]
@@ -476,7 +476,7 @@ impl c::journal_keys {
     /// Key @k, to edit in place: its own, or in the journal entry it was read
     /// from - had alone, not rw.
     pub(crate) fn key_mut<'a>(&'a self, _not_rw: &'a mut NotRw<'_>, k: &c::journal_key) -> &'a mut BkeyI {
-        unsafe { &mut *BkeyI::from_thin(self.key_k(k)).cast_mut() }
+        unsafe { ThinMut::<BkeyI>::from_raw(self.key_k(k)) }.into_mut()
     }
 }
 
