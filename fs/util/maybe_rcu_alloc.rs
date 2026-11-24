@@ -329,6 +329,13 @@ pub(crate) trait RcuFreeing {
     /// @p is @a's: alloc()'s, or a DST's at layout_of() its value's layout.
     /// Nothing but RCU readers uses it after.
     unsafe fn free<A: Alloc>(p: NonNull<Self>, a: &A);
+
+    /// Whether it's dropped at its free, nothing readers reach going with it,
+    /// or after a grace period.
+    fn drops_at_free() -> bool;
+
+    /// A build error unless drops_at_free().
+    fn assert_drops_at_free();
 }
 
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead>> RcuFreeing for T {
@@ -350,6 +357,14 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead>> RcuFreeing for T {
         PENDING.fetch_add(1, Relaxed);
         Flavor::RCU.call(unsafe { Freeing::<T, RcuWorkHead, A>::new(p) }, Freeing::queue);
     }
+
+    default fn drops_at_free() -> bool {
+        false
+    }
+
+    default fn assert_drops_at_free() {
+        let () = NotDroppedAtFree::<T>::ERR;
+    }
 }
 
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic> RcuFreeing for T {
@@ -369,6 +384,14 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic> RcuFr
     default unsafe fn free<A: Alloc>(p: NonNull<T>, _: &A) {
         <T as Detach>::detach(unsafe { p.as_ref() });
         Flavor::RCU.call(unsafe { Freeing::<T, RcuHead, A>::new(p) }, Freeing::drop_free);
+    }
+
+    default fn drops_at_free() -> bool {
+        false
+    }
+
+    default fn assert_drops_at_free() {
+        let () = NotDroppedAtFree::<T>::ERR;
     }
 }
 
@@ -391,6 +414,12 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + Drop
         unsafe { core::ptr::drop_in_place(p.as_ptr()) };
         <T as RcuHeadAt<RcuHead>>::free_mem_rcu(unsafe { Freeing::<T, RcuHead, A>::new(p) });
     }
+
+    default fn drops_at_free() -> bool {
+        true
+    }
+
+    default fn assert_drops_at_free() {}
 }
 
 impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + DropAnytime + FreeAnytime> RcuFreeing
@@ -424,6 +453,12 @@ struct NotRcuFreed<T: ?Sized>(PhantomData<T>);
 
 impl<T: ?Sized> NotRcuFreed<T> {
     const ERR: () = panic!("what's read under RCU must be freed a grace period on - !FreeAnytime: it needs an RcuMember");
+}
+
+struct NotDroppedAtFree<T: ?Sized>(PhantomData<T>);
+
+impl<T: ?Sized> NotDroppedAtFree<T> {
+    const ERR: () = panic!("dropped once readers are past it - not DropAnytime: what frees it can't drop it first");
 }
 
 /// RcuDropWorkMembers whose drop is still to come - the word their last write

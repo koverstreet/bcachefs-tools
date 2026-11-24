@@ -27,7 +27,8 @@ use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator,
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
-use crate::util::rcu::{DropAnytime, Flavor, GpCookie, HasRcuHead, RcuHead, RcuOwned};
+use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::rcu::{Flavor, GpCookie, HasRcuHead, RcuHead, RcuOwned};
 use crate::os::workqueue::{Queue, RawWork};
 
 const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
@@ -59,38 +60,6 @@ fn into_raw<T: HasRcuHead>(p: NonNull<T>) -> Raw {
 /// @raw is into_raw()'s.
 unsafe fn from_raw<T: HasRcuHead>(raw: Raw) -> NonNull<T> {
     unsafe { raw.byte_sub(T::HEAD).cast() }
-}
-
-/// Whether a T is dropped at its free, or once its grace period's over.
-trait DropAt {
-    fn at_free() -> bool;
-
-    /// A build error for a T that isn't.
-    fn assert_at_free();
-}
-
-impl<T> DropAt for T {
-    default fn at_free() -> bool {
-        false
-    }
-
-    default fn assert_at_free() {
-        let () = NotDroppedAtFree::<T>::ERR;
-    }
-}
-
-impl<T: DropAnytime> DropAt for T {
-    fn at_free() -> bool {
-        true
-    }
-
-    fn assert_at_free() {}
-}
-
-struct NotDroppedAtFree<T>(PhantomData<T>);
-
-impl<T> NotDroppedAtFree<T> {
-    const ERR: () = panic!("an Allocator's T is written over and dropped by its user: this T is dropped once readers are past it - alloc() and free() it");
 }
 
 /// @h's link: the kernel's next, or liburcu's next.next.
@@ -399,7 +368,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
     /// wasn't at its free.
     fn process_raw(&self, raw: Raw) {
         let p = unsafe { from_raw::<T>(raw) };
-        if !<T as DropAt>::at_free() {
+        if !<T as RcuFreeing>::drops_at_free() {
             unsafe { ptr::drop_in_place(p.as_ptr()) };
         }
         unsafe { self.backing().deallocate(p.cast(), Layout::new::<T>()) }
@@ -607,7 +576,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
     fn allocate_from(&self, layout: Layout, fresh: impl FnOnce(&A) -> Result<NonNull<[u8]>, AllocError>)
         -> Result<NonNull<[u8]>, AllocError>
     {
-        <T as DropAt>::assert_at_free();
+        <T as RcuFreeing>::assert_drops_at_free();
 
         let t = Layout::new::<T>();
         if layout.size() > t.size() || layout.align() > t.align() {
@@ -623,7 +592,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
     /// @p is a T in memory from A - alloc()'s, or another RcuPending's over
     /// the same A - and nothing but readers from before this uses it after.
     pub unsafe fn free(&self, p: NonNull<T>) {
-        if <T as DropAt>::at_free() {
+        if <T as RcuFreeing>::drops_at_free() {
             unsafe { ptr::drop_in_place(p.as_ptr()) };
         }
         self.enqueue(p)
@@ -745,7 +714,7 @@ unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
     }
 
     unsafe fn deallocate(&self, p: NonNull<u8>, _: Layout) {
-        <T as DropAt>::assert_at_free();
+        <T as RcuFreeing>::assert_drops_at_free();
         self.enqueue(p.cast())
     }
 }
