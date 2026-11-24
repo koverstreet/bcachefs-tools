@@ -171,6 +171,13 @@ native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, 
 /// it reads to say how long it is can't change through a &Self, nor a &mut
 /// Self.
 pub unsafe trait SelfSized {
+    /// Its alignment, which align_of() can't say of a DST.
+    const ALIGN: usize;
+
+    /// The fewest bytes a value is: what from_thin() reads to say how long
+    /// it is, at least.
+    const MIN_BYTES: usize;
+
     /// The value at @p - a thin pointer, its address - as long as it says.
     ///
     /// # Safety
@@ -190,6 +197,11 @@ pub unsafe trait SelfSized {
 }
 
 impl<T> !SelfSized for T {}
+
+/// The greater of two alignments, in a const: Ord::max() isn't const.
+pub const fn align_max(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
 
 /// A header and the array after it, counted in elements: C's `T name[]`, as
 /// a DST - a #[counted] type, a DstArray.
@@ -896,6 +908,9 @@ macro_rules! vstruct_family {
         // SAFETY: its header's count says how long it is, and that's a
         // private field - Deref is to the header, to read
         unsafe impl SelfSized for $name<$st> {
+            const ALIGN: usize = align_max(align_of::<<Self as Unsized>::Head>(), align_of::<<Self as Unsized>::Elem>());
+            const MIN_BYTES: usize = <Self as Unsized>::MIN_BYTES;
+
             unsafe fn from_thin(p: *const ()) -> *const Self {
                 let $h: &$head = unsafe { &*p.cast() };
                 <Self as Unsized>::from_raw(p.cast(), $len)

@@ -19,7 +19,7 @@ use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
 use crate::util::rcu::{FreeAnytime, HasRcuHead};
 use crate::util::thin::ThinBox;
-use crate::util::vstructs::{FlexArray, SelfSized};
+use crate::util::vstructs::{align_max, FlexArray, SelfSized};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 
@@ -96,6 +96,9 @@ impl<H, T> DstArray<H, T> {
 // SAFETY: the header says how long the array is - nr(), which nothing
 // changes through it - and is had only by &
 unsafe impl<H: DstHead, T> SelfSized for DstArray<H, T> {
+    const ALIGN: usize = align_max(align_of::<H>(), align_of::<T>());
+    const MIN_BYTES: usize = size_of::<H>().next_multiple_of(Self::ALIGN);
+
     unsafe fn from_thin(p: *const ()) -> *const Self {
         // a slice pointer's length is the DST's tail's
         ptr::slice_from_raw_parts(p.cast::<T>(), unsafe { (*p.cast::<H>()).nr() }) as *const Self

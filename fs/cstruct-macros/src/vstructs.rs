@@ -194,8 +194,8 @@ pub(crate) fn derive_tear_safe(input: TokenStream) -> Result<TokenStream, String
 
 /// #[derive(SelfSized)], on a #[repr(C)] struct ending in a SelfSized DST of
 /// ours: as long as that says, its fields before it sized. Its offset is
-/// LAST_AT, the last field's name uppercased: where it is in a sized twin of
-/// the struct whose last field has its head and its alignment.
+/// LAST_AT, the last field's name uppercased: where its sized fields end, in
+/// a twin of them, rounded up to its alignment.
 pub(crate) fn derive_self_sized(input: TokenStream) -> Result<TokenStream, String> {
     let item: syn::DeriveInput = syn::parse2(input).map_err(|e| e.to_string())?;
     let name = &item.ident;
@@ -223,27 +223,36 @@ pub(crate) fn derive_self_sized(input: TokenStream) -> Result<TokenStream, Strin
     }
     // as many as the struct has, where it has them: a field it's built without
     // is one its twin is
-    let sized = sized.iter().map(|f| {
+    let sized: Vec<_> = sized.iter().map(|f| {
         let (i, t) = (&f.ident, &f.ty);
         let cfgs = f.attrs.iter().filter(|a| a.path().is_ident("cfg"));
         quote!(#(#cfgs)* #i: #t)
-    });
+    }).collect();
     let at = format_ident!("{}_AT", last_ident.to_string().to_uppercase());
     let vis = &item.vis;
     let vs = vs();
+    // its sized fields, laid out as they are in it, and where they end
+    let twin = quote! {
+        #[allow(dead_code)]
+        #[repr(C)]
+        struct Twin { #(#sized,)* __end: [u8; 0] }
+    };
     Ok(quote! {
         impl #name {
             #vis const #at: usize = {
-                #[repr(C)]
-                struct Tail(<#last_ty as #vs::Unsized>::Head, [<#last_ty as #vs::Unsized>::Elem; 0]);
-                #[allow(dead_code)]
-                #[repr(C)]
-                struct Twin { #(#sized,)* #last_ident: Tail }
-                ::core::mem::offset_of!(Twin, #last_ident)
+                #twin
+                ::core::mem::offset_of!(Twin, __end).next_multiple_of(<#last_ty as #vs::SelfSized>::ALIGN)
             };
         }
 
         unsafe impl #vs::SelfSized for #name {
+            const ALIGN: usize = {
+                #twin
+                #vs::align_max(::core::mem::align_of::<Twin>(), <#last_ty as #vs::SelfSized>::ALIGN)
+            };
+            const MIN_BYTES: usize =
+                (Self::#at + <#last_ty as #vs::SelfSized>::MIN_BYTES).next_multiple_of(<Self as #vs::SelfSized>::ALIGN);
+
             unsafe fn from_thin(p: *const ()) -> *const Self {
                 let last = unsafe { <#last_ty as #vs::SelfSized>::from_thin(p.byte_add(Self::#at)) };
                 ::core::ptr::slice_from_raw_parts(p, (last as *const [()]).len()) as *const Self

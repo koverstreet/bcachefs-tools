@@ -12,7 +12,7 @@
 //! under a header of words, as a typed key's value is under its bkey.
 
 use crate::util::alloc::{flags, AlignedBox, AllocError, AllocGfp, Box, Flags, Kmalloc};
-use crate::util::vstructs::{Plain, SelfSized, Unsized};
+use crate::util::vstructs::{Plain, SelfSized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
@@ -207,10 +207,8 @@ fn room_short(cap: usize, min: usize, what: &str) -> ! {
     panic!("a room of {cap} bytes, short of the {min} a {what} is at least")
 }
 
-// XXX: T's layout is Unsized's - its alignment its head's - till Unsized says
-// it without one
-impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> DstRoom<T, B> {
-    const ALIGNED: () = assert!(align_of::<T::Head>() <= align_of::<B::Elem>(),
+impl<T: ?Sized + SelfSized, B: ?Sized + Storage> DstRoom<T, B> {
+    const ALIGNED: () = assert!(T::ALIGN <= align_of::<B::Elem>(),
                                 "a DstRoom's storage, less aligned than what it holds");
 
     /// A room made from a slice can be shorter than the least T: @e, the
@@ -224,7 +222,7 @@ impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> DstRoom<T, B> {
     }
 }
 
-impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> Deref for DstRoom<T, B> {
+impl<T: ?Sized + SelfSized, B: ?Sized + Storage> Deref for DstRoom<T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -234,7 +232,7 @@ impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> Deref for DstRoom<T, 
     }
 }
 
-impl<T: ?Sized + Unsized + SelfSized, B: ?Sized + Storage> DerefMut for DstRoom<T, B> {
+impl<T: ?Sized + SelfSized, B: ?Sized + Storage> DerefMut for DstRoom<T, B> {
     fn deref_mut(&mut self) -> &mut T {
         let e = self.buf.elems_mut();
         Self::check(e);

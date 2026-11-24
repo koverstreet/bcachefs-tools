@@ -134,6 +134,9 @@ impl<V: Unsized + ?Sized> ArmAt for BkeyI<V> {
 // XXX: what it reads its length from, k.u64s, can change through a &mut
 // Self - the XXX on BkeyI
 unsafe impl<F: 'static, S: State> SelfSized for BkeyI<FamilyVal<F, S>> {
+    const ALIGN: usize = align_of::<c::bkey>();
+    const MIN_BYTES: usize = <Self as Unsized>::MIN_BYTES;
+
     unsafe fn from_thin(p: *const ()) -> *const Self {
         <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<c::bkey>()).bytes() })
     }
