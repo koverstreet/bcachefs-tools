@@ -43,8 +43,10 @@
 //! in a Locked's data has the struct holding the lock for its parent.
 //!
 //! A field `w: ReffedWork<f, R>` - a work item, running fn f, holding a ref
-//! on R's count - or a DelayedWork<f, R>, the same after a delay, its timer
-//! with a lockdep class too, is made here too, with all it needs, as the field is the
+//! on R's count - or a CancelledWork<f>, holding none, cancelled as it drops,
+//! and so only a struct's first field; or a DelayedWork<f, R>, the same after
+//! a delay, its timer with a lockdep class too - is made here too, with all
+//! it needs, as the field is the
 //! one place it's declared: f as a type, a braced struct beside the fn f in
 //! scope here, and its WorkFunc - the field's At, and run(), the call to f;
 //! and the field's initializer, ReffedWork::new() given the At, with a
@@ -84,7 +86,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let mut inits = Vec::new();
     let mut field_impls = Vec::new();
     let mut at: Option<&Type> = None;
-    for f in fields {
+    for (i, f) in fields.iter().enumerate() {
         let Some(name) = &f.ident else {
             return Err(Error::new_spanned(f, format!("{parent}: #[derive(Init)] is for named fields")));
         };
@@ -148,6 +150,10 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         if let (None, Some((kind, func))) = (&init, reffed_work_fn(&parent, name, ty)?) {
             if has_lifetimes {
                 return Err(Error::new_spanned(name, format!("{parent}.{name}: a {kind}'s parent has no lifetimes")));
+            }
+            if kind == "CancelledWork" && i != 0 {
+                return Err(Error::new_spanned(name, format!("{parent}.{name}: a CancelledWork is its parent's \
+                                                             first field, dropped before what its run uses")));
             }
             field_impls.push(work_func(&cfg, &inst_ty, name, func));
             let w = work_init(&parent, name, kind)?;
@@ -284,12 +290,13 @@ fn is_journal_pin(ty: &Type) -> bool {
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────
 
-/// The work type and f, if field type @ty is a ReffedWork<f, R> or a
-/// DelayedWork<f, R>: f a bare name, the fn in scope here that it runs - its
+/// The work type and f, if field type @ty is a ReffedWork<f, R>, a
+/// CancelledWork<f> or a DelayedWork<f, R>: f a bare name, the fn in scope here that it runs - its
 /// type is made here, beside it.
 fn reffed_work_fn<'a>(parent: &str, name: &Ident, ty: &'a Type) -> syn::Result<Option<(&'a Ident, &'a Ident)>> {
     let Type::Path(p) = ty else { return Ok(None) };
-    let Some(last) = p.path.segments.last().filter(|s| s.ident == "ReffedWork" || s.ident == "DelayedWork") else {
+    let Some(last) = p.path.segments.last()
+        .filter(|s| s.ident == "ReffedWork" || s.ident == "CancelledWork" || s.ident == "DelayedWork") else {
         return Ok(None)
     };
     let PathArguments::AngleBracketed(args) = &last.arguments else { return Ok(None) };

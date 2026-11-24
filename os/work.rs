@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! ReffedWork and DelayedWork, the same in both builds, over each one's
-//! workqueue - but their classes, in-kernel a lockdep class per field.
+//! ReffedWork, CancelledWork and DelayedWork, the same in both builds, over
+//! each one's workqueue - but their classes, in-kernel a lockdep class per
+//! field.
 
 use super::{Queue, RawDelayedWork, RawWork, WorkFn, Workqueue};
 use crate::c;
@@ -10,7 +11,7 @@ use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use core::ffi::c_ulong;
 use core::marker::PhantomData;
-use pin_init::{pin_data, pin_init};
+use pin_init::{pin_data, pin_init, pinned_drop};
 
 /// A field's work's class: in-kernel its lockdep class - @key, named @name.
 #[cfg(kernel)]
@@ -28,10 +29,11 @@ fn raw_work(func: WorkFn, (): WorkClass) -> impl ::pin_init::PinInit<RawWork> {
     RawWork::new(func)
 }
 
-/// A ReffedWork's or DelayedWork's function as a type, and the field it runs
-/// from: for a field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes
-/// f - a braced struct, a type only, beside the fn f - and this. At is that
-/// field's, and only its initializer makes a work of Self.
+/// A ReffedWork's, CancelledWork's or DelayedWork's function as a type, and
+/// the field it runs from: for a field `w: ReffedWork<f, R>`, the parent's
+/// #[derive(Init)] makes f - a braced struct, a type only, beside the fn f -
+/// and this. At is that field's, and only its initializer makes a work of
+/// Self.
 pub(crate) trait WorkFunc: Sized + 'static {
     #[doc(hidden)]
     type At: Place<Base: Enclosing<Visible = <Self::At as Place>::Base>>;
@@ -84,6 +86,7 @@ const _: () = {
     #[allow(dead_code)]
     fn check<F: WorkFunc, R>() {
         let _ = <ReffedWork<F, R> as NotImpl<_>>::check;
+        let _ = <CancelledWork<F> as NotImpl<_>>::check;
     }
 };
 
@@ -261,6 +264,60 @@ where
         -> impl ::pin_init::PinInit<Self, E>
     {
         pin_init!(Self { work <- raw_work(Self::work_fn, class), _placed_at: at, _r: PhantomData }? E)
+    }
+}
+
+/// struct work_struct, placed as a ReffedWork is, holding no ref: F run on
+/// the queue it's handed. What keeps the parent for the run is its drop,
+/// which cancels it - waiting out a run under way, which reaches the parent:
+/// so it's the parent's first field, dropped before the fields the run uses.
+/// #[derive(Init)] makes it nowhere else. A parent's own Drop runs before
+/// its fields', so what the run needs mustn't go there.
+#[pin_data(PinnedDrop)]
+#[repr(C)]
+pub(crate) struct CancelledWork<F: WorkFunc> {
+    #[pin]
+    work:       RawWork,
+    _placed_at: F::At,
+}
+
+impl<F: WorkFunc> Contained for CancelledWork<F>
+where
+    F::At: Place<Type = Self>,
+{
+    type Parent = Parent<F>;
+    type At = F::At;
+    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
+}
+
+impl<F: WorkFunc> CancelledWork<F>
+where
+    F::At: Place<Type = Self>,
+{
+    /// Run F on @wq. Queued already, the pending run is the one there'll be.
+    pub(crate) fn queue(&self, wq: &Queue) -> bool {
+        unsafe { self.work.queue(wq) }
+    }
+
+    /// # Safety
+    /// @work is a CancelledWork<F>'s, queued by queue().
+    unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
+        F::run(unsafe { (*work.cast::<Self>()).container() });
+    }
+
+    /// INIT_WORK(), of the field's class.
+    #[doc(hidden)]
+    pub(crate) fn new<E: From<core::convert::Infallible>>(at: F::At, class: WorkClass)
+        -> impl ::pin_init::PinInit<Self, E>
+    {
+        pin_init!(Self { work <- raw_work(Self::work_fn, class), _placed_at: at }? E)
+    }
+}
+
+#[pinned_drop]
+impl<F: WorkFunc> PinnedDrop for CancelledWork<F> {
+    fn drop(self: core::pin::Pin<&mut Self>) {
+        self.work.cancel_sync();
     }
 }
 

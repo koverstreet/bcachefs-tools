@@ -14,7 +14,9 @@
 //! paths) - or a pair of them, or OnQueue, the parent's own queue it runs on.
 //! Its parent's #[derive(Init)] makes it, placed at its field: so C's pointer
 //! to it is had back as the ReffedWork, and its container() as the parent F
-//! runs on. DelayedWork<F, R> is the same, after a delay: both in work.rs.
+//! runs on. CancelledWork<F> holds no ref: its drop cancels it, so it's its
+//! parent's first field. DelayedWork<F, R> is a ReffedWork after a delay:
+//! all in work.rs.
 //!
 //! RawWork and RawDelayedWork are struct work_struct and struct delayed_work,
 //! bare - under the works above, or for a parent not made by
@@ -232,7 +234,7 @@ macro_rules! new_delayed_work {
 
 #[path = "../work.rs"]
 mod work;
-pub(crate) use work::{DelayedWork, OnQueue, Own, ReffedWork, WorkFunc};
+pub(crate) use work::{CancelledWork, DelayedWork, OnQueue, Own, ReffedWork, WorkFunc};
 
 #[repr(transparent)]
 pub struct RawWork {
