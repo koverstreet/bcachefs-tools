@@ -225,7 +225,7 @@ pub enum DevFlag {
 
 pub const CONGESTED_MAX: u32 = 1024;
 
-#[pin_data(PinnedDrop)]
+#[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, RcuHead)]
 #[init_args(fs: &crate::fs::Fs)]

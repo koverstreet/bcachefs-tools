@@ -244,7 +244,6 @@ use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err_fn, prt};
 use core::ffi::CStr;
 use core::pin::Pin;
-use pin_init::pinned_drop;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 #[cfg(kernel)]
@@ -488,20 +487,6 @@ unsafe impl KobjOwner for Dev {
     const GROUPS: GroupList<DevDir> = DEV_GROUPS.list();
     type Dir = DevDir;
     type Alloc = MaybeRcuAlloc<Dev>;
-}
-
-#[pinned_drop]
-impl PinnedDrop for Dev {
-    fn drop(self: Pin<&mut Self>) {
-        let ca = unsafe { self.get_unchecked_mut() };
-
-        ca.bucket_backpointer_mismatch.free();
-        ca.bucket_backpointer_empty.free();
-
-        ca.disk_sb.get_mut().free();
-
-        ca.buckets_free();
-    }
 }
 
 /// @ca, out of c->devs[] and past readers: its sysfs gone, and freed with its

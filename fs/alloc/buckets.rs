@@ -1051,16 +1051,6 @@ impl Dev {
         }
         Ok(())
     }
-
-    /// What buckets_alloc() and buckets_nouse_alloc() allocated, as it's
-    /// freed - but its usage counters, which go as it drops:
-    /// bch2_dev_buckets_free().
-    pub fn buckets_free(&mut self) {
-        unsafe {
-            self.buckets_nouse.free();
-            self.bucket_gens.free();
-        }
-    }
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────
