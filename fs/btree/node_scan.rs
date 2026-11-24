@@ -7,11 +7,11 @@ use core::ptr::NonNull;
 use crate::init::passes::RecoveryPass;
 use crate::data_structures::array_vec::ArrayVec;
 
-use crate::btree::bkey::{BkeyI, BkeyV, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{BkeyV, BkeyVMut, POS_MIN, SPOS_MAX};
 use crate::init::error::BkeyValidate;
 use crate::btree::cache::{node_data_free, node_scratch_alloc, node_struct_free};
 use crate::btree::journal_overlay;
-use crate::btree::node::BtreeNode;
+use crate::btree::node::{BtreeNode, NodeKey};
 use crate::btree::path::LockedNode;
 use crate::btree::read::{read_done, ReadInFlightNode};
 use crate::c::{self, Errcode, BtreePtrV2};
@@ -32,7 +32,7 @@ use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::util::par::{self, Backend};
 use crate::util::rcu::read_lock;
 use crate::data_structures::sort::dedup_by;
-use crate::util::vstructs::Head;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_dev_ratelimited, bch_info, bch_info_dev, prt};
 
@@ -50,19 +50,6 @@ pub(crate) struct FoundBtreeNode {
     min_key:         Bpos,
     max_key:         Bpos,
     ptrs:            ArrayVec<c::bch_extent_ptr, { c::BCH_REPLICAS_MAX as usize }>,
-}
-
-#[repr(C)]
-struct FoundKey {
-    k:    c::bkey,
-    v:    BtreePtrV2,
-    ptrs: [c::bch_extent_ptr; c::BCH_REPLICAS_MAX as usize],
-}
-
-impl FoundKey {
-    fn as_bkey_i(&self) -> &BkeyI {
-        unsafe { &*BkeyI::from_raw(core::ptr::from_ref(self).cast()) }
-    }
 }
 
 impl FoundBtreeNode {
@@ -108,21 +95,23 @@ impl FoundBtreeNode {
         }
     }
 
-    fn to_key(&self) -> FoundKey {
-        let mut k = FoundKey {
-            k:    c::bkey::new(),
-            v:    BtreePtrV2::default(),
-            ptrs: [c::bch_extent_ptr::default(); c::BCH_REPLICAS_MAX as usize],
-        };
+    fn to_key(&self) -> NodeKey {
+        const V_U64S: usize = size_of::<BtreePtrV2>() / size_of::<u64>();
 
+        let mut k = NodeKey::default();
         k.k.set_key_type(BkeyType::btree_ptr_v2);
-        k.k.set_val_bytes(size_of::<BtreePtrV2>() + size_of::<c::bch_extent_ptr>() * self.ptrs.len());
         k.k.p = self.max_key;
-        k.v.seq = Le64::new(self.cookie);
-        k.v.sectors_written = Le16::new(self.sectors_written);
-        k.v.min_key = self.min_key;
-        k.v.set_range_updated(self.range_updated);
-        k.ptrs[..self.ptrs.len()].copy_from_slice(&self.ptrs);
+        k.set_val_u64s(V_U64S + self.ptrs.len()).expect("a node key's room, for a node's pointers");
+
+        let mut key = &mut *k;
+        let mut p = key.as_s().arm::<BtreePtrV2>().expect("a btree_ptr_v2");
+        let v = p.v_mut();
+        v.seq = Le64::new(self.cookie);
+        v.sectors_written = Le16::new(self.sectors_written);
+        v.min_key = self.min_key;
+        v.set_range_updated(self.range_updated);
+
+        plain_bytes_mut(&mut k.val_mut()[V_U64S..]).copy_from_slice(plain_bytes(&self.ptrs[..]));
         k
     }
 }
@@ -267,7 +256,7 @@ impl<'f> DevScan<'f> {
 
         let b = self.buf.node();
         let mut k = b.key_peek();
-        k.set_key(n.to_key().as_bkey_i());
+        k.set_key(&*n.to_key());
         b.contents.published_writer_mut().store(&k);
 
         let mut err = Printbuf::new();
@@ -506,7 +495,7 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
         let mut from = c::bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
         from.bits.set_from(c::BkeyValidateFrom::btree_node);
         assert!(crate::btree::bkey::bkey_validate(
-            &BkeyValidate::new(fs, k.as_bkey_i().as_sc(), &from)).is_ok());
+            &BkeyValidate::new(fs, (&*k).as_sc(), &from)).is_ok());
 
         if *nodes_found == 0 {
             prt!(out, "recovering from btree node scan at btree={btree} level={level}\n");
@@ -516,12 +505,12 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
         *nodes_found += 1;
 
         match *nodes_found {
-            ..10 => prt!(out, "{}\n", k.as_bkey_i().as_sc().to_text(fs)),
+            ..10 => prt!(out, "{}\n", (&*k).as_sc().to_text(fs)),
             10   => prt!(out, "<many>\n"),
             _    => {}
         }
 
-        journal_overlay::insert(&mut fs.not_rw(), btree, level + 1, k.as_bkey_i())?;
+        journal_overlay::insert(&mut fs.not_rw(), btree, level + 1, &k)?;
     }
 
     if *nodes_found != 0 {
