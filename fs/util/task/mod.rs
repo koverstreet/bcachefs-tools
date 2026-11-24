@@ -107,6 +107,7 @@ pub use waitlist::{Complete, DynComplete, WaitList, WaitlistCompletion};
 pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
 use crate::c;
+use crate::data_structures::llist::LlistNode;
 use crate::errcode::BchError;
 use crate::os::kthread::{Kthread, KthreadRef};
 use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
@@ -308,7 +309,7 @@ impl Resumable for Requeue {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Target {
+pub(crate) enum Target {
     Inline,
     /* and the cpu, where the await names one */
     Queue(NonNull<Queue>, Option<u32>),
@@ -332,6 +333,7 @@ pub enum Spawn<'q, 'n> {
 
 #[repr(C)]
 #[pin_data]
+#[derive(cstruct_macros::Fields)]
 pub(crate) struct Header {
     #[pin]
     work:      RawWork,
@@ -342,14 +344,14 @@ pub(crate) struct Header {
     /* the executor's done with its memory: set by finish(), read by its drop */
     finished:  AtomicBool,
     listed:    Cell<u32>,
-    runq_next: AtomicPtr<Header>,
+    runq_next: LlistNode,
     list:      NonNull<TaskList>,
     vtable:    &'static TaskVtable,
     _rcu:      RcuMember,
 }
 
 /// What the executor calls on a task without knowing its future's type.
-struct TaskVtable {
+pub(crate) struct TaskVtable {
     poll:   unsafe fn(NonNull<Header>, &mut Context<'_>) -> Poll<()>,
     finish: unsafe fn(NonNull<Header>),
     name:   fn() -> &'static str,
@@ -416,7 +418,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
                 started:   Cell::new(false),
                 finished:  AtomicBool::new(false),
                 listed:    Cell::new(0),
-                runq_next: AtomicPtr::new(null_mut()),
+                runq_next: LlistNode::new(),
                 list:      NonNull::from(list),
                 vtable:    const {
                     &TaskVtable { poll: Self::poll, finish: Self::finish, name: core::any::type_name::<F> }

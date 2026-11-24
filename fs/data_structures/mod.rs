@@ -15,6 +15,7 @@ pub mod heap;
 pub mod ida;
 pub mod inline_vec;
 pub mod list;
+pub mod llist;
 pub mod ref_cell;
 pub mod sort;
 pub mod strided;
