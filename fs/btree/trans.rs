@@ -647,22 +647,27 @@ impl Drop for TransGuard<'_> {
             old
         };
 
-        if !trans.is_null() {
-            c.with_trans_list(|list| unsafe { list.remove(&*trans.cast()) });
-
-            /*
-             * RCU-defer the mempool return: the cycle detector walks
-             * wait_fifos under RCU without holding closure refs, so other
-             * threads may be mid-access of this trans via a pointer they
-             * read from a wait_fifo slot. Grace period ensures the memory
-             * isn't reused for a different struct before those walks
-             * finish; per-CPU cache reuse within a grace period is
-             * identity-confusion (acceptable per probabilistic detection).
-             */
-            let trans = PooledTrans(unsafe { NonNull::new_unchecked(trans.cast()) });
-            rcu::Flavor::RCU.call(trans, PooledTrans::free);
+        if let Some(trans) = NonNull::new(trans) {
+            cached_trans_retire(c, trans);
         }
     }
+}
+
+/// A transaction out of its percpu slot, done with: off the transaction list,
+/// its memory the pool's again a grace period on.
+pub(crate) fn cached_trans_retire(c: &Fs, trans: NonNull<BtreeTrans<'static>>) {
+    c.with_trans_list(|list| unsafe { list.remove(trans.as_ref()) });
+
+    /*
+     * RCU-defer the mempool return: the cycle detector walks
+     * wait_fifos under RCU without holding closure refs, so other
+     * threads may be mid-access of this trans via a pointer they
+     * read from a wait_fifo slot. Grace period ensures the memory
+     * isn't reused for a different struct before those walks
+     * finish; per-CPU cache reuse within a grace period is
+     * identity-confusion (acceptable per probabilistic detection).
+     */
+    rcu::Flavor::RCU.call(PooledTrans(trans), PooledTrans::free);
 }
 
 // ── Memory, and beginning again ─────────────────────────────────────────────
