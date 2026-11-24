@@ -17,8 +17,8 @@
 //! What's safe, and why:
 //!
 //! - Holding the list is holding a &List or &mut List: one lives in a
-//!   Locked<R, List<T, OFFSET>>. Walking it with a cursor, and reordering it -
-//!   sort() - are safe.
+//!   Locked<R, List<T, OFFSET>>. Walking it with a cursor, draining it, and
+//!   reordering it - sort() - are safe.
 //! - An item is live, and doesn't move, while it's on the list, and after
 //!   it's taken off until the list's lock is next released: its owner takes
 //!   the lock before freeing it. So a cursor can take an item off and still
@@ -295,6 +295,26 @@ impl<T, const OFFSET: usize> List<T, OFFSET> {
     pub fn cursor_mut(&mut self) -> CursorMut<'_, T, OFFSET> {
         let pos = if self.is_empty() { ptr::from_ref(&self.head) } else { self.head.next.get() };
         CursorMut { list: self, pos }
+    }
+
+    /// Each item taken off in turn, from the front, and handed to @body with
+    /// @owner - its lock's guard, which @list() picks this one out of:
+    /// list_for_each_entry_safe() with list_del_init(), for a body that needs
+    /// the rest of what @owner holds. The next is whatever's at the front once
+    /// the body's done, so the body may do anything to the list.
+    pub fn drain<O>(owner: &mut O, list: impl Fn(&mut O) -> &mut Self, mut body: impl FnMut(&mut O, &T)) {
+        loop {
+            let l = list(&mut *owner);
+            if l.is_empty() {
+                return;
+            }
+            let first = l.head.next.get();
+            let item = unsafe {
+                (*first).del_init();
+                Self::item(first)
+            };
+            body(&mut *owner, item);
+        }
     }
 
     /// Its items in @cmp's order, stably: an insertion sort, from the back,
