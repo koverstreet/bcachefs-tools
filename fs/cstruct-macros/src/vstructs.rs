@@ -154,11 +154,11 @@ pub(crate) fn derive_non_zero_word(input: TokenStream) -> Result<TokenStream, St
     })
 }
 
-/// #[derive(TearSafe)], on a struct: a Volatile of it loads and stores it field
-/// by field - an array's element by element - each as its own Volatile would,
-/// so a torn one is each field of some value, and its padding is never read.
-/// That its readers can take one is what deriving it says.
-pub(crate) fn derive_tear_safe(input: TokenStream) -> Result<TokenStream, String> {
+/// #[derive(VolatileValue)], on a struct: a Volatile of it loads and stores it
+/// field by field - an array's element by element - each as its own Volatile
+/// would, so a torn one is each field of some value, and its padding is never
+/// read. That its readers can take one is what deriving it says.
+pub(crate) fn derive_volatile_value(input: TokenStream) -> Result<TokenStream, String> {
     let item: syn::DeriveInput = syn::parse2(input).map_err(|e| e.to_string())?;
     let name = &item.ident;
     let syn::Data::Struct(s) = &item.data else {
@@ -180,7 +180,6 @@ pub(crate) fn derive_tear_safe(input: TokenStream) -> Result<TokenStream, String
     }).unzip();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     Ok(quote! {
-        unsafe impl #impl_generics crate::util::projections::TearSafe for #name #ty_generics #where_clause {}
         unsafe impl #impl_generics #vv for #name #ty_generics #where_clause {
             unsafe fn load(p: *mut Self) -> Self {
                 unsafe { Self { #(#loads),* } }

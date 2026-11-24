@@ -193,8 +193,10 @@ impl Eq for Bitmap {}
 // Written under a lock and read without it - a preference, the allocator's
 // placement - it can be read mid-write, each word as before or after
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, cstruct_macros::TearSafe)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct BitArray<const W: usize>([usize; W]);
+
+impl<const W: usize> crate::util::projections::TearSafe for BitArray<W> {}
 
 // SAFETY: integers; all zeroes is empty
 unsafe impl<const W: usize> ::pin_init::Zeroable for BitArray<W> {}

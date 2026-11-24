@@ -32,8 +32,9 @@
 //!   at a time - not an atomic, whose writers race each other - and
 //!   VolatileWriter, it as its writer has it; VolatilePublish, one set only
 //!   by showing the guard of the lock that publishes it. A value of more
-//!   words is one only if it's TearSafe: a reader may see it torn, and its
-//!   type says that's fine. They stay; their places go.
+//!   words is one only if it's TearSafe or a derived VolatileValue: a reader
+//!   may see it torn, and its type says that's fine. They stay; their places
+//!   go.
 //!
 //! - Published once: PublishedOnce, a value set once by its lock's holder
 //!   and read by anyone from then on - a key a running filesystem gains,
@@ -232,24 +233,16 @@ macro_rules! published {
 /// A value whose readers are fine with seeing it torn - each word as some
 /// write left it, not all from the same one: a position read for progress,
 /// say. A Volatile of it is loaded and stored a word at a time - of its
-/// alignment, up to a u64 - so it's NoUninit too.
-///
-/// Its words are only ever stored whole, from values of it: a torn one is
-/// each word of some value, never bytes no value had. So a bool field is
-/// fine - it's 0 or 1 in every value - where Plain, any bytes at all, would
-/// rule it out.
-///
-/// # Safety
-/// Any value whose every word is the same word of some value is a value of
-/// it, and one its readers can take.
+/// alignment, up to a u64 - and it's Plain, so a torn one, any bytes, is a
+/// value. One with a bool field, 0 or 1 in every value, derives VolatileValue
+/// instead, field by field.
 #[rustc_specialization_trait]
-pub unsafe trait TearSafe {}
+pub trait TearSafe: Plain {}
 
 /// How a Volatile loads and stores a T: whole, by one atomic of its size - a
 /// build error if it's more than a word at its alignment - or, if it's
-/// TearSafe, a word at a time, as integers: T is NoUninit. Or, derived with
-/// TearSafe, field by field, each as its own Volatile would: its padding
-/// never read.
+/// TearSafe, a word at a time, as integers. Or, derived, field by field, each
+/// as its own Volatile would: its padding never read.
 ///
 /// # Safety
 /// load() and store() read and write @p only by atomics, of what it is.
@@ -265,7 +258,7 @@ pub unsafe trait VolatileValue: Sized {
 /// T's size, one word at its alignment - or a build error.
 const fn one_word<T>() -> usize {
     assert!(size_of::<T>() == align_of::<T>() && size_of::<T>() <= size_of::<u64>(),
-            "a Volatile of more than a word at its alignment: is it TearSafe?");
+            "a Volatile of more than a word at its alignment: is it TearSafe, or a derived VolatileValue?");
     size_of::<T>()
 }
 
@@ -349,7 +342,7 @@ unsafe impl<T: NoUninit + TearSafe> VolatileValue for T {
 /// loads and stores, as C's plain ones: a reader sees each word as it was
 /// written, not two of them as of one moment. To C, a plain @T. A @T of
 /// one word at its alignment is loaded and stored whole; one of more is
-/// TearSafe.
+/// TearSafe, or a derived VolatileValue.
 ///
 /// Volatile, not atomic: its writers don't race each other, only its
 /// readers. set() is a store, for a field with one writer - a thread's own

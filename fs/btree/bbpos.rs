@@ -15,7 +15,7 @@ pub struct bbpos {
 
 // Torn, a mix of two positions - not necessarily between them: harmless in
 // what reads one racily, a walk's progress, shown
-unsafe impl crate::util::projections::TearSafe for bbpos {}
+impl crate::util::projections::TearSafe for bbpos {}
 
 /*
  * Layout is padding-free (bpos is __packed __aligned(4)), so a blbpos can be

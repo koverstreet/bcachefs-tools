@@ -27,7 +27,8 @@ use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, U
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{MaybeZeroable, TearSafe, TypeInfo};
+use cstruct_macros::{MaybeZeroable, TypeInfo, VolatileValue};
+use crate::util::projections::TearSafe;
 use super::io::*;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
 
@@ -42,7 +43,7 @@ pub struct bch_dev_identity {
 
 // ca->mi: read by anyone, a field at a time - a copy half made is one
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TearSafe, TypeInfo)]
+#[derive(Clone, Copy, Default, MaybeZeroable, VolatileValue, TypeInfo)]
 pub struct bch_member_cpu {
     pub nbuckets: u64, /* device size */
     pub nbuckets_minus_first: u64,
@@ -1331,8 +1332,10 @@ where
 /// so a reader has a copy - torn, if it raced the rename: each byte some
 /// name's, and the last a NUL, as every name's is.
 #[repr(transparent)]
-#[derive(Clone, Copy, ::pin_init::Zeroable, cstruct_macros::Plain, TearSafe)]
+#[derive(Clone, Copy, ::pin_init::Zeroable, cstruct_macros::Plain)]
 pub struct DevName([c_char; c::BDEVNAME_SIZE as usize]);
+
+impl TearSafe for DevName {}
 
 impl DevName {
     /// @s, up to a NUL in it, truncated to leave room for its own.

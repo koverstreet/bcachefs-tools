@@ -202,11 +202,11 @@ pub fn derive_no_uninit(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     expand("#[derive(NoUninit)]", || vstructs::derive_no_uninit(input.into()))
 }
 
-/// `#[derive(TearSafe)]`: util/projections.rs's TearSafe, a Volatile of it
-/// loaded field by field - see vstructs.rs.
-#[proc_macro_derive(TearSafe)]
-pub fn derive_tear_safe(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand("#[derive(TearSafe)]", || vstructs::derive_tear_safe(input.into()))
+/// `#[derive(VolatileValue)]`: util/projections.rs's VolatileValue, a
+/// Volatile of it loaded field by field - see vstructs.rs.
+#[proc_macro_derive(VolatileValue)]
+pub fn derive_volatile_value(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand("#[derive(VolatileValue)]", || vstructs::derive_volatile_value(input.into()))
 }
 
 /// `#[derive(NonZeroWord)]`: util/vstructs.rs's NonZeroWord, checked at

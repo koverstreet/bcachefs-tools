@@ -1151,7 +1151,7 @@ pub struct bch_sb_layout {
 // bch_dev's copy is read without sb_lock - by the allocator, until the
 // superblock buckets are marked - and may be read mid-edit, each offset as
 // before or after
-unsafe impl crate::util::projections::TearSafe for bch_sb_layout {}
+impl crate::util::projections::TearSafe for bch_sb_layout {}
 
 pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 

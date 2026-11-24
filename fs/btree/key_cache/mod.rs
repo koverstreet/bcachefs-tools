@@ -46,14 +46,14 @@ use core::ffi::{c_uint, c_ulong};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
-use cstruct_macros::{placed, Init, MaybeZeroable, NoUninit, TypeInfo};
+use cstruct_macros::{placed, Init, MaybeZeroable, Plain, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};
 
 pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
 
 #[allow(non_camel_case_types)]
 #[repr(C, align(4))]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable, NoUninit)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable, Plain)]
 pub struct bkey_cached_key {
     pub btree_id: u32,
     pub pos: Bpos,
@@ -61,7 +61,7 @@ pub struct bkey_cached_key {
 
 // Torn, a mix of two keys: a lookup that matches one locks the entry and
 // checks its key again
-unsafe impl TearSafe for bkey_cached_key {}
+impl TearSafe for bkey_cached_key {}
 
 crate::keyed_by_value!(c::bkey_cached, |ck| ck.key.get() => c::bkey_cached_key);
 
