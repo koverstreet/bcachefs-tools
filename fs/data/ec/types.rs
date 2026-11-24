@@ -35,7 +35,7 @@ nest! {
     /// @ptrs are referenced, and there's one of these per stripe, not per
     /// bucket.
     #[repr(C)]
-    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
+    #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
     pub struct GcStripeData {
         #[members]
         #>[bitfield(u8)]
