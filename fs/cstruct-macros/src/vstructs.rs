@@ -370,6 +370,30 @@ fn family_args(attr: TokenStream, takes: &[&str]) -> Result<FamilyArgs, String> 
     Ok(args)
 }
 
+/// How long an unsized vstruct is, of its header @h, @head: its `u64s =
+/// PATH[, start = EXPR]` - u64s from where its header ends, or past the
+/// header it embeds, or from @start - or its `bytes = FIELD`.
+fn vstruct_len(name: &Ident, head: &Ident, args: &FamilyArgs) -> Result<TokenStream, String> {
+    let vs = vs();
+    if let Some(c) = &args.bytes {
+        return Ok(quote!(#vs::Count::count(&{ h.#c })));
+    }
+    let u64s = args.u64s.as_ref().ok_or_else(|| format!("{name}: an unsized vstruct counts itself - u64s = or bytes ="))?;
+    let path: Vec<Ident> = syn::parse::Parser::parse2(Punctuated::<Ident, Token![.]>::parse_separated_nonempty,
+                                                      u64s.clone())
+        .map_err(|_| format!("{name}: u64s = {u64s} - a field, or a field's, FIELD.COUNT"))?
+        .into_iter().collect();
+    // the count by value: a packed header's field can't be borrowed
+    let count = quote!(#vs::Count::count(&{ h.#(#path).* }) * 8);
+    Ok(match (&args.start, path.as_slice()) {
+        (Some(start), _) => quote!((#start) + #count),
+        (None, [_]) => quote!(::core::mem::size_of::<#head>() + #count),
+        (None, [hdr, _]) => quote!(::core::mem::offset_of!(#head, #hdr)
+                                   + crate::types::field_size(|p: #head| p.#hdr) as usize + #count),
+        _ => return Err(format!("{name}: u64s = {u64s} - a field, or a field's, FIELD.COUNT")),
+    })
+}
+
 /// @name's vstruct!() and vstruct_container!(), from its attribute's `u64s =
 /// PATH[, start = EXPR]` and `entries = [thin] E`: an unsized type's, with
 /// @head, counted by its header - or, `bytes = FIELD`, its length in bytes.
@@ -583,7 +607,7 @@ fn members_on(name: &Ident, fields: &[FieldDef], defs: &[TokenStream]) -> Result
 /// its definition in each - Unvalidated, bytes from outside, its count
 /// checked against them; Validated, its count trusted, validate's; and
 /// Validated its Whole, the header never having grown.
-fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, String> {
+fn own_count_family(name: &Ident, shape: &Shape<'_>, len: TokenStream) -> Result<TokenStream, String> {
     let vs = vs();
     let doc = format!(" {name}, in state S - Validated unless named: its fields - those that\n \
                        hold a count private - then its tail, as long as its count says, so\n \
@@ -593,7 +617,7 @@ fn own_count_family(name: &Ident, shape: &Shape<'_>) -> Result<TokenStream, Stri
                        against them when it's made.");
     let mut out = dst(name, true, &doc, shape, TokenStream::new());
     let head = &shape.head;
-    out.extend(quote!(crate::vstruct_family!(unsized #name, #head);));
+    out.extend(quote!(crate::vstruct_family!(unsized #name, #head, |h| #len);));
     let (unvalidated, validated) = (quote!(#name<#vs::Unvalidated>), quote!(#name<#vs::Validated>));
     out.extend(members_on(name, shape.fields, &[quote!([<S: #vs::State>] #name<S>)])?);
     out.extend(family(name, &unvalidated, &validated, &validated));
@@ -627,6 +651,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         .map_err(|e| format!("{name}: {e}"))?;
     let written = crate::tokens::derived(name, "head");
     let vstruct = vstruct_of(name, &written, &args)?;
+    let len = vstruct_len(name, &written, &args)?;
     let private = args.bytes.iter().cloned().collect();
     let (tail, elem, fields) = own_tail(&def, args.tail, "unsized_vstruct")?;
     let last = &last.ident;
@@ -646,7 +671,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
                     #msg);
         };
     });
-    out.extend(own_count_family(name, &shape)?);
+    out.extend(own_count_family(name, &shape, len)?);
     out.extend(vstruct);
     Ok(out)
 }
@@ -716,7 +741,8 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
         // alignment only if its elements are: else it claims bytes past it
         const _: () = assert!(::core::mem::size_of::<#elem>() % ::core::mem::align_of::<#written>() == 0, #msg);
     });
-    out.extend(own_count_family(name, &shape)?);
+    let len = quote!((#tail_at) + #vs::Count::count(&{ h.#count_path }) * ::core::mem::size_of::<#elem>());
+    out.extend(own_count_family(name, &shape, len)?);
     Ok(out)
 }
 
