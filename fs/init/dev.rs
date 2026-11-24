@@ -245,7 +245,7 @@ use crate::{bch_err_fn, prt};
 use core::ffi::CStr;
 use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
@@ -256,9 +256,11 @@ use crate::util::alloc::AlignedBox;
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{TryRefcount, WaitableRef};
-use nestify::nest;
 
-pub(crate) type SbRoom = DstRoom<c::bch_sb, AlignedBox<[u64], IO_ALIGN>>;
+/// What a superblock's read into, and kept in: IO-aligned, as it's read and
+/// written in place.
+pub(crate) type SbStorage = AlignedBox<[u64], IO_ALIGN>;
+pub(crate) type SbRoom = DstRoom<c::bch_sb, SbStorage>;
 
 /// A superblock in memory, in a buffer that grows: a power of two, zeroes past
 /// the superblock, page aligned - it's read and written in place, O_DIRECT in
@@ -298,32 +300,25 @@ impl core::ops::DerefMut for bch_fs_sb {
 
 pub type SbBio = Option<BioBox<'static, Bio>>;
 
-nest! {
-    /// A device's superblock, what reads and writes it, and the block device
-    /// it's on as it was opened: what changes while the device is a
-    /// filesystem's, under its sb_lock. Dropped, the device is closed.
-    #[repr(C)]
-    #[derive(MaybeZeroable, BitfieldMembers, TypeInfo)]
-    pub struct bch_sb_io {
-        pub buf: c::bch_sb_buf,
-        /// Its bio, as big as the buffer, if @have_bio: Rust's alone
-        pub bio: SbBio,
-        #[members]
-        #>[bitfield(u8)]
-        pub bits: pub struct bch_sb_handle_bits {
-            have_layout: u1,
-            have_bio:    u1,
-            __pad:       u6,
-        },
-        /// The last seq written
-        pub seq: u64,
-        pub s_bdev_file: Option<crate::os::blkdev::BdevFile>,
-        /// The path it was opened by, NUL-terminated
-        pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
-        /// A ref, the handle's
-        pub holder: *const crate::sb::io::Holder,
-        pub mode: c::blk_mode_t,
-    }
+/// A device's superblock, what reads and writes it, and the block device it's
+/// on as it was opened: what changes while the device is a filesystem's,
+/// under its sb_lock. Dropped, the device is closed. With no device - format's,
+/// a test's - it's a superblock in memory alone.
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct bch_sb_io {
+    /// Read and validated, or made: never what a read hasn't checked
+    pub buf: c::bch_sb_buf,
+    /// Its bio, as big as the buffer, while its device is open: Rust's alone
+    pub bio: SbBio,
+    /// The last seq written
+    pub seq: u64,
+    pub s_bdev_file: Option<crate::os::blkdev::BdevFile>,
+    /// The path it was opened by, NUL-terminated
+    pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
+    /// A ref, the handle's
+    pub holder: *const crate::sb::io::Holder,
+    pub mode: c::blk_mode_t,
 }
 
 impl Default for bch_sb_io {
@@ -331,7 +326,6 @@ impl Default for bch_sb_io {
         bch_sb_io {
             buf:         Default::default(),
             bio:         None,
-            bits:        bch_sb_handle_bits::new(),
             seq:         0,
             s_bdev_file: None,
             sb_name:     None,

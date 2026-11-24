@@ -155,12 +155,12 @@ use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut, read_past, ArmAt, ArmRef, Head, InPlace, InState, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
-#[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
-use crate::util::alloc::{AlignedBox, Arc, Flags, KVec, KVVec};
+use crate::util::alloc::{Arc, Flags, KVec, KVVec};
+use crate::init::dev::{SbBio, SbStorage};
 use core::sync::atomic::AtomicPtr;
-use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit, IO_ALIGN};
+use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit};
 use crate::util::gather::Gather;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};
@@ -1057,6 +1057,20 @@ impl Drop for c::bch_sb_io {
 
 const SB_BIO_FITS: &str = "the superblock's buffer, or the scratch, into the bio realloc() sized for the buffer";
 
+/// @bio, made again if it has fewer bvecs than @buf maps to: apart from the
+/// buffer, so one that failed is made again next time.
+fn bio_fit(bio: &mut SbBio, buf: &[u8]) -> Result<(), BchError> {
+    let nr = crate::os::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
+    if bio.as_ref().is_some_and(|b| usize::from(b.bio().max_vecs()) >= nr) {
+        return Ok(());
+    }
+
+    let new = BioBox::<Bio>::new::<BchError, _>(nr.try_into().expect("a superblock's worth of bvecs"), 0, |b| b.init())
+        .map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_bio_realloc))?;
+    *bio = Some(new);
+    Ok(())
+}
+
 impl c::bch_sb_io {
     /// The path it was opened by
     pub fn name(&self) -> &CStr {
@@ -1068,60 +1082,45 @@ impl c::bch_sb_io {
         self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev)
     }
 
-    /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
-    /// of two, at least its device's logical block; past what its layout
-    /// allows, -ENOSPC. And with it, a bio of as many bvecs as that maps to:
-    /// made apart from the buffer, so one that failed is made again next time.
+    /// Room for a superblock of @u64s - 0, the minimum: with a device, at
+    /// least its logical block, not past what the superblock's layout allows -
+    /// -ENOSPC - and the bio grown to map it.
     fn realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        let bdev = self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev);
-        let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
-        if let Some(bdev) = bdev {
-            bytes = bytes.max(crate::os::blkdev::logical_block_size(bdev) as usize);
-        }
-        let size = bytes.next_power_of_two();
+        let Some(bdev) = self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev) else {
+            return self.buf.reserve(u64s, 0);
+        };
 
-        if self.buf.buffer_size() < size {
-            grow(&mut self.buf, self.bits.have_layout() != 0, bdev, bytes, size)?;
+        let bytes = bytes_for(u64s as usize);
+        let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
+        if bytes as u64 > max {
+            use crate::util::log::{log_no_fs, LogLevel};
+            use crate::util::printbuf::{prt_bdevname, Msg};
+            log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
+                prt_bdevname(out, Some(bdev));
+                write!(out, ": superblock too big: want {bytes} but have {max}");
+            }));
+            return Err(c::Errcode::ENOSPC_sb.into());
         }
 
-        if self.bits.have_bio() != 0 {
-            let buf = self.buf.buffer();
-            let nr = crate::os::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
-            if self.bio.as_ref().is_some_and(|b| usize::from(b.bio().max_vecs()) >= nr) {
-                return Ok(());
-            }
+        self.buf.reserve(u64s, crate::os::blkdev::logical_block_size(bdev) as usize)?;
+        bio_fit(&mut self.bio, self.buf.buffer())
+    }
 
-            let bio = BioBox::<Bio>::new::<BchError, _>(nr.try_into().expect("a superblock's worth of bvecs"), 0,
-                                                        |b| b.init())
-                .map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_bio_realloc))?;
-            self.bio = Some(bio);
-        }
-        Ok(())
+    /// A buffer for reading a superblock of @bytes into - zeroed, a power of
+    /// two, at least the device's logical block - and the bio grown to map it.
+    fn read_buf(&mut self, bytes: usize) -> Result<SbStorage, BchError> {
+        let bdev = self.s_bdev_file.as_ref().expect("a superblock read with no device open").bdev();
+        let size = bytes.max(crate::os::blkdev::logical_block_size(bdev) as usize).next_power_of_two();
+        let buf = SbStorage::try_new_zeroed_slice_gfp(size / size_of::<u64>(), Flags::empty())
+            .map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))?;
+        bio_fit(&mut self.bio, plain_bytes(&buf[..]))?;
+        Ok(buf)
     }
 
     /// The buffer and bio freed and the device closed: it zeroed.
     pub(crate) fn free(&mut self) {
         *self = Self::default();
     }
-}
-
-/// @buf grown to @size, for a superblock of @bytes: past what its layout
-/// allows, if it has one, -ENOSPC.
-fn grow(buf: &mut bch_sb_buf, have_layout: bool, bdev: Option<&BlockDevice>, bytes: usize, size: usize)
-    -> Result<(), BchError>
-{
-    if buf.is_allocated() && have_layout {
-        let max = 512u64 << buf.sb().layout.sb_max_size_bits;
-        if bytes as u64 > max {
-            crate::util::log::log_no_fs(crate::util::log::LogLevel::ERR, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
-                crate::util::printbuf::prt_bdevname(out, bdev);
-                write!(out, ": superblock too big: want {bytes} but have {max}");
-            }));
-            return Err(c::Errcode::ENOSPC_sb.into());
-        }
-    }
-
-    buf.realloc(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
 }
 
 impl bch_sb_handle {
@@ -1205,17 +1204,17 @@ impl c::bch_sb_io {
     /// The bio, set up for an IO by @opf - with the buffer it maps, and the
     /// device it's to, borrowed apart.
     fn bio(&mut self, opf: u32) -> (&mut BioBox<'static, Bio>, &mut [u8], &BlockDevice) {
-        let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
+        let bio = self.bio.as_mut().expect("superblock IO without a bio: its device not open");
         bio.reset(opf);
         let bdev = self.s_bdev_file.as_ref().expect("superblock IO with no device open").bdev();
         (bio, self.buf.buffer_mut(), bdev)
     }
 
-    /// @bytes from @sector of its device into the buffer.
-    fn read(&mut self, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (bio, buf, bdev) = self.bio(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
+    /// @buf, from @sector of its device: read_buf()'s, or part of one.
+    fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), BchError> {
+        let (bio, _, bdev) = self.bio(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
         // bound, so the Remapped drops before the bio it borrows
-        let ret = bio.remap_read(&mut buf[..bytes]).expect(SB_BIO_FITS).submit_wait(bdev, sector);
+        let ret = bio.remap_read(buf).expect(SB_BIO_FITS).submit_wait(bdev, sector);
         ret
     }
 
@@ -1238,42 +1237,43 @@ impl bch_sb<Unvalidated> {
     }
 }
 
-/// The superblock at @offset read into @sb's buffer - grown as it needs - and
-/// checked as far as that takes: that it's one, of a version we read, whole,
-/// and its checksum. Not validated.
-fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Result<(), BchError> {
+/// The superblock at @offset read into @storage - made again bigger as it
+/// needs - and checked as far as that takes: that it's one, of a version we
+/// read, whole, and its checksum. Not validated.
+fn read_one_super(io: &mut c::bch_sb_io, storage: &mut SbStorage, offset: u64,
+                  err: &mut Printbuf) -> Result<(), BchError> {
     loop {
-        let io = sb.io_mut();
-        let len = io.buf.buffer_size();
-        io.read(offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
+        io.read(offset, plain_bytes_mut(&mut storage[..])).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
 
-        let buf: &[u8] = io.buf.buffer_mut();
-        let h = cast_plain::<Head<bch_sb>>(buf).expect("a superblock buffer, holding a header");
+        let buf = plain_bytes(&storage[..]);
+        let h = head_of(buf);
 
         sb_err_on!(err, h.magic.b != BCACHE_MAGIC && h.magic.b != BCHFS_MAGIC, invalid_sb_magic,
                    "Not a bcachefs superblock (got magic {})", h.magic)?;
 
         sb_compatible(h, err)?;
 
-        let bytes = size_of::<Head<bch_sb>>() + h.u64s() as usize * size_of::<u64>();
+        let sb = bch_sb::<Unvalidated>::from_bytes(buf);
+        let bytes = match &sb {
+            Ok(sb) => sb.as_bytes().len(),
+            Err(VStructError::Overrun { want, .. }) => *want,
+            Err(e) => return sb_err_on!(err, true, invalid_sb_too_big, "Invalid superblock: {e}"),
+        };
         let max = 512u64 << u32::from(h.layout.sb_max_size_bits).min(c::BCH_SB_LAYOUT_SIZE_BITS_MAX);
         sb_err_on!(err, bytes as u64 > max, invalid_sb_too_big,
                    "Invalid superblock: too big (got {bytes} bytes, layout max {max})")?;
 
-        if bytes > buf.len() {
-            let u64s = h.u64s() as u32;
-            sb.sb_realloc(u64s)?;
+        let Ok(sb) = sb else {
+            *storage = io.read_buf(bytes)?;
             continue;
-        }
+        };
 
         let ty = h.csum_type();
         sb_err_on!(err, ty.0 >= c::CsumType::NR || ty.is_encryption(),
                    invalid_sb_csum_type, "unknown checksum type {ty}")?;
 
         // XXX: verify MACs
-        let csum = bch_sb::<Unvalidated>::from_bytes(&buf[..bytes])
-            .expect("a superblock, as long as its u64s say, checked whole above")
-            .checksum();
+        let csum = sb.checksum();
         if csum != h.csum {
             crate::data::checksum::csum_err_msg(err, ty, h.csum, csum);
             return Err(Errcode::invalid_sb_csum.into());
@@ -1284,19 +1284,20 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
     }
 }
 
-/// The layout, from its own sector - read through @sb's buffer, aligned for
-/// IO as one on the stack isn't - and validated.
-fn read_layout_sector(sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<c::bch_sb_layout, BchError> {
-    let io = sb.io_mut();
-    io.read(c::BCH_SB_LAYOUT_SECTOR.into(), size_of::<c::bch_sb_layout>())?;
-    let layout = read_past::<c::bch_sb_layout>(io.buf.buffer_mut(), 0);
+/// The layout, from its own sector - read through @storage, aligned for IO as
+/// one on the stack isn't - and validated.
+fn read_layout_sector(io: &mut c::bch_sb_io, storage: &mut SbStorage,
+                      err: &mut Printbuf) -> Result<c::bch_sb_layout, BchError> {
+    let buf = plain_bytes_mut(&mut storage[..]);
+    io.read(c::BCH_SB_LAYOUT_SECTOR.into(), &mut buf[..size_of::<c::bch_sb_layout>()])?;
+    let layout = read_past::<c::bch_sb_layout>(buf, 0);
     validate_layout(&layout, err)?;
     Ok(layout)
 }
 
 /// @layout's backups read - the primary's tried already, and valid if
-/// @primary_valid, in @sb's buffer - for the offset of the copy with the
-/// highest seq, of all of them: in the buffer, after.
+/// @primary_valid, in @storage - for the offset of the copy with the highest
+/// seq, of all of them: in @storage, after.
 ///
 /// Reading every copy defends against several failure modes:
 ///   - a torn write to the primary: its csum fails; a backup at the same seq
@@ -1308,10 +1309,10 @@ fn read_layout_sector(sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<c::b
 ///
 /// The last read wins a tie, so the common case - every slot at the same
 /// seq - reads nothing again.
-fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary_valid: bool,
+fn read_backup_supers(io: &mut c::bch_sb_io, storage: &mut SbStorage, layout: &c::bch_sb_layout, primary_valid: bool,
                       err: &mut Printbuf) -> Result<u64, BchError> {
     let primary = layout.sb_offset[0].get();
-    let mut best_seq = if primary_valid { sb.io().seq } else { 0 };
+    let mut best_seq = if primary_valid { io.seq } else { 0 };
     let mut best = primary;
     let mut last_read = if primary_valid { primary } else { 0 };
     let mut any_valid = primary_valid;
@@ -1320,8 +1321,8 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
         let offset = o.get();
 
         let mut slot_err = Printbuf::new();
-        let ret = read_one_super(sb, offset, &mut slot_err);
-        // read into the buffer, valid or not
+        let ret = read_one_super(io, storage, offset, &mut slot_err);
+        // read into @storage, valid or not
         last_read = offset;
         if ret.is_err() {
             prt!(err, "  sb @ {offset}: ");
@@ -1331,8 +1332,8 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
         }
 
         any_valid = true;
-        if sb.io().seq >= best_seq {
-            best_seq = sb.io().seq;
+        if io.seq >= best_seq {
+            best_seq = io.seq;
             best = offset;
         }
     }
@@ -1342,7 +1343,7 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
     }
 
     if last_read != best {
-        read_one_super(sb, best, err)?;
+        read_one_super(io, storage, best, err)?;
     }
     Ok(best)
 }
@@ -1391,18 +1392,12 @@ fn buffered_instead(opts: &mut c::bch_opts) -> bool {
     }
 }
 
-/// The header of what read_one_super() read, in @sb's buffer.
-fn header(sb: &mut bch_sb_handle) -> &Head<bch_sb> {
-    cast_plain(sb.io_mut().buf.buffer_mut()).expect("a superblock buffer, holding a header")
-}
-
 fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holder>>,
                           err: &mut Printbuf) -> Result<bch_sb_handle, BchError>
 {
     let mut sb = bch_sb_handle::default();
     let io = sb.io_mut();
     io.mode = c::BLK_OPEN_READ;
-    io.bits.set_have_bio(1);
 
     let enomem = |_| BchError::from(c::ENOMEM);
     io.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
@@ -1459,38 +1454,41 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     io.s_bdev_file = Some(file);
     sb.dev().bdev.set(bdev);
 
-    sb.sb_realloc(0)?;
+    // what's read goes into the superblock's room only once it's validated
+    let io = sb.io_mut();
+    let mut storage = io.read_buf(size_of::<Head<bch_sb>>())?;
 
     let (sb_offset, primary_bad) = if opts.defined(c::OptId::sb) {
         // a superblock asked for, for recovery or debugging: that one, no
         // scan or fallback
         let offset = opts.sb();
-        read_one_super(&mut sb, offset, err)?;
+        read_one_super(io, &mut storage, offset, err)?;
         (offset, false)
     } else {
         // the primary first, for its layout; the layout's own sector if it
         // can't be read
         let mut primary_err = Printbuf::new();
-        match read_one_super(&mut sb, c::BCH_SB_SECTOR.into(), &mut primary_err) {
+        match read_one_super(io, &mut storage, c::BCH_SB_SECTOR.into(), &mut primary_err) {
             Ok(()) => {
-                let primary_seq = sb.io().seq;
-                let layout = header(&mut sb).layout;
+                let primary_seq = io.seq;
+                let layout = head_of(plain_bytes(&storage[..])).layout;
                 validate_layout(&layout, err)?;
-                let offset = read_backup_supers(&mut sb, &layout, true, err)?;
-                (offset, primary_seq < sb.io().seq)
+                let offset = read_backup_supers(io, &mut storage, &layout, true, err)?;
+                (offset, primary_seq < io.seq)
             }
             Err(_) => {
                 prt!(err, "primary superblock unreadable: ");
                 err.write_bytes(primary_err.as_bytes());
                 prt!(err, "\n");
-                let layout = read_layout_sector(&mut sb, err)?;
-                (read_backup_supers(&mut sb, &layout, false, err)?, true)
+                let layout = read_layout_sector(io, &mut storage, err)?;
+                (read_backup_supers(io, &mut storage, &layout, false, err)?, true)
             }
         }
     };
 
-    let block_bytes = u32::from(header(&mut sb).block_size.get()) << 9;
-    let dev_block = crate::os::blkdev::logical_block_size(sb.bdev());
+    let h = head_of(plain_bytes(&storage[..]));
+    let block_bytes = u32::from(h.block_size.get()) << 9;
+    let dev_block = crate::os::blkdev::logical_block_size(io.bdev().expect("the device it was read from"));
     if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
             return Err(c::EINTR.into());
@@ -1499,8 +1497,8 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
         return Err(Errcode::block_size_too_small.into());
     }
 
-    sb.io_mut().bits.set_have_layout(1);
-    validate_bytes(sb.buffer_mut(), opts, sb_offset, ValidateFlags::empty(), err)?;
+    validate_bytes(plain_bytes_mut(&mut storage[..]), opts, sb_offset, ValidateFlags::empty(), err)?;
+    io.buf.data = Some(DstRoom::from_storage(storage));
 
     if primary_bad && sb.io().mode & c::BLK_OPEN_WRITE != 0 {
         match rewrite_primary_super(&mut sb) {
@@ -1763,14 +1761,32 @@ fn field_offset<S: SbState>(sb: &bch_sb<S>, ty: c::SbFieldType) -> Option<usize>
     S::field_by_type(sb, ty).map(|f| f.as_bytes().as_ptr() as usize - base)
 }
 
+/// A superblock of @u64s, in bytes, header and all.
+fn bytes_for(u64s: usize) -> usize {
+    size_of::<Head<bch_sb>>() + u64s * size_of::<u64>()
+}
+
+/// The header at the start of @buf, a superblock read and not yet checked.
+fn head_of(buf: &[u8]) -> &Head<bch_sb> {
+    cast_plain(buf).expect("a superblock buffer, holding a header")
+}
+
 impl bch_sb_buf {
-    /// The buffer made @size bytes, the superblock kept and zeroes after.
-    fn realloc(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
+    /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
+    /// of two, at least @min bytes: grown if it's smaller, the superblock kept
+    /// and zeroes after.
+    fn reserve(&mut self, u64s: u32, min: usize) -> Result<(), BchError> {
+        let size = bytes_for(u64s as usize).max(min).next_power_of_two();
+        if self.buffer_size() >= size {
+            return Ok(());
+        }
+
+        let enomem = |_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc);
         let u64s = size / size_of::<u64>();
         match &mut self.data {
-            Some(r) => r.realloc(u64s, Flags::empty()),
+            Some(r) => r.realloc(u64s, Flags::empty()).map_err(enomem),
             None => {
-                let b = AlignedBox::<[u64], IO_ALIGN>::try_new_zeroed_slice_gfp(u64s, Flags::empty())?;
+                let b = SbStorage::try_new_zeroed_slice_gfp(u64s, Flags::empty()).map_err(enomem)?;
                 self.data = Some(DstRoom::from_storage(b));
                 Ok(())
             }
@@ -1792,9 +1808,8 @@ impl bch_sb_buf {
     /// deleted. Its offset, if it's still there. The buffer must have room.
     fn field_resize_at(&mut self, ty: c::SbFieldType, off: Option<usize>, u64s: u32) -> Option<usize> {
         let new = u64s as usize * size_of::<u64>();
+        let (sb_u64s, end) = (self.sb().u64s(), self.sb_bytes().len());
         let buf = self.buffer_mut();
-        let sb_u64s = cast_plain::<Head<bch_sb>>(buf).expect("a superblock's head").u64s();
-        let end = size_of::<Head<bch_sb>>() + sb_u64s * size_of::<u64>();
 
         // a section's u64s count its header
         let old = off.map_or(0, |off| {
@@ -1947,11 +1962,7 @@ impl core::ops::DerefMut for FsSbResize<'_> {
 
 impl SbResize for FsSbResize<'_> {
     fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        let size = (size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>()).next_power_of_two();
-        if self.buffer_size() >= size {
-            return Ok(());
-        }
-        self.realloc(size).map_err(|_| BchError::from(c::Errcode::ENOMEM_sb_buf_realloc))
+        self.reserve(u64s, 0)
     }
 
     fn grow_with(&mut self, d: isize) -> Option<()> {
