@@ -145,7 +145,7 @@ pub use super::for_each::*;
 pub use super::trans_attempt::*;
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
-use crate::btree::path::{btree_path_level, BtreePath, KeyVal, LockedNode, Paths};
+use crate::btree::path::{KeyVal, LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::data::extents::{bch2_cut_back_s, bch2_cut_front_s};
 use crate::debug::params::debug_check_iterators;
@@ -2005,20 +2005,12 @@ impl<'t> BtreeIter<'t> {
         unsafe { key_from_parts(u, v) }
     }
 
-    /// btree_iter_path()->l[0]: None with no node there.
-    ///
-    /// # Safety
-    /// The transaction doesn't unlock while it's used - the borrow of @t
-    /// doesn't see to that, as unlock() takes &self.
-    pub unsafe fn leaf<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<PathLeaf<'a>> {
-        unsafe {
-            // an iterator's path isn't cached: its key cache path is
-            let path = t.trans().paths.get().add(self.path as usize).cast::<BtreePath<BtreeNode>>();
-            let l = &raw mut (*path).l[0];
-            // NULL above the root, or an error pointer
-            (*l).b.get().ok()??;
-            Some(PathLeaf { l, _trans: PhantomData })
-        }
+    /// btree_iter_path()->l[0], under a borrow of the path table: None with no
+    /// node held there.
+    pub fn leaf<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<PathLeaf<'a>> {
+        let paths = t.trans().paths();
+        paths[self.path].locked_btree_node(0)?;
+        Some(PathLeaf { paths, path: self.path })
     }
 
     pub fn pos(&self) -> Bpos {
@@ -2410,21 +2402,23 @@ impl From<LockedNode<'_, BtreeNode>> for BtreeNodeRef {
     }
 }
 
+/// An iterator's path's leaf, under a borrow of the path table: nothing unlocks
+/// it while it's had.
 pub struct PathLeaf<'a> {
-    l:      *mut btree_path_level<BtreeNode>,
-    _trans: PhantomData<&'a ()>,
+    paths: Paths<'a>,
+    path:  PathIdx,
 }
 
-impl<'a> PathLeaf<'a> {
-    pub fn node(&self) -> LockedNode<'a, BtreeNode> {
-        unsafe { LockedNode::new((*self.l).b.get().ok().flatten().expect("a leaf with no node").as_ref()) }
+impl PathLeaf<'_> {
+    pub fn node(&self) -> LockedNode<'_, BtreeNode> {
+        self.paths[self.path].locked_btree_node(0).expect("a leaf, held by its path")
     }
 
     /// Where the bset search tree failed at the path's key, if it did:
     /// the node's bfloat_to_text(). Peeks the node iterator, moving it past deleted
     /// keys.
-    pub fn bfloat_to_text(&self, out: &mut Printbuf) {
-        let b = self.node();
-        unsafe { b.btree_node_iter_bfloat_to_text(b.contents(), out, &mut (*self.l).iter) }
+    pub fn bfloat_to_text(&mut self, out: &mut Printbuf) {
+        let (b, iter) = self.paths[self.path].locked_level_mut(0).expect("a leaf, held by its path");
+        b.btree_node_iter_bfloat_to_text(b.contents(), out, iter);
     }
 }

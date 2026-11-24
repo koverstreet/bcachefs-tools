@@ -69,8 +69,7 @@ fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<
 
     let start = iter.pos();
 
-    // SAFETY: nothing unlocks while we look
-    if let Some(leaf) = unsafe { iter.leaf(t) } {
+    if let Some(leaf) = iter.leaf(t) {
         let leaf_end = leaf.node().key().k.p;
         if leaf_end != SPOS_MAX {
             end = bkey_min(end, leaf_end.nosnap_successor());

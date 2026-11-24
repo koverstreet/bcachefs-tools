@@ -132,8 +132,7 @@ impl DebugFile for BfloatFailed {
             let mut iter = BtreeIter::new(&*trans, bd.id.get(), from,
                                           BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
             iter.for_each(&trans, |t, iter, _k| {
-                // SAFETY: used before the unlock below
-                if let Some(l) = unsafe { iter.leaf(t) } {
+                if let Some(mut l) = iter.leaf(t) {
                     let b = l.node();
                     let end = b.key().k.p;
                     if end > prev_node {
