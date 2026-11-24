@@ -17,7 +17,8 @@
 use crate::c;
 use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
 use core::alloc::Layout;
-use crate::util::rcu::FreeAnytime;
+use crate::util::rcu::{FreeAnytime, HasRcuHead};
+use crate::util::thin::ThinBox;
 use crate::util::vstructs::{FlexArray, SelfSized};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
@@ -109,6 +110,12 @@ impl<H: DstHead, T> FlexArray for DstArray<H, T> {
     }
 }
 
+// its head is first
+impl<H: HasRcuHead, T> HasRcuHead for DstArray<H, T> {
+    const HEAD: usize = H::HEAD;
+    const WORK: bool = H::WORK;
+}
+
 impl<H: DstHead, T> DstArray<H, T> {
     /// What one of @nr elements is allocated as: its rcu_head, if it has one,
     /// its header, and the array.
@@ -119,7 +126,8 @@ impl<H: DstHead, T> DstArray<H, T> {
         let bytes = nr.checked_mul(size_of::<T>())
             .and_then(|b| b.checked_add(Self::TAIL + <T as ArrayFreeing>::prefix()))
             .ok_or(AllocError)?;
-        Layout::from_size_align(bytes, 8).map_err(|_| AllocError)
+        // padded as size_of_val() pads it: what it's freed by, by RcuFreeing
+        Ok(Layout::from_size_align(bytes, 8).map_err(|_| AllocError)?.pad_to_align())
     }
 
     /// @head of the room @given has for elements, at the start of @given past
@@ -146,6 +154,32 @@ impl<H: DstHead, T> DstArray<H, T> {
     fn alloc_gfp(head: H, gfp: Flags) -> Result<NonNull<H>, AllocError> {
         let given = KVmalloc.allocate_zeroed_gfp(Self::layout(head.nr())?, gfp)?;
         Ok(Self::place(|_| head, given))
+    }
+
+    /// alloc(), owned: freed as its markers say. Its elements FreeAnytime, so
+    /// no rcu_head before the header: the allocation is the array.
+    pub fn alloc_box(head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    where
+        T: FreeAnytime,
+    {
+        Self::alloc_box_gfp(head, Flags::empty())
+    }
+
+    /// alloc_box(), for what mustn't fail to allocate.
+    pub fn alloc_box_nofail(head: H) -> ThinBox<Self, KVmalloc>
+    where
+        T: FreeAnytime,
+    {
+        Self::alloc_box_gfp(head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes")
+    }
+
+    fn alloc_box_gfp(head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    where
+        T: FreeAnytime,
+    {
+        let p = Self::alloc_gfp(head, gfp)?;
+        // KVmalloc's, ours, at layout() - for_value()'s, padded as it pads
+        Ok(unsafe { ThinBox::from_raw(p.cast()) })
     }
 
     /// alloc(), of room for @nr from @a, its header @head of the room @a gave

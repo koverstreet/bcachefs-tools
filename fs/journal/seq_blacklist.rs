@@ -46,6 +46,7 @@ use crate::types::Le64;
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::rcu::{RcuArray, RcuElement};
 use crate::util::Printbuf;
+use crate::util::projections::Publish;
 use crate::sb::io::SbResize;
 
 type Section = c::bch_sb_field_journal_seq_blacklist<Validated>;
@@ -83,15 +84,13 @@ impl SbFieldOps for Section {
         let Some(bl) = sb.field::<Section>() else { return Ok(()) };
 
         // SAFETY: under sb_lock, the writers' lock
-        unsafe {
-            fs.journal_seq_blacklist.rebuild(bl.start.len(), |t| {
-                for (t, e) in t.iter_mut().zip(&bl.start) {
-                    t.start = e.start.get();
-                    t.end   = e.end.get();
-                }
-                Eytzinger0::sort_by(t, |l, r| l.start.cmp(&r.start));
-            })
-        }.map_err(|_| fs.err(Errcode::ENOMEM_blacklist_table_init))
+        unsafe { fs.journal_seq_blacklist.writer() }.rebuild(bl.start.len(), |t| {
+            for (t, e) in t.iter_mut().zip(&bl.start) {
+                t.start = e.start.get();
+                t.end   = e.end.get();
+            }
+            Eytzinger0::sort_by(t, |l, r| l.start.cmp(&r.start));
+        }).map_err(|_| fs.err(Errcode::ENOMEM_blacklist_table_init))
     }
 }
 
@@ -226,7 +225,7 @@ pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool
     let nr = bl.len();
 
     // SAFETY: under sb_lock, the writers' lock, and nothing's rebuilt here
-    let t = unsafe { fs.journal_seq_blacklist.get_locked() };
+    let t = unsafe { fs.journal_seq_blacklist.writer().get_locked() };
     assert_eq!(t.len(), nr, "blacklist table out of sync with the superblock");
 
     let oldest = fs.journal.oldest_seq_found_ondisk.get();
