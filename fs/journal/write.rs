@@ -986,7 +986,7 @@ fn write_checksum(j: &c::journal, data: &mut c::JsetBuf, closed: &Closed) -> Res
 /// The entry's buffer, out of its write for its task, and what close
 /// settled of it - under buf_lock, held till write_prep() is done: the write
 /// buffer's flush reads the buffer in the write till then.
-fn write_take(w: &'static c::journal_buf, seq: u64, _: &c::BufLockGuard<'_>) -> (Closed, Written) {
+fn write_take(w: &c::journal_buf, seq: u64, _: &c::BufLockGuard<'_>) -> (Closed, c::JsetBuf) {
     let mut l = w.journal().lock.lock();
     let bits = l.get_of(&w.bits);
     assert!(bits.write_started(), "journal write of seq {seq} not started");
@@ -1000,8 +1000,7 @@ fn write_take(w: &'static c::journal_buf, seq: u64, _: &c::BufLockGuard<'_>) -> 
         u64s_reserved:              *l.get_of(&w.u64s_reserved),
     };
 
-    let data = w.write_take_buf(&mut l);
-    (closed, Written::new(w, data))
+    (closed, w.write_take_buf(&mut l))
 }
 
 /// The entry compacted - under @b, its buf_lock, from write_take() - its
@@ -1120,47 +1119,51 @@ async fn write_task(w: &'static c::journal_buf, seq: u64) -> Written {
      * out of the write till write_prep() clears need_flush_to_write_buffer:
      * buf_lock held till then.
      */
-    let (mut written, a) = {
+    let mut written;
+    let a = {
         let b = j.buf_lock.lock();
-        let (closed, mut written) = write_take(w, seq, &b);
-        let a = write_start(w, seq, b, &closed, &mut written);
-        (written, a)
+        let (closed, data) = write_take(w, seq, &b);
+        written = Written::new(w, data);
+        write_start(w, seq, b, &closed, &mut written)
     };
 
-    let a = match a {
-        Ok(a) => a,
-        Err(e) => {
-            write_start_err(w, &written.data, e);
-            return written;
+    /* the task's output, returned from one place: each return is a copy on the stack */
+    'io: {
+        let a = match a {
+            Ok(a) => a,
+            Err(e) => {
+                write_start_err(w, &written.data, e);
+                break 'io;
+            }
+        };
+        if fs.opts().nochanges.get() != 0 {
+            break 'io;
         }
-    };
-    if fs.opts().nochanges.get() != 0 {
-        return written;
-    }
 
-    let flush = !written.data.jset().no_flush();
+        let flush = !written.data.jset().no_flush();
 
-    if flush && a.separate_flush {
-        stack_pin_init!(let g = Gather::<PreflushErrs, waiter::Async>::new());
-        write_preflush(w, &written.devs, &g);
-        let errs = g.wait(Resume::queue(wq)).await;
-        written.note_failed(fs, errs.0, true);
-    }
+        if flush && a.separate_flush {
+            stack_pin_init!(let g = Gather::<PreflushErrs, waiter::Async>::new());
+            write_preflush(w, &written.devs, &g);
+            let errs = g.wait(Resume::queue(wq)).await;
+            written.note_failed(fs, errs.0, true);
+        }
 
-    let Allocated { key, mut cas, separate_flush } = a;
-    let data = &written.data;
-    let (opf, bytes) = write_opf(fs, data, &key, separate_flush);
-    // the replicas are clones of the buffer's bio, from the journal's own set:
-    // they don't wait behind data writes'
-    let mut io = InFlight::with(fs, |ca| &ca.journal.bio_set, IOPRIO_RT);
-    io.submit::<c::DevWriteRefKind>(data.bio_range(bytes), opf, DataType::journal, &key, Refs::Given(&mut cas),
-                                    Resume::queue(wq)).await;
-    let errs = io.wait(Resume::INLINE).await;
-    written.note_failed(fs, errs.failed(), false);
-    if flush {
-        wake_flush_waiters(w, &written);
+        let Allocated { key, mut cas, separate_flush } = a;
+        let data = &written.data;
+        let (opf, bytes) = write_opf(fs, data, &key, separate_flush);
+        // the replicas are clones of the buffer's bio, from the journal's own set:
+        // they don't wait behind data writes'
+        let mut io = InFlight::with(fs, |ca| &ca.journal.bio_set, IOPRIO_RT);
+        io.submit::<c::DevWriteRefKind>(data.bio_range(bytes), opf, DataType::journal, &key, Refs::Given(&mut cas),
+                                        Resume::queue(wq)).await;
+        let errs = io.wait(Resume::INLINE).await;
+        written.note_failed(fs, errs.failed(), false);
+        if flush {
+            wake_flush_waiters(w, &written);
+        }
+        requeue(wq).await;
     }
-    requeue(wq).await;
 
     written
 }
