@@ -154,20 +154,21 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmAt, ArmRef, Head, InPlace, InState, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut, read_past, ArmAt, ArmRef, Head, InPlace, InState, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
-use crate::util::alloc::{Arc, Flags, KVec, KVVec};
+use crate::util::alloc::{AlignedBox, Arc, Flags, KVec, KVVec};
 use core::sync::atomic::AtomicPtr;
-use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit};
+use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit, IO_ALIGN};
 use crate::util::gather::Gather;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};
 use crate::os::kernel::NSEC_PER_SEC;
 use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
-use core::mem::{size_of, size_of_val, MaybeUninit};
+use core::mem::{size_of, size_of_val};
 use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::dst_room::DstRoom;
 use core::pin::Pin;
 use pin_init::PinInit;
 use crate::published;
@@ -984,18 +985,11 @@ impl Fs {
 
 impl bch_sb_buf {
     pub fn sb(&self) -> &bch_sb {
-        // SAFETY: it was read and validated, and this owns its buffer while
-        // we're borrowed - resize and realloc take &mut
-        unsafe { &*bch_sb::<Validated>::from_thin(self.buffer().as_ptr().cast()) }
+        self.data.as_deref().expect("a superblock's buffer: it's read, or made")
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
-        // SAFETY: as sb()'s
-        unsafe { &mut *bch_sb::<Validated>::from_thin(self.as_mut_ptr().cast()).cast_mut() }
-    }
-
-    fn as_mut_ptr(&mut self) -> *mut Head<bch_sb> {
-        self.buffer_mut().as_mut_ptr().cast()
+        self.data.as_deref_mut().expect("a superblock's buffer: it's read, or made")
     }
 
     /// Whether it has a buffer: none until it's read, or made.
@@ -1008,8 +1002,7 @@ impl bch_sb_buf {
     }
 
     fn buffer(&self) -> &[u8] {
-        // grow() writes all of it
-        self.data.as_deref().map_or(&[], |b| unsafe { assume_init_ref(b) })
+        self.data.as_ref().map_or(&[], |r| plain_bytes(r.elems()))
     }
 
     pub fn field<F: SbSection + ?Sized>(&self) -> Option<&F::Arm> {
@@ -1775,13 +1768,9 @@ impl bch_sb_buf {
     fn grow(&mut self, size: usize) -> Result<(), crate::util::alloc::AllocError> {
         let old = self.buffer();
         assert!(size >= old.len(), "a superblock buffer of {} bytes grown to {size}", old.len());
-        let mut new = io_buf(size, Flags::empty())?;
-        let (copy, zero) = new.split_at_mut(old.len());
-        for (n, o) in copy.iter_mut().zip(old) {
-            n.write(*o);
-        }
-        zero.fill(MaybeUninit::new(0));
-        self.data = Some(new);
+        let mut new = AlignedBox::<[u64], IO_ALIGN>::try_new_zeroed_slice_gfp(size / size_of::<u64>(), Flags::empty())?;
+        plain_bytes_mut(&mut *new)[..old.len()].copy_from_slice(old);
+        self.data = Some(DstRoom::from_storage(new));
         Ok(())
     }
 
@@ -1792,8 +1781,7 @@ impl bch_sb_buf {
 
     /// The superblock's buffer, all of it: what the superblock can grow into.
     fn buffer_mut(&mut self) -> &mut [u8] {
-        // as buffer()'s
-        self.data.as_deref_mut().map_or(&mut [], |b| unsafe { assume_init_mut(b) })
+        self.data.as_mut().map_or(&mut [], |r| plain_bytes_mut(r.elems_mut()))
     }
 
     /// The section at @off - or a new one of type @ty at the end, None -

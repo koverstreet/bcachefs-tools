@@ -250,11 +250,15 @@ use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
-use crate::os::bio::{Bio, BioBox, IoBuf};
+use crate::os::bio::{Bio, BioBox, IO_ALIGN};
+use crate::data_structures::dst_room::DstRoom;
+use crate::util::alloc::AlignedBox;
 use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::{bytes_in, c_char, strscpy};
 use crate::util::refcount::{TryRefcount, WaitableRef};
 use nestify::nest;
+
+pub(crate) type SbRoom = DstRoom<c::bch_sb, AlignedBox<[u64], IO_ALIGN>>;
 
 /// A superblock in memory, in a buffer that grows: a power of two, zeroes past
 /// the superblock, page aligned - it's read and written in place, O_DIRECT in
@@ -263,7 +267,7 @@ use nestify::nest;
 #[repr(C)]
 #[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_sb_buf {
-    pub(crate) data: Option<IoBuf>,
+    pub(crate) data: Option<SbRoom>,
     /// The section types edited since the last write, by bit: set by
     /// field_mut() and resizing, for the filesystem's to_cpu() to read.
     pub dirty:       u64,
