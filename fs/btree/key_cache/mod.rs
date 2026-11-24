@@ -146,7 +146,7 @@ pub struct bch_fs_btree_key_cache {
     pub(crate) table: KeyTable,
     /* what's in the table, to walk: an entry's slot is from insert to evict */
     #[pin]
-    #[init(::pin_init::init_zeroed())]
+    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_btree_key_cache_init))]
     pub(crate) keys: c::fast_list,
 
     #[pin]

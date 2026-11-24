@@ -23,6 +23,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::errcode::BchError;
 use crate::util::alloc::AllocError;
 use crate::os::percpu::{free_percpu, IrqGuard, PerCpu, PerCpuRef};
 use crate::util::rcu::ReadGuard;
@@ -30,20 +31,24 @@ use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_void;
 use core::iter;
 use core::mem::ManuallyDrop;
+use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::MaybeZeroable;
+use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::data_structures::ida::Ida;
 
 #[repr(C)]
+#[pin_data(PinnedDrop)]
 #[derive(MaybeZeroable)]
 pub struct fast_list {
     /* the items, by slot: allocated by any CPU at once */
     pub items: SharedGenRadix<Item>,
+    #[pin]
     pub slots_allocated: Ida,
-    /* set by init() and exit(), which take the list shared, as C's pointer is */
+    /* new()'s PerCpu<Cache>, as a pointer: a PerCpu isn't Sync */
     buffer: AtomicPtr<Cache>,
 }
 
@@ -69,7 +74,7 @@ impl c::fast_list {
     /// @f on this CPU's cache, interrupts off.
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
-        // SAFETY: init()'s Caches, freed by exit() after the list's last use
+        // SAFETY: new()'s Caches, freed as the list drops
         let caches = unsafe { PerCpuRef::<Cache>::from_raw(self.buffer.load(Relaxed)) };
         // SAFETY: only this CPU's own uses touch its copy, which interrupts
         // off keeps to this one
@@ -166,32 +171,27 @@ impl c::fast_list {
         self.put_idx(idx);
     }
 
-    /// init()ed, and not exit()ed since.
+    pub fn new() -> impl PinInit<Self, BchError> {
+        pin_init!(Self {
+            items: SharedGenRadix::new(),
+            slots_allocated <- Ida::new(),
+            buffer: AtomicPtr::new(PerCpu::<Cache>::alloc()?.into_raw()),
+        }? BchError)
+    }
+
+    /// Made: a static's is zeroed until it's made in place.
     pub fn is_made(&self) -> bool {
         !self.buffer.load(Relaxed).is_null()
     }
+}
 
-    /// # Safety
-    /// Nothing else is using it: it's zeroed, or exit()ed.
-    pub unsafe fn init(&self) -> Result<(), AllocError> {
-        unsafe { self.slots_allocated.init_zeroed() };
-        self.buffer.store(PerCpu::<Cache>::alloc()?.into_raw(), Relaxed);
-        Ok(())
-    }
+/// Every item should be off it.
+#[pinned_drop]
+impl PinnedDrop for fast_list {
+    fn drop(self: Pin<&mut Self>) {
+        let buffer = self.buffer.load(Relaxed);
 
-    /// Frees what init() and the list allocated; every item should be off it.
-    ///
-    /// # Safety
-    /// Nothing is using it, or will after - but init() again.
-    pub unsafe fn exit(&self) {
-        let buffer = self.buffer.swap(null_mut(), Relaxed);
-        // never init()ed - its ida's lock not even initialized - or init()
-        // failed: no slot was handed out
-        if buffer.is_null() {
-            return;
-        }
-
-        // SAFETY: init()'s, and no CPU's using it
+        // SAFETY: new()'s, and no CPU's using it
         for lp in unsafe { PerCpuRef::<Cache>::from_raw(buffer) }.cpus() {
             self.free_slots(unsafe { lp.as_mut() }.0.drain(..));
         }
@@ -200,7 +200,6 @@ impl c::fast_list {
         // a slot still allocated is an item still on the list
         crate::warn_on!(self.slots_allocated.find_first().is_some());
 
-        self.slots_allocated.destroy();
         unsafe { self.items.free() };
     }
 }

@@ -490,15 +490,10 @@ impl Fs {
         -> Result<(), BchError>
     {
         blacklist_table_initialize(self)?;
-        crate::debug::async_objs::lists::async_obj_init(self)?;
-        unsafe { self.btree.cache.nodes.init() }?;
-        unsafe { self.btree.key_cache.keys.init() }?;
         btree_init(self)?;
         compress_init(self)?;
         counters_init(self);
         encryption_init(self, user_key)?;
-        #[cfg(not(NO_BCACHEFS_FS))]
-        unsafe { self.vfs.inodes.init() }?;
 
         #[cfg(CONFIG_UNICODE)]
         if self.casefold_enabled().is_ok() {
@@ -930,8 +925,6 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     // each workqueue's destroy is its flush: before the exits free what their
     // work uses
     unsafe { fs.exit_late() };
-    #[cfg(not(NO_BCACHEFS_FS))]
-    unsafe { fs.vfs.inodes.exit() };
     reconcile_exit(fs);
     unsafe { c::journal::exit(&raw mut (*p).journal) };
     ec_exit(fs);
@@ -939,10 +932,8 @@ fn teardown(this: &mut MaybeRcuAlloc<Fs>) {
     unsafe {
         (*p).counters.now.free();
         btree_exit(p);
-        fs.btree.cache.nodes.exit();
-        fs.btree.key_cache.keys.exit();
     }
-    crate::debug::async_objs::lists::async_obj_exit(fs);
+    fs.tasks().drain();
     unsafe { fs.disk_groups.free() };
 }
 

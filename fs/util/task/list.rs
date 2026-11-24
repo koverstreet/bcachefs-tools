@@ -10,7 +10,8 @@ use crate::locking::MemallocFlags;
 use crate::os::kernel::msleep;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::prt;
-use crate::util::alloc::AllocError;
+use crate::errcode::BchError;
+use crate::util::alloc::init_at;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::printbuf::Msg;
 use crate::util::rcu::{self, ReadGuard};
@@ -31,17 +32,24 @@ impl TaskList {
         unsafe { &*core::ptr::from_ref(list).cast::<TaskList>() }
     }
 
-    /// Panics if it was made already.
-    pub fn init(&'static self, _: &ThisModule) -> Result<(), AllocError> {
+    /// A static's, made in place at module init. Panics if it was made already.
+    pub fn init(&'static self, _: &ThisModule) -> Result<(), BchError> {
         assert!(!self.0.is_made(), "the module's task list made twice");
         // SAFETY: zeroed, at module init, before any task is made
-        unsafe { self.0.init() }
+        unsafe { init_at(c::fast_list::new(), core::ptr::from_ref(&self.0).cast_mut()) }
     }
 
+    /// A static's, dropped in place and zeroed again: a no-op on one never made.
     pub fn exit(&'static self, _: &Quiesced<'_>) {
-        // SAFETY: at module exit, past the barrier: with no filesystem, the
-        // last tasks - those freed after a grace period - have run
-        unsafe { self.0.exit() }
+        if self.0.is_made() {
+            let list = core::ptr::from_ref(&self.0).cast_mut();
+            // SAFETY: at module exit, past the barrier: with no filesystem, the
+            // last tasks - those freed after a grace period - have run
+            unsafe {
+                core::ptr::drop_in_place(list);
+                core::ptr::write_bytes(list, 0, 1);
+            }
+        }
     }
 
     /// The list's a debugging aid: no room isn't an error, the task just

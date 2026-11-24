@@ -16,6 +16,8 @@ use pin_init::pin_data;
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
 pub struct bch_fs_vfs {
+    #[pin]
+    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_other_alloc))]
     pub inodes: c::fast_list,
     /* every VFS inode of ours, and which subvolumes hold an inode number */
     #[cfg(not(NO_BCACHEFS_FS))]

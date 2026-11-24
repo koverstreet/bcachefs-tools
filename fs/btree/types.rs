@@ -314,7 +314,7 @@ pub struct bch_fs_btree_cache {
      * aren't the cache's, and are freed while we run: they're not on it.
      */
     #[pin]
-    #[init(::pin_init::init_zeroed())]
+    #[init(crate::util::alloc::init_or(cs::fast_list::new(), c::Errcode::ENOMEM_fs_btree_cache_init))]
     pub nodes: cs::fast_list,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */

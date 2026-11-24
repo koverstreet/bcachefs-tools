@@ -21,7 +21,7 @@
 
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::alloc::{AllocError, KVVec};
-use pin_init::Zeroable;
+use pin_init::{pin_data, pin_init, PinInit, Zeroable};
 
 const B: usize = usize::BITS as usize;
 const B_BITS: u32 = usize::BITS.ilog2();
@@ -245,18 +245,18 @@ impl Tree {
     }
 }
 
-pub struct Ida(Locked<SpinLockIrq, Tree>);
+#[pin_data]
+pub struct Ida {
+    #[pin]
+    tree: Locked<SpinLockIrq, Tree>,
+}
 
-// its lock, zeroed, isn't initialized: init_zeroed()
+// its lock, zeroed, isn't initialized: a static's, until new() is made over it
 unsafe impl Zeroable for Ida {}
 
 impl Ida {
-    /// For an Ida in zeroed memory, or destroy()ed.
-    ///
-    /// # Safety
-    /// Nothing is using it, or will until it returns.
-    pub unsafe fn init_zeroed(&self) {
-        let Ok(()) = unsafe { self.0.init_zeroed(c"&ida->lock", crate::lock_class_key!()) };
+    pub fn new() -> impl PinInit<Self> {
+        pin_init!(Self { tree <- crate::new_lock!(Tree { depth: 0, nodes: KVVec::new() }, "&ida->lock") })
     }
 
     /// The lowest free id in [@min, @max] - @max no more than INT_MAX, as the
@@ -269,7 +269,7 @@ impl Ida {
 
         loop {
             let depth = {
-                let mut t = self.0.lock();
+                let mut t = self.tree.lock();
                 if let Some(id) = t.alloc(min, max) {
                     return Ok(id);
                 }
@@ -283,7 +283,7 @@ impl Ida {
             let new_nodes = KVVec::from_elem(!0usize, nodes_up_to_level(depth + 1))?;
 
             let unused = {
-                let mut t = self.0.lock();
+                let mut t = self.tree.lock();
                 // grown meanwhile: ours goes
                 if t.depth == depth { t.grow(new_nodes) } else { new_nodes }
             };
@@ -292,21 +292,11 @@ impl Ida {
     }
 
     pub fn free(&self, id: u32) {
-        self.0.lock().free(id)
+        self.tree.lock().free(id)
     }
 
     /// The lowest id allocated.
     pub fn find_first(&self) -> Option<u32> {
-        self.0.lock().find_first()
-    }
-
-    /// Every id freed, and the tree with them.
-    pub fn destroy(&self) {
-        let nodes = {
-            let mut t = self.0.lock();
-            t.depth = 0;
-            core::mem::take(&mut t.nodes)
-        };
-        drop(nodes);
+        self.tree.lock().find_first()
     }
 }

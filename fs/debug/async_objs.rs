@@ -43,6 +43,8 @@ pub enum AsyncObjKind {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct async_obj_list {
+    #[pin]
+    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_async_obj_init))]
     pub list: c::fast_list,
 }
 
@@ -140,24 +142,6 @@ use crate::util::place::Contained;
 use crate::util::rcu;
 use crate::util::task::TaskRef;
 use crate::util::Printbuf;
-
-pub fn async_obj_init(fs: &Fs) -> Result<(), BchError> {
-    for l in &fs.async_objs {
-        // SAFETY: filesystem init, before anything is listed
-        if unsafe { l.list.init() }.is_err() {
-            return fs.throw(c::Errcode::ENOMEM_async_obj_init);
-        }
-    }
-    Ok(())
-}
-
-pub fn async_obj_exit(fs: &Fs) {
-    fs.tasks().drain();
-    for l in &fs.async_objs {
-        // SAFETY: filesystem teardown, everything done with
-        unsafe { l.list.exit() };
-    }
-}
 
 /// How a list's objects are shown: of the list's kind, read under RCU.
 type ObjToText = unsafe fn(&mut Printbuf, &Fs, NonNull<c_void>);
