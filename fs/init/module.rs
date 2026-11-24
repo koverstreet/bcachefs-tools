@@ -58,29 +58,30 @@ pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     crate::util::task::TASKS.exit(&q);
 }
 
-/// Failed, bcachefs_exit() undoes it.
-#[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
-pub(crate) fn bcachefs_init(m: &ThisModule) -> Result<(), BchError> {
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    crate::btree::bkey::pack_test();
+crate::init_fn! {
+    /// Failed, bcachefs_exit() undoes it.
+    pub(crate) fn bcachefs_init(m: &ThisModule) -> Result<(), BchError> {
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        crate::btree::bkey::pack_test();
 
-    crate::util::futex::bch2_futex_init();
+        crate::util::futex::bch2_futex_init();
 
-    BCACHEFS_KOBJ.init();
+        BCACHEFS_KOBJ.init();
 
-    crate::util::maybe_rcu_alloc::free_init()?;
-    crate::util::task::TASKS.init(m)?;
-    crate::data::read::pools_init(m)?;
-    crate::btree::read::pools_init(m)?;
-    crate::btree::write::pools_init(m)?;
-    BCACHEFS_KOBJ.kobj().add(fs_kobj(), c"bcachefs")?;
-    crate::btree::lock_graph::graphs_init()?;
-    crate::btree::key_cache::btree_key_cache_module_init()?;
-    #[cfg(kernel)]
-    crate::init::chardev::bch2_chardev_init(m)?;
-    #[cfg(not(NO_BCACHEFS_FS))]
-    crate::vfs::new_inode::vfs_init(m)?;
-    #[cfg(CONFIG_DEBUG_FS)]
-    ret_to_result_void(crate::debug::debug::bch2_debug_init())?;
-    Ok(())
+        crate::util::maybe_rcu_alloc::free_init()?;
+        crate::util::task::TASKS.init(m)?;
+        crate::data::read::pools_init(m)?;
+        crate::btree::read::pools_init(m)?;
+        crate::btree::write::pools_init(m)?;
+        BCACHEFS_KOBJ.kobj().add(fs_kobj(), c"bcachefs")?;
+        crate::btree::lock_graph::graphs_init()?;
+        crate::btree::key_cache::btree_key_cache_module_init()?;
+        #[cfg(kernel)]
+        crate::init::chardev::bch2_chardev_init(m)?;
+        #[cfg(not(NO_BCACHEFS_FS))]
+        crate::vfs::new_inode::vfs_init(m)?;
+        #[cfg(CONFIG_DEBUG_FS)]
+        ret_to_result_void(crate::debug::debug::bch2_debug_init())?;
+        Ok(())
+    }
 }

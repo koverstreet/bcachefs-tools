@@ -43,6 +43,17 @@ impl Drop for ModuleRef {
     }
 }
 
+/// A fn only module init runs, as its &ThisModule says: in-kernel in
+/// .init.text, freed once init's done, as C's __init.
+#[macro_export]
+macro_rules! init_fn {
+    ($(#[$attr:meta])* $vis:vis fn $($rest:tt)*) => {
+        $(#[$attr])*
+        #[cfg_attr(kernel, unsafe(link_section = ".init.text"))]
+        $vis fn $($rest)*
+    };
+}
+
 impl ModuleExit {
     pub(super) const fn new() -> Self {
         ModuleExit(())

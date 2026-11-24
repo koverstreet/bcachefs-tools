@@ -14,14 +14,15 @@ pub use common::*;
 use crate::init::module::{bcachefs_exit, bcachefs_init};
 use core::ffi::c_int;
 
-/// A failed init is exited, and is ENOMEM, as C's.
-#[unsafe(link_section = ".init.text")]
-fn init() -> c_int {
-    match bcachefs_init(&ThisModule::new()) {
-        Ok(()) => 0,
-        Err(_) => {
-            bcachefs_exit(&ModuleExit::new());
-            -(crate::c::ENOMEM as c_int)
+crate::init_fn! {
+    /// A failed init is exited, and is ENOMEM, as C's.
+    fn init() -> c_int {
+        match bcachefs_init(&ThisModule::new()) {
+            Ok(()) => 0,
+            Err(_) => {
+                bcachefs_exit(&ModuleExit::new());
+                -(crate::c::ENOMEM as c_int)
+            }
         }
     }
 }
