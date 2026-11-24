@@ -682,8 +682,9 @@ macro_rules! vstruct_family {
 
     // An unsized type's X<S>, its own definition in every state: a sized
     // union's arm as long as its count says, and made from bytes, or a
-    // pointer to its header @head, in the state the caller names
-    (unsized $name:ident, $head:ident) => {
+    // pointer to its header @head, in the state the caller names - as long
+    // as @len, of the header @h, says
+    (unsized $name:ident, $head:ident, |$h:ident| $len:expr) => {
         $crate::vstruct_family!(@in_state $name);
 
         impl<S: $crate::util::vstructs::State> $crate::util::vstructs::ArmAt for $name<S> {
@@ -692,8 +693,8 @@ macro_rules! vstruct_family {
             }
         }
 
-        $crate::vstruct_family!(@state $name, Unvalidated, $head);
-        $crate::vstruct_family!(@state $name, Validated, $head);
+        $crate::vstruct_family!(@state $name, Unvalidated, $head, |$h| $len);
+        $crate::vstruct_family!(@state $name, Validated, $head, |$h| $len);
     };
 
     // A DST definition, $ty - with impl generics [$g] - its head @head's
@@ -941,14 +942,15 @@ macro_rules! vstruct_family {
 
     // An unsized type in state @st: made from a pointer to its header, @head,
     // or bytes, or from the other state
-    (@state $name:ident, $st:ident, $head:ident) => { const _: () = {
+    (@state $name:ident, $st:ident, $head:ident, |$h:ident| $len:expr) => { const _: () = {
         use $crate::util::vstructs::*;
 
         // SAFETY: its header's count says how long it is, and that's a
         // private field - Deref is to the header, to read
         unsafe impl SelfSized for $name<$st> {
             unsafe fn from_thin(p: *const ()) -> *const Self {
-                <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<$head>()).bytes() })
+                let $h: &$head = unsafe { &*p.cast() };
+                <Self as Unsized>::from_raw(p.cast(), $len)
             }
         }
 
