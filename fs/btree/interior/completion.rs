@@ -26,10 +26,9 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
 use crate::types::Le64;
-use crate::util::alloc::Box;
 use crate::util::vstructs::{Head, SelfSized};
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
-            UPDATE_NODES_MAX};
+            UpdateBox, UPDATE_NODES_MAX};
 
 impl InteriorUpdate<'_> {
     /*
@@ -310,8 +309,8 @@ fn btree_node_seq_matches(b: &BtreeNode, seq: Le64) -> bool {
     b_seq == seq
 }
 
-fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
-    let u = unsafe { update.as_ref() };
+fn nodes_written(fs: &Fs, owner: UpdateBox) {
+    let u = &*owner;
     let mut journal_seq = 0;
 
     /* before the transaction: commit_lock is taken outside btree locks */
@@ -424,7 +423,7 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
             let Pointee::Node { b: r, .. } = i.to else { continue };
             let b = r.node(fs);
 
-            b.will_make_reachable.clear(update);
+            b.will_make_reachable.clear(NonNull::from(u));
             b.flags.set_will_make_reachable(false);
             new_nodes.push(r);
         }
@@ -447,13 +446,8 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
      * to free as->b and calling btree_update_reparent() on us - we'll
      * recheck under btree_update_lock below:
      */
-    let front_mode = || {
-        let g = fs.btree.interior_updates.lock.lock();
-        let front = g.unwritten.peek_front().expect("an update completing, on unwritten");
-        assert!(ptr::eq(Box::as_ptr(front), update.as_ptr()), "an update completing out of order");
-        u.mode(&g)
-    };
-    if let Some(Mode::Node(r)) = front_mode() {
+    let mode = u.mode(&fs.btree.interior_updates.lock.lock());
+    if let Some(Mode::Node(r)) = mode {
         let b = r.node(fs);
 
         /*
@@ -553,21 +547,23 @@ fn nodes_written(fs: &Fs, update: NonNull<BtreeUpdate>) {
 
     u.owned.borrow_mut().open_buckets.clear();
 
-    unsafe { super::update_free(update, None) };
+    super::update_free(fs, owner);
 }
 
 /// The interior update worker: the updates on unwritten completed in order,
-/// each once its new nodes are written - the first not yet stops it.
+/// each once its new nodes are written - the first not yet stops it. Taken
+/// off unwritten to complete: the worker never runs twice at once, so the
+/// next isn't taken until this one's done.
 pub(super) fn worker(fs: &Fs) {
     loop {
-        let update = {
-            let g = fs.btree.interior_updates.lock.lock();
-            match g.unwritten.peek_front() {
-                Some(u) if u.nodes_written() => NonNull::from(&**u),
-                _ => break,
+        let owner = {
+            let mut g = fs.btree.interior_updates.lock.lock();
+            if !g.unwritten.peek_front().is_some_and(|u| u.nodes_written()) {
+                break;
             }
+            g.unwritten.pop_front().expect("the front, just peeked")
         };
 
-        nodes_written(fs, update);
+        nodes_written(fs, owner);
     }
 }
