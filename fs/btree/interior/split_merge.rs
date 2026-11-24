@@ -8,8 +8,8 @@ use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, Valid
                          BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX};
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeTrans, CommitFlags, CommitOpts,
-                         TransAttempt, Watermark};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitFlags,
+                         CommitOpts, TransAttempt, Watermark};
 use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal, BtreeAndJournalIter};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::btree::node::insert::KeyInsert;
@@ -1543,31 +1543,32 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
     Ok(())
 }
 
-/// @b, which @iter's path holds, replaced by a compacted copy - written to
-/// @target, if not 0.
+/// @node, which @iter's path holds at its level, replaced by a compacted copy -
+/// written to @target, if not 0.
 pub(crate) fn node_rewrite<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
-                               b: &BtreeNode, target: u32, commit: CommitOpts,
+                               node: BtreeNodeRef, target: u32, commit: CommitOpts,
                                write: c::WriteFlags) -> Result<(), BchError> {
-    assert!(!b.is_fake(), "rewriting a fake btree node");
+    let level = usize::from(paths[iter.path].level());
+    assert!(!paths[iter.path].locked_btree_node(level).expect("a rewrite's node, held by its path").is_fake(),
+            "rewriting a fake btree node");
 
-    let ret = node_rewrite_in(t, paths, iter, b,
+    let ret = node_rewrite_in(t, paths, iter, level, node,
                               StartOpts { target, commit: commit.flags(CommitFlags::NO_ENOSPC), write,
                                           ..Default::default() });
     t.trans().downgrade(paths);
     ret
 }
 
-fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
-                       node: &BtreeNode, opts: StartOpts) -> Result<(), BchError> {
+fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>, level: usize,
+                       node: BtreeNodeRef, opts: StartOpts) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let level = usize::from(node.c.level.get());
 
     let update = InteriorUpdate::start(t, paths, iter.path, level, opts)?;
 
     trans.node_lock_write(paths, iter.path, level)?;
     let b = paths[iter.path].locked_btree_node(level).expect("a rewrite's node, held by its path");
-    ebug_assert!(ptr::eq(b.node(), node), "rewriting a node its path doesn't hold");
+    ebug_assert!(ptr::eq(b.node(), node.as_ptr()), "rewriting a node its path doesn't hold");
 
     let mut n = update.alloc_replacement(b);
     build_aux_trees(n.node(), n.contents_mut());

@@ -954,7 +954,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         write_flags: c::WriteFlags,
     ) -> Result<(), BchError> {
         let trans = self.trans();
-        super::interior::node_rewrite(self, &mut trans.paths(), iter, unsafe { &*node.as_ptr() }, target,
+        super::interior::node_rewrite(self, &mut trans.paths(), iter, node, target,
                                       flags.into(), write_flags)
     }
 
