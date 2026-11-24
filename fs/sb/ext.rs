@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::btree::types::btree_id_str;
     use crate::types::Le32;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, FakeVStruct, Head, Unvalidated};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated};
 
     /// An ext section of @u64s, @buf's first, as the superblock's printer
     /// prints it - by its type.
@@ -70,12 +70,12 @@ mod tests {
         // a superblock of no sections: its header
         let mut sb = [0u64; size_of::<Head<c::bch_sb>>() / size_of::<u64>()];
         let sb_bytes = plain_bytes_mut(&mut sb[..]);
-        cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_val_u64s(0);
+        cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_u64s(0);
         let sb = c::bch_sb::<Unvalidated>::from_bytes(sb_bytes).unwrap();
 
         let b = plain_bytes_mut(buf);
         let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
-        f.set_val_u64s(u64s);
+        f.set_u64s(u64s);
         f.type_ = Le32::new(c::SbFieldType::ext.0);
         let f = c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
 

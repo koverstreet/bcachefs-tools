@@ -154,7 +154,7 @@ use crate::util::names::{self, Names};
 use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, FakeDst, FakeVStruct, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
+use crate::util::vstructs::{assume_init_mut, assume_init_ref, bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, FakeDst, Head, InPlace, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
@@ -343,7 +343,7 @@ fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end
     let sb_end = bytes.len();
     bytes[sb_end - dropped..].fill(0);
     cast_plain_mut::<Head<c::bch_sb_field>>(&mut bytes[f..]).expect("a section's header")
-        .set_val_u64s(whole / size_of::<u64>());
+        .set_u64s(whole / size_of::<u64>());
     sb.sub_u64s((dropped / size_of::<u64>()) as u32);
 
     write!(err, "{} bytes past its last whole entry, dropped", len - end);
@@ -1817,7 +1817,7 @@ impl bch_sb_buf {
             None => {
                 buf[end..new_end].fill(0);
                 let h = cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[end..]).expect("a section's head");
-                h.set_val_u64s(u64s as usize);
+                h.set_u64s(u64s as usize);
                 h.type_ = Le32::new(ty.0);
                 Some(end)
             }
@@ -1829,14 +1829,14 @@ impl bch_sb_buf {
                         buf[src..dst].fill(0);
                     }
                     cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[off..]).expect("a section's head")
-                        .set_val_u64s(u64s as usize);
+                        .set_u64s(u64s as usize);
                 }
                 (u64s != 0).then_some(off)
             }
         };
 
         cast_plain_mut::<Head<bch_sb>>(buf).expect("a superblock's head")
-            .set_val_u64s(sb_u64s + new / size_of::<u64>() - old / size_of::<u64>());
+            .set_u64s(sb_u64s + new / size_of::<u64>() - old / size_of::<u64>());
         ret
     }
 
@@ -2999,7 +2999,7 @@ mod tests {
     use crate::btree::bkey::ValidateFlags;
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{FakeVStruct, Head, SelfSized, Unvalidated, Validated, VStructError};
+    use crate::util::vstructs::{Head, SelfSized, Unvalidated, Validated, VStructError};
     use crate::util::Printbuf;
     use core::ffi::c_int;
 
@@ -3010,7 +3010,7 @@ mod tests {
         // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field, and
         // as many as u64s says
         unsafe {
-            (*f).set_val_u64s(u64s);
+            (*f).set_u64s(u64s);
             (*f).type_ = Le32::new(ty.0);
             &*c::bch_sb_field::<Validated>::from_thin(f.cast())
         }

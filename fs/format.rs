@@ -1832,13 +1832,6 @@ pub struct jset {
     pub _data: [u64; 0],
 }
 
-impl jset_head {
-    /// By what holds it, which has room for its entries.
-    pub fn set_u64s(&mut self, u64s: usize) {
-        self.u64s.set(u64s as u32);
-    }
-}
-
 /* A journal entry's keys, Views as its walk yields them: each one's header is whole. */
 floored_by_self!(bkey_i);
 
@@ -1894,13 +1887,6 @@ pub struct bset {
 
     pub start: [c::bkey_packed; 0],
     pub _data: [u64; 0],
-}
-
-impl bset_head {
-    /// By what holds it, which has room for its keys.
-    pub fn set_u64s(&mut self, u64s: usize) {
-        self.u64s.set(u64s as u16);
-    }
 }
 
 const KEY_OFFSET: &str = "a bset's keys start and end on a u64, and so does each";

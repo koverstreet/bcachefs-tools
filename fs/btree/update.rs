@@ -23,7 +23,7 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, Container, EntryWalk, FakeDst, FakeVStruct, Head, Plain, Unsized,
+use crate::util::vstructs::{plain_bytes, Container, EntryWalk, FakeDst, Head, Plain, Unsized,
                             Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -428,7 +428,7 @@ impl TransAttempt<'_, '_> {
         h.type_ = ty.0 as u8;
         h.btree_id = btree;
         h.level = level;
-        h.set_val_u64s(data.len().div_ceil(size_of::<u64>()));
+        h.set_u64s(data.len().div_ceil(size_of::<u64>()));
 
         self.subbuf_push(&self.trans().journal_entries, &h, |v| {
             let (d, pad) = v.as_mut_bytes().split_at_mut(data.len());
