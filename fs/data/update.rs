@@ -24,6 +24,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::AllocWait;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
+use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
@@ -121,7 +122,7 @@ pub struct data_update {
     pub rcu: c::rcu_head,
     /* extent being updated: */
     pub btree_id: Btree,
-    pub k: c::bkey_buf,
+    pub k: BkeyBuf,
     pub opts: c::data_update_opts,
 
     /* read by the in-flight listing, racily */
@@ -271,7 +272,7 @@ impl ToText for c::data_update {
         fs.data_update_opts_to_text(out, &self.op.opts, &self.opts);
         out.newline();
 
-        prt!(out, "old key:\t{}", BkeySC::from(self.k.key()).to_text(fs));
+        prt!(out, "old key:\t{}", BkeySC::from(self.k.as_ref()).to_text(fs));
         out.newline();
 
         prt!(out, "write: ");
@@ -282,7 +283,7 @@ impl ToText for c::data_update {
 #[cold]
 pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
     let fs = m.op.fs();
-    prt!(out, "{}", BkeySC::from(m.k.key()).to_text(fs));
+    prt!(out, "{}", BkeySC::from(m.k.as_ref()).to_text(fs));
     out.newline();
 
     let mut out = out.indent(2);
@@ -391,7 +392,7 @@ impl c::data_update {
     }
 
     fn key(&self) -> BkeySC<'_> {
-        BkeySC::from(self.k.key())
+        BkeySC::from(self.k.as_ref())
     }
 
     /// The read and write bios share bvecs and pages: the write writes what
@@ -460,7 +461,7 @@ impl c::data_update {
 
         let end = self.key().k.p;
         while self.op.pos < end {
-            let ours = BkeySC::from(self.k.key());
+            let ours = BkeySC::from(self.k.as_ref());
             if !lockrestart_do(trans, |t| {
                 let mut iter = BtreeIter::new(t, self.btree_id, self.op.pos, BtreeIterFlags::SLOTS);
                 let k = iter.peek_slot(t)?.expect("a slot always has a key");
@@ -525,9 +526,7 @@ impl c::data_update {
             pos:   k.k.p,
         };
 
-        // SAFETY: the caller's: it stays where it is
-        unsafe { self.k.init() };
-        self.k.reassemble(k);
+        self.k = BkeyBuf::from_key(k);
 
         self.btree_id = btree_id;
         self.opts = data_opts;
@@ -535,8 +534,8 @@ impl c::data_update {
 
         // SAFETY: an update is done before the filesystem goes
         unsafe { c::bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
-        self.op.pos = self.k.key().k().start_pos();
-        self.op.version = self.k.key().k().bversion;
+        self.op.pos = self.k.as_ref().k().start_pos();
+        self.op.version = self.k.as_ref().k().bversion;
         self.op.target = data_opts.target;
         self.op.write_point = wp;
         use c::WriteFlags as w;
@@ -554,7 +553,6 @@ impl c::data_update {
                 self.trace(ret_to_c(Err::<(), _>(*e)));
             }
             self.op.res.put();
-            self.k.exit();
         }
         ret
     }
@@ -566,7 +564,7 @@ impl c::data_update {
         let fs = self.fs();
         let mut held = Held { in_flight: None, nocow: None, devs: Default::default() };
         let type_ = self.opts.type_;
-        let k = BkeySC::from(self.k.key());
+        let k = BkeySC::from(self.k.as_ref());
 
         let snapshot = k.k.p.snapshot;
         if type_ != Type::scrub_no_repair && snapshot != 0 && unlikely(!fs.snapshots.exists(snapshot)) {
@@ -689,7 +687,7 @@ impl c::data_update {
             return fs.throw(Errcode::data_update_done_unwritten);
         }
 
-        let k = BkeySC::from(self.k.key());
+        let k = BkeySC::from(self.k.as_ref());
         if let Some(kp) = k.arm::<Ptrs>() {
             for (i, ptr) in kp.ptrs(fs).enumerate() {
                 // the error is a missing device's repair being scheduled
@@ -769,7 +767,7 @@ impl c::data_update {
     fn ptrs_io_error_kill(&mut self) -> bool {
         let fs = self.fs();
         let trans = crate::btree_trans!(fs);
-        let k = BkeySC::from(self.k.key());
+        let k = BkeySC::from(self.k.as_ref());
         if let Some(kp) = k.arm::<Ptrs>() {
             let mut nr = u32::from(self.op.bits.nr_replicas());
             let mut bit = 1u32;
@@ -806,7 +804,10 @@ impl c::data_update {
 
         self.opts.ptrs_io_error |= ptrs_io_error;
         if let Some(k) = &poisoned {
-            self.k.reassemble(BkeySC::from(k));
+            // XXX: a poisoned key that's outgrown the inline room moves to the
+            // heap while the in-flight listing may be reading it, racily: a
+            // torn read of the room can follow a half-written pointer
+            self.k.set_key(BkeySC::from(k));
         }
 
         // before the bitrot fixup below, which clears ret

@@ -1652,6 +1652,6 @@ pub fn write_op_to_text(out: &mut Printbuf, op: &Op) {
         fs.data_update_opts_to_text(&mut out, &u.op.opts, &u.opts);
         out.newline();
 
-        prt!(out, "old key:\t{}\n", BkeySC::from(u.k.key()).to_text(fs));
+        prt!(out, "old key:\t{}\n", BkeySC::from(u.k.as_ref()).to_text(fs));
     }
 }

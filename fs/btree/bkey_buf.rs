@@ -9,11 +9,10 @@
 //! any other value.
 //!
 //! As in C, copying a key in can't fail: the heap buffer is allocated
-//! __GFP_NOFAIL - InlineOrBoxed's Storage::grow(), and C's bkey_buf's by
-//! kzalloc_nofail(), which kfree_unsized() takes back. Zeroed, so the whole
-//! buffer is initialized memory.
-
-#![allow(non_camel_case_types)]
+//! __GFP_NOFAIL, by InlineOrBoxed's Storage::grow(). Zeroed, so the whole
+//! buffer is initialized memory. And as C's, it's room for any key: a key
+//! that's outgrown the struct moves once, and never again - a data update's
+//! is read under RCU, by the in-flight listing, while it's in use.
 
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::c;
@@ -21,16 +20,7 @@ use crate::format::Btree;
 use core::mem::size_of;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::dst_room::InlineOrBoxed;
-use crate::util::alloc::kzalloc_nofail;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use cstruct_macros::MaybeZeroable;
-
-#[repr(C)]
-#[derive(Clone, Copy, MaybeZeroable)]
-pub struct bkey_buf {
-    pub k: *mut c::bkey_i,
-    pub onstack: [u64; 12],
-}
 
 const ONSTACK_U64S: usize = 12;
 
@@ -38,9 +28,9 @@ const ONSTACK_U64S: usize = 12;
 /// C's kmalloc(2048).
 const HEAP_U64S: usize = 256;
 
-pub type BkeyBuf = DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S>>;
+pub type BkeyBuf = DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S, HEAP_U64S>>;
 
-impl DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S>> {
+impl DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S, HEAP_U64S>> {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it. Out of line:
     /// it zeroes the whole room, and no hot path makes one.
     #[inline(never)]
@@ -80,65 +70,6 @@ impl AsRef<BkeyI> for BkeyBuf {
 impl AsMut<BkeyI> for BkeyBuf {
     fn as_mut(&mut self) -> &mut BkeyI {
         self
-    }
-}
-
-/// C's bkey_buf: @k points into @onstack while the key is small, so once
-/// init()ed it can't move. Used for a data update's key, which C reads.
-impl c::bkey_buf {
-    pub fn key(&self) -> &BkeyI {
-        // SAFETY: as C keeps it, for as long as it's borrowed
-        unsafe { &*BkeyI::from_raw(self.k) }
-    }
-
-    fn onstack_ptr(&mut self) -> *mut c::bkey_i {
-        self.onstack.as_mut_ptr().cast()
-    }
-
-    /// # Safety
-    /// It isn't moved while it's in use: @k may point into it.
-    pub unsafe fn init(&mut self) {
-        self.k = self.onstack_ptr();
-        // SAFETY: @onstack, which has room for a header
-        unsafe { (*self.k).k = c::bkey::new() };
-    }
-
-    /// Copies @k in. A key too big for @onstack moves the buffer to the heap
-    /// (__GFP_NOFAIL), where it stays.
-    pub fn reassemble(&mut self, k: BkeySC<'_>) {
-        const { assert!(size_of::<[u64; ONSTACK_U64S]>() == size_of::<c::bkey_buf>() - size_of::<*mut c::bkey_i>()) };
-
-        if self.k == self.onstack_ptr() && k.k.u64s as usize > ONSTACK_U64S {
-            let p = kzalloc_nofail(HEAP_U64S * size_of::<u64>()).cast::<u64>();
-            assert!(!p.is_null(), "__GFP_NOFAIL allocation returned NULL");
-            // SAFETY: a fresh buffer, room for any key
-            unsafe { core::ptr::copy_nonoverlapping(self.onstack.as_ptr(), p, ONSTACK_U64S) };
-            self.k = p.cast();
-        }
-        // SAFETY: init()'s @k, which is @onstack with room for @k, or the
-        // heap buffer, with room for any key
-        let dst = unsafe { core::slice::from_raw_parts_mut(self.k.cast::<u64>(), k.k.u64s.into()) };
-        copy_key(dst, k.k, k.val_bytes())
-    }
-
-    pub fn exit(&mut self) {
-        if !self.k.is_null() && self.k != self.onstack_ptr() {
-            // SAFETY: reassemble()'s
-            unsafe { crate::util::alloc::kfree_unsized(self.k.cast()) };
-        }
-        self.k = core::ptr::null_mut();
-    }
-
-    /// exit(), for a key RCU readers may still be reading: the heap buffer is
-    /// freed a grace period later, and @k is left pointing at it - so this must
-    /// be the last thing done with the bkey_buf, and its memory freed no
-    /// sooner.
-    /// May sleep.
-    pub fn exit_rcu(&mut self) {
-        if !self.k.is_null() && self.k != self.onstack_ptr() {
-            // SAFETY: reassemble()'s, kmalloc()'d
-            unsafe { crate::util::alloc::kfree_rcu_mightsleep(self.k.cast()) };
-        }
     }
 }
 

@@ -87,15 +87,21 @@ impl<T: ?Sized, E: Plain + Copy + ::pin_init::Zeroable, const A: usize> DstRoom<
     }
 }
 
-/// @N elements in itself, and once they're outgrown, a boxed slice - grown
-/// __GFP_NOFAIL, doubling, so a value growing a word at a time isn't a copy
-/// a word. Once boxed it stays boxed.
-pub enum InlineOrBoxed<E, const N: usize> {
+/// @N elements in itself, and once they're outgrown, a boxed slice of at
+/// least @B - grown __GFP_NOFAIL, doubling past that, so a value growing a
+/// word at a time isn't a copy a word. Once boxed it stays boxed. Laid out as
+/// a C tagged union, Inline first: zeroed, it's Inline, all zeroes.
+#[repr(C, u8)]
+pub enum InlineOrBoxed<E, const N: usize, const B: usize> {
     Inline([E; N]),
     Boxed(Box<[E], Kmalloc>),
 }
 
-impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize> Storage for InlineOrBoxed<E, N> {
+// zeroed, the tag is Inline's, and its elements zeroes
+unsafe impl<E: ::pin_init::Zeroable, const N: usize, const B: usize> ::pin_init::Zeroable
+    for InlineOrBoxed<E, N, B> {}
+
+impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> Storage for InlineOrBoxed<E, N, B> {
     type Elem = E;
 
     fn elems(&self) -> &[E] {
@@ -124,13 +130,13 @@ impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize> Storage for InlineO
     }
 }
 
-impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize> InlineOrBoxed<E, N> {
+impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> InlineOrBoxed<E, N, B> {
     #[cold]
     #[inline(never)]
     fn grow_slow(&mut self, n: usize) -> &mut [E] {
         let have = self.elems().len();
         if n > have {
-            let mut b = Box::try_zeroed_slice_in(n.max(have * 2), Kmalloc.with_flags(flags::NOFAIL))
+            let mut b = Box::try_zeroed_slice_in(n.max(B).max(have * 2), Kmalloc.with_flags(flags::NOFAIL))
                 .expect("a __GFP_NOFAIL allocation");
             b[..have].copy_from_slice(self.elems());
             *self = Self::Boxed(Box::into_unflagged(b));
@@ -162,7 +168,7 @@ impl<T: ?Sized, E: Plain, const N: usize> DstRoom<T, [E; N]> {
     }
 }
 
-impl<T: ?Sized, E: ::pin_init::Zeroable, const N: usize> DstRoom<T, InlineOrBoxed<E, N>> {
+impl<T: ?Sized, E: ::pin_init::Zeroable, const N: usize, const B: usize> DstRoom<T, InlineOrBoxed<E, N, B>> {
     /// Its @N inline elements, all zeroes: what T's header says of that is
     /// T's.
     pub fn zeroed() -> Self {
@@ -244,8 +250,9 @@ impl<T: ?Sized, E: Plain + Copy, const N: usize> Clone for DstRoom<T, [E; N]> {
 
 impl<T: ?Sized, E: Plain + Copy, const N: usize> Copy for DstRoom<T, [E; N]> {}
 
-// plain storage, every bit pattern of which is some T's room
-unsafe impl<T: ?Sized, E: Plain, const N: usize> ::pin_init::Zeroable for DstRoom<T, [E; N]> {}
+// #[repr(transparent)] over B: zeroed, it's zeroed storage, which is some T's
+// room
+unsafe impl<T: ?Sized, B: ::pin_init::Zeroable> ::pin_init::Zeroable for DstRoom<T, B> {}
 
 // #[repr(transparent)] over B: None is its None
 unsafe impl<T: ?Sized, B: ::pin_init::ZeroableOption> ::pin_init::ZeroableOption for DstRoom<T, B> {}

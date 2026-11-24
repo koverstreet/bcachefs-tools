@@ -104,7 +104,7 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
         return u.exit(-(c::EIO as c_int));
     }
     {
-        let k = BkeySC::from(u.k.key());
+        let k = BkeySC::from(u.k.as_ref());
         fs.event_add_trace(events::data_read_promote, k.k.size.into(), |out| prt!(out, "{}", k.to_text(fs)));
     }
 

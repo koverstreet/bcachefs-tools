@@ -100,7 +100,6 @@ pub mod c {
     pub use super::bcachefs_ioctl::*;
     pub use crate::btree::bbpos::{bbpos, blbpos, blbpos_bits};
     pub(crate) use crate::btree::bbpos::{__blbpos_bits_forward};
-    pub use crate::btree::bkey_buf::{bkey_buf};
     pub use super::btree_bkey_defs::*;
     pub use super::btree_bkey_types::*;
     pub use crate::btree::node::bset::{BSET_TREE_NR_TYPES, MAX_BSETS};

@@ -32,7 +32,7 @@
 //!
 //! An update in flight is on the data_update async object list, which
 //! debugfs walks under RCU: so the task's memory is freed a grace period after it's done, as every
-//! task's is, and the key buffer likewise by exit_rcu().
+//! task's is, and the Update dropped then too, its key buffer with it - an RcuDropMember's.
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, TransAttempt};
@@ -47,6 +47,7 @@ use crate::fs::Fs;
 use crate::util::task::{Completion, Done};
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Resumable, Resume, Spawn};
+use crate::util::rcu::RcuDropMember;
 use crate::util::task::{TaskBox, TaskList, TaskSlot};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
@@ -83,6 +84,8 @@ pub struct Update {
     held:      Option<Held>,
     /// Zeroed until init(), which expects that
     u:         UnsafeCell<MaybeUninit<c::data_update>>,
+    /// The listing's walk may be reading its key
+    rcu:       RcuDropMember,
 }
 
 /// Makes the update's box, its task to run on @at, with the update zeroed. Out
@@ -106,6 +109,8 @@ where
             listed:    AsyncObjSlot::none(),
             held:      None,
             u:         UnsafeCell::new(MaybeUninit::zeroed()),
+            // its drop doesn't sleep
+            rcu:       unsafe { RcuDropMember::new() },
         });
         TaskSlot::alloc(init)
     })
@@ -248,15 +253,14 @@ unsafe fn write_done(op: *mut c::bch_write_op) {
 #[pinned_drop]
 impl PinnedDrop for Update {
     fn drop(self: Pin<&mut Self>) {
-        // exit() leaves the key buffer for here, as the list's walk may still
-        // be reading it. Zeroed, for an update never init()ed, it's valid too
-        // SAFETY: a raw place, as the update may be zeroed
-        unsafe { (*self.u.get().cast::<c::data_update>()).k.exit_rcu() };
+        // the key buffer, dropped a grace period on, past the list's walk.
+        // Zeroed, for an update never init()ed, it's valid too
+        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<c::data_update>()).k) };
     }
 }
 
-// SAFETY: the task's memory is freed a grace period after it's dropped, and
-// the key buffer likewise by exit_rcu(). A promote's to_text() also reads the
+// SAFETY: the task is dropped and its memory freed a grace period after it's
+// done, its key buffer with it. A promote's to_text() also reads the
 // parent read while read_done isn't set - which races with the read
 // completing just after: the XXX at the top of async_objs.rs. A mover's
 // doesn't read its context, which isn't freed a grace period after it's done

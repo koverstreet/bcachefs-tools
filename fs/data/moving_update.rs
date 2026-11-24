@@ -34,7 +34,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::args_stored_once;
 
 fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
-    (u.moving().expect("a mover's update has its context"), u.k.key().k().size)
+    (u.moving().expect("a mover's update has its context"), u.k.as_ref().k().size)
 }
 
 /// Counts the read's errors in the context's stats. For a scrub, a poisoned
@@ -44,7 +44,7 @@ fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
 fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, size: u32) {
     let stats = moving.stats();
     let fs = u.op.fs();
-    let k = read.poisoned.as_ref().map_or(BkeySC::from(u.k.key()), BkeySC::from);
+    let k = read.poisoned.as_ref().map_or(BkeySC::from(u.k.as_ref()), BkeySC::from);
     let poisoned = u.opts.type_ == c::DataUpdateType::scrub &&
         k.arm::<Ptrs>().is_some_and(|k| k.poisoned(fs));
 
@@ -65,7 +65,7 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>) {
     let read = {
         let d = &mut *u;
-        read_update(&mut d.rbio, d.k.key(), d.btree_id, d.opts.read_flags, d.opts.read_dev).await
+        read_update(&mut d.rbio, d.k.as_ref(), d.btree_id, d.opts.read_flags, d.opts.read_dev).await
     };
     drop(read_io);
     u.read_done.store(true, Relaxed);
@@ -129,7 +129,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get());
 
-    let size = BkeySC::from(u.k.key()).k.size;
+    let size = BkeySC::from(u.k.as_ref()).k.size;
     let read_io = moving.io_start(false, size);
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
 

@@ -104,7 +104,7 @@ pub(crate) fn remap_bits(fs: &Fs, old: BkeySC<'_>, bits: u32, new: BkeySC<'_>) -
 #[cold]
 fn key_to_text(out: &mut Printbuf, fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_>,
                insert: BkeySC<'_>) {
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.k.as_ref());
 
     write!(out, "rewrites found:\t{:b}", remap_bits(fs, old, u.opts.ptrs_kill.into(), insert));
     out.newline();
@@ -138,7 +138,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     -> Result<Bpos, BchError>
 {
     let fs = t.fs();
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.k.as_ref());
 
     /* make a local copy, so that we can trace it after the transaction commit: */
     let k = t.bkey_make_mut_noupdate(k)?;
@@ -294,7 +294,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     }
 
     t.log_str(u.opts.type_.name().as_bytes())?;
-    t.log_bkey(u.btree_id, 0, u.k.key())?;
+    t.log_bkey(u.btree_id, 0, u.k.as_ref())?;
 
     /* needs k.k->p, the whole key's end - see index_update(): */
     t.insert_snapshot_whiteouts(u.btree_id, k.k().p, insert.k().p)?;
@@ -401,7 +401,7 @@ fn for_each_old_slot<'t, F>(trans: &'t TransGuard<'t>, u: &c::data_update, res: 
 where
     F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, BkeySC<'k>) -> Result<(), BchError>,
 {
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.k.as_ref());
     let mut iter = BtreeIter::new(trans, u.btree_id, old.k.start_pos(), BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT);
     iter.for_each_max_commit(trans, old.k.p, BtreeIterFlags::SLOTS, res,
                              CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC, |t, iter, k| {
@@ -417,7 +417,7 @@ where
 /// read failed on every replica: drops its ptrs_kill, and logs it.
 pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -> Result<(), BchError> {
     let fs = trans.fs();
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.k.as_ref());
     let old_p = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));
 
     let mut msg = LogMsg::new(fs);
@@ -464,7 +464,7 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
 fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError> {
     let fs = u.op.fs();
     let trans = crate::btree_trans!(fs);
-    let old = BkeySC::from(u.k.key());
+    let old = BkeySC::from(u.k.as_ref());
     let mut parked = false;
 
     bch_err_fn!(fs, for_each_old_slot(&trans, u, None, |t, iter, k| {
@@ -503,7 +503,7 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
 /// it's back already, and the next try can read it.
 pub(crate) fn no_device_to_read_from(u: &c::data_update) {
     let fs = u.op.fs();
-    let devs = offline_devs(fs, BkeySC::from(u.k.key()));
+    let devs = offline_devs(fs, BkeySC::from(u.k.as_ref()));
     if !devs.d.is_empty() {
         let _ = fs.park_for_devs(&devs, || park_update(u, ParkReason::DevsOffline(devs)));
     }
