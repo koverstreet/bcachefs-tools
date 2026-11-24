@@ -2990,21 +2990,20 @@ mod tests {
     use crate::btree::bkey::ValidateFlags;
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{Head, SelfSized, Unvalidated, Validated, VStructError};
+    use crate::data_structures::dst_room::DstRoom;
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated, Validated, VStructError};
     use crate::util::Printbuf;
     use core::ffi::c_int;
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
     /// - as a superblock's walk would give it: as many bytes as it says.
     fn field(buf: &mut [u64], ty: c::SbFieldType, u64s: usize) -> &c::bch_sb_field {
-        let f = buf.as_mut_ptr().cast::<Head<c::bch_sb_field>>();
-        // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field, and
-        // as many as u64s says
-        unsafe {
-            (*f).set_u64s(u64s);
-            (*f).type_ = Le32::new(ty.0);
-            &*c::bch_sb_field::<Validated>::from_thin(f.cast())
-        }
+        let r = DstRoom::<c::bch_sb_field, [u64]>::from_elems_mut(buf);
+        let h = cast_plain_mut::<Head<c::bch_sb_field>>(plain_bytes_mut(r.elems_mut()))
+            .expect("room for a field's header");
+        h.set_u64s(u64s);
+        h.type_ = Le32::new(ty.0);
+        r
     }
 
     /// A superblock field is the section its type says - and one this code
