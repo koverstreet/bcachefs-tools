@@ -1162,7 +1162,6 @@ impl Fs {
     /* Device add/removal: */
 
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
-        let ca_p = ca.as_ptr();
         let dev_idx = ca.dev_idx;
         let fast_device_removal = self.compat(c::SbCompat::no_stale_ptrs) &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
@@ -1178,7 +1177,11 @@ impl Fs {
              */
             drop(ca);
 
-            state.dev_remove_locked(unsafe { &*ca_p }, fast_device_removal, flags, err)?
+            // c->devs[]'s, under state_lock: removed meanwhile, it's not there
+            let Some(ca) = state.devs()[dev_idx as usize].get() else {
+                return self.throw(Errcode::device_has_been_removed);
+            };
+            state.dev_remove_locked(&ca, fast_device_removal, flags, err)?
         };
 
         /*
