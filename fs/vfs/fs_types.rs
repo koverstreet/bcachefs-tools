@@ -10,12 +10,8 @@ use crate::util::projections::Volatile;
 use crate::os::workqueue::RawDelayedWork;
 use crate::os::vfs_inode::{Live, VfsInode};
 use core::ffi::{c_uint, c_ulong};
-#[cfg(not(NO_BCACHEFS_FS))]
-use core::ffi::{c_int, c_void};
 use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
-#[cfg(not(NO_BCACHEFS_FS))]
-use crate::btree::iter::BtreeTrans;
 
 /*
  * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
@@ -132,14 +128,6 @@ pub struct InodeQuota {
     /// sectors reserved for writes, charged to ei_qid ahead of i_blocks
     pub ei_quota_reserved: u64,
 }
-
-/* returns 0 if we want to do the update, or error is passed up */
-#[cfg(not(NO_BCACHEFS_FS))]
-#[allow(non_camel_case_types)]
-pub type inode_set_fn = Option<unsafe extern "C" fn(*mut BtreeTrans<'_>,
-                                                    *mut c::InodeInfo,
-                                                    *mut c::bch_inode_unpacked, *mut c_void)
-                                                    -> c_int>;
 
 /// ei_pagecache_lock's states: adding to the page cache, or blocking adds.
 pub enum PagecacheAdd {}

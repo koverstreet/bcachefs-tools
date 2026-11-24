@@ -51,9 +51,6 @@ pub struct IoFailures<const N: usize> {
     pub ec_msg: Printbuf,
 }
 
-// SAFETY: its message owns its buffer
-unsafe impl<const N: usize> Send for IoFailures<N> {}
-
 impl Deref for c::bch_io_failures {
     type Target = IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>;
 

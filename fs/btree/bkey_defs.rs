@@ -32,9 +32,6 @@ pub enum BkeyPackPosRet {
     BKEY_PACK_POS_FAIL,
 }
 
-#[allow(non_camel_case_types)]
-pub type compiled_unpack_fn = Option<unsafe extern "C" fn(*mut c::bkey, *const c::bkey_packed)>;
-
 xmacro! {
     bkey_fields {
         (BKEY_FIELD_INODE, p.inode),
