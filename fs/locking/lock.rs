@@ -452,7 +452,7 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> ExclusiveGuard<'a, R, G, P, U, A
     where
         P: Publish,
     {
-        unsafe { as_writer(&self.lock.published) }
+        unsafe { self.lock.published.writer() }
     }
 
     /// protected() and published() at once: borrowing the guard once for both.
@@ -460,7 +460,7 @@ impl<'a, R: RawLockBase, G, P, U: Unlock<R>, A> ExclusiveGuard<'a, R, G, P, U, A
     where
         P: Publish,
     {
-        unsafe { (&mut *self.lock.protected.get(), as_writer(&self.lock.published)) }
+        unsafe { (&mut *self.lock.protected.get(), self.lock.published.writer()) }
     }
 }
 
@@ -540,7 +540,7 @@ impl<R: RawSixLock, G, P, A> SharedGuard<'_, R, G, P, SixIntent, A> {
     where
         P: Publish,
     {
-        unsafe { as_writer(&self.lock.published) }
+        unsafe { self.lock.published.writer() }
     }
 }
 
@@ -879,22 +879,13 @@ impl<G, P: crate::util::projections::Publish, L> LockedBy<G, P, L> {
     /// # Safety
     /// The lock that publishes it is held, for as long as the reference lives.
     pub unsafe fn published_writer(&self) -> &P::Writer {
-        unsafe { as_writer(&self.published) }
+        unsafe { self.published.writer() }
     }
 
     /// @P as its writer has it, through the only reference to it.
     pub fn published_writer_mut(&mut self) -> &P::Writer {
         unsafe { self.published_writer() }
     }
-}
-
-/// @p as its writer has it - Locked's and LockedBy's both.
-///
-/// # Safety
-/// The lock that publishes it is held, for as long as the reference lives.
-unsafe fn as_writer<P: Publish>(p: &P) -> &P::Writer {
-    // P::Writer is laid out as P (Publish)
-    unsafe { &*core::ptr::from_ref(p).cast::<P::Writer>() }
 }
 
 impl<G, P, L, S: Sharing> Deref for LockedBy<G, P, L, S> {
