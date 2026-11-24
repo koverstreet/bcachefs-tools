@@ -24,7 +24,7 @@ use crate::data_structures::fifo::FifoRead;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
 use crate::util::refcount::{AtomicRef, RefGuard};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut, Head, SelfSized, Unvalidated};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64};
 use crate::journal::buckets::{drop_retired, JournalBuckets};
@@ -61,28 +61,25 @@ pub const JOURNAL_BUF_NR: u32 = 256;
 /// nothing: the two go from j->free_buf to an open entry's buf, side by side;
 /// the buffer into the write as it starts, then its task, and back as it's
 /// done.
-pub struct JsetBuf(Box<MappedPages, Kmalloc>);
-
-// None is its pointer null - zeroed
-unsafe impl ::pin_init::ZeroableOption for JsetBuf {}
+pub type JsetBuf = DstRoom<c::jset<Unvalidated>, Box<MappedPages, Kmalloc>>;
 
 impl JsetBuf {
     pub fn new(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
         let pages = MappedPages::new(size as usize, gfp)?;
-        Ok(JsetBuf(Box::into_unflagged(Box::init_in(init_with(|| pages), Kmalloc.with_flags(gfp))?)))
+        Ok(DstRoom::from_storage(Box::into_unflagged(Box::init_in(init_with(|| pages), Kmalloc.with_flags(gfp))?)))
     }
 
     /// The bio its first @bytes are written from - by clones, which borrow it.
     pub fn bio_range(&self, bytes: u32) -> BioRange<'_> {
-        self.0.bio().range().take(bytes)
+        self.storage().bio().range().take(bytes)
     }
 
     pub fn size(&self) -> c_uint {
-        self.0.len() as c_uint
+        self.capacity() as c_uint
     }
 
     pub fn as_ptr(&self) -> *mut Head<c::jset> {
-        self.0.as_non_null().as_ptr().cast()
+        self.storage().as_non_null().as_ptr().cast()
     }
 
     pub fn head(&self) -> &Head<c::jset> {
@@ -105,27 +102,27 @@ impl JsetBuf {
     /// the write buffer's flush, which has them by buf_lock.
     pub(crate) fn entries_ptr(&self, u64s: usize) -> NonNull<[u8]> {
         let hdr = mem::size_of::<Head<c::jset>>();
-        let d = self.0.as_non_null();
+        let d = self.storage().as_non_null();
         assert!(hdr + u64s * 8 <= d.len(), "journal entries of {u64s} u64s past a buffer of {} bytes", d.len());
         let entries = d.cast::<u8>().map_addr(|a| a.checked_add(hdr).expect("a journal buffer's entries, within it"));
         NonNull::slice_from_raw_parts(entries, u64s * 8)
     }
 
     pub fn jset(&self) -> &c::jset<Unvalidated> {
-        c::jset::<Unvalidated>::from_bytes(self.bytes()).expect("a journal buffer's jset, within it")
+        self
     }
 
     pub fn jset_mut(&mut self) -> &mut c::jset<Unvalidated> {
-        c::jset::<Unvalidated>::from_bytes_mut(self.bytes_mut()).expect("a journal buffer's jset, within it")
+        self
     }
 
     /// The whole buffer, its jset and the room past it.
     pub fn bytes_mut(&mut self) -> &mut [u8] {
-        self.0.as_mut_slice()
+        plain_bytes_mut(self.elems_mut())
     }
 
     pub fn bytes(&self) -> &[u8] {
-        self.0.as_slice()
+        plain_bytes(self.elems())
     }
 }
 

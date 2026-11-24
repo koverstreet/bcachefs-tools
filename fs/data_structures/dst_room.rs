@@ -6,12 +6,13 @@
 //! one struct, either dereferencing to its T, and the first coercing to the
 //! second. Or B is an InlineOrBoxed - InlineVec's, for a single value: its
 //! room in itself, and once that's outgrown, a boxed slice. Or an
-//! AlignedBox<[E], A>, for storage IO needs aligned further.
+//! AlignedBox<[E], A>, for storage IO needs aligned further. Or a Box of any
+//! storage - of MappedPages, a bio's own pages, as words.
 //!
 //! The storage is its own element type, not T's: a T's tail may be bytes
 //! under a header of words, as a typed key's value is under its bkey.
 
-use crate::util::alloc::{flags, AlignedBox, AllocError, AllocGfp, Box, Flags, Kmalloc};
+use crate::util::alloc::{flags, AlignedBox, Alloc, AllocError, AllocGfp, Box, Flags, Kmalloc};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, DstHead, Plain, SelfSized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
@@ -84,6 +85,22 @@ impl<T: ?Sized, E: Plain + Copy + ::pin_init::Zeroable, const A: usize> DstRoom<
         new[..keep].copy_from_slice(&self.buf[..keep]);
         self.buf = new;
         Ok(())
+    }
+}
+
+impl<S: ?Sized + Storage, A: Alloc> Storage for Box<S, A> {
+    type Elem = S::Elem;
+
+    fn elems(&self) -> &[S::Elem] {
+        (**self).elems()
+    }
+
+    fn elems_mut(&mut self) -> &mut [S::Elem] {
+        (**self).elems_mut()
+    }
+
+    fn grow(&mut self, n: usize) -> &mut [S::Elem] {
+        (**self).grow(n)
     }
 }
 
@@ -221,6 +238,11 @@ impl<T: ?Sized, B: ?Sized + Storage> DstRoom<T, B> {
 
     pub fn elems_mut(&mut self) -> &mut [B::Elem] {
         self.buf.elems_mut()
+    }
+
+    /// What it's stored in: for what it does besides hold the T - its IO.
+    pub fn storage(&self) -> &B {
+        &self.buf
     }
 }
 

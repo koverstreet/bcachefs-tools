@@ -100,6 +100,18 @@ pub struct MappedPages(Yoke<Mapped<'static>, BioBox<'static, Bio<AllocPages>>>);
 // it goes
 unsafe impl Send for MappedPages {}
 
+impl crate::data_structures::dst_room::Storage for MappedPages {
+    type Elem = u64;
+
+    fn elems(&self) -> &[u64] {
+        self.as_slice()
+    }
+
+    fn elems_mut(&mut self) -> &mut [u64] {
+        self.as_mut_slice()
+    }
+}
+
 /// Pages of the bio's own from alloc_pages() alone, none the bounce pool's:
 /// each freed as it was allocated.
 pub struct AllocPages;
@@ -151,16 +163,17 @@ impl MappedPages {
         self.len() == 0
     }
 
-    pub fn as_slice(&self) -> &[u8] {
+    /// As u64s: whole pages, page aligned.
+    pub fn as_slice(&self) -> &[u64] {
         // SAFETY: our pages, mapped at data() while we live; what IO has them
         // - a clone of the bio, borrowing it - writes them out, reading them
-        unsafe { core::slice::from_raw_parts(self.data().as_ptr(), self.len()) }
+        unsafe { core::slice::from_raw_parts(self.data().as_ptr().cast(), self.len() / size_of::<u64>()) }
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+    pub fn as_mut_slice(&mut self) -> &mut [u64] {
         // SAFETY: as as_slice()'s, borrowed mutably: no clone of the bio has
         // them
-        unsafe { core::slice::from_raw_parts_mut(self.data().as_ptr(), self.len()) }
+        unsafe { core::slice::from_raw_parts_mut(self.data().as_ptr().cast(), self.len() / size_of::<u64>()) }
     }
 
     /// Its pages, by pointer: not a borrow of them, which what's had through
