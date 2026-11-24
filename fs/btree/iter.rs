@@ -1671,9 +1671,9 @@ impl<'t> BtreeIter<'t> {
         self.peek_slot_in(t, paths)
     }
 
-    /// The key, the root node's, held by the iterator's path.
+    /// Whether the iterator is at the root node, held by its path.
     pub(super) fn peek_root_in(&mut self, t: &TransAttempt<'t, '_>, paths: &mut Paths<'_>, btree: Btree,
-                               level: u32) -> Result<Option<NonNull<BkeyI>>, BchError> {
+                               level: u32) -> Result<bool, BchError> {
         let trans = t.trans();
         let fs = trans.fs();
 
@@ -1694,10 +1694,10 @@ impl<'t> BtreeIter<'t> {
                 break;
             }
 
-            return Ok(Some(NonNull::from(b.key())));
+            return Ok(true);
         }
 
-        Ok(None)
+        Ok(false)
     }
 
     fn holds_paths(&self) -> bool {
@@ -1987,9 +1987,12 @@ impl<'t> BtreeIter<'t> {
     pub(super) fn peek_root<'i>(&'i mut self, t: &TransAttempt<'t, '_>, btree: Btree, level: u32)
         -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
     {
-        let k = self.peek_root_in(t, &mut t.trans().paths(), btree, level)?;
-        // SAFETY: the key, in the iterator's path, for as long as it's borrowed
-        Ok(k.map(|k| (&*self, BkeySC::from(unsafe { k.as_ref() }))))
+        if !self.peek_root_in(t, &mut t.trans().paths(), btree, level)? {
+            return Ok(None);
+        }
+        let v = self.found_node_key(t).expect("a root, held by its iterator's path");
+        let this = &*self;
+        Ok(this.key_of(Some(v)).map(|k| (this, k)))
     }
 
     /// Whether the iterator's path holds a node at its level - a btree node,
@@ -2024,13 +2027,16 @@ impl<'t> BtreeIter<'t> {
     /// The key of the node the iterator's path holds at its level, as a key a
     /// peek returns: the iterator's key, good until it moves.
     pub(crate) fn node_key_at_iter_level(&mut self, t: &TransAttempt<'_, 't>) -> Option<BkeySC<'_>> {
-        let v = {
-            let paths = t.trans().paths();
-            let path = &paths[self.path];
-            let b = path.locked_btree_node(path.level() as usize)?;
-            self.found_i(b.key())
-        };
+        let v = self.found_node_key(t)?;
         self.key_of(Some(v))
+    }
+
+    /// node_key_at_iter_level(), the key's value: its header the iterator's.
+    fn found_node_key(&mut self, t: &TransAttempt<'_, 't>) -> Option<KeyVal> {
+        let paths = t.trans().paths();
+        let path = &paths[self.path];
+        let b = path.locked_btree_node(path.level() as usize)?;
+        Some(self.found_i(b.key()))
     }
 
     /// @f of @node's key: the node the iterator's path holds at its level,
