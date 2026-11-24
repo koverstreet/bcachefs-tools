@@ -10,7 +10,7 @@ use bcachefs_kernel::journal::{
 use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::ToText;
-use bcachefs_kernel::util::vstructs::FakeDst;
+use bcachefs_kernel::util::vstructs::SelfSized;
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -280,6 +280,7 @@ fn journal_entry_header_to_text(
     out: &mut Printbuf,
     fs: &Fs,
     p: &c::journal_replay,
+    j: &c::jset,
     blacklisted: bool,
 ) {
     write!(
@@ -292,12 +293,12 @@ fn journal_entry_header_to_text(
          \x20 flush           {}\n\
          \x20 written at      ",
         if blacklisted { "blacklisted " } else { "" },
-        p.j.seq.get(),
-        p.j.bytes(),
-        p.j.sectors(fs.block_bits.into()),
-        p.j.version.get(),
-        p.j.last_seq.get(),
-        if p.j.no_flush() { 0 } else { 1 },
+        j.seq.get(),
+        j.bytes(),
+        j.sectors(fs.block_bits.into()),
+        j.version.get(),
+        j.last_seq.get(),
+        if j.no_flush() { 0 } else { 1 },
     );
 
     journal_ptrs_to_text(out, fs, p);
@@ -410,7 +411,7 @@ fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &c::journal_replay,
     let all_entries: Vec<&c::jset_entry> = j.entries().collect();
 
     if !f.filtering {
-        journal_entry_header_to_text(&mut buf, fs, p, blacklisted);
+        journal_entry_header_to_text(&mut buf, fs, p, j, blacklisted);
 
         if !f.headers_only {
             for &entry in &all_entries {
@@ -419,7 +420,7 @@ fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &c::journal_replay,
         }
     } else {
         if f.all_headers {
-            journal_entry_header_to_text(&mut buf, fs, p, blacklisted);
+            journal_entry_header_to_text(&mut buf, fs, p, j, blacklisted);
             printed_header = true;
         }
 
@@ -448,7 +449,7 @@ fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &c::journal_replay,
             let t_entries = &all_entries[t_start..t_end];
             if should_print_transaction(f, t_entries) {
                 if !printed_header {
-                    journal_entry_header_to_text(&mut buf, fs, p, blacklisted);
+                    journal_entry_header_to_text(&mut buf, fs, p, j, blacklisted);
                     printed_header = true;
                 }
 

@@ -150,7 +150,7 @@ use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::sleep::Sleep;
 use crate::util::printbuf::HumanReadable;
-use crate::util::vstructs::{plain_bytes, FakeDst, Head};
+use crate::util::vstructs::{plain_bytes, Head, SelfSized};
 use crate::util::refcount::TryRefcount;
 use crate::util::{Printbuf, ToText};
 use crate::{prt, warn_once};

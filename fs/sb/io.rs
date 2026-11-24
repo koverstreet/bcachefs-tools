@@ -349,9 +349,9 @@ fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end
     write!(err, "{} bytes past its last whole entry, dropped", len - end);
 }
 
-/// The header of the section at @off of @sb, as read: its extent checked.
-fn field_head(sb: &bch_sb<Unvalidated>, off: usize) -> &Head<c::bch_sb_field> {
-    cast_plain(&sb.as_bytes()[off..]).expect("a section's header, its extent checked")
+/// The section at @off of @sb, as read: its extent checked.
+fn field(sb: &bch_sb<Unvalidated>, off: usize) -> &c::bch_sb_field<Unvalidated> {
+    c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..]).expect("a section, its extent checked")
 }
 
 /// The section at @off of @sb validated as its type says: a partial entry at
@@ -360,7 +360,7 @@ fn field_head(sb: &bch_sb<Unvalidated>, off: usize) -> &Head<c::bch_sb_field> {
 fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, err: &mut Printbuf)
     -> Result<(), BchError>
 {
-    let ty = field_head(sb, off).type_.get();
+    let ty = field(sb, off).type_.get();
     let Some(min_len) = c::bch_sb_field_by_tag!(ty, A => Some(<A<Validated> as ArmRef>::MIN_LEN), _ => None)
         else { return Ok(()) };
 
@@ -371,9 +371,8 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, e
         invalid()
     };
 
-    let len = field_head(sb, off).bytes();
-    let f = c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..])
-        .expect("a section, its extent checked");
+    let f = field(sb, off);
+    let len = size_of_val(f);
     let Some(end) = f.entries_end() else {
         return too_short(err, len);
     };
@@ -387,8 +386,7 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, e
     }
 
     let sb = &*sb;
-    let f = c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..])
-        .expect("a section, its extent checked");
+    let f = field(sb, off);
     f.validate(sb, flags, err).unwrap_or_else(|| too_short(err, f.as_bytes().len()))
 }
 
@@ -436,7 +434,7 @@ impl c::SbFieldType {
 /// too.
 fn field_validate(sb: &mut bch_sb<Unvalidated>, off: usize,
                   flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-    let ty = field_head(sb, off).type_.get();
+    let ty = field(sb, off).type_.get();
     let name = c::SbFieldType(ty).name().unwrap_or("(unknown)");
     let mut field_err = Printbuf::new();
 
@@ -626,10 +624,10 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
     // sections after moved down, so its length is read after
     let mut off = size_of::<Head<bch_sb>>();
     while off < sb.as_bytes().len() {
-        if field_head(sb, off).type_.get() != c::SbFieldType::members_v1.0 {
+        if field(sb, off).type_.get() != c::SbFieldType::members_v1.0 {
             field_validate(sb, off, flags, out)?;
         }
-        off += field_head(sb, off).bytes();
+        off += size_of_val(field(sb, off));
     }
 
     if write {
@@ -1804,11 +1802,12 @@ impl bch_sb_buf {
     fn field_resize_at(&mut self, ty: c::SbFieldType, off: Option<usize>, u64s: u32) -> Option<usize> {
         let new = u64s as usize * size_of::<u64>();
         let buf = self.buffer_mut();
-        let sb = cast_plain_mut::<Head<bch_sb>>(buf).expect("a superblock's head");
-        let (end, sb_u64s) = (sb.bytes(), sb.u64s());
+        let sb_u64s = cast_plain::<Head<bch_sb>>(buf).expect("a superblock's head").u64s();
+        let end = size_of::<Head<bch_sb>>() + sb_u64s * size_of::<u64>();
 
+        // a section's u64s count its header
         let old = off.map_or(0, |off| {
-            cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[off..]).expect("a section's head").bytes()
+            cast_plain::<Head<c::bch_sb_field>>(&buf[off..]).expect("a section's head").u64s() * size_of::<u64>()
         });
         let new_end = end + new - old;
         assert!(new_end <= buf.len(), "superblock resized past its buffer ({new_end} > {})", buf.len());
