@@ -58,7 +58,7 @@ use crate::c;
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
-use crate::util::vstructs::{len_at, parse_at, ArmAt, ArmRef, DstHead, InState, SelfSized, SizedArm, State, Unsized,
+use crate::util::vstructs::{len_at, ArmRef, DstHead, InState, SelfSized, SizedArm, State, Unsized,
                             Unvalidated, UnvalidatedSized, VStruct, VStructError, Validated, Whole};
 use core::marker::PhantomData;
 
@@ -110,7 +110,7 @@ impl<V: ?Sized> DstHead for BkeyI<V> {
     type Head = c::bkey;
 }
 
-/* u64s 0 is no key - a room starts as bkey_init()'s, and arm_at() refuses one -
+/* u64s 0 is no key - a room starts as bkey_init()'s, and len_in() refuses one -
  * but from_raw() of it is total: the header, no value */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     type Elem = V::Elem;
@@ -126,12 +126,6 @@ unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
         let v = V::from_raw_mut(p.wrapping_add(size_of::<c::bkey>()), bytes.saturating_sub(size_of::<c::bkey>()));
         v.wrapping_byte_sub(size_of::<c::bkey>()) as *mut Self
-    }
-}
-
-impl<V: Unsized + ?Sized> ArmAt for BkeyI<V> {
-    fn arm_at(b: &[u8]) -> Result<&Self, VStructError> {
-        parse_at::<Self>(b, c::bkey::bytes)
     }
 }
 

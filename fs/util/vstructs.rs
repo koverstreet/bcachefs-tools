@@ -473,16 +473,6 @@ where
     Ok(len)
 }
 
-/// The T at the start of @bytes, as long as len_at() says: a T's
-/// ArmAt::arm_at().
-pub fn parse_at<T>(bytes: &[u8], len: impl FnOnce(&T::Head) -> usize) -> Result<&T, VStructError>
-where
-    T: Unsized + DstHead<Head: Plain> + ?Sized,
-{
-    let len = len_at::<T>(bytes, len)?;
-    Ok(cast(&bytes[..len]).expect("as len_at() checked"))
-}
-
 /// The plain T at the start of @b, by value, at any alignment: an error if
 /// @b is shorter than it.
 pub fn read_plain<T: Plain>(b: &[u8]) -> Result<T, VStructError> {
@@ -668,13 +658,6 @@ macro_rules! vstruct_family {
     // as @len, of the header @h, says
     (unsized $name:ident, $head:ident, |$h:ident| $len:expr) => {
         $crate::vstruct_family!(@in_state $name);
-
-        impl<S: $crate::util::vstructs::State> $crate::util::vstructs::ArmAt for $name<S> {
-            fn arm_at(b: &[u8]) -> Result<&Self, $crate::util::vstructs::VStructError> {
-                $crate::util::vstructs::parse_at::<Self>(b, |$h: &$head| $len)
-            }
-        }
-
         $crate::vstruct_family!(@state $name, Unvalidated, $head, |$h| $len);
         $crate::vstruct_family!(@state $name, Validated, $head, |$h| $len);
     };
@@ -852,7 +835,7 @@ macro_rules! vstruct_family {
     // state - the struct, X<Whole>, is an arm wherever its value in place is
     (@arm $name:ident, $fam:ident, $arm_of:ident) => { const _: () = {
         use $crate::types::ArmOf;
-        use $crate::util::vstructs::{ArmAt, ArmRef, State, VStructError};
+        use $crate::util::vstructs::{ArmRef, State};
 
         impl<U: ?Sized, S: State> ArmOf<U> for $name<S>
         where
@@ -881,17 +864,6 @@ macro_rules! vstruct_family {
 
             fn whole_len(len: usize) -> Option<usize> {
                 <<S as State>::Of<$fam> as ArmRef>::whole_len(len)
-            }
-        }
-
-        impl<S: State> ArmAt for $name<S>
-        where
-            <S as State>::Of<$fam>: ArmAt,
-        {
-            fn arm_at(b: &[u8]) -> Result<&Self, VStructError> {
-                // SAFETY: as arm_ref()'s
-                <<S as State>::Of<$fam> as ArmAt>::arm_at(b)
-                    .map(|d| unsafe { &*(d as *const <S as State>::Of<$fam> as *const Self) })
             }
         }
     }; };
@@ -1114,15 +1086,17 @@ pub unsafe trait Unsized {
 
 /// The T at the start of @bytes, as many as its count says - an error if they
 /// don't hold its header, aligned, or that many, or it says fewer than its
-/// header: T::from_bytes(), for an Unvalidated T.
-pub fn from_bytes<T: ArmAt + ?Sized>(bytes: &[u8]) -> Result<&T, VStructError> {
-    T::arm_at(bytes)
+/// header: T::from_bytes(), for an Unvalidated T. Its length is len_in()'s,
+/// and any bytes that long are a T.
+pub fn from_bytes<T: SelfSized + Unsized + ?Sized>(bytes: &[u8]) -> Result<&T, VStructError> {
+    let len = T::len_in(bytes)?;
+    Ok(cast(&bytes[..len]).expect("as len_in() said"))
 }
 
 /// from_bytes(), mutably: T::from_bytes_mut().
-pub fn from_bytes_mut<T: ArmAt + Unsized + ?Sized>(bytes: &mut [u8]) -> Result<&mut T, VStructError> {
-    let len = size_of_val(T::arm_at(bytes)?);
-    Ok(cast_mut(&mut bytes[..len]).expect("as arm_at() took them"))
+pub fn from_bytes_mut<T: SelfSized + Unsized + ?Sized>(bytes: &mut [u8]) -> Result<&mut T, VStructError> {
+    let len = T::len_in(bytes)?;
+    Ok(cast_mut(&mut bytes[..len]).expect("as len_in() said"))
 }
 
 /// Whether @b can be a T, every byte of it: at least MIN_BYTES, aligned for
@@ -1271,11 +1245,11 @@ impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: ArmAt + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
+impl<'a, E: SelfSized + Unsized + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
     type Item = &'a E;
 
     fn next(&mut self) -> Option<&'a E> {
-        let Ok(e) = E::arm_at(self.rest) else {
+        let Ok(e) = from_bytes::<E>(self.rest) else {
             self.rest = &[];
             return None;
         };
@@ -1297,17 +1271,17 @@ impl<'a, E: ?Sized> ValidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: ArmAt + Unsized + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {
+impl<'a, E: SelfSized + Unsized + ?Sized + 'a> Iterator for ValidatedEntriesMut<'a, E> {
     type Item = &'a mut E;
 
     fn next(&mut self) -> Option<&'a mut E> {
-        let Ok(len) = E::arm_at(self.rest).map(size_of_val) else {
+        let Ok(len) = E::len_in(self.rest) else {
             self.rest = &mut [];
             return None;
         };
         let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
         self.rest = rest;
-        Some(cast_mut(e).expect("as arm_at() took them"))
+        Some(cast_mut(e).expect("as len_in() said"))
     }
 }
 
@@ -1327,12 +1301,12 @@ impl<'a, E: ?Sized> UnvalidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: ArmAt + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
+impl<'a, E: SelfSized + Unsized + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
     type Item = Result<&'a E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.filter(|r| !r.is_empty())?;
-        match E::arm_at(rest) {
+        match from_bytes::<E>(rest) {
             Ok(e) => {
                 self.rest = Some(&rest[size_of_val(e)..]);
                 Some(Ok(e))
@@ -1359,18 +1333,18 @@ impl<'a, E: ?Sized> UnvalidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: ArmAt + Unsized + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
+impl<'a, E: SelfSized + Unsized + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
     type Item = Result<&'a mut E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.take().filter(|r| !r.is_empty())?;
-        let len = match E::arm_at(rest) {
-            Ok(e) => size_of_val(e),
+        let len = match E::len_in(rest) {
+            Ok(len) => len,
             Err(err) => return Some(Err(err)),
         };
         let (e, rest) = rest.split_at_mut(len);
         self.rest = Some(rest);
-        Some(Ok(cast_mut(e).expect("as arm_at() took them")))
+        Some(Ok(cast_mut(e).expect("as len_in() said")))
     }
 }
 
@@ -1536,15 +1510,6 @@ unsafe impl<T: SizedArm> Unsized for T {
     fn from_raw_mut(p: *mut u8, _bytes: usize) -> *mut Self {
         p.cast()
     }
-}
-
-/// It at the start of bytes that don't say how long it is, as long as it says
-/// - a plain one its size, a counted one as many as its count says: an arm
-/// of a sized tagged union, from the storage's bytes past the tag; an entry,
-/// from what's left of its container; bytes off a device. An error if they
-/// don't hold that many.
-pub trait ArmAt {
-    fn arm_at(b: &[u8]) -> Result<&Self, VStructError>;
 }
 
 /// A sized tagged union @U holding @arm, its arms @at bytes in: the payload

@@ -60,7 +60,7 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
-                            ArmAt, Unsized, Unvalidated, VStruct};
+                            Unsized, Unvalidated, VStruct};
 use crate::util::{backref::BackRef, printbuf::Msg};
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
@@ -360,7 +360,7 @@ impl c::bset_head {
     }
 }
 
-pub trait BsetHolder: ArmAt + Unsized + VStruct {
+pub trait BsetHolder: Unsized + VStruct {
     const BSET: usize;
     const KEYS: usize = Self::BSET + size_of::<Head<c::bset>>();
 

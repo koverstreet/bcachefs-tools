@@ -81,7 +81,7 @@
 //!    types the block declares, plain data, a reference to it; another's -
 //!    the replicas entry, a header and the devices it counts - its
 //!    #[counted] family's type, X<St>, in the storage's state, as long as
-//!    its own header says (CountedHead, ArmAt);
+//!    its own header says (CountedHead, from_bytes());
 //!  - `get()`: the arm the tag selects. Unvalidated, an error if the tag
 //!    isn't one of ours or the arm's header says it's longer than the
 //!    storage holds (ArmError); Validated, Err(the tag), and an arm that
@@ -819,7 +819,7 @@ impl Gen<'_> {
         // An arm type this declares is plain data: a reference to it, whatever
         // the storage's state. Another's is a #[counted] family's head - a
         // replicas entry's - the family's type in the
-        // storage's state, as long as its own header says (CountedHead, ArmAt).
+        // storage's state, as long as its own header says (CountedHead, from_bytes()).
         let declared = |a: &TaggedArm| tu.defs.iter().any(|def| is_def(&a.ty, def));
         let stated = arms.iter().any(|a| !declared(a));
         let st_param = stated.then(|| quote!(, St: #vs::State = #vs::Validated));
@@ -864,11 +864,16 @@ impl Gen<'_> {
                 }
             } else {
                 quote! {
-                    <<#ty as #vs::CountedHead>::Of<St> as #vs::ArmAt>::arm_at(b)
+                    #vs::from_bytes::<<#ty as #vs::CountedHead>::Of<St>>(b)
                         .map_err(|err| #vs::ArmError::Bad { tag: #t_tag, err })?
                 }
             };
             quote!(Ok(#en_ref::#arm(#got)))
+        });
+        // a family is SelfSized in each state, not over every one
+        let counted_in_st = arms.iter().filter(|a| !declared(a)).map(|a| {
+            let ty = &a.ty;
+            quote!(<#ty as #vs::CountedHead>::Of<St>: #vs::SelfSized,)
         });
         let news = arms.iter().map(|a| {
             let arm = &a.name;
@@ -1018,7 +1023,10 @@ impl Gen<'_> {
                 }
 
                 /// The arm the tag selects, in state St: get()'s, in either.
-                fn arm_in<St: #vs::State>(&self) -> Result<#en_ref<'_ #st_use>, #vs::ArmError<#tag_enum>> {
+                fn arm_in<St: #vs::State>(&self) -> Result<#en_ref<'_ #st_use>, #vs::ArmError<#tag_enum>>
+                where
+                    #(#counted_in_st)*
+                {
                     let t: #tag_ty = #det::get(&self.0);
                     let b = &self.as_bytes()[#payload_offset..];
                     #selects

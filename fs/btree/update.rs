@@ -24,7 +24,7 @@ use core::cmp::Ordering;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, ArmAt, Container, DstHead, EntryWalk, Head, Plain, Unsized,
+use crate::util::vstructs::{plain_bytes, Container, DstHead, EntryWalk, Head, Plain, SelfSized, Unsized,
                             Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
@@ -297,7 +297,7 @@ impl TransAttempt<'_, '_> {
 
     /// An entry with header @head at the sub-buffer's end, and @tail_u64s past
     /// it for @tail to write - as long as @head says, which is checked.
-    pub fn subbuf_push<T: ArmAt + Unsized + DstHead<Head: Plain> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
+    pub fn subbuf_push<T: SelfSized + Unsized + DstHead<Head: Plain> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
                                                                             head: &T::Head, tail_u64s: usize,
                                                                             tail: impl FnOnce(&mut [u64]))
         -> Result<(), BchError>
@@ -311,7 +311,7 @@ impl TransAttempt<'_, '_> {
         let (h, t) = e.split_at_mut(head_u64s);
         h.as_mut_bytes().copy_from_slice(plain_bytes(head));
         tail(t);
-        assert!(T::arm_at(e.as_bytes()).is_ok_and(|v| size_of_val(v) == size_of_val(e)),
+        assert!(T::len_in(e.as_bytes()).is_ok_and(|n| n == size_of_val(e)),
                 "a sub-buffer entry of {tail_u64s} u64s past its header, which says otherwise");
         Ok(())
     }
