@@ -51,6 +51,8 @@
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
+use core::ptr::NonNull;
+use crate::util::thin::ThinRef;
 
 /// Every byte of every value initialized - no padding, and no variant that
 /// leaves some unwritten, as a None in a niche can - so a value can be
@@ -1390,18 +1392,6 @@ pub struct ViewEntries<'a, E: ?Sized> {
     _entry: PhantomData<&'a E>,
 }
 
-/// The length of the entry at the start of @rest, as its header says.
-///
-/// # Safety
-/// @rest starts with a whole, aligned E, which says it's at least its header
-/// and no longer than @rest.
-#[inline(always)]
-unsafe fn validated_len<E: FakeDst + Plain>(rest: &[u8]) -> usize {
-    let len = unsafe { &*rest.as_ptr().cast::<E>() }.bytes();
-    debug_assert!(len >= size_of::<E>() && len <= rest.len(), "a validated entry of {len} bytes, in {}", rest.len());
-    len
-}
-
 impl<'a, E: ?Sized> ViewEntries<'a, E> {
     /// @c's entries.
     pub fn of<C: Container<Entry = E> + ?Sized>(c: &'a C) -> Self {
@@ -1409,7 +1399,7 @@ impl<'a, E: ?Sized> ViewEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
+impl<'a, E: Unsized + SelfSized + ?Sized + 'a> Iterator for ViewEntries<'a, E> {
     type Item = &'a E;
 
     #[inline]
@@ -1418,15 +1408,15 @@ impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ViewEntri
         if self.rest.len() < size_of::<E::Head>() {
             return None;
         }
-        let len = unsafe { validated_len::<E::Head>(self.rest) };
-        let (e, rest) = self.rest.split_at(len);
-        self.rest = rest;
+        let e = unsafe { ThinRef::<'a, E>::from_raw(NonNull::from(self.rest).cast()) }.get();
+        let len = size_of_val(e);
+        self.rest = &self.rest[len..];
         self.at += len;
-        Some(unsafe { &*E::from_raw(e.as_ptr(), len) })
+        Some(e)
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
+impl<'a, E: Unsized + SelfSized + ?Sized + 'a> EntryWalk for ViewEntries<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
@@ -1446,7 +1436,7 @@ impl<'a, E: ?Sized> ViewEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ViewEntriesMut<'a, E> {
+impl<'a, E: Unsized + SelfSized + ?Sized + 'a> Iterator for ViewEntriesMut<'a, E> {
     type Item = &'a mut E;
 
     #[inline]
@@ -1454,15 +1444,15 @@ impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> Iterator for ViewEntri
         if self.rest.len() < size_of::<E::Head>() {
             return None;
         }
-        let len = unsafe { validated_len::<E::Head>(self.rest) };
+        let len = size_of_val(unsafe { ThinRef::<E>::from_raw(NonNull::from(&*self.rest).cast()) }.get());
         let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
         self.rest = rest;
         self.at += len;
-        Some(unsafe { &mut *E::from_raw_mut(e.as_mut_ptr(), len) })
+        Some(cast_mut(e).expect("a validated entry, as long as it says"))
     }
 }
 
-impl<'a, E: Unsized<Head: Plain + FakeDst> + ?Sized + 'a> EntryWalk for ViewEntriesMut<'a, E> {
+impl<'a, E: Unsized + SelfSized + ?Sized + 'a> EntryWalk for ViewEntriesMut<'a, E> {
     fn offset(&self) -> usize {
         self.at
     }
