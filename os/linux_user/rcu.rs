@@ -11,6 +11,33 @@ use crate::c;
 use crate::locking::MemallocFlags;
 use core::marker::PhantomData;
 
+/// An object's head for its free a grace period on: call_rcu()'s, and the
+/// layout its kvfree_rcu() frees by - std's allocator wants it, where the
+/// kernel's kvfree() doesn't.
+#[repr(C)]
+pub struct RcuHead {
+    head:              c::rcu_head,
+    pub(crate) layout: PackedLayout,
+}
+
+/// A Layout in a word: its size, and its alignment's log2 in the top bits.
+#[derive(Clone, Copy)]
+pub(crate) struct PackedLayout(usize);
+
+impl PackedLayout {
+    const ALIGN_SHIFT: u32 = usize::BITS - 6;
+
+    pub(crate) fn new(l: core::alloc::Layout) -> Self {
+        assert!(l.size() < 1 << Self::ALIGN_SHIFT, "an allocation of {} bytes, freed by kvfree_rcu()", l.size());
+        PackedLayout(l.size() | (l.align().trailing_zeros() as usize) << Self::ALIGN_SHIFT)
+    }
+
+    pub(crate) fn get(self) -> core::alloc::Layout {
+        core::alloc::Layout::from_size_align(self.0 & ((1 << Self::ALIGN_SHIFT) - 1), 1 << (self.0 >> Self::ALIGN_SHIFT))
+            .expect("a layout, packed")
+    }
+}
+
 /// Not Send: the section is the thread's. A NORECLAIM scope while it lives.
 pub struct ReadGuard {
     _noreclaim: MemallocFlags,

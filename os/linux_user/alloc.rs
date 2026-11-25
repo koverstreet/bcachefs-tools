@@ -2,7 +2,8 @@
 
 //! Allocation, for userspace, for util/alloc.rs: Kmalloc, Vmalloc and KVmalloc
 //! over std's allocator, which takes no flags and no memalloc scope. What's
-//! freed a grace period on, by an rcu_head of no size it knows, is malloc()'s.
+//! freed a grace period on with no head, by kfree_rcu_mightsleep(), is
+//! malloc()'s.
 
 #[path = "../alloc.rs"]
 mod common;
@@ -12,7 +13,8 @@ pub use std::sync::Arc;
 
 use crate::c;
 use crate::util::alloc::{kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
-use crate::util::rcu::FreeAnytime;
+use crate::util::rcu::{FreeAnytime, HasRcuHead};
+use super::rcu::{PackedLayout, RcuHead};
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::ptr::NonNull;
@@ -163,8 +165,7 @@ fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
     core::ptr::null_mut()
 }
 
-/// @size bytes kvzalloc()'d, NOFAIL: kvfree_rcu_head() or
-/// kfree_rcu_mightsleep() takes it back.
+/// @size bytes kvzalloc()'d, NOFAIL: kfree_rcu_mightsleep() takes it back.
 pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
     NonNull::new(kmalloc_noprof(size, flags::ZERO | flags::NOFAIL).cast()).expect("a NOFAIL allocation failed")
 }
@@ -248,13 +249,25 @@ pub unsafe fn kvfree_sized(p: NonNull<u8>, size: usize) {
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
 }
 
-/// C's kvfree_rcu(): @p freed a grace period on - by a callback of its own,
-/// as rcu_free_ptr() frees it, not by @head.
+/// C's kvfree_rcu(): the allocation at @p, of @layout, freed a grace period
+/// on, by T's head, T::HEAD bytes in.
 ///
 /// # Safety
-/// Only RCU readers use @p after.
-pub unsafe fn kvfree_rcu_head(p: *mut c_void, _head: *mut c::rcu_head) {
-    unsafe { rcu_free_ptr(p) }
+/// @p is a KVFREE allocator's, of @layout, with T's head; only RCU readers
+/// use it after.
+pub unsafe fn kvfree_rcu<T: ?Sized + HasRcuHead>(p: NonNull<u8>, layout: Layout) {
+    let head = p.as_ptr().wrapping_add(T::HEAD).cast::<RcuHead>();
+    unsafe {
+        (&raw mut (*head).layout).write(PackedLayout::new(layout));
+        super::rcu::Flavor::RCU.call_raw(head.cast(), kvfree_rcu_cb::<T>);
+    }
+}
+
+unsafe extern "C" fn kvfree_rcu_cb<T: ?Sized + HasRcuHead>(head: *mut c::rcu_head) {
+    unsafe {
+        let layout = (*head.cast::<RcuHead>()).layout.get();
+        std::alloc::dealloc(head.cast::<u8>().wrapping_sub(T::HEAD), layout)
+    }
 }
 
 /// C's kfree_rcu_mightsleep(): @p freed a grace period on.

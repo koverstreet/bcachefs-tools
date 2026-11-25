@@ -310,12 +310,9 @@ unsafe fn free_slot<H, F: Future, A: Alloc + Copy>(home: NonNull<H>) {
             return Flavor::RCU.call(SlotMem::<H, F, A>(w.cast()), SlotMem::drop_free);
         }
         core::ptr::drop_in_place(home.as_ptr());
-        #[cfg(kernel)]
         if A::KVFREE {
-            // tiny RCU passes the head's offset as its callback
-            const { assert!(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD < 4096) };
-            let head = w.byte_add(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).as_ptr();
-            return crate::util::alloc::kvfree_rcu_head(w.as_ptr().cast(), head.cast());
+            let layout = Layout::from_size_align_unchecked((*w.as_ptr()).given, align_of::<WithTask<'_, H, F, A>>());
+            return crate::util::alloc::kvfree_rcu::<WithTask<'_, H, F, A>>(w.cast(), layout);
         }
         Flavor::RCU.call(SlotMem::<H, F, A>(w.cast()), SlotMem::free);
     }

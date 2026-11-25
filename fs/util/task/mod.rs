@@ -106,7 +106,6 @@ pub use select::{Select, SelectWait};
 pub use waitlist::{Complete, DynComplete, WaitList, WaitlistCompletion};
 pub use r#box::{exclusive_size, spawn, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
-use crate::c;
 use crate::data_structures::llist::LlistNode;
 use crate::errcode::BchError;
 use crate::os::kthread::{Kthread, KthreadRef};
@@ -114,7 +113,7 @@ use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::Printbuf;
 use crate::prt;
-use crate::os::workqueue::{Queue, RawWork, WorkAt};
+use crate::os::workqueue::{Queue, WorkAt};
 use core::fmt;
 use core::future::Future;
 use core::cell::Cell;
@@ -336,7 +335,7 @@ pub enum Spawn<'q, 'n> {
 #[derive(cstruct_macros::Fields)]
 pub(crate) struct Header {
     #[pin]
-    work:      RawWork,
+    work:      RcuWorkHead,
     waiting:   AtomicPtr<Done>,
     target:    Cell<Target>,
     thread:    Option<KthreadRef>,
@@ -361,10 +360,7 @@ pub(crate) struct TaskVtable {
 // queues it. What's still reached locklessly after - a late completer's
 // compare-exchange of @waiting, which then fails - must stay outside the head.
 impl HasRcuHead for Header {
-    const HEAD: usize = {
-        assert!(size_of::<RcuWorkHead>() <= size_of::<c::work_struct>());
-        core::mem::offset_of!(Header, work)
-    };
+    const HEAD: usize = core::mem::offset_of!(Header, work);
     const WORK: bool = true;
 }
 
@@ -411,7 +407,7 @@ impl<'q, F: Future + Send> Task<'q, F> {
         };
         pin_init!(Self {
             header <- pin_init!(Header {
-                work <- crate::new_work!(crate::os::workqueue::run_raw::<Header>, "bcachefs task"),
+                work <- RcuWorkHead::new_work(crate::new_work!(crate::os::workqueue::run_raw::<Header>, "bcachefs task")),
                 waiting:   AtomicPtr::new(null_mut()),
                 target:    Cell::new(target),
                 thread:    None,
@@ -591,8 +587,8 @@ impl TaskRef {
             Target::Queue(wq, cpu) => {
                 let wq = unsafe { wq.as_ref() };
                 match cpu {
-                    Some(cpu) => unsafe { header.work.queue_on(wq, cpu) },
-                    None      => unsafe { header.work.queue(wq) },
+                    Some(cpu) => unsafe { header.work.work().queue_on(wq, cpu) },
+                    None      => unsafe { header.work.work().queue(wq) },
                 };
             }
             Target::Run(rq) => unsafe { rq.as_ref().dispatch(self.0) },

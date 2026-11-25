@@ -188,10 +188,9 @@ impl<T, H: HeadKind> RcuHeadAt<H> for T {
     }
 
     default fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
-        #[cfg(kernel)]
         if A::KVFREE {
-            let h = <T as RcuHeadAt<H>>::head(&f).as_ptr();
-            return unsafe { crate::util::alloc::kvfree_rcu_head(h.cast(), h.cast()) };
+            let h = <T as RcuHeadAt<H>>::head(&f);
+            return unsafe { crate::util::alloc::kvfree_rcu::<H>(h.cast(), Layout::new::<Headed<T, H>>()) };
         }
         Flavor::RCU.call(f, Freeing::free_mem);
     }
@@ -258,8 +257,8 @@ impl<T: ?Sized + SelfSized, H: HeadKind> RcuHeadAt<H> for T {
     default fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
         const { assert!(A::KVFREE, "a DST freed a grace period on with no rcu_head of its own: by kvfree_rcu(), \
                                     and kvfree() doesn't free its allocator's memory") };
-        let base = allocation::<T, H>(f.0).0.as_ptr();
-        unsafe { crate::util::alloc::kvfree_rcu_head(base.cast(), base.cast()) }
+        let (base, layout) = allocation::<T, H>(f.0);
+        unsafe { crate::util::alloc::kvfree_rcu::<H>(base, layout) }
     }
 }
 
@@ -303,12 +302,9 @@ fn allocation<T: ?Sized + RcuHeadAt<H>, H: HeadKind>(p: NonNull<T>) -> (NonNull<
 /// free_mem_rcu() by T's own head: kvfree_rcu() of T, batched, if kvfree()
 /// frees A's memory.
 fn own_head_free_mem_rcu<T: ?Sized + HasRcuHead + RcuHeadAt<H>, H: HeadKind, A: Alloc>(f: Freeing<T, H, A>) {
-    #[cfg(kernel)]
     if A::KVFREE {
-        // tiny RCU passes the head's offset as its callback
-        const { assert!(T::HEAD < 4096, "kvfree_rcu() of a head more than a page into its object") };
-        let h = <T as RcuHeadAt<H>>::head(&f);
-        return unsafe { crate::util::alloc::kvfree_rcu_head(f.0.as_ptr().cast(), h.as_ptr().cast()) };
+        let (base, layout) = allocation::<T, H>(f.0);
+        return unsafe { crate::util::alloc::kvfree_rcu::<T>(base, layout) };
     }
     Flavor::RCU.call(f, Freeing::free_mem);
 }

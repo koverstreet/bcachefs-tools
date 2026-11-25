@@ -126,25 +126,48 @@ impl<H> !FreeAnytime for RcuDropWorkMember<H> {}
 impl<H> !DropAnytime for RcuDropWorkMember<H> {}
 impl<H> !DropAtomic for RcuDropWorkMember<H> {}
 
-#[repr(transparent)]
-pub struct RcuHead(c::rcu_head);
+pub use crate::os::rcu::RcuHead;
 
-/// The rcu_head, then the work queued in its place.
+/// The rcu_head, then the work queued in its place - or a work first, whose
+/// memory is the head once it's done: a task's.
 #[repr(C)]
 pub union RcuWorkHead {
-    rcu:  core::mem::ManuallyDrop<c::rcu_head>,
-    work: core::mem::ManuallyDrop<c::work_struct>,
+    rcu:  core::mem::ManuallyDrop<RcuHead>,
+    work: core::mem::ManuallyDrop<crate::os::workqueue::RawWork>,
 }
 
-pub(crate) trait HeadKind {
-    const WORK: bool;
+impl RcuWorkHead {
+    /// The work @init makes: what it is till its free.
+    pub fn new_work<E>(init: impl ::pin_init::PinInit<crate::os::workqueue::RawWork, E>)
+        -> impl ::pin_init::PinInit<Self, E>
+    {
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                crate::util::alloc::init_at(init, (&raw mut (*slot).work).cast())
+            })
+        }
+    }
+
+    /// The work new_work() made.
+    pub fn work(&self) -> &crate::os::workqueue::RawWork {
+        unsafe { &self.work }
+    }
 }
 
-impl HeadKind for RcuHead {
+/// The head a free uses: an RcuHead, or an RcuWorkHead - room for the work.
+/// Put before what it frees, it's the allocation's start.
+pub(crate) trait HeadKind: HasRcuHead {}
+
+impl HeadKind for RcuHead {}
+impl HeadKind for RcuWorkHead {}
+
+impl HasRcuHead for RcuHead {
+    const HEAD: usize = 0;
     const WORK: bool = false;
 }
 
-impl HeadKind for RcuWorkHead {
+impl HasRcuHead for RcuWorkHead {
+    const HEAD: usize = 0;
     const WORK: bool = true;
 }
 

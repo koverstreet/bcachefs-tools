@@ -14,7 +14,7 @@ pub use kernel::sync::Arc;
 
 use crate::c;
 use crate::util::alloc::{kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
-use crate::util::rcu::{DropAnytime, DropAtomic, FreeAnytime, NothingToDetach};
+use crate::util::rcu::{DropAnytime, DropAtomic, FreeAnytime, HasRcuHead, NothingToDetach};
 use core::alloc::Layout;
 use core::ffi::{c_int, c_void};
 use core::ptr::NonNull;
@@ -307,8 +307,7 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
     KBox::into_inner(b)
 }
 
-/// @size bytes kvzalloc()'d, NOFAIL: kvfree_rcu_head() or
-/// kfree_rcu_mightsleep() takes it back.
+/// @size bytes kvzalloc()'d, NOFAIL: kfree_rcu_mightsleep() takes it back.
 pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
     kvzalloc_gfp(size, flags::NOFAIL).expect("a NOFAIL allocation failed")
 }
@@ -365,13 +364,16 @@ pub unsafe fn kvfree_sized(p: NonNull<u8>, size: usize) {
     unsafe { KVmalloc.deallocate(p, layout) };
 }
 
-/// C's kvfree_rcu(): @p, kvmalloc()'d, freed a grace period on, by @head in
-/// it.
+/// C's kvfree_rcu(): the allocation at @p freed a grace period on, by T's
+/// head, T::HEAD bytes in. kvfree() needs no layout.
 ///
 /// # Safety
-/// @head is in @p, and only RCU readers use @p after.
-pub unsafe fn kvfree_rcu_head(p: *mut c_void, head: *mut c::rcu_head) {
-    unsafe { c::rust_kvfree_rcu(p, head) }
+/// @p is a KVFREE allocator's, with T's head; only RCU readers use it after.
+pub unsafe fn kvfree_rcu<T: ?Sized + HasRcuHead>(p: NonNull<u8>, _layout: Layout) {
+    // its allocation is found by its head rounded down to a page - tiny
+    // RCU's passes the offset as its callback
+    const { assert!(T::HEAD < 4096, "kvfree_rcu() of a head more than a page into its object") };
+    unsafe { c::rust_kvfree_rcu(p.as_ptr().cast(), p.as_ptr().wrapping_add(T::HEAD).cast()) }
 }
 
 /// C's kfree_rcu_mightsleep(): @p, kmalloc()'d, freed a grace period on -

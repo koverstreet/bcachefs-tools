@@ -15,6 +15,11 @@ use core::ffi::{c_int, CStr};
 use core::marker::PhantomData;
 use pin_init::PinInit;
 
+/// An object's head for its free a grace period on: call_rcu()'s, which is
+/// kvfree_rcu()'s too - 7.3's kvfree_rcu_head is an rcu_head, or smaller.
+#[repr(transparent)]
+pub struct RcuHead(c::rcu_head);
+
 /// Not Send: the section is the thread's. A NORECLAIM scope while it lives.
 pub struct ReadGuard {
     _guard:     kernel::sync::rcu::Guard,
