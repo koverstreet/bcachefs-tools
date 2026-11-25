@@ -138,7 +138,7 @@ use crate::data_structures::fifo::FifoRead;
 use crate::locking::{Guard as _, MemallocFlags};
 use crate::init::recovery::NotRw;
 use crate::journal::entries::EntryWriter;
-use crate::util::alloc::{flags, KVVec};
+use crate::util::alloc::{flags, Vec};
 use crate::util::backtrace::prt_current_backtrace;
 use crate::format::DataType;
 use crate::util::task::{waiter, Select, WaitSync};
@@ -1462,7 +1462,7 @@ impl c::journal {
         -> Result<(), BchError>
     {
         let u64s = size_of::<Head<c::jset_entry>>() / size_of::<u64>() + data.len().div_ceil(size_of::<u64>());
-        let mut e = KVVec::from_elem(0u64, u64s)?;
+        let mut e = Vec::from_elem(0u64, u64s)?;
         EntryWriter::new(&mut e[..]).push_bytes(ty, btree_id, level, data)
             .expect("an entry, in room sized for it");
 
@@ -1477,7 +1477,7 @@ impl c::journal {
             let want = (v.len() + e.len()) * 2;
             drop(g);
 
-            let mut new = KVVec::with_capacity(want)?;
+            let mut new = Vec::with_capacity(want)?;
 
             let mut g = self.lock.lock();
             let v = &mut g.early_journal_entries;

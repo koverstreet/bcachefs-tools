@@ -93,7 +93,7 @@ pub struct six_lock {
     pub owner: AtomicPtr<c::task_struct>,
     /* the intent lock's holder's */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub owner_stack: core::cell::UnsafeCell<crate::util::alloc::KVVec<c_ulong>>,
+    pub owner_stack: core::cell::UnsafeCell<crate::util::alloc::Vec<c_ulong>>,
     pub wait_lock: Locked<RawSpinLock, six_lock_waiters>,
     pub dep_map: LockdepMap,
 }

@@ -22,7 +22,7 @@ use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
 use crate::sb::errors::SbErrorId;
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, Validated,
                             ValidatedEntriesMut};
 use crate::util::{Printbuf, ToText};
@@ -79,7 +79,7 @@ fn validate_late(fs: &Fs, version: MetadataVersion, big_endian: bool, f: &mut Se
 
 /// A copy of the clean section, validated: recovery's, which uses it after
 /// sb_lock is dropped and the superblock may have changed.
-pub(crate) struct CleanSection(KVVec<u64>);
+pub(crate) struct CleanSection(Vec<u64>);
 
 impl core::ops::Deref for CleanSection {
     type Target = Section;
@@ -105,7 +105,7 @@ impl Fs {
         };
 
         let bytes = f.as_bytes();
-        let mut copy = KVVec::from_elem(0u64, bytes.len() / size_of::<u64>())
+        let mut copy = Vec::from_elem(0u64, bytes.len() / size_of::<u64>())
             .map_err(|_| BchError::from(Errcode::ENOMEM_read_superblock_clean))?;
         copy.as_mut_bytes().copy_from_slice(bytes);
 

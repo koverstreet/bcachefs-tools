@@ -6,7 +6,7 @@ use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::dst_array::DstArray;
 use crate::errcode::BchError;
 use crate::os::alloc::Global;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::thin::ThinBox;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
@@ -221,7 +221,7 @@ impl Printbuf {
         let cols = || text.split(is_sep).zip(text.iter().copied().filter(is_sep).chain([b'\n']));
 
         /* First pass: measure max column widths */
-        let mut col_widths: KVVec<usize> = KVVec::new();
+        let mut col_widths: Vec<usize> = Vec::new();
         let mut col = 0;
 
         for (s, c) in cols() {

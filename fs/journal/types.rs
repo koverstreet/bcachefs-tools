@@ -13,7 +13,7 @@ use crate::journal::write::JournalWrite;
 use crate::data::dev_bio::DevBio;
 use crate::errcode::BchError;
 use crate::os::bio::{BioRange, MappedPages};
-use crate::util::alloc::{init_with, AllocGfp, Box, Flags, KVVec, Kmalloc};
+use crate::util::alloc::{init_with, AllocGfp, Box, Flags, Vec, Kmalloc};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::Printbuf;
 use crate::util::printbuf::HumanReadable;
@@ -504,7 +504,7 @@ pub struct JournalLocked {
      * We may queue up some things to be journalled (log messages) before
      * the journal has actually started - stash them here:
      */
-    pub early_journal_entries: KVVec<u64>,
+    pub early_journal_entries: Vec<u64>,
 }
 
 published! {
@@ -611,7 +611,7 @@ pub type JournalWriteRef = RefGuard<Placed<AtomicRef<()>, WritesInFlightAt>>;
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct PinBuf {
-    pub entries: KVVec<crate::journal::pins::PinList>,
+    pub entries: Vec<crate::journal::pins::PinList>,
 }
 
 /*
@@ -633,7 +633,7 @@ type FsRoRef = crate::field!(super.ro_ref);
 /* And its own queue */
 type JournalWq = OnQueue<crate::field!(wq)>;
 pub type ReclaimThread = Daemon;
-pub type RewindRanges = LockedBy<KVVec<c::journal_rewind_range>, (), NotRw<'static>>;
+pub type RewindRanges = LockedBy<Vec<c::journal_rewind_range>, (), NotRw<'static>>;
 
 /* Embedded in struct bch_fs */
 nest! {
@@ -719,7 +719,7 @@ nest! {
          * longer needed, the bucket can be discarded and reused.
          */
         #[pin]
-        #[init(new_lock!(PinBuf { entries: KVVec::new() }, ::pin_init::zeroed(),
+        #[init(new_lock!(PinBuf { entries: Vec::new() }, ::pin_init::zeroed(),
                          "&j->pin_resize_lock"))]
         pub pin_resize_lock: Locked<PercpuRwSem, PinBuf, PinRange>,
         #[pin]

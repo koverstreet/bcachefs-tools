@@ -6,7 +6,7 @@
 //! - without the continuation, which is the executor's: a task awaits the
 //! Gather. A fork-join's jobs folding their errors, first one wins; a flush's
 //! shards summing their counters; () for a barrier on IOs that free
-//! themselves; or a KVVec of what each put, taken as they come - reaped.
+//! themselves; or a Vec of what each put, taken as they come - reaped.
 //!
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>, waiter::Sync>::new());
 //!     let r = g.get();                // one more in flight
@@ -39,7 +39,7 @@
 //! owner has waited are one word, changed by cmpxchg, as closure_sub()
 //! changes a closure's.
 //!
-//! A Gather<KVVec<T>> collects what's put instead: each put is pushed,
+//! A Gather<Vec<T>> collects what's put instead: each put is pushed,
 //! under an irqsave spinlock, onto a vec that has room for it. A put can't
 //! allocate, so the owner makes the room, getting each ref by try_get() -
 //! which can fail, where get() can't; get() on one doesn't build. The owner
@@ -59,7 +59,7 @@
 use crate::errcode::{BchError, FirstErr};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, WaitSync, Waiter};
 use core::cell::UnsafeCell;
@@ -134,19 +134,19 @@ impl Fold for Result<(), BchError> {
 /// capacity is kept at least the puts so far plus the refs out. A ref
 /// counted when room's made either has put - in the vec - or hasn't, as a
 /// put pushes before its ref's dropped from the count.
-impl<T: Send> Fold for KVVec<T> {
+impl<T: Send> Fold for Vec<T> {
     type Item = T;
-    type Acc = Locked<SpinLockIrq, KVVec<T>>;
+    type Acc = Locked<SpinLockIrq, Vec<T>>;
 
     const RESERVES: bool = true;
 
     fn acc() -> impl PinInit<Self::Acc> {
-        new_lock!(KVVec::new())
+        new_lock!(Vec::new())
     }
 
     fn fold(acc: &Self::Acc, v: T) {
         let pushed = acc.lock().push_within_capacity(v).is_ok();
-        assert!(pushed, "Gather<KVVec> put with no room: a ref not from try_get()");
+        assert!(pushed, "Gather<Vec> put with no room: a ref not from try_get()");
     }
 
     fn result(acc: &Self::Acc) -> Self {
@@ -162,7 +162,7 @@ impl<T: Send> Fold for KVVec<T> {
             return Ok(());
         }
 
-        let mut new = KVVec::with_capacity((len + refs).max(cap * 2))?;
+        let mut new = Vec::with_capacity((len + refs).max(cap * 2))?;
         let mut v = acc.lock();
         for x in v.drain_all() {
             // puts since are no more than the refs that were out: they fit
@@ -421,11 +421,11 @@ impl<T: Fold, W: Width> Resumable for GatherWait<'_, '_, T, W> {
     }
 }
 
-impl<T: Send, Wt: Waiter, W: Width> Gather<'_, KVVec<T>, Wt, W> {
+impl<T: Send, Wt: Waiter, W: Width> Gather<'_, Vec<T>, Wt, W> {
     /// What's been put since the last take, in @out - emptied first - with
     /// refs still out: the puts move into the buffer @out had, which is
     /// given the room theirs had, so any yet to come still fit.
-    pub fn take(&self, out: &mut KVVec<T>) -> Result<(), AllocError> {
+    pub fn take(&self, out: &mut Vec<T>) -> Result<(), AllocError> {
         out.clear();
         // only the owner - us - changes it
         let cap = self.acc.lock().capacity();

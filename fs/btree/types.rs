@@ -15,7 +15,7 @@ use crate::errcode::BchError;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
-use crate::util::alloc::{Box, Flags, KVVec, Kmalloc};
+use crate::util::alloc::{Box, Flags, Vec, Kmalloc};
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::time_stats::TimeStatsArray;
@@ -144,8 +144,8 @@ pub struct BtreeRoots {
     #[init(::pin_init::init_array_from_fn(|_| cs::btree_root::default()))]
     pub roots_known: [cs::btree_root; Btree::NR as usize],
     #[pin]
-    #[init(KVVec::new())]
-    pub roots_extra: KVVec<cs::btree_root>,
+    #[init(Vec::new())]
+    pub roots_extra: Vec<cs::btree_root>,
 }
 
 impl BtreeRoots {
@@ -697,7 +697,7 @@ pub struct BtreeTrans<'f> {
     /* bump allocator, invalidated on transaction restart */
     pub mem: Cell<TransMem>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: Cell<KVVec<cs::trans_kmalloc_trace>>,
+    pub trans_kmalloc_trace: Cell<Vec<cs::trans_kmalloc_trace>>,
 
     pub nr_sorted: Cell<cs::PathIdx>,
     pub nr_paths: Cell<cs::PathIdx>,
@@ -721,7 +721,7 @@ pub struct BtreeTrans<'f> {
     pub last_begin_ip: Cell<c_ulong>,
     pub last_restarted_ip: Cell<c_ulong>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_restarted_trace: Cell<KVVec<c_ulong>>,
+    pub last_restarted_trace: Cell<Vec<c_ulong>>,
     pub last_unlock_ip: Cell<c_ulong>,
     pub srcu_lock_time: Cell<c_ulong>,
     pub srcu_idx: Cell<c_int>,
@@ -813,7 +813,7 @@ pub struct btree_trans_buf {
 #[derive(MaybeZeroable)]
 pub struct TransStatsLocked {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: KVVec<cs::trans_kmalloc_trace>,
+    pub trans_kmalloc_trace: Vec<cs::trans_kmalloc_trace>,
     pub max_paths_text: Printbuf,
 }
 
@@ -1061,7 +1061,7 @@ pub struct bch_fs_btree {
     #[late]
     pub(crate) async_ops: crate::btree::async_ops::AsyncOps,
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
+    #[init(new_lock!(Vec::new()))]
     pub(crate) node_scan: NodeScan,
 }
 

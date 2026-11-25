@@ -36,7 +36,7 @@ use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Mu
 use crate::new_lock;
 use crate::types::{Fifo, Le64, Lent};
 use crate::util::Printbuf;
-use crate::util::alloc::{Box, KVVec, Kmalloc};
+use crate::util::alloc::{Box, Vec, Kmalloc};
 use crate::util::atomic::try_update;
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
@@ -133,7 +133,7 @@ pub(crate) struct Updates {
      * Every update from start to free: being here is the update's ref on the
      * filesystem
      */
-    live:      KVVec<NonNull<BtreeUpdate>>,
+    live:      Vec<NonNull<BtreeUpdate>>,
     /*
      * Made visible, in the order they were: completed in that order. Each its
      * update's owner, from updated_node() or updated_root() until the worker

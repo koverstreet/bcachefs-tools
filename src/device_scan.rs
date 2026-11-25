@@ -29,7 +29,7 @@ use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{filter_dead, Fs, OpenFs};
-use bcachefs_kernel::util::alloc::KVVec;
+use bcachefs_kernel::util::alloc;
 use c::bch_sb_handle;
 use c::bch_opts;
 use uuid::Uuid;
@@ -225,7 +225,7 @@ pub fn filter_current_sbs(
 		}
 	}
 
-	let mut handles = KVVec::with_capacity(sbs.len())?;
+	let mut handles = alloc::Vec::with_capacity(sbs.len())?;
 	for (_, sb) in sbs {
 		handles.push(sb)?;
 	}

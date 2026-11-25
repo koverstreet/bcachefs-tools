@@ -66,7 +66,7 @@ use crate::init::error::id;
 use crate::locking::{MemallocFlags, SeqLock};
 use crate::debug::trace::events;
 use crate::sb::members::DevIoRef;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::atomic::try_update;
 use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev};
 use crate::util::futex::{futex_wait, futex_wake};
@@ -131,7 +131,7 @@ pub(crate) struct Discard {
 }
 
 /// A worker's discards: those in flight, and those done, to reap.
-type Discards = Gather<'static, KVVec<Discard>, waiter::Sync>;
+type Discards = Gather<'static, Vec<Discard>, waiter::Sync>;
 
 enum NotAdded {
     /// One is in flight for the bucket already.
@@ -144,7 +144,7 @@ enum NotAdded {
 /// fast discard work: its Discards, room for those it reaps, and its counts.
 struct Worker<'a> {
     g:        &'a Discards,
-    done:     KVVec<Discard>,
+    done:     Vec<Discard>,
     s:        &'a SeqLock<DiscardState>,
     fastpath: bool,
 }
@@ -354,7 +354,7 @@ impl Drop for Discard {
     }
 }
 
-impl Gathered<KVVec<Discard>> for DiscardBio {
+impl Gathered<Vec<Discard>> for DiscardBio {
     fn done(self: Pin<&mut Self>, _: Result<(), BchError>) -> Discard {
         let d = self.project().discard.take().expect("a discard bio, with its discard");
         // while its io ref is ours: once put, it may be reaped
@@ -365,7 +365,7 @@ impl Gathered<KVVec<Discard>> for DiscardBio {
 
 impl Discard {
     /// Issue it, to be put to its worker's Discards by @done.
-    fn submit(self, fs: &Fs, done: GatherRef<'static, KVVec<Discard>, waiter::Sync>) {
+    fn submit(self, fs: &Fs, done: GatherRef<'static, Vec<Discard>, waiter::Sync>) {
         let ca = &self.ca;
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);
         let size = u32::from(ca.mi.get().bucket_size) << 9;
@@ -387,7 +387,7 @@ impl Discard {
 
 impl<'a> Worker<'a> {
     fn new(g: &'a Discards, s: &'a SeqLock<DiscardState>, fastpath: bool) -> Self {
-        Worker { g, done: KVVec::new(), s, fastpath }
+        Worker { g, done: Vec::new(), s, fastpath }
     }
 
     /// Counted, by why: one in flight for it, or none to be had.

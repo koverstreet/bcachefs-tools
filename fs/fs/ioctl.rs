@@ -27,7 +27,7 @@ use crate::inode_opts::get_io_opts;
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::ioctl::{UserArg, UserVstruct};
 use crate::os::kernel::{capable, Capability};
 use crate::util::os_str::OsStrExt;
@@ -70,12 +70,12 @@ struct Entries {
     size: u32,
     used: u32,
     full: bool,
-    rec:  KVVec<u8>,
+    rec:  Vec<u8>,
 }
 
 impl Entries {
     fn new(buf: u64, size: u32) -> Self {
-        Entries { buf, size, used: 0, full: false, rec: KVVec::new() }
+        Entries { buf, size, used: 0, full: false, rec: Vec::new() }
     }
 
     /// Append an entry, @name after the header @hdr makes for its reclen, if

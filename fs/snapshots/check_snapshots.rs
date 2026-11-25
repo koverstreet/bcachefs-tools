@@ -46,7 +46,7 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::inode;
 use crate::snapshots::{delete, snapshot, subvolume};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
@@ -1183,9 +1183,9 @@ struct TreeReconstruct {
     btree:   Btree,
     cur_pos: Bpos,
     /// The current inode's snapshot ids.
-    cur_ids: KVVec<u32>,
+    cur_ids: Vec<u32>,
     /// The trees so far; merged-away ones are left empty.
-    trees:   KVVec<KVVec<u32>>,
+    trees:   Vec<Vec<u32>>,
 }
 
 impl TreeReconstruct {
@@ -1205,7 +1205,7 @@ impl TreeReconstruct {
             return Ok(());
         }
 
-        let mut tree = core::mem::replace(&mut self.cur_ids, KVVec::new());
+        let mut tree = core::mem::replace(&mut self.cur_ids, Vec::new());
         for t in self.trees.iter_mut() {
             if t.iter().any(|id| tree.contains(id)) {
                 for &id in t.iter() {
@@ -1228,7 +1228,7 @@ impl TreeReconstruct {
     }
 }
 
-fn add_nodup(ids: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
+fn add_nodup(ids: &mut Vec<u32>, id: u32) -> Result<(), BchError> {
     if !ids.contains(&id) {
         ids.push(id)?;
     }
@@ -1287,7 +1287,7 @@ fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(
 fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
 
-    let mut btrees: KVVec<Btree> = KVVec::new();
+    let mut btrees: Vec<Btree> = Vec::new();
     for &btree in crate::BTREE_IDS_KNOWN {
         if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0 {
             btrees.push(btree)?;
@@ -1298,8 +1298,8 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
     let mut r = TreeReconstruct {
         btree:   Btree::extents,
         cur_pos: POS_MIN,
-        cur_ids: KVVec::new(),
-        trees:   KVVec::new(),
+        cur_ids: Vec::new(),
+        trees:   Vec::new(),
     };
 
     for &btree in btrees.iter() {

@@ -54,7 +54,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -529,7 +529,7 @@ pub struct BpScanIter<'p> {
     pos:        Bpos,
     nr_flushes: u64,
     progress:   Option<&'p Progress<'p>>,
-    batch:      KVVec<BkeyI<c::Backpointer>>,
+    batch:      Vec<BkeyI<c::Backpointer>>,
     /* a refill found nothing: the scan's at its end */
     done:       bool,
 }
@@ -615,7 +615,7 @@ impl BpScanIter<'_> {
 
 impl<'p> BpScanIter<'p> {
     pub fn new(btree: Btree, pos: Bpos, progress: Option<&'p Progress<'_>>) -> Self {
-        Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new(), done: false }
+        Self { btree, pos, nr_flushes: 0, progress, batch: Vec::new(), done: false }
     }
 
     /// Each backpointer in an attempt of its own, retried on restart; the peek and @f

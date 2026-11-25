@@ -21,7 +21,7 @@ use crate::format::Bpos;
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::printbuf::{Printbuf, ToText};
 use crate::prt;
 use crate::os::kernel::HZ;
@@ -182,9 +182,9 @@ impl InodeCache {
     }
 
     /// The subvolumes holding inode number @inum.
-    fn holders(&self, inum: u64) -> Result<KVVec<u32>, BchError> {
+    fn holders(&self, inum: u64) -> Result<Vec<u32>, BchError> {
         let _noio = MemallocFlags::noio();
-        let mut subvols = KVVec::new();
+        let mut subvols = Vec::new();
         loop {
             // copied out under a spinlock: room made first, outside it
             let n = self.by_inum.with(&inum, |s| s.len());

@@ -23,7 +23,7 @@ use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
-use crate::util::alloc::{Kmalloc, KVVec};
+use crate::util::alloc::{Kmalloc, Vec};
 use crate::util::log::LogMsg;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef};
@@ -234,7 +234,7 @@ fn scrub_extent(m: &Moving<'_>, found: &Gather<'static, Bad, waiter::Sync>, io_o
 
 /// The seqs of the flush entries in the scrub's window - back from the
 /// newest, as far as scrub_journal_max_rewind_secs - oldest first.
-fn flush_window(fs: &Fs, jk: &c::journal_keys) -> Result<KVVec<u64>, BchError> {
+fn flush_window(fs: &Fs, jk: &c::journal_keys) -> Result<Vec<u64>, BchError> {
     let flushes_of = || jk.entries().iter().filter(|i| !i.ignored() && !i.jset().no_flush());
 
     /*
@@ -246,7 +246,7 @@ fn flush_window(fs: &Fs, jk: &c::journal_keys) -> Result<KVVec<u64>, BchError> {
     let newest_time = flushes_of().map(|i| i.datetime()).max().unwrap_or(0);
     let max_rewind_secs = u64::from(fs.opts().scrub_journal_max_rewind_secs.get());
 
-    let mut flushes = KVVec::new();
+    let mut flushes = Vec::new();
     for i in flushes_of() {
         /*
          * Entries with no datetime entry (t == 0) are always included:

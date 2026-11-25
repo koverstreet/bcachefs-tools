@@ -14,7 +14,7 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::init::passes::{self, RecoveryPass};
 use crate::sb::members::DevRef;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
@@ -23,10 +23,10 @@ use crate::{bch_err, btree_trans};
 fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
     let enomem = |_| fs.err(Errcode::ENOMEM_gc_gens);
 
-    let mut oldest_gens: KVVec<(DevRef, KVVec<u8>)> = KVVec::new();
+    let mut oldest_gens: Vec<(DevRef, Vec<u8>)> = Vec::new();
     for ca in fs.members() {
         let mi = ca.mi.get();
-        let mut oldest = KVVec::from_elem(0u8, mi.nbuckets as usize).map_err(enomem)?;
+        let mut oldest = Vec::from_elem(0u8, mi.nbuckets as usize).map_err(enomem)?;
 
         let rcu = read_lock();
         for b in u64::from(mi.first_bucket)..mi.nbuckets {

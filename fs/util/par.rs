@@ -37,7 +37,7 @@
 
 use crate::errcode::BchError;
 use core::ffi::CStr;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kthread::Kthread;
 use crate::util::sleep::Sleep;
@@ -85,7 +85,7 @@ pub struct Scope<'scope, 'env: 'scope> {
     tasks:     &'env TaskList,
     freezable: bool,
     /// What the body's spawned, in order.
-    jobs:      RefCell<KVVec<Job<'env>>>,
+    jobs:      RefCell<Vec<Job<'env>>>,
     scope:     PhantomData<&'scope mut &'scope ()>,
     env:       PhantomData<&'env mut &'env ()>,
 }
@@ -117,7 +117,7 @@ where
         backend,
         tasks,
         freezable,
-        jobs:  RefCell::new(KVVec::new()),
+        jobs:  RefCell::new(Vec::new()),
         scope: PhantomData,
         env:   PhantomData,
     };

@@ -9,11 +9,11 @@
 //! An element's index is its place in the sequence, 0..len(); where it's
 //! stored is the index, or past the gap the index plus the gap's size. It
 //! owns its elements, dropping them as they're truncated off, cleared or it's
-//! dropped; the storage is a KVVec's, kvmalloc()'d, as C's is, and freed as
+//! dropped; the storage is a Vec's, kvmalloc()'d, as C's is, and freed as
 //! one. Growing is reserve()'s, apart from insert(), so an element that owns
 //! something is never handed over to an allocation that fails.
 
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use core::ops::Index;
 use core::ptr;
 
@@ -103,7 +103,7 @@ impl<T> GapBuffer<T> {
         }
 
         let size = self.size.max(8) * 2;
-        let mut new = KVVec::<T>::with_capacity(size)?;
+        let mut new = Vec::<T>::with_capacity(size)?;
         // SAFETY: full, so no gap: nr elements, into room for size
         unsafe {
             if self.nr != 0 {
@@ -128,15 +128,15 @@ impl<T> GapBuffer<T> {
         self.nr += 1;
     }
 
-    /// The storage, as the KVVec it was allocated as, its elements not
+    /// The storage, as the Vec it was allocated as, its elements not
     /// counted: whoever drops it frees only memory.
     ///
     /// # Safety
     /// The elements are moved out, or theirs is to drop no more.
-    unsafe fn take_storage(&mut self) -> Option<KVVec<T>> {
+    unsafe fn take_storage(&mut self) -> Option<Vec<T>> {
         let data = core::mem::replace(&mut self.data, ptr::null_mut());
-        // SAFETY: a KVVec's, of capacity size
-        (!data.is_null()).then(|| unsafe { KVVec::from_raw_parts(data, 0, self.size) })
+        // SAFETY: a Vec's, of capacity size
+        (!data.is_null()).then(|| unsafe { Vec::from_raw_parts(data, 0, self.size) })
     }
 
     /// The elements dropped and the storage freed: empty, as zeroed.
@@ -168,6 +168,7 @@ unsafe impl<T> ::pin_init::Zeroable for GapBuffer<T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::vec::Vec;
 
     /// Inserts anywhere, through growth, give the sequence in order.
     #[test]

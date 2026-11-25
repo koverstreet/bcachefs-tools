@@ -17,7 +17,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::ioctl::{dir, Ioctl};
 use crate::util::vstructs::{CountedHead, DstHead, Head, Unsized};
 use core::ffi::CStr;
@@ -111,11 +111,11 @@ where
 
 /// A string from userspace, shorter than its limit: EINVAL if it isn't,
 /// as strndup_user().
-pub struct UserStr(KVVec<u8>);
+pub struct UserStr(Vec<u8>);
 
 impl UserStr {
     pub fn read(addr: u64, max: usize) -> Result<Self, BchError> {
-        let mut buf = KVVec::from_elem(0u8, max + 1)?;
+        let mut buf = Vec::from_elem(0u8, max + 1)?;
         let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
             .strcpy_into_buf(&mut buf)?.to_bytes().len();
         if len >= max {

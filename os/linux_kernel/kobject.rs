@@ -287,9 +287,9 @@ impl Kobject {
 
     /// A KOBJ_CHANGE uevent, @env its VAR=value strings.
     pub fn uevent_change(&self, env: &[&CStr]) -> Result<(), BchError> {
-        use crate::util::alloc::KVVec;
+        use crate::util::alloc::Vec;
 
-        let mut envp = KVVec::with_capacity(env.len() + 1)?;
+        let mut envp = Vec::with_capacity(env.len() + 1)?;
         for e in env {
             envp.push(e.as_ptr().cast_mut())?;
         }

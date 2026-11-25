@@ -33,7 +33,7 @@ use crate::format::{Bpos, Btree, BtreeFlags};
 use crate::fs::Fs;
 use crate::journal::pins::{Pin, PinHolder};
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
-use crate::util::alloc::{flags, Flags, AllocError, KVVec};
+use crate::util::alloc::{flags, Flags, AllocError, Vec};
 use crate::util::place::{Contained, FieldPath};
 use crate::util::refcount::TryRefcount;
 use crate::util::projections::Volatile;
@@ -153,14 +153,14 @@ pub enum WbFlushCaller {
 #[derive(Default)]
 pub struct Inc {
     keys:       WbKeys,
-    accounting: KVVec<AccountingKey>,
+    accounting: Vec<AccountingKey>,
 }
 
 /// What flushing.lock protects: the keys a flush has, and their refs, sorted.
 #[derive(Default)]
 pub struct Flushing {
     keys:   WbKeys,
-    sorted: KVVec<c::wb_key_ref>,
+    sorted: Vec<c::wb_key_ref>,
 }
 
 crate::published! {
@@ -219,7 +219,7 @@ pub struct bch_fs_btree_write_buffer {
 const WB_RESIZE_GFP: Flags = flags::NORETRY.union(flags::NOWARN);
 
 /// Room for @new_size in all, rounded up to a power of two.
-fn resize_gfp<T>(v: &mut KVVec<T>, new_size: usize, gfp: Flags) -> Result<(), AllocError> {
+fn resize_gfp<T>(v: &mut Vec<T>, new_size: usize, gfp: Flags) -> Result<(), AllocError> {
     if new_size <= v.capacity() {
         return Ok(());
     }

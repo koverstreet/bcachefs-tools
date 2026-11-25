@@ -73,7 +73,7 @@ use crate::debug::trace::events;
 use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
 use crate::prt;
-use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, KBox, Vec};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Private, RegisterError, Registration};
@@ -215,7 +215,7 @@ impl<'f> InFlight<'f> {
 
 crate::keyed_by!(InFlight<'_>, |f| f.key() => c::move_bucket_key);
 
-type Batch<'f> = KVVec<Pin<KBox<InFlight<'f>>>>;
+type Batch<'f> = Vec<Pin<KBox<InFlight<'f>>>>;
 
 // ── Device wait amounts ──────────────────────────────────────────────────
 
@@ -349,7 +349,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// its device iterator and masks aren't needed in the frame the
     /// evacuations run under.
     #[inline(never)]
-    fn dev_list(&self, devs: &mut KVVec<CopygcDev>) -> Result<u64, BchError> {
+    fn dev_list(&self, devs: &mut Vec<CopygcDev>) -> Result<u64, BchError> {
         let fs = self.fs;
         let mut wants_space = c::DevsMask::default();
         let mut low_on_space = c::DevsMask::default();
@@ -483,7 +483,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         Ok(())
     }
 
-    fn get_buckets(&self, batch: &mut Batch<'f>, devs: &mut KVVec<CopygcDev>) -> Result<(), BchError> {
+    fn get_buckets(&self, batch: &mut Batch<'f>, devs: &mut Vec<CopygcDev>) -> Result<(), BchError> {
         for d in devs.iter_mut() {
             d.pos  = fragmentation_lru(d.dev).start().to_bpos();
             d.done = false;
@@ -565,7 +565,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// find - or a repair underway in the background, which a later pass
     /// sees past. Neither is a reason to stop copygc, and taking ordinary
     /// buckets is always right.
-    fn should_do_ec(&self, devs: &KVVec<CopygcDev>) -> bool {
+    fn should_do_ec(&self, devs: &Vec<CopygcDev>) -> bool {
         let trans = self.trans();
         let lru = stripe_lru();
         let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
@@ -623,7 +623,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// This pass's buckets, into @batch. Not inlined: its iterators aren't
     /// needed in the frame the evacuations run under.
     #[inline(never)]
-    fn pick(&self, batch: &mut Batch<'f>, devs: &mut KVVec<CopygcDev>) -> Result<(), BchError> {
+    fn pick(&self, batch: &mut Batch<'f>, devs: &mut Vec<CopygcDev>) -> Result<(), BchError> {
         let fs = self.fs;
 
         match self.trans().write_buffer_tryflush() {
@@ -642,7 +642,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         }
     }
 
-    fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut KVVec<CopygcDev>)
+    fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut Vec<CopygcDev>)
         -> Result<(), BchError>
     {
         let data_opts = c::data_update_opts {
@@ -675,14 +675,14 @@ impl<'f, 'w> Copygc<'f, 'w> {
         Ok(())
     }
 
-    fn copygc_pass(&mut self, devs: &mut KVVec<CopygcDev>) -> (Result<(), BchError>, bool) {
+    fn copygc_pass(&mut self, devs: &mut Vec<CopygcDev>) -> (Result<(), BchError>, bool) {
         let fs = self.fs;
         let sectors = |cg: &Self| (cg.ctxt.stats().sectors_seen(), cg.ctxt.stats().sectors_moved());
         let (seen, moved) = sectors(self);
 
         self.wait_done(false);
 
-        let mut batch = KVVec::new();
+        let mut batch = Vec::new();
         let mut picked = 0;
         let ret = self.pick_and_evacuate(&mut batch, &mut picked, devs);
 
@@ -734,7 +734,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
     // Before what holds an InFlight: it outlives every one registered in it
     let set = InFlightSet::default();
     let set = &set;
-    let mut devs = KVVec::new();
+    let mut devs = Vec::new();
     let mut kick = me.kicks();
 
     Kthread::set_freezable();

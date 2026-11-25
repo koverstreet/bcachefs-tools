@@ -25,7 +25,7 @@ use crate::fs::Fs;
 use crate::fsck_err_on;
 use crate::init::error::id;
 use crate::inode;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::{bch_err, bch_err_fn};
 use core::cmp::max;
 use core::ops::ControlFlow;
@@ -38,7 +38,7 @@ struct Nlink {
     count:    u32,
 }
 
-fn add_nlink(fs: &Fs, t: &mut KVVec<Nlink>, inum: u64, snapshot: u32) -> Result<(), BchError> {
+fn add_nlink(fs: &Fs, t: &mut Vec<Nlink>, inum: u64, snapshot: u32) -> Result<(), BchError> {
     if t.len() == t.capacity() {
         let new_size = max(128, t.capacity() * 2);
 
@@ -88,7 +88,7 @@ fn iter_flags() -> BtreeIterFlags {
 
 fn check_nlinks_find_hardlinks(
     fs:    &Fs,
-    t:     &mut KVVec<Nlink>,
+    t:     &mut Vec<Nlink>,
     start: u64,
     end:   &mut u64,
 ) -> Result<(), BchError> {
@@ -128,7 +128,7 @@ fn check_nlinks_find_hardlinks(
 
 fn check_nlinks_walk_dirents(
     fs:          &Fs,
-    links:       &mut KVVec<Nlink>,
+    links:       &mut Vec<Nlink>,
     range_start: u64,
     range_end:   u64,
 ) -> Result<(), BchError> {
@@ -193,7 +193,7 @@ fn check_nlinks_update_inode(
 
 fn check_nlinks_update_hardlinks(
     fs:          &Fs,
-    links:       &KVVec<Nlink>,
+    links:       &Vec<Nlink>,
     range_start: u64,
     range_end:   u64,
 ) -> Result<(), BchError> {
@@ -217,7 +217,7 @@ fn check_nlinks_update_hardlinks(
 }
 
 fn check_nlinks(fs: &Fs) -> Result<(), BchError> {
-    let mut links = KVVec::new();
+    let mut links = Vec::new();
     let mut next_iter_range_start = 0;
 
     loop {

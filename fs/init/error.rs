@@ -38,7 +38,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::prt;
 use crate::sb::errors::{FsckFlags, SbErrorId};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
@@ -84,7 +84,7 @@ pub(crate) struct FsckErrState {
     pub(crate) ret:         Option<BchError>,
     /// FSCK_FIX_yes or FSCK_FIX_no for all of them: a Y or N answer
     pub(crate) fix:         Option<c::FsckErrOpt>,
-    pub(crate) last_msg:    Option<KVVec<u8>>,
+    pub(crate) last_msg:    Option<Vec<u8>>,
 }
 
 impl FsckErrState {
@@ -96,18 +96,18 @@ impl FsckErrState {
 /// The error paths' state, under the errors lock: each fsck error's, and the
 /// paths fsck damaged, for its summary.
 pub(crate) struct ErrorsLocked {
-    pub(crate) msgs:                    KVVec<FsckErrState>,
+    pub(crate) msgs:                    Vec<FsckErrState>,
     pub(crate) msgs_alloc_err:          bool,
-    pub(crate) damaged_paths:           KVVec<c::fsck_damaged_path>,
+    pub(crate) damaged_paths:           Vec<c::fsck_damaged_path>,
     pub(crate) damaged_paths_alloc_err: bool,
 }
 
 impl ErrorsLocked {
     fn new() -> Self {
         ErrorsLocked {
-            msgs:                    KVVec::new(),
+            msgs:                    Vec::new(),
             msgs_alloc_err:          false,
-            damaged_paths:           KVVec::new(),
+            damaged_paths:           Vec::new(),
             damaged_paths_alloc_err: false,
         }
     }
@@ -124,8 +124,8 @@ pub struct bch_fs_errors {
 
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pub(crate) counts: Locked<Mutex, KVVec<c::bch_sb_error_entry_cpu>>,
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) counts: Locked<Mutex, Vec<c::bch_sb_error_entry_cpu>>,
 }
 
 /// The fsck error ids by their names: id::inode_wrong_nlink.
@@ -364,7 +364,7 @@ fn count_locked<'a>(fs: &Fs, st: &'a mut ErrorsLocked, id: SbErrorId, msg: &[u8]
         return (Some(s), c);
     }
 
-    let mut last = KVVec::new();
+    let mut last = Vec::new();
     s.last_msg = last.extend_from_slice(msg).is_ok().then_some(last);
 
     if fs.opts.ratelimit_errors.get() != 0 && s.nr >= FSCK_ERR_RATELIMIT_NR {

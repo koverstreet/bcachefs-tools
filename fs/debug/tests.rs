@@ -20,7 +20,7 @@ use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
 
-use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, KBox, Vec};
 use crate::util::place::{Container, PlacedInit};
 use core::ops::ControlFlow;
 use core::pin::Pin;
@@ -795,7 +795,7 @@ fn test_bkey_buf(_fs: &Fs, _nr: u64) -> TestRet {
 #[derive(Init)]
 struct PlacedParent {
     #[pin]
-    elems: Container<PlacedElem, KVVec<Pin<KBox<PlacedElem>>>>,
+    elems: Container<PlacedElem, Vec<Pin<KBox<PlacedElem>>>>,
 }
 
 /// An element, placed in PlacedParent's container: made only by its

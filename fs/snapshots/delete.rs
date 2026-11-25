@@ -70,7 +70,7 @@ use crate::locking::{Locked, RwSem};
 use crate::new_lock;
 use crate::snapshots::check_snapshots;
 use crate::snapshots::snapshot;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::data_structures::eytzinger::Eytzinger1;
 use crate::util::log::{self, LogLevel, LogMsg};
 use crate::util::Printbuf;
@@ -117,9 +117,9 @@ fn live_child_of(l: &[InteriorDelete], id: u32) -> Option<u32> {
 
 #[derive(Default)]
 struct DeleteNodes {
-    deleting_from_trees: KVVec<u32>,
-    delete_leaves:       KVVec<u32>,
-    delete_interior:     KVVec<InteriorDelete>,
+    deleting_from_trees: Vec<u32>,
+    delete_leaves:       Vec<u32>,
+    delete_interior:     Vec<InteriorDelete>,
 }
 
 #[pin_data]
@@ -1039,7 +1039,7 @@ fn delete_dead_snapshot_keys_v2(trans: &TransGuard<'_>, run: &Run<'_>) -> Result
 #[derive(Default)]
 struct Collection {
     nodes:   DeleteNodes,
-    no_keys: KVVec<InteriorDelete>,
+    no_keys: Vec<InteriorDelete>,
 }
 
 fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snapshot)
@@ -1101,7 +1101,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
     }
 }
 
-fn add_nodup(fs: &Fs, list: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
+fn add_nodup(fs: &Fs, list: &mut Vec<u32>, id: u32) -> Result<(), BchError> {
     if !list.contains(&id) {
         list.push(id).inspect_err(|_| {
             bch_err!(fs, "error reallocating snapshot_id_list (size {})", list.capacity());
@@ -1302,7 +1302,7 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
 
     // Eytzinger trees with 1-based indexing are faster than 0-based indexing
     // due to better cacheline alignment:
-    let mut dying = KVVec::new();
+    let mut dying = Vec::new();
     dying.push(InteriorDelete::default())?;
     dying.extend_from_slice(&coll.nodes.delete_interior)?;
     for &id in coll.nodes.delete_leaves.iter() {
@@ -1417,7 +1417,7 @@ fn delete_dead_snapshots(fs: &Fs) -> Result<(), BchError> {
 
 crate::recovery_pass!(delete_dead_snapshots => delete_dead_snapshots);
 
-fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut KVVec<InteriorDelete>) -> Result<(), BchError> {
+fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut Vec<InteriorDelete>) -> Result<(), BchError> {
     let Some(v) = snapshot::val(k) else { return Ok(()) };
 
     if state(&v) != c::SnapshotState::no_keys {
@@ -1430,8 +1430,8 @@ fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut KVVec<InteriorDelete>
     Ok(())
 }
 
-fn collect_dead_interior_snapshots(trans: &TransGuard<'_>) -> Result<KVVec<InteriorDelete>, BchError> {
-    let mut delete = KVVec::new();
+fn collect_dead_interior_snapshots(trans: &TransGuard<'_>) -> Result<Vec<InteriorDelete>, BchError> {
+    let mut delete = Vec::new();
     let mut iter = BtreeIter::new(trans, Btree::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each(trans, |_, _, k| get_dead_interior_snapshots(k, &mut delete))?;
     Ok(delete)

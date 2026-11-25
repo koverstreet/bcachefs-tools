@@ -315,7 +315,7 @@ pub struct bch_sb_io {
     pub seq: u64,
     pub s_bdev_file: Option<crate::os::blkdev::BdevFile>,
     /// The path it was opened by, NUL-terminated
-    pub sb_name: Option<crate::util::alloc::Box<[u8], crate::util::alloc::Kmalloc>>,
+    pub sb_name: Option<crate::util::alloc::Box<[u8]>>,
     /// A ref, the handle's
     pub holder: *const crate::sb::io::Holder,
     pub mode: c::blk_mode_t,

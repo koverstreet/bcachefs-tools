@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Rust v0 symbol demangling, on the heap: rustc_demangle's v0 printer, as a
-//! loop over a stack of steps in a KVVec instead of recursion.
+//! loop over a stack of steps in a Vec instead of recursion.
 //!
 //! Backtraces are printed from wherever lock debugging fires - the bottom of
 //! a deep write path, say - and rustc_demangle's recursive descent takes
@@ -26,7 +26,7 @@
 //! steps between Skip and Unskip print nothing, and don't follow backrefs.
 
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::Printbuf;
 use core::fmt::Write;
 
@@ -34,7 +34,7 @@ use core::fmt::Write;
 /// so output can be exponential in the input.
 const MAX_OUT: usize = 16 << 10;
 
-/// The most steps pending: a page's worth, so the KVVec is kmalloc()'d -
+/// The most steps pending: a page's worth, so the Vec is kmalloc()'d -
 /// kvmalloc() of a page or less never falls back to vmalloc - and freed by
 /// kfree(), which a caller under a spinlock can do, where vfree() can't.
 const MAX_STEPS: usize = 4096 / core::mem::size_of::<Step>();
@@ -100,7 +100,7 @@ struct Demangler<'s, 'o> {
     skip:  u32,
     /// Lifetimes bound by for<...> binders around what's being printed
     bound: u32,
-    steps: KVVec<Step>,
+    steps: Vec<Step>,
 }
 
 impl<'s> Demangler<'s, '_> {
@@ -633,7 +633,7 @@ fn v0(out: &mut Printbuf, sym: &str) -> Result<(), Raw> {
         out,
         skip:  0,
         bound: 0,
-        steps: KVVec::new(),
+        steps: Vec::new(),
     };
     {
         let _noreclaim = MemallocFlags::noreclaim();

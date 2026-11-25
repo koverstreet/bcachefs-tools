@@ -8,7 +8,7 @@ use crate::locking::{Locked, Mutex, PercpuRwSem};
 use crate::new_lock;
 use crate::snapshots::subvolume::delete_unlinked;
 use crate::types::{bits_to_longs};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::data_structures::bitmap::AtomicBitArray;
 use crate::os::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
@@ -101,8 +101,8 @@ pub struct bch_fs_snapshots {
     pub(crate) wait_for_pagecache_and_delete_work: ReffedWork<delete_unlinked, crate::field!(super.writes)>,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pub(crate) unlinked: Locked<Mutex, KVVec<u32>>,
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) unlinked: Locked<Mutex, Vec<u32>>,
 }
 
 #[repr(C)]

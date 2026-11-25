@@ -2,7 +2,7 @@
 
 //! **Don't use this.** An intrusive list can't be made safe: linking an item
 //! is a promise about its lifetime that nothing checks, and every list that
-//! goes wrong goes wrong as use-after-free. New code wants a vector - KVVec,
+//! goes wrong goes wrong as use-after-free. New code wants a vector - Vec,
 //! DArray - and the lists we have are to become vectors. This exists for
 //! what can't be one: util/task's WaitList, whose entries live in their
 //! waiters' memory so that waiting can't fail to allocate, and C's lists

@@ -554,7 +554,7 @@ impl<'a> BioRange<'a> {
     #[cfg(kernel)]
     fn vmap(self) -> Option<Mapped<'a>> {
         use crate::os::vmap::Vmap;
-        use crate::util::alloc::KVVec;
+        use crate::util::alloc::Vec;
         use core::ptr;
 
         let pages_of = |s: &Segment<'_>| ((s.offset + s.len) as usize).div_ceil(PAGE_SIZE);
@@ -574,7 +574,7 @@ impl<'a> BioRange<'a> {
         let pages: &mut [*mut c::page] = if nr <= stack.len() {
             &mut stack[..nr]
         } else {
-            heap = KVVec::from_elem(ptr::null_mut(), nr).ok()?;
+            heap = Vec::from_elem(ptr::null_mut(), nr).ok()?;
             &mut heap
         };
 

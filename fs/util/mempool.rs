@@ -17,7 +17,7 @@ use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::os::kernel::HZ;
-use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVec, KVmalloc, Kmalloc};
+use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vec};
 use crate::util::futex::EventCount;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::late::LateInit;
@@ -35,7 +35,7 @@ use pin_init::{pin_data, pinned_drop, PinInit};
 pub struct Mempool<A: AllocGfp + Copy> {
     /* the reserve, and its length published, for free_raw()'s unlocked check */
     #[pin]
-    reserve: Locked<SpinLockIrq, KVec<Element>, Volatile<usize>>,
+    reserve: Locked<SpinLockIrq, Vec<Element>, Volatile<usize>>,
     /* bumped by every element freed to the reserve, for alloc_raw() to wait on */
     freed:   EventCount,
     min_nr:  usize,
@@ -78,8 +78,8 @@ fn first_try(gfp: Flags) -> Flags {
 }
 
 /// The reserve: @min_nr elements, or none, if one can't be had.
-fn fill<A: AllocGfp>(alloc: &A, min_nr: usize, layout: Layout) -> Result<KVec<Element>, AllocError> {
-    let mut reserve = KVec::with_capacity(min_nr)?;
+fn fill<A: AllocGfp>(alloc: &A, min_nr: usize, layout: Layout) -> Result<Vec<Element>, AllocError> {
+    let mut reserve = Vec::with_capacity(min_nr)?;
     let gfp = Flags::empty();
 
     for _ in 0..min_nr {
@@ -92,7 +92,7 @@ fn fill<A: AllocGfp>(alloc: &A, min_nr: usize, layout: Layout) -> Result<KVec<El
     Ok(reserve)
 }
 
-fn drain<A: AllocGfp>(alloc: &A, reserve: &mut KVec<Element>, layout: Layout) {
+fn drain<A: AllocGfp>(alloc: &A, reserve: &mut Vec<Element>, layout: Layout) {
     for e in reserve.drain_all() {
         unsafe { alloc.deallocate(e.0, layout) };
     }
@@ -304,7 +304,7 @@ impl<A: AllocGfp + Copy> Mempool<A> {
 
     fn free_reserve(&self) {
         if self.is_made() {
-            let mut reserve = core::mem::replace(&mut *self.reserve.lock(), KVec::new());
+            let mut reserve = core::mem::take(&mut *self.reserve.lock());
             drain(self.backing(), &mut reserve, self.layout());
         }
     }

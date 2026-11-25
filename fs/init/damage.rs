@@ -41,7 +41,7 @@ use crate::inode;
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
-use crate::util::alloc::{kvvec_insert, KVVec};
+use crate::util::alloc::Vec;
 use crate::os::kernel::ktime_get_real_seconds;
 use crate::util::vstructs::{Unvalidated, Validated};
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
@@ -106,9 +106,9 @@ pub fn inode_has_damage(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> R
 /// versions', merged, sorted by id: damage recorded against an ancestor
 /// version happened to the data a descendant sees.
 pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
-    -> Result<KVVec<c::bch_sb_error_entry_cpu>, BchError>
+    -> Result<Vec<c::bch_sb_error_entry_cpu>, BchError>
 {
-    let mut out: KVVec<c::bch_sb_error_entry_cpu> = KVVec::new();
+    let mut out: Vec<c::bch_sb_error_entry_cpu> = Vec::new();
     loop {
         let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
         let Some(d) = iter.peek_slot(t)?.and_then(|k| k.arm::<c::Damage>()) else { break };
@@ -116,7 +116,7 @@ pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
         for e in d.v().entries.iter() {
             match out.binary_search_by_key(&e.id(), |o| o.id()) {
                 Ok(j)  => out[j] = merge(out[j], e.into()),
-                Err(j) => kvvec_insert(&mut out, j, e.into())?,
+                Err(j) => out.insert(j, e.into())?,
             }
         }
 

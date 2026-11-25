@@ -48,7 +48,7 @@ use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
 use crate::util::projections::VolatilePublish;
-use crate::util::alloc::{Box, KVVec, Kmalloc};
+use crate::util::alloc::{Box, Vec, Kmalloc};
 use crate::util::thin::{ThinBox, ThinMut, ThinRef};
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
@@ -90,7 +90,7 @@ pub struct journal_ptr {
 #[repr(C)]
 #[derive(SelfSized)]
 pub struct journal_replay {
-    pub ptrs: KVVec<c::journal_ptr>,
+    pub ptrs: Vec<c::journal_ptr>,
 
     pub csum_good: bool,
     pub ignore_blacklisted: bool,
@@ -178,7 +178,7 @@ pub struct journal_keys {
      * the reset in journal_keys_sort and get merged into the main
      * array after sorting. Written as the keys are.
      */
-    pub pre_sort: LockedBy<KVVec<c::journal_key>, (), NotRw<'static>>,
+    pub pre_sort: LockedBy<Vec<c::journal_key>, (), NotRw<'static>>,
 
     /*
      * What the journal read kept, by seq from journal_entries_base_seq: the

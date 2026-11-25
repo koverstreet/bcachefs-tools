@@ -19,7 +19,7 @@ use crate::init::passes;
 use crate::init::recovery::NotRw;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwSem, Shared, SharedGuard};
 use crate::debug::trace::events;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::os::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
@@ -63,7 +63,7 @@ impl MarkHeld for MarkWrite<'_> {
 
 #[derive(Default)]
 pub(crate) struct Table {
-    entries:    KVVec<Entry>,
+    entries:    Vec<Entry>,
     gc_running: bool,
 }
 
@@ -109,7 +109,7 @@ impl Table {
         }
     }
 
-    fn with_entries<R>(&mut self, f: impl FnOnce(&mut KVVec<Entry>) -> R) -> R {
+    fn with_entries<R>(&mut self, f: impl FnOnce(&mut Vec<Entry>) -> R) -> R {
         let r = f(&mut self.entries);
         Eytzinger0::sort_by(&mut self.entries, |l, r| l.pos.cmp(&r.pos));
         r
@@ -178,9 +178,9 @@ pub fn mem_read<S>(fs: &Fs, pos: &DiskAccountingPos<S>) -> Counters {
  * with something more general, it exists to support the ioctl used by the
  * 'bcachefs fs usage' command.
  */
-pub fn replicas_usage_read(fs: &Fs) -> Result<KVVec<u8>, BchError> {
+pub fn replicas_usage_read(fs: &Fs) -> Result<Vec<u8>, BchError> {
     let mark = fs.mark_lock().read();
-    let mut out = KVVec::new();
+    let mut out = Vec::new();
     for e in fs.accounting_mem(&mark).entries.iter() {
         let pos = DiskAccountingPos::from_bpos(e.pos);
         let Some(r) = replicas_entry(&pos) else { continue };
@@ -192,9 +192,9 @@ pub fn replicas_usage_read(fs: &Fs) -> Result<KVVec<u8>, BchError> {
     Ok(out)
 }
 
-pub fn to_keys(fs: &Fs, types_mask: u32) -> Result<KVVec<u8>, BchError> {
+pub fn to_keys(fs: &Fs, types_mask: u32) -> Result<Vec<u8>, BchError> {
     let mark = fs.mark_lock().read();
-    let mut out = KVVec::new();
+    let mut out = Vec::new();
     for e in fs.accounting_mem(&mark).entries.iter() {
         let ty = DiskAccountingPos::from_bpos(e.pos).type_().0;
         if types_mask.checked_shr(ty.into()).unwrap_or(0) & 1 == 0 {
@@ -347,7 +347,7 @@ pub(crate) fn accounting_gc_free(fs: &Fs, mark: &mut MarkWrite<'_>) {
     acc.gc_running = false;
 }
 
-fn read_key(fs: &Fs, entries: &mut KVVec<Entry>, k: BkeySC<'_>) -> Result<(), BchError> {
+fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchError> {
     let Some(a) = k.arm::<Accounting>() else { return Ok(()) };
     let d = &a.v().d;
     let pos = DiskAccountingPos::from_bpos(k.k.p);
@@ -449,7 +449,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, not_rw
 }
 
 fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal_keys, not_rw: &mut NotRw<'_>,
-                       entries: &mut KVVec<Entry>, i: usize) -> Result<usize, BchError>
+                       entries: &mut Vec<Entry>, i: usize) -> Result<usize, BchError>
 {
     let next = accumulate_newer(ctx, fs, journal_keys, not_rw, i)?;
     read_key(fs, entries, journal_keys.key(&journal_keys.keys()[i]).into())?;
@@ -457,7 +457,7 @@ fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal
 }
 
 fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, not_rw: &mut NotRw<'_>,
-             entries: &mut KVVec<Entry>) -> Result<(), BchError>
+             entries: &mut Vec<Entry>) -> Result<(), BchError>
 {
     let fs = trans.fs();
     let keys = journal_keys.keys();
@@ -709,7 +709,7 @@ fn read(fs: &Fs) -> Result<(), BchError> {
 
     let journal_keys = fs.journal_keys_get().expect("accounting read after recovery was done with the journal keys");
     let journal_keys = journal_keys.value();
-    let mut entries = KVVec::new();
+    let mut entries = Vec::new();
     let walked = read_walk(&trans, journal_keys, &mut not_rw, &mut entries);
 
     /*

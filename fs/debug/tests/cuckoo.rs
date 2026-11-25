@@ -56,7 +56,7 @@ use crate::fs::Fs;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::prt;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, CuckooMultimap, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
@@ -119,10 +119,10 @@ impl TestItem for u64 {
 }
 
 impl TestItem for Entry<TestEntry> {
-    type Pool = KVVec<[TestEntry; 4]>;
+    type Pool = Vec<[TestEntry; 4]>;
 
     fn pool(keys: &[u64]) -> Result<Self::Pool, BchError> {
-        let mut pool = KVVec::new();
+        let mut pool = Vec::new();
         for &key in keys {
             pool.push(core::array::from_fn(|_| TestEntry { key, val: AtomicU64::new(0) }))?;
         }
@@ -149,7 +149,7 @@ type Map = Entry<TestEntry>;
 fn model<I: TestItem, S: CuckooHasher, const W: usize>(name: &str) -> TestRet {
     const NR: usize = 512;
     let key = |i: usize| (i as u64).wrapping_mul(0x9E3779B97F4A7C15) >> 2;
-    let mut keys = KVVec::new();
+    let mut keys = Vec::new();
     for i in 0..NR {
         keys.push(key(i))?;
     }
@@ -159,7 +159,7 @@ fn model<I: TestItem, S: CuckooHasher, const W: usize>(name: &str) -> TestRet {
     // What each key's last op left it, and its ops so far that changed it,
     // make()'s @seq - so an op's item is never the entry in the table: on the
     // heap, as a kernel stack is small
-    let mut st = KVVec::new();
+    let mut st = Vec::new();
     for _ in 0..NR {
         st.push((0u64, 0u64))?;
     }
@@ -431,7 +431,7 @@ fn round<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str, 
     let readers = num_online_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
     let injecting = faults.alloc_fail != 0;
 
-    let (mut keys, mut key_vals) = (KVVec::new(), KVVec::new());
+    let (mut keys, mut key_vals) = (Vec::new(), Vec::new());
     for i in 0..KEYS {
         keys.push(KeyState::default())?;
         key_vals.push(key(i))?;
@@ -594,7 +594,7 @@ fn shared<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str,
 {
     let injecting = faults.alloc_fail != 0;
 
-    let (mut keys, mut wins) = (KVVec::new(), KVVec::new());
+    let (mut keys, mut wins) = (Vec::new(), Vec::new());
     for i in 0..SHARED {
         keys.push(key(i))?;
         wins.push(AtomicU32::new(0))?;
@@ -620,7 +620,7 @@ fn shared<I: TestItem, S: CuckooHasher, const W: usize>(table: &str, name: &str,
         for r in 0..readers {
             let (writers_left, checked) = (&writers_left, &checked);
             s.spawn(format_args!("cuckoo shared reader[{r}]"), move || {
-                let mut found = KVVec::new();
+                let mut found = Vec::new();
                 for _ in 0..SHARED {
                     found.push(0u64)?;
                 }
@@ -879,7 +879,7 @@ fn bench<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
         let lookups = (n as u64).max(1 << 22);
 
         let mut rng = random_u64() | 1;
-        let (mut keys, mut misses) = (KVVec::new(), KVVec::new());
+        let (mut keys, mut misses) = (Vec::new(), Vec::new());
         for _ in 0..n {
             keys.push((xorshift(&mut rng) | 1) & !(3 << 62))?;
             misses.push(xorshift(&mut rng) & !1)?;

@@ -9,7 +9,7 @@ use crate::sb::counters::recent_counters;
 use crate::sb::members::btree_bitmap_gc_schedule;
 use crate::cstructs::c;
 use crate::new_lock;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::os::kobject::Kobject;
 use crate::util::projections::Volatile;
@@ -364,8 +364,8 @@ pub struct Dev {
         ReffedWork<do_discards_fast, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
     /// Buckets queued for fast discard: alloc/discard.rs's alone.
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pub(crate) discard_fast: Locked<Mutex, KVVec<u64>>,
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) discard_fast: Locked<Mutex, Vec<u64>>,
     /// Discards in flight on it, by every worker: a futex word, a worker at
     /// the limit sleeping on it.
     #[pin]
@@ -699,14 +699,14 @@ pub struct Fs {
 
     /* Journal scrub: extents needing repair after recovery */
     #[pin]
-    #[init(crate::new_lock!(crate::util::alloc::KVVec::new()))]
+    #[init(crate::new_lock!(crate::util::alloc::Vec::new()))]
     pub(crate) scrub_journal_repairs:
-        Locked<Mutex, crate::util::alloc::KVVec<crate::data::scrub_journal::Repair>>,
+        Locked<Mutex, crate::util::alloc::Vec<crate::data::scrub_journal::Repair>>,
 
     /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
     #[pin]
-    #[init(crate::new_lock!(crate::util::alloc::KVVec::new()))]
-    pub(crate) lost_extents_ranges: Locked<Mutex, crate::util::alloc::KVVec<core::ops::Range<Bpos>>>,
+    #[init(crate::new_lock!(crate::util::alloc::Vec::new()))]
+    pub(crate) lost_extents_ranges: Locked<Mutex, crate::util::alloc::Vec<core::ops::Range<Bpos>>>,
 
     #[pin]
     #[init(::pin_init::zeroed::<crate::data::compress::Compress>())]

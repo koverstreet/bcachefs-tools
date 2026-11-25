@@ -105,7 +105,7 @@
 //! as any field's type is (os/*/workqueue.rs).
 
 use crate::errcode::BchError;
-use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, AllocError, KBox, Vec};
 use crate::util::rcu::FreeAnytime;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::size_of;
@@ -742,9 +742,9 @@ pub(crate) trait Holds<T>: Sized {
 
 // each element in a pinned box of its own, made there; room for its box is
 // made first, so an element made is an element held
-impl<T: FreeAnytime> Holds<T> for KVVec<Pin<KBox<T>>> {
+impl<T: FreeAnytime> Holds<T> for Vec<Pin<KBox<T>>> {
     fn empty() -> Self {
-        KVVec::new()
+        Vec::new()
     }
 
     fn insert<E: From<AllocError>>(&mut self, init: impl PinInit<T, E>) -> Result<(), E> {
@@ -759,7 +759,7 @@ impl<T: FreeAnytime> Holds<T> for KVVec<Pin<KBox<T>>> {
     }
 
     fn retain(&mut self, mut f: impl FnMut(&T) -> bool) {
-        KVVec::retain(self, |b| f(&**b))
+        Vec::retain(self, |b| f(&**b))
     }
 }
 

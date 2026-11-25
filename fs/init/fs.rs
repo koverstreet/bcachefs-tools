@@ -31,7 +31,7 @@ use crate::sb::io::{read_super, sb_to_fs, Holder};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevKobjRef, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::{Printbuf, ToText};
-use crate::util::alloc::{Arc, KVVec};
+use crate::util::alloc::{Arc, Vec};
 use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
 use crate::os::kernel::READ;
@@ -421,7 +421,7 @@ impl Fs {
 /// The filesystem @sbs are the devices of, with options @opts: Fs::init()'s
 /// fields, the rest from init_from(). It takes the devices it attaches,
 /// leaving their handles zeroed; on failure, it's exited.
-fn alloc(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Holder>,
+fn alloc(sbs: &mut Vec<c::bch_sb_handle>, opts: &c::bch_opts, holder: Arc<Holder>,
          user_key: Option<&c::bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
     let mut b = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::ENOMEM_fs_alloc)?;
     // nothing else reaches it till init_from() registers it; if init_early()
@@ -441,7 +441,7 @@ const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
 impl Fs {
     /// What's set while nothing else can reach it: its @holder, its superblock,
     /// and its name.
-    fn init_early(mut self: Pin<&mut Self>, sbs: &KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
+    fn init_early(mut self: Pin<&mut Self>, sbs: &Vec<c::bch_sb_handle>, opts: &c::bch_opts,
                   holder: Arc<Holder>) -> Result<(), BchError> {
         *self.as_mut().project().holder = Some(holder);
         self.stdio.store(opts.stdio as usize as *mut _, Relaxed);
@@ -478,7 +478,7 @@ impl Fs {
         Ok(())
     }
 
-    fn init_from(&self, sbs: &mut KVVec<c::bch_sb_handle>, user_key: Option<&c::bch_key>, out: &mut Printbuf)
+    fn init_from(&self, sbs: &mut Vec<c::bch_sb_handle>, user_key: Option<&c::bch_key>, out: &mut Printbuf)
         -> Result<(), BchError>
     {
         blacklist_table_initialize(self)?;
@@ -706,12 +706,12 @@ impl OpenFs {
     }
 
     fn claim_to<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts,
-                    holder: &Arc<Holder>, out: &mut Printbuf) -> Result<KVVec<c::bch_sb_handle>, BchError> {
+                    holder: &Arc<Holder>, out: &mut Printbuf) -> Result<Vec<c::bch_sb_handle>, BchError> {
         if devs.len() == 0 {
             return Err(c::EINVAL.into());
         }
 
-        let mut sbs = KVVec::with_capacity(devs.len())?;
+        let mut sbs = Vec::with_capacity(devs.len())?;
         for path in devs {
             sbs.push(read_super(path, opts, Some(holder))?)?;
         }
@@ -741,7 +741,7 @@ fn open_failed(e: BchError, out: &mut Printbuf) -> BchError {
 
 /// An open's first half: its devices claimed and read, the dead ones dropped
 pub struct Claimed {
-    sbs:    KVVec<c::bch_sb_handle>,
+    sbs:    Vec<c::bch_sb_handle>,
     holder: Arc<Holder>,
     out:    Printbuf,
 }
@@ -927,13 +927,13 @@ pub fn newest<'a>(sbs: impl IntoIterator<Item = &'a c::bch_sb>) -> Option<usize>
 }
 
 /// Newest first, without those removed from the filesystem or split from it
-pub fn filter_dead(sbs: &mut KVVec<c::bch_sb_handle>, opts: &c::bch_opts,
+pub fn filter_dead(sbs: &mut Vec<c::bch_sb_handle>, opts: &c::bch_opts,
                    mut out: Option<&mut Printbuf>) -> Result<(), BchError> {
     let Some(best) = newest(sbs.iter().map(|h| h.sb())) else {
         return Ok(());
     };
 
-    let mut dead = KVVec::from_elem(false, sbs.len())?;
+    let mut dead = Vec::from_elem(false, sbs.len())?;
     for i in (0..sbs.len()).rev() {
         let name = sbs[i].io().name().to_str().unwrap_or("?");
         match dev_in_fs(sbs[best].sb(), Some(sbs[best].bdev()), &sbs[i], opts) {

@@ -17,7 +17,7 @@ use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members::sb_member;
 use crate::types::Le64;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::Printbuf;
 
 fn invalid() -> BchError {
@@ -26,7 +26,7 @@ fn invalid() -> BchError {
 
 /// @runs are on the device and don't overlap - so they total no more than
 /// its nbuckets, which members validation, first, has capped below u32.
-fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err: &mut Printbuf)
+fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: Vec<Range<u64>>, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     runs.sort_unstable_by_key(|r| r.start);
@@ -56,7 +56,7 @@ fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err
 impl SbFieldOps for c::bch_sb_field_journal<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut runs = KVVec::with_capacity(f.buckets.len())?;
+        let mut runs = Vec::with_capacity(f.buckets.len())?;
         for b in &f.buckets {
             runs.push(b.get()..b.get().saturating_add(1))?;
         }
@@ -76,7 +76,7 @@ impl SbFieldOps for c::bch_sb_field_journal<Validated> {
 impl SbFieldOps for c::bch_sb_field_journal_v2<Validated> {
     fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal_v2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut runs = KVVec::with_capacity(f.d.len())?;
+        let mut runs = Vec::with_capacity(f.d.len())?;
         for d in &f.d {
             let (start, nr) = (d.start.get(), d.nr.get());
             let Some(end) = start.checked_add(nr).filter(|&end| end > start) else {

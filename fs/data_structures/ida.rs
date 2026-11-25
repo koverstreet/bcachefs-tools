@@ -20,7 +20,7 @@
 //! it - kvmalloc() and kvfree() may sleep.
 
 use crate::locking::{Locked, SpinLockIrq};
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use pin_init::{pin_data, pin_init, PinInit, Zeroable};
 
 const B: usize = usize::BITS as usize;
@@ -67,7 +67,7 @@ fn bit_range(base: usize, span_shift: u32, min: u32, max: u32) -> Option<(u32, u
 struct Tree {
     depth: u32,
     /// (B^depth - 1) / (B - 1) words
-    nodes: KVVec<usize>,
+    nodes: Vec<usize>,
 }
 
 // depth 0, no nodes
@@ -147,7 +147,7 @@ impl Tree {
 
     /// One level deeper, into @new_nodes - every id free, a tree of depth + 1:
     /// the old nodes, to free outside the lock.
-    fn grow(&mut self, mut new_nodes: KVVec<usize>) -> KVVec<usize> {
+    fn grow(&mut self, mut new_nodes: Vec<usize>) -> Vec<usize> {
         /*
          * Old tree becomes the leftmost subtree of new tree. For each level L
          * in the old tree (0..depth-1), its B^L nodes move to new level L+1,
@@ -256,7 +256,7 @@ unsafe impl Zeroable for Ida {}
 
 impl Ida {
     pub fn new() -> impl PinInit<Self> {
-        pin_init!(Self { tree <- crate::new_lock!(Tree { depth: 0, nodes: KVVec::new() }, "&ida->lock") })
+        pin_init!(Self { tree <- crate::new_lock!(Tree { depth: 0, nodes: Vec::new() }, "&ida->lock") })
     }
 
     /// The lowest free id in [@min, @max] - @max no more than INT_MAX, as the
@@ -280,7 +280,7 @@ impl Ida {
             };
 
             /* Initialize everything to "all free". */
-            let new_nodes = KVVec::from_elem(!0usize, nodes_up_to_level(depth + 1))?;
+            let new_nodes = Vec::from_elem(!0usize, nodes_up_to_level(depth + 1))?;
 
             let unused = {
                 let mut t = self.tree.lock();

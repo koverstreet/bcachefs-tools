@@ -74,7 +74,7 @@ use crate::fs::Fs;
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::prt;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::Cuckoo;
 use crate::os::kernel::{cond_resched, ktime_get_ns, WRITE};
@@ -214,13 +214,13 @@ const WORK_BUF_NR: usize = 1024;
 /// The entries a buffered phase has read ahead and not yet done: positions in
 /// its work btree, in order.
 struct WorkBuf {
-    pos:  KVVec<Bpos>,
+    pos:  Vec<Bpos>,
     next: usize,
 }
 
 impl WorkBuf {
     fn new() -> Result<Self, BchError> {
-        Ok(WorkBuf { pos: KVVec::with_capacity(WORK_BUF_NR)?, next: 0 })
+        Ok(WorkBuf { pos: Vec::with_capacity(WORK_BUF_NR)?, next: 0 })
     }
 
     fn clear(&mut self) {
@@ -297,7 +297,7 @@ struct StripeRetry {
     mark: IoMark,
 }
 
-type StripeRetries = KVVec<StripeRetry>;
+type StripeRetries = Vec<StripeRetry>;
 
 /// The parked stripes, by index: bch_fs_reconcile.stripes_pending.
 pub type StripesPending = Cuckoo;
@@ -658,7 +658,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
 /// movers. A device's that can't start is reported, and the rest go on:
 /// do_reconcile_phys().
 fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
-    let mut devs = KVVec::new();
+    let mut devs = Vec::new();
     for ca in fs.members().filter(|ca| ca.mi.get().rotational && ca.is_online()) {
         devs.push(u32::from(ca.dev_idx))?;
     }

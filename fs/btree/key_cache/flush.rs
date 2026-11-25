@@ -13,7 +13,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::journal::pins::PinHolder;
-use crate::util::alloc::{flags, KVVec};
+use crate::util::alloc::{flags, Vec};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::{fs_fatal_error, prt};
@@ -252,7 +252,7 @@ impl Fs {
 
         let srcu = self.btree.trans.barrier.read_lock();
         let trans = crate::btree_trans!(self);
-        let mut keys: KVVec<c::bkey_cached_key> = KVVec::new();
+        let mut keys: Vec<c::bkey_cached_key> = Vec::new();
         let mut any_done = false;
 
         /*

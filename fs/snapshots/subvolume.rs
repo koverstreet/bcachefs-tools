@@ -37,7 +37,7 @@ use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
 use crate::inode;
 use crate::snapshots::snapshot;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::place::Contained;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
@@ -774,7 +774,7 @@ fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
 pub(crate) fn delete_unlinked(snapshots: &c::bch_fs_snapshots) {
     let fs = snapshots.container();
     loop {
-        let subvols = core::mem::replace(&mut *snapshots.unlinked.lock(), KVVec::new());
+        let subvols = core::mem::replace(&mut *snapshots.unlinked.lock(), Vec::new());
         if subvols.is_empty() {
             break;
         }

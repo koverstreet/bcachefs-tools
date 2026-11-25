@@ -28,7 +28,7 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
 use crate::os::kernel::unlikely;
 use crate::debug::trace::events;
-use crate::util::alloc::{init_at, AllocError, KVVec};
+use crate::util::alloc::{init_at, AllocError, Vec};
 use crate::util::place::{up, FieldPath};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
@@ -244,8 +244,8 @@ fn lock_pair<'b>(new: &'b PinList, new_seq: u64, old: Option<&'b PinList>, old_s
  * All of them, not just the live window: slot() masks without a range check,
  * so a stray pin for an out of window seq still lands on a valid, empty entry
  */
-fn new_entries(nr: usize) -> Result<KVVec<PinList>, AllocError> {
-    let mut v = KVVec::with_capacity(nr)?;
+fn new_entries(nr: usize) -> Result<Vec<PinList>, AllocError> {
+    let mut v = Vec::with_capacity(nr)?;
     for slot in &mut v.spare_capacity_mut()[..nr] {
         let Ok(()) = unsafe { init_at(PinList::new(), slot.as_mut_ptr()) };
     }

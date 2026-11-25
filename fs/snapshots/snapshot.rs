@@ -311,7 +311,7 @@ use crate::fs::Fs;
 use crate::init::passes;
 use crate::snapshots::{check_snapshots, delete, subvolume};
 use crate::util::log::{LogLevel, LogMsg};
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::bitmap::BitArray;
 use crate::util::projections::Publish;
 use crate::util::rcu::{RcuArray, RcuArrayWriter};
@@ -1484,9 +1484,9 @@ pub fn check_key_has_snapshot<'a>(
 /// The snapshots that have overwritten the key at @pos in @btree: on each
 /// branch, the one closest to @pos.snapshot.
 pub fn overwrites(t: &TransAttempt<'_, '_>, btree: Btree, pos: Bpos)
-    -> Result<KVVec<u32>, BchError>
+    -> Result<Vec<u32>, BchError>
 {
-    let mut ids = KVVec::new();
+    let mut ids = Vec::new();
 
     if !t.fs().snapshots.has_children(pos.snapshot) {
         return Ok(ids);

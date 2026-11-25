@@ -21,7 +21,7 @@
 
 use crate::c;
 use crate::prt;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::demangle::prt_demangled;
 use crate::os::sched;
 use crate::util::Printbuf;
@@ -109,7 +109,7 @@ pub(crate) fn prt_fn_name(out: &mut Printbuf, f: c_ulong) {
 fn demangle_in_place(out: &mut Printbuf, start: usize) {
     // demangling reads the name as it writes: a Rust name is moved out of
     // @out first, and left as it is if it can't be
-    let mut bounce = KVVec::new();
+    let mut bounce = Vec::new();
     {
         let sym = &out.as_bytes()[start..];
         if !sym.starts_with(b"_R") {
@@ -150,7 +150,7 @@ pub fn prt_backtrace(out: &mut Printbuf, stack: &[c_ulong]) {
 
 /// @task's stack, @skipnr frames in - and the frame saving it, for current -
 /// into @stack, grown till it fits: an error if it can't be, what fit kept.
-pub fn save_backtrace(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
+pub fn save_backtrace(stack: &mut Vec<c_ulong>, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
     #[cfg(CONFIG_STACKTRACE)]
     {
         stack.clear();
@@ -180,7 +180,7 @@ pub fn save_backtrace(stack: &mut KVVec<c_ulong>, task: *mut c::task_struct, ski
 pub fn prt_task_backtrace(out: &mut Printbuf, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
     let skipnr = skipnr + (task == sched::current()) as u32;
 
-    let mut stack = KVVec::new();
+    let mut stack = Vec::new();
     let ret = save_backtrace(&mut stack, task, skipnr);
     prt_backtrace(out, &stack);
     ret

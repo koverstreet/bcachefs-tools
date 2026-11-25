@@ -4,7 +4,7 @@ use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::c;
 use crate::data::keylist;
 use crate::data_structures::dst_room::DstRoom;
-use crate::util::alloc::{Flags, AllocError, KVVec};
+use crate::util::alloc::{Flags, AllocError, Vec};
 use crate::os::kernel::prefetch;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
@@ -46,12 +46,12 @@ impl KeysLiveWriter {
 /// What changes its length or capacity takes the KeysLive its lock
 /// publishes them in, and sets it.
 #[derive(Default)]
-pub struct WbKeys(KVVec<u64>);
+pub struct WbKeys(Vec<u64>);
 
 impl Deref for WbKeys {
-    type Target = KVVec<u64>;
+    type Target = Vec<u64>;
 
-    fn deref(&self) -> &KVVec<u64> {
+    fn deref(&self) -> &Vec<u64> {
         &self.0
     }
 }

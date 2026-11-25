@@ -27,7 +27,7 @@ use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::journal::sb::buckets_to_sb;
 use crate::c::JournalGuard;
 use crate::locking::{Guard as _, LockedBy};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::totalram_bytes;
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
@@ -36,14 +36,14 @@ use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree
 const STAGES: [Stage; 4] = [DISCARD, DIRTY_ONDISK, DIRTY, CUR];
 
 pub struct JournalRing {
-    buckets: KVVec<u64>,
-    seq:     KVVec<u64>,
+    buckets: Vec<u64>,
+    seq:     Vec<u64>,
     cursors: [u32; STAGES.len()],
     /*
      * Buckets fsck found another user's data in, still needed: never written
      * again, and dropped once reclaim has them awaiting discard
      */
-    retired: KVVec<u64>,
+    retired: Vec<u64>,
     /* the journal read's: the newest seq it's found, in cur */
     highest_seq_found: u64,
 }
@@ -227,11 +227,11 @@ impl JournalRing {
      * the old ones given back to free outside it too
      */
 
-    fn replace(&mut self, buckets: KVVec<u64>, seq: KVVec<u64>) -> [KVVec<u64>; 2] {
+    fn replace(&mut self, buckets: Vec<u64>, seq: Vec<u64>) -> [Vec<u64>; 2] {
         [core::mem::replace(&mut self.buckets, buckets), core::mem::replace(&mut self.seq, seq)]
     }
 
-    fn splice(&mut self, s: Splice, buckets: KVVec<u64>, mut seq: KVVec<u64>) -> [KVVec<u64>; 2] {
+    fn splice(&mut self, s: Splice, buckets: Vec<u64>, mut seq: Vec<u64>) -> [Vec<u64>; 2] {
         s.apply(&mut seq, self.seqs());
         for c in &mut self.cursors {
             *c = s.cursor(*c, seq.len());
@@ -290,10 +290,10 @@ pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>, c::JournalLockAt>
 
 pub fn new() -> JournalBuckets {
     let ring = JournalRing {
-        buckets: KVVec::new(),
-        seq:     KVVec::new(),
+        buckets: Vec::new(),
+        seq:     Vec::new(),
         cursors: [0; STAGES.len()],
-        retired: KVVec::new(),
+        retired: Vec::new(),
         highest_seq_found: 0,
     };
     LockedBy::new(ring, pin_init::Zeroable::zeroed())
@@ -350,11 +350,11 @@ fn sb_buckets(sb: &c::bch_sb) -> impl Iterator<Item = u64> + '_ {
 pub fn load(ca: &Dev, sb: &c::bch_sb) -> Result<(), BchError> {
     let fs = ca.fs();
     let enomem = |_| fs.err(Errcode::ENOMEM_dev_journal_init);
-    let mut buckets = KVVec::from_elem(0, sb_buckets(sb).count()).map_err(enomem)?;
+    let mut buckets = Vec::from_elem(0, sb_buckets(sb).count()).map_err(enomem)?;
     for (dst, b) in buckets.iter_mut().zip(sb_buckets(sb)) {
         *dst = b;
     }
-    let seq = KVVec::from_elem(0, buckets.len()).map_err(enomem)?;
+    let seq = Vec::from_elem(0, buckets.len()).map_err(enomem)?;
 
     let old = ca.with_journal_ring(|ring| {
         ca.journal.buckets.set(buckets.len() as u32);
@@ -369,7 +369,7 @@ pub fn load(ca: &Dev, sb: &c::bch_sb) -> Result<(), BchError> {
 /// Sorted, in the superblock too: at a clean mount, before the journal read
 /// has given them seqs.
 pub(crate) fn sort(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev) -> Result<(), BchError> {
-    let mut buckets = KVVec::from_elem(0, ca.journal.nr() as usize).map_err(enomem(fs))?;
+    let mut buckets = Vec::from_elem(0, ca.journal.nr() as usize).map_err(enomem(fs))?;
     ca.with_journal_ring(|ring| {
         ring.buckets.sort_unstable();
         buckets.copy_from_slice(ring.buckets());
@@ -388,10 +388,10 @@ pub(crate) fn sort(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev) -> Result<(), Bc
 fn splice(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, removed: usize, inserted: &[u64],
           pos: impl FnOnce(&mut JournalRing) -> Result<Option<usize>, BchError>) -> Result<bool, BchError> {
     /* sb_lock held, the list doesn't change between our looks at it */
-    let alloc = || KVVec::from_elem(0, ca.journal.nr() as usize + inserted.len()).map_err(enomem(fs));
+    let alloc = || Vec::from_elem(0, ca.journal.nr() as usize + inserted.len()).map_err(enomem(fs));
     let (mut list, mut buckets, mut seq) = (alloc()?, alloc()?, alloc()?);
 
-    let commit = |ring: &mut JournalRing, s, buckets: KVVec<u64>, seq| {
+    let commit = |ring: &mut JournalRing, s, buckets: Vec<u64>, seq| {
         ca.journal.buckets.set(buckets.len() as u32);
         ring.splice(s, buckets, seq)
     };
@@ -449,8 +449,8 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark)
     assert!(nr > have, "growing {ca}'s journal to {nr} buckets, from {have}");
     let want = (nr - have) as usize;
 
-    let mut obs = KVVec::with_capacity(want).map_err(enomem(fs))?;
-    let mut bu = KVVec::with_capacity(want).map_err(enomem(fs))?;
+    let mut obs = Vec::with_capacity(want).map_err(enomem(fs))?;
+    let mut bu = Vec::with_capacity(want).map_err(enomem(fs))?;
 
     let ret = (|| -> Result<(), BchError> {
         while bu.len() < want {

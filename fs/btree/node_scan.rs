@@ -22,7 +22,7 @@ use crate::sb::members::DevIoRef;
 use crate::init::passes;
 use crate::locking::{Locked, Mutex};
 use crate::types::{Le16, Le64};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::bio::{Bio, BioBox, BioOwner};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::heap::{MinHeap, PeekMut};
@@ -35,7 +35,7 @@ use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_dev_ratelimited, bch_info, bch_info_dev, prt};
 
-pub(crate) type NodeScan = Locked<Mutex, KVVec<FoundBtreeNode>>;
+pub(crate) type NodeScan = Locked<Mutex, Vec<FoundBtreeNode>>;
 
 #[derive(Clone)]
 pub(crate) struct FoundBtreeNode {
@@ -414,7 +414,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
 
     dump_nodes(fs, "nodes after merging replicas", &nodes);
 
-    let mut heap = MinHeap::new(replace(&mut *nodes, KVVec::new()),
+    let mut heap = MinHeap::new(replace(&mut *nodes, Vec::new()),
                                 |l: &FoundBtreeNode, r: &FoundBtreeNode| l.pos().cmp(&r.pos()));
     while let Some(n) = heap.pop() {
         let i = nodes.len();

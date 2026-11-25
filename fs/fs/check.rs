@@ -16,7 +16,7 @@ use crate::dirent::{Dirent, DirentTarget};
 use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::capacity::DiskReservation;
-use crate::util::alloc::{kvvec_insert, KVVec};
+use crate::util::alloc::Vec;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
@@ -29,12 +29,12 @@ use crate::format::{Bpos, Btree};
 pub struct SnapshotsSeen {
     pos: Bpos,
     /// Ascending, as seen in key order, plus any a repair added in order.
-    ids: KVVec<u32>,
+    ids: Vec<u32>,
 }
 
 impl SnapshotsSeen {
     pub fn new() -> Self {
-        SnapshotsSeen { pos: Default::default(), ids: KVVec::new() }
+        SnapshotsSeen { pos: Default::default(), ids: Vec::new() }
     }
 
     /// Record a key at @pos; a new inode:offset starts the list over.
@@ -91,7 +91,7 @@ impl SnapshotsSeen {
 
     /// A copy, to keep the list as it was at this key while the walk goes on.
     pub fn try_clone(&self) -> Result<Self, BchError> {
-        let mut ids = KVVec::with_capacity(self.ids.len())?;
+        let mut ids = Vec::with_capacity(self.ids.len())?;
         for &i in self.ids.iter() {
             ids.push(i)?;
         }
@@ -102,7 +102,7 @@ impl SnapshotsSeen {
     pub fn add_inorder(&mut self, id: u32) -> Result<(), BchError> {
         match self.ids.iter().position(|&i| i >= id) {
             Some(idx) if self.ids[idx] == id => {}
-            Some(idx) => kvvec_insert(&mut self.ids, idx, id)?,
+            Some(idx) => self.ids.insert(idx, id)?,
             None => self.ids.push(id)?,
         }
         Ok(())
@@ -137,9 +137,9 @@ pub struct InodeWalker {
     last_pos:         Bpos,
     /// The versions are valid while the transaction's commit_count is this.
     commit_count:     u32,
-    inodes:           KVVec<WalkerEntry>,
+    inodes:           Vec<WalkerEntry>,
     /// From get_visible(): snapshots where a whiteout hides older versions.
-    deletes:          KVVec<u32>,
+    deletes:          Vec<u32>,
     /// A repair changed an inode's type: see take_changed_inode_type().
     changed_inode_type: bool,
 }
@@ -183,8 +183,8 @@ impl InodeWalker {
             recalculate_sums: false,
             last_pos:         Default::default(),
             commit_count:     0,
-            inodes:           KVVec::new(),
-            deletes:          KVVec::new(),
+            inodes:           Vec::new(),
+            deletes:          Vec::new(),
             changed_inode_type: false,
         }
     }
@@ -522,7 +522,7 @@ impl InodeWalker {
                                                           BtreeIterFlags::empty()).found()? {
                 if u.bi_snapshot != snapshot {
                     let e = WalkerEntry { inode: u, whiteout: false, count: 0 };
-                    kvvec_insert(&mut self.inodes, 0, e)?;
+                    self.inodes.insert(0, e)?;
                 }
             }
         }
@@ -961,7 +961,7 @@ pub mod ioctl {
         let mut opts = user_opts(arg.opts)?;
 
         let user_devs = user.tail(&arg);
-        let mut devs = KVVec::with_capacity(user_devs.len())?;
+        let mut devs = Vec::with_capacity(user_devs.len())?;
         for i in 0..user_devs.len() {
             devs.push(UserStr::read(user_devs.get(i)?, c::PATH_MAX as usize)?)?;
         }

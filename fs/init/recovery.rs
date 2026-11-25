@@ -25,7 +25,7 @@ use crate::snapshots::snapshot::snapshots_read;
 use crate::snapshots::subvolume;
 use crate::types::Le64;
 use crate::locking::Guard as _;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::os_str::{OsStr, OsStrExt};
@@ -420,7 +420,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
     fs.recovery.progress.init_count(Some(c"journal replay: sorted pass"), Units::keys,
                                     keys.len() as u64);
 
-    let mut keys_sorted = KVVec::new();
+    let mut keys_sorted = Vec::new();
     for (idx, k) in keys.iter().enumerate() {
         cond_resched();
         fs.recovery.progress.update_count(fs);

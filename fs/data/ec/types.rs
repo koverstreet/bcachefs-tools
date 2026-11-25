@@ -9,7 +9,7 @@ use crate::data::ec::stripe_new::NewStripes;
 use crate::fs::Fs;
 use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SpinLockIrq};
 use crate::new_lock;
-use crate::util::alloc::{KBox, KVVec};
+use crate::util::alloc::{KBox, Vec};
 use crate::os::bio::BioSet;
 use crate::data_structures::cuckoo::Cuckoo;
 use crate::util::futex::EventCount;
@@ -79,14 +79,14 @@ pub struct bch_fs_ec {
     /// The stripe heads, made on first use - boxed, as their users hold them
     /// without this lock: Rust's alone.
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pub(crate) stripe_heads: Locked<Lockdep<ByteLock>, KVVec<Pin<KBox<c::ec_stripe_head>>>>,
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) stripe_heads: Locked<Lockdep<ByteLock>, Vec<Pin<KBox<c::ec_stripe_head>>>>,
 
     /// Each disk label's ec_dev_stripe_state, made on first use - boxed, as
     /// stripe heads point at them: Rust's alone.
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pub(crate) dev_stripe_states: Locked<Lockdep<ByteLock>, KVVec<Pin<KBox<c::ec_dev_stripe_state>>>>,
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) dev_stripe_states: Locked<Lockdep<ByteLock>, Vec<Pin<KBox<c::ec_dev_stripe_state>>>>,
 
     /// The stripes being made, once their heads or repairs hand them on,
     /// until their task is done with them; and room for those held. Boxed,

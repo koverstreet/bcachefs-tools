@@ -147,7 +147,7 @@ use crate::data::moving::MovingIo;
 use crate::errcode::{Errcode, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
-use crate::util::alloc::{AllocError, KBox, KVVec};
+use crate::util::alloc::{AllocError, KBox, Vec};
 use crate::util::backref::BackRef;
 use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
@@ -349,13 +349,13 @@ pub(crate) type StripeNewBox = TaskBox<'static, StripeNew>;
 /// its maker's until it's handed on, and comes here then - where nothing can
 /// fail - so room is kept for every stripe held: capacity >= len + @held.
 pub(crate) struct NewStripes {
-    v:          KVVec<StripeNewBox>,
+    v:          Vec<StripeNewBox>,
     held:       usize,
 }
 
 impl NewStripes {
     pub(crate) fn new() -> Self {
-        NewStripes { v: KVVec::new(), held: 0 }
+        NewStripes { v: Vec::new(), held: 0 }
     }
 
     /// Room for one more stripe, held by its maker until it's handed on.

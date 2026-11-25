@@ -30,7 +30,7 @@
 use crate::c;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::{new_lock, prt};
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::os::kernel::HZ;
 use crate::os::percpu::{CpuGuard, PerCpu};
 use crate::os::sched;
@@ -55,8 +55,8 @@ pub struct io_clock {
 
     /// The waiters, latest first: Rust's alone.
     #[pin]
-    #[init(new_lock!(KVVec::new(), (), "&clock->timer_lock"))]
-    timers: Locked<SpinLockIrq, KVVec<Timer>>,
+    #[init(new_lock!(Vec::new(), (), "&clock->timer_lock"))]
+    timers: Locked<SpinLockIrq, Vec<Timer>>,
 }
 
 /// A waiter on a clock: wakes @task when the clock reaches @expire.
@@ -109,7 +109,7 @@ impl io_clock {
     /// allocated unlocked, swapped in under the lock, and the old buffer -
     /// empty - freed once the lock's dropped.
     fn grow(&self, cap: usize) -> Result<(), AllocError> {
-        let mut new = KVVec::with_capacity((cap * 2).max(4))?;
+        let mut new = Vec::with_capacity((cap * 2).max(4))?;
         let mut timers = self.timers.lock();
         if timers.capacity() == cap {
             for t in timers.drain_all() {

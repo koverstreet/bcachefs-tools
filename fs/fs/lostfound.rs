@@ -24,7 +24,7 @@ use crate::{inode, inode_opts};
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::str_hash;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
@@ -414,7 +414,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         return Ok(());
     }
 
-    let mut whiteouts_done: KVVec<u32> = KVVec::new();
+    let mut whiteouts_done: Vec<u32> = Vec::new();
     let mut iter = BtreeIter::new(t, Btree::inodes,
                                   spos(0, inode.bi_inum, inode.bi_snapshot - 1),
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);

@@ -55,7 +55,7 @@ use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::Fifo;
-use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, KBox, Vec};
 use crate::util::ffi::c_char;
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::os::file::{file_data, Any, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
@@ -276,7 +276,7 @@ impl StdioRedirect {
     /// A line of input, newline and all, into @line - waiting at most
     /// @timeout jiffies, MAX_SCHEDULE_TIMEOUT being forever: ETIME if it runs
     /// out, EPIPE if the file's closed.
-    pub fn readline_timeout(&self, line: &mut KVVec<u8>, timeout: c_ulong) -> Result<(), BchError> {
+    pub fn readline_timeout(&self, line: &mut Vec<u8>, timeout: c_ulong) -> Result<(), BchError> {
         let input = &self.input;
         loop {
             let n = input.events.wait_until(Sleep::IDLE.timeout(timeout as _), || {

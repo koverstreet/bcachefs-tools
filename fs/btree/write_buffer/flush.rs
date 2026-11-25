@@ -16,7 +16,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Btree};
 use crate::locking::MemallocFlags;
 use crate::data_structures::sort::heapsort_by_lt;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::{local_clock, num_online_cpus, race_fault};
 use crate::util::par::{self, Backend};
 use crate::util::projections::VolatileWriter;
@@ -358,7 +358,7 @@ fn flush_sorted_sharded(
 
     *shards_total.place() += n_shards as u64;
 
-    let cnts = if n_shards > 1 { KVVec::from_elem(FlushCounters::default(), n_shards).ok() } else { None };
+    let cnts = if n_shards > 1 { Vec::from_elem(FlushCounters::default(), n_shards).ok() } else { None };
 
     if let Some(mut cnts) = cnts {
         let wb_idx = wb.idx.get() as usize;

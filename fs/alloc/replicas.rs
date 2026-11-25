@@ -29,7 +29,7 @@ use crate::sb::io::{entries_end, SbFieldOps, SbSection, SbState};
 use crate::sb::members::member_exists;
 use crate::os::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::strided::StridedBuf;
@@ -476,12 +476,12 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::Wr
 
 pub struct ReplicasCpu {
     entries: StridedBuf<Entry>,
-    refs:    KVVec<AtomicI32>,
+    refs:    Vec<AtomicI32>,
 }
 
 impl ReplicasCpu {
     pub const fn new() -> Self {
-        ReplicasCpu { entries: StridedBuf::new(), refs: KVVec::new() }
+        ReplicasCpu { entries: StridedBuf::new(), refs: Vec::new() }
     }
 
     fn len(&self) -> usize {
@@ -502,7 +502,7 @@ impl ReplicasCpu {
 
     /// @nr slots of @stride bytes, zeroed, their refs 0.
     fn zeroed(nr: usize, stride: usize) -> Result<Self, AllocError> {
-        let mut refs = KVVec::with_capacity(nr)?;
+        let mut refs = Vec::with_capacity(nr)?;
         for _ in 0..nr {
             refs.push(AtomicI32::new(0))?;
         }
@@ -547,7 +547,7 @@ impl ReplicasCpu {
         let e = e.as_bytes();
         let mut new = ReplicasCpu {
             entries: self.entries.restrided(self.entries.stride().max(e.len()), 1)?,
-            refs:    KVVec::with_capacity(self.len() + 1)?,
+            refs:    Vec::with_capacity(self.len() + 1)?,
         };
         for r in self.refs.iter() {
             new.refs.push(AtomicI32::new(r.load(Ordering::Relaxed)))?;

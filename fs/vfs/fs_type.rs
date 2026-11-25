@@ -38,7 +38,7 @@ use crate::OptId;
 use crate::os::fs_context::{FsContext, FsParam, ParamValue};
 use crate::os::fs_type::{FsType, FsTypeTable, SuperData};
 use crate::os::super_block::{MountedOn, ReconfSuper, Root};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::printbuf::Printbuf;
 use crate::util::vstructs::plain_bytes_mut;
 use pin_init::{init, Init};
@@ -73,7 +73,7 @@ pub(crate) struct MountParams {
     /// parses them, after Claimed::open().
     parse_later: Printbuf,
     /// The devices, from however many "source" parameters.
-    devs:        KVVec<DevPath>,
+    devs:        Vec<DevPath>,
     /// "status_fd"'s channel, for as long as the filesystem might still print
     /// there: see start() and status_fd.rs.
     status:      Option<StatusFile>,
@@ -83,11 +83,11 @@ pub(crate) struct MountParams {
 }
 
 /// A device's path, NUL-terminated.
-struct DevPath(KVVec<u8>);
+struct DevPath(Vec<u8>);
 
 impl DevPath {
     fn new(path: &[u8]) -> Result<Self, BchError> {
-        let mut v = KVVec::with_capacity(path.len() + 1)?;
+        let mut v = Vec::with_capacity(path.len() + 1)?;
         v.extend_from_slice(path)?;
         v.push(0)?;
         Ok(DevPath(v))
@@ -287,7 +287,7 @@ impl FsType for Bcachefs {
         init!(MountParams {
             opts        <- pin_init::init_zeroed(),
             parse_later: Printbuf::new(),
-            devs:        KVVec::new(),
+            devs:        Vec::new(),
             status:      None,
             user_key:    None,
         }? BchError)

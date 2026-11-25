@@ -21,7 +21,7 @@ use crate::{prt, sb_err_on};
 use crate::sb::errors::{prt_error_ids, SbErrorId};
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::Le64;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated};
 use crate::util::Printbuf;
@@ -345,8 +345,8 @@ const _: () = {
 /// version of @major from @version_incompat on, what downgrading past it
 /// needs - those that need nothing left out.
 fn downgrade_entries(major: u32, version_incompat: MetadataVersion, have_stripes: bool)
-        -> Result<KVVec<u8>, AllocError> {
-    let mut table = KVVec::<u8>::new();
+        -> Result<Vec<u8>, AllocError> {
+    let mut table = Vec::<u8>::new();
     for src in DOWNGRADE.iter().filter(|s| s.version.major() == major && s.version >= version_incompat) {
         let stripes = DOWNGRADE_STRIPES.iter().find(|s| have_stripes && s.version == src.version);
         let passes = passes::passes_to_stable(src.passes | stripes.map_or(0, |s| s.passes));

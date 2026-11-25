@@ -19,7 +19,7 @@ use crate::util::rcu::FreeAnytime;
 // ── Allocators ───────────────────────────────────────────────────────────
 //
 // core's Allocator: in-kernel, the kernel's C allocators with the flags the
-// task's memalloc scope says - so KVVec, KBox and everything built on them
+// task's memalloc scope says - so Vec, KBox and everything built on them
 // honour NORECLAIM and NOWARN, which the page allocator doesn't know. In
 // userspace, std's allocator. Each port's impls are its own (os::alloc).
 
@@ -375,7 +375,6 @@ pub use crate::data_structures::vec::{DrainAll, IntoIter, PushError, Vec};
 use crate::data_structures::array_vec::LenUint;
 
 pub type KVec<T> = Vec<T, Kmalloc>;
-pub type KVVec<T> = Vec<T, KVmalloc>;
 
 /// A @T, kvmalloc()'d, the allocation failing with @err - @init with its own.
 pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::Errcode)
@@ -454,12 +453,4 @@ pub fn init_with<T>(make: impl FnOnce() -> T) -> impl ::pin_init::Init<T> {
 pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::Errcode)
     -> impl ::pin_init::PinInit<T, crate::errcode::BchError> {
     unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(|_| err.into())) }
-}
-
-/// Insert @v at @idx, moving what's after it up one: neither build's KVVec
-/// has insert(), so it's a push and a rotate.
-pub fn kvvec_insert<T>(vec: &mut KVVec<T>, idx: usize, v: T) -> Result<(), AllocError> {
-    vec.push(v)?;
-    vec[idx..].rotate_right(1);
-    Ok(())
 }

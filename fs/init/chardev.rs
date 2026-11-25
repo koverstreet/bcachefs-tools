@@ -47,7 +47,7 @@ use crate::os::kobject::Kobject;
 use crate::os::module::{ModuleExit, ThisModule};
 use crate::os::ioctl::{arg, inout, input, output, vstruct, UserArg, UserStr, UserVstruct};
 use crate::util::ioctl::Ioctl;
-use crate::util::alloc::{KBox, KVVec};
+use crate::util::alloc::{KBox, Vec};
 use kernel::alloc::flags::GFP_KERNEL;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefGuard, TryRefcount};
@@ -69,7 +69,6 @@ use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
 use core::ffi::CStr;
 use cstruct_macros::vtable;
-use crate::util::alloc::KVec;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
 use crate::format::{Btree, DataType, MemberState};
@@ -422,7 +421,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
     /* bound per-call kernel allocation; the caller loops anyways */
     let buf_size = arg.buf_size.min(1 << 20) as usize;
 
-    let mut out = KVVec::<u8>::new();
+    let mut out = Vec::<u8>::new();
     let full = {
         let trans = btree_trans!(fs);
         let mut iter = BtreeIter::new_level(&*trans, arg.btree, arg.start, arg.level, flags);
@@ -772,11 +771,11 @@ const NAME: &CStr = c"bcachefs-ctl";
 /// The filesystems, by minor - None, a free one - each a BackRef to it from
 /// its CtlDev; and the global device.
 struct Minors {
-    fs:     KVec<Option<BackRef<Fs>>>,
+    fs:     Vec<Option<BackRef<Fs>>>,
     global: Option<Device>,
 }
 
-static MINORS: Locked<ByteLock, Minors> = Locked::new_const(Minors { fs: KVec::new(), global: None }, ());
+static MINORS: Locked<ByteLock, Minors> = Locked::new_const(Minors { fs: Vec::new(), global: None }, ());
 
 static CHRDEV: Chrdev = Chrdev::new(NAME);
 
@@ -812,7 +811,7 @@ impl Drop for Minor {
         // The last one out frees the table: nothing else does, the static
         // is never dropped
         if minors.fs.iter().all(Option::is_none) {
-            minors.fs = KVec::new();
+            minors.fs = Vec::new();
         }
     }
 }

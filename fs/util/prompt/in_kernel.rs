@@ -3,7 +3,7 @@ use core::time::Duration;
 use super::{Question, Reply, UNANSWERED};
 use crate::c;
 use crate::fs::Fs;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::{jiffies, HZ};
 use crate::os::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
@@ -30,7 +30,7 @@ impl<'a> Prompt<'a> {
         let mut slow = slow.map(|s| {
             (jiffies().wrapping_add(s.after.as_millis() as core::ffi::c_ulong * HZ / 1000), s.then)
         });
-        let mut line = KVVec::new();
+        let mut line = Vec::new();
 
         loop {
             if self.0.write(false, rec.as_bytes()).is_err() {

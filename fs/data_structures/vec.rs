@@ -2,7 +2,7 @@
 
 //! Vec<T, A, L>: a growable array allocated by A, its length and capacity
 //! L, laid out as C's darray - nr, size, data - with data NULL until it
-//! allocates. KVec and KVVec are it: the same in both builds.
+//! allocates. The same in both builds.
 
 use crate::data_structures::array_vec::LenUint;
 use crate::util::alloc::{flags, stateless, AllocError, AllocGfp, Flags};
@@ -14,7 +14,7 @@ use core::ptr::{self, NonNull};
 use core::slice;
 
 #[repr(C)]
-pub struct Vec<T, A: AllocGfp, L: LenUint = usize> {
+pub struct Vec<T, A: AllocGfp = crate::os::alloc::Global, L: LenUint = usize> {
     nr:   L,
     size: L,
     data: Option<NonNull<T>>,
@@ -33,17 +33,51 @@ unsafe impl<T, A: AllocGfp, L: LenUint> ::pin_init::Zeroable for Vec<T, A, L> {}
 /// push_within_capacity()'s, with what wasn't pushed.
 pub struct PushError<T>(pub T);
 
-impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
-    const ZST: bool = size_of::<T>() == 0;
-
+impl<T> Vec<T> {
     pub const fn new() -> Self {
-        Vec { nr: L::ZERO, size: L::ZERO, data: None, _p: PhantomData }
+        Self::empty()
     }
 
     pub fn with_capacity(capacity: usize) -> Result<Self, AllocError> {
-        let mut v = Self::new();
+        Self::with_capacity_in(capacity, crate::os::alloc::Global)
+    }
+
+    pub fn from_elem(value: T, n: usize) -> Result<Self, AllocError>
+    where
+        T: Clone,
+    {
+        let mut v = Self::with_capacity(n)?;
+        if n != 0 {
+            for _ in 1..n {
+                unsafe { v.push_unchecked(value.clone()) };
+            }
+            unsafe { v.push_unchecked(value) };
+        }
+        Ok(v)
+    }
+}
+
+impl<T, A: AllocGfp> Vec<T, A> {
+    /// Our allocators are stateless: @alloc only says which.
+    pub const fn new_in(_alloc: A) -> Self
+    where
+        A: Copy,
+    {
+        Self::empty()
+    }
+
+    pub fn with_capacity_in(capacity: usize, _alloc: A) -> Result<Self, AllocError> {
+        let mut v = Self::empty();
         v.reserve(capacity)?;
         Ok(v)
+    }
+}
+
+impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
+    const ZST: bool = size_of::<T>() == 0;
+
+    const fn empty() -> Self {
+        Vec { nr: L::ZERO, size: L::ZERO, data: None, _p: PhantomData }
     }
 
     pub fn len(&self) -> usize {
@@ -188,18 +222,13 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
         Ok(())
     }
 
-    pub fn from_elem(value: T, n: usize) -> Result<Self, AllocError>
-    where
-        T: Clone,
-    {
-        let mut v = Self::with_capacity(n)?;
-        if n != 0 {
-            for _ in 1..n {
-                unsafe { v.push_unchecked(value.clone()) };
-            }
-            unsafe { v.push_unchecked(value) };
-        }
-        Ok(v)
+    /// @v put at @index, those after it moved up: std's, if it can allocate.
+    pub fn insert(&mut self, index: usize, v: T) -> Result<(), AllocError> {
+        let len = self.len();
+        assert!(index <= len, "inserting at {index} in a vector of {len}");
+        self.push(v)?;
+        self[index..].rotate_right(1);
+        Ok(())
     }
 
     /// The element at @index, taken out, those after it moved down: std's.
@@ -309,7 +338,7 @@ impl<T, A: AllocGfp, L: LenUint> Drop for Vec<T, A, L> {
 
 impl<T, A: AllocGfp, L: LenUint> Default for Vec<T, A, L> {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
     }
 }
 

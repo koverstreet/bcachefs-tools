@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A min-heap over a KVVec, ordered by a comparator, as the kernel's min_heap.
+//! A min-heap over a Vec, ordered by a comparator, as the kernel's min_heap.
 
 use core::cmp::Ordering;
 use core::ops::{Deref, DerefMut};
 
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 
 /// @v[node] moved down until no child orders after it: a max-heap's sift, by
 /// @cmp.
@@ -27,13 +27,13 @@ pub(crate) fn sift_down<T>(v: &mut [T], mut node: usize, cmp: &mut impl FnMut(&T
 }
 
 pub struct MinHeap<T, F: FnMut(&T, &T) -> Ordering> {
-    v:   KVVec<T>,
+    v:   Vec<T>,
     cmp: F,
 }
 
 impl<T, F: FnMut(&T, &T) -> Ordering> MinHeap<T, F> {
     /// @v as a heap, least first by @cmp: min_heapify_all().
-    pub fn new(v: KVVec<T>, cmp: F) -> Self {
+    pub fn new(v: Vec<T>, cmp: F) -> Self {
         let mut heap = MinHeap { v, cmp };
         for i in (0..heap.v.len() / 2).rev() {
             heap.sift_down(i);
@@ -114,7 +114,7 @@ impl<T, F: FnMut(&T, &T) -> Ordering> Drop for PeekMut<'_, T, F> {
 #[cfg(test)]
 mod tests {
     use super::{MinHeap, PeekMut};
-    use crate::util::alloc::KVVec;
+    use crate::util::alloc;
 
     // A wrong heap is silent: node scan would resolve overlapping nodes out
     // of order and keep the wrong one.
@@ -122,7 +122,7 @@ mod tests {
     fn min_heap_pops_in_order() {
         let mut s: u64 = 1;
         for n in 0..200 {
-            let mut v = KVVec::new();
+            let mut v = alloc::Vec::new();
             let mut want = Vec::new();
             for _ in 0..n {
                 s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);

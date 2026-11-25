@@ -25,7 +25,7 @@ use crate::journal::buckets::JournalRing;
 use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{kvzalloc, AllocError, Flags, KVVec};
+use crate::util::alloc::{kvzalloc, AllocError, Flags, Vec};
 use crate::util::thin::ThinBox;
 use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
@@ -577,7 +577,7 @@ fn bsearch_head(nr: usize, anchor: usize, seq: &mut impl FnMut(usize) -> u64) ->
  * to a single bucket per device, so two adjacent buckets with the
  * same seq is impossible and signals corruption.
  */
-fn walk_inuse(nr: usize, head: usize, seq: &mut impl FnMut(usize) -> u64, order: &mut KVVec<(usize, u64)>)
+fn walk_inuse(nr: usize, head: usize, seq: &mut impl FnMut(usize) -> u64, order: &mut Vec<(usize, u64)>)
     -> Result<bool, AllocError>
 {
     let mut prev_seq = seq(head);
@@ -620,8 +620,8 @@ fn walk_inuse(nr: usize, head: usize, seq: &mut impl FnMut(usize) -> u64, order:
  *     empty. `order` stays empty; caller falls through to the slow
  *     full-bucket-read path (which handles the empty-journal case too).
  */
-fn bsearch_collect(nr: usize, mut seq: impl FnMut(usize) -> u64) -> Result<KVVec<(usize, u64)>, AllocError> {
-    let mut order = KVVec::new();
+fn bsearch_collect(nr: usize, mut seq: impl FnMut(usize) -> u64) -> Result<Vec<(usize, u64)>, AllocError> {
+    let mut order = Vec::new();
 
     let Some(anchor) = anchor_bucket(nr, &mut seq) else {
         /* journal is empty — every bucket peeked, none had a jset */
@@ -698,15 +698,15 @@ fn read_at<'b>(ca: &DevIoRef<c::DevReadRefKind>, bio: &'b mut BioBox<Bio<Buffer<
 /// A device's ring, as a read has it: its buckets, and the newest seq each
 /// bucket had when it was copied - from the reads before.
 struct RingCopy {
-    buckets: KVVec<u64>,
-    seqs:    KVVec<u64>,
+    buckets: Vec<u64>,
+    seqs:    Vec<u64>,
 }
 
 impl RingCopy {
     /// @ca's, copied out from under j->lock into room made outside it.
     fn of(ca: &Dev) -> Result<Self, BchError> {
         let nr = ca.journal.nr() as usize;
-        let (mut buckets, mut seqs) = (KVVec::with_capacity(nr)?, KVVec::with_capacity(nr)?);
+        let (mut buckets, mut seqs) = (Vec::with_capacity(nr)?, Vec::with_capacity(nr)?);
         ca.with_journal_ring(|r| {
             assert_eq!(r.nr() as usize, nr, "{ca}: the journal ring's nr out of step with its published nr");
             buckets.extend_from_slice(r.buckets()).expect("room made for the ring's buckets");
@@ -726,7 +726,7 @@ struct WriteHead {
 /// What a device's read found: the newest seq it saw in each bucket, and the
 /// newest entry.
 struct Found {
-    seqs: KVVec<u64>,
+    seqs: Vec<u64>,
     head: Option<WriteHead>,
 }
 
@@ -751,18 +751,18 @@ impl Found {
 struct DevReader<'a> {
     fs:      &'a Fs,
     ca:      &'a DevIoRef<c::DevReadRefKind>,
-    buckets: KVVec<u64>,
+    buckets: Vec<u64>,
     found:   Found,
     bio:     BioBox<'static, Bio<Buffer<IoBuf>>>,
 }
 
 impl<'a> DevReader<'a> {
-    fn new(fs: &'a Fs, ca: &'a DevIoRef<c::DevReadRefKind>, buckets: KVVec<u64>) -> Result<Self, BchError> {
+    fn new(fs: &'a Fs, ca: &'a DevIoRef<c::DevReadRefKind>, buckets: Vec<u64>) -> Result<Self, BchError> {
         let bytes = (ca.bucket_bytes() as usize).next_power_of_two();
         let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_journal_read_buf_realloc))?;
         let bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
             Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ, |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
-        let found = Found { seqs: KVVec::from_elem(0, buckets.len())?, head: None };
+        let found = Found { seqs: Vec::from_elem(0, buckets.len())?, head: None };
         Ok(DevReader { fs, ca, buckets, found, bio })
     }
 
@@ -906,7 +906,7 @@ impl<'a> DevReader<'a> {
         self.seqs()[bucket]
     }
 
-    fn read_live(&mut self, read: &ReadLock<'_>, mut order: KVVec<(usize, u64)>) -> Result<(), BchError> {
+    fn read_live(&mut self, read: &ReadLock<'_>, mut order: Vec<(usize, u64)>) -> Result<(), BchError> {
         let nr = self.nr();
 
         /*
@@ -975,10 +975,10 @@ impl<'a> DevReader<'a> {
              * bsearch / walk fails). An empty order on return means the
              * journal itself is empty -> slow full-bucket-read.
              */
-            let mut peeked = KVVec::from_elem(false, nr)?;
+            let mut peeked = Vec::from_elem(false, nr)?;
             bsearch_collect(nr, |i| self.peek_once(&mut peeked, i))?
         } else {
-            KVVec::new()
+            Vec::new()
         };
 
         if !order.is_empty() {
@@ -994,9 +994,9 @@ impl<'a> DevReader<'a> {
 
 /// Each of @devs read, in parallel, each one's finds put in its slot, then
 /// merged into its ring.
-fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRefKind>>,
+fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: Vec<DevIoRef<c::DevReadRefKind>>,
                 full_read: bool) -> Result<(), BchError> {
-    let mut found: KVVec<Option<Found>> = KVVec::with_capacity(devs.len())?;
+    let mut found: Vec<Option<Found>> = Vec::with_capacity(devs.len())?;
     for _ in devs.iter() {
         found.push(None)?;
     }
@@ -1039,9 +1039,9 @@ fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: KVVec<DevIoRef<c::DevReadRef
 }
 
 fn journal_devs(fs: &Fs, want: impl Fn(&Dev) -> bool, degraded: bool)
-    -> Result<KVVec<DevIoRef<c::DevReadRefKind>>, BchError>
+    -> Result<Vec<DevIoRef<c::DevReadRefKind>>, BchError>
 {
-    let mut devs = KVVec::new();
+    let mut devs = Vec::new();
     for ca in fs.members() {
         if !want(&ca) {
             continue;
@@ -1407,7 +1407,7 @@ pub fn journal_read(fs: &Fs) -> Result<c::journal_start_info, BchError> {
     Ok(info)
 }
 
-fn validate_kept(fs: &Fs, rewind_ranges: &mut KVVec<c::journal_rewind_range>, entries: &mut JournalEntries, drop_before: u64)
+fn validate_kept(fs: &Fs, rewind_ranges: &mut Vec<c::journal_rewind_range>, entries: &mut JournalEntries, drop_before: u64)
     -> Result<(), BchError>
 {
     for i in entries.slots_mut() {
@@ -1499,6 +1499,7 @@ pub fn entry_log_str_eq(entry: &c::jset_entry, s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::vec::Vec;
 
     fn ring(nr: usize, tail: usize, live: usize, first: u64, step: u64) -> Vec<u64> {
         let mut r = vec![0; nr];

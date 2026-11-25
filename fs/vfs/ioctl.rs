@@ -34,7 +34,7 @@ use crate::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opt
 use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::file::File;
 use super::file::InodeFile;
 use super::super_block::SuperBlock;
@@ -472,7 +472,7 @@ fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
     let mut p = parent(&inode, n);
     drop(inode);
 
-    let mut dirs: KVVec<InodeRef> = KVVec::new();
+    let mut dirs: Vec<InodeRef> = Vec::new();
     while !namei::subvol_inum_eq(p, dir) {
         // inum_is_descendant() found no loop: the cap is for a rename since
         if p.inum == 0 || dirs.len() >= 4096 {
@@ -507,7 +507,7 @@ fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
      * directory is deeper than its parent, so a step up that isn't
      * shallower is the loop - but nothing checks it here yet.
      */
-    let mut dirs: KVVec<InodeRef> = KVVec::new();
+    let mut dirs: Vec<InodeRef> = Vec::new();
     while dir != 0 {
         let i = InodeInfo::get_trans(t, c::subvol_inum { subvol: parent_sv.into(), inum: dir })?;
         let (subvol, _, next) = up(&i);

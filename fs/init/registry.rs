@@ -22,7 +22,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::{ByteLock, Locked};
 use crate::sb::io::Holder;
-use crate::util::alloc::{Arc, KVVec};
+use crate::util::alloc::{Arc, Vec};
 use crate::util::backref::BackRef;
 use crate::util::futex::EventCount;
 use crate::util::log::{log_no_fs, LogLevel};
@@ -58,8 +58,8 @@ pub enum Key<'a> {
 }
 
 /// @paths' devices, by number: no IO, nothing claimed
-pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<KVVec<c::dev_t>, BchError> {
-    let mut devs = KVVec::new();
+pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<c::dev_t>, BchError> {
+    let mut devs = Vec::new();
     for path in paths {
         let dev = crate::os::blkdev::lookup(path).inspect_err(|e| {
             log_no_fs(LogLevel::ERR, crate::message!("cannot open with device {}: {}",
@@ -92,17 +92,17 @@ crate::display_via_to_text!(impl['a] Key<'a>);
 struct OpeningEntry {
     holder: Arc<Holder>,
     by:     Opener,
-    devs:   KVVec<c::dev_t>,
+    devs:   Vec<c::dev_t>,
     uuid:   Option<[u8; 16]>,
 }
 
 struct Registry {
-    open:    KVVec<BackRef<Fs>>,
-    opening: KVVec<OpeningEntry>,
+    open:    Vec<BackRef<Fs>>,
+    opening: Vec<OpeningEntry>,
 }
 
 static REGISTRY: Locked<ByteLock, Registry> =
-    Locked::new_const(Registry { open: KVVec::new(), opening: KVVec::new() }, ());
+    Locked::new_const(Registry { open: Vec::new(), opening: Vec::new() }, ());
 
 /// Woken when an Opening ends
 static OPENING_DONE: EventCount = EventCount::new();
@@ -199,7 +199,7 @@ impl FsHandle {
             }
 
             let holder = Holder::new()?;
-            let mut d = KVVec::with_capacity(devs.len())?;
+            let mut d = Vec::with_capacity(devs.len())?;
             d.extend_from_slice(devs)?;
             registry.opening.push(OpeningEntry { holder: holder.clone(), by, devs: d, uuid: None })?;
             return Ok(FsHandle::Opening(Opening { holder, by }));

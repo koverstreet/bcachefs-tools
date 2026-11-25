@@ -41,7 +41,7 @@ use crate::inode;
 use crate::inode_opts::reinherit_attrs;
 use crate::snapshots::subvolume;
 use crate::str_hash;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::os::kernel::{capable, Capability};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::{Printbuf, ToText};
@@ -665,14 +665,14 @@ pub fn inode_get_dirent<'i, 'a>(
 /// printed from the root down. @note is why the walk stopped short of the
 /// root, if it did.
 struct PathUp {
-    names: KVVec<u8>,
-    ends:  KVVec<usize>,
+    names: Vec<u8>,
+    ends:  Vec<usize>,
     note:  Printbuf,
 }
 
 impl PathUp {
     fn new() -> Self {
-        PathUp { names: KVVec::new(), ends: KVVec::new(), note: Printbuf::new() }
+        PathUp { names: Vec::new(), ends: Vec::new(), note: Printbuf::new() }
     }
 
     fn push(&mut self, name: &OsStr) -> Result<(), BchError> {
@@ -725,7 +725,7 @@ fn inum_to_path_up(
     path:        &mut PathUp,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut seen: KVVec<(u32, u64)> = KVVec::new();
+    let mut seen: Vec<(u32, u64)> = Vec::new();
 
     let mut ret = Ok(());
 
@@ -847,7 +847,7 @@ pub fn inum_is_descendant(
 ) -> Result<bool, BchError> {
     let mut subvol = inum.subvol as u32;
     let mut cur = inum.inum;
-    let mut seen: KVVec<(u32, u64)> = KVVec::new();
+    let mut seen: Vec<(u32, u64)> = Vec::new();
 
     let mut snapshot = subvolume::get_snapshot(t, subvol)?;
 

@@ -25,7 +25,7 @@ use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::{bch_enum, MaybeZeroable};
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::format::{Bpos, Btree};
 
 #[bch_enum(closed)]
@@ -54,7 +54,7 @@ pub struct per_snapshot_io_opts {
     pub dev_cookie: c::bch_devs_mask,
 
     pub fs_io_opts: c::bch_inode_opts,
-    pub d: KVVec<c::snapshot_io_opts_entry>,
+    pub d: Vec<c::snapshot_io_opts_entry>,
 }
 
 /// The work btree a key with @r is tracked in: rb_work_id().

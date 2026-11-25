@@ -16,7 +16,7 @@
 //! slice's.
 
 use crate::data_structures::dst_room::DstRoom;
-use crate::util::alloc::{AllocError, KVVec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::projections::View;
 use crate::util::vstructs::{cast_plain_mut, Plain};
 use core::marker::PhantomData;
@@ -95,20 +95,20 @@ impl<'a, T: Plain> StridedMut<'a, T> {
 }
 
 pub struct StridedBuf<T: ?Sized> {
-    bytes:  KVVec<u8>,
+    bytes:  Vec<u8>,
     stride: usize,
     _t:     PhantomData<fn() -> *const T>,
 }
 
 impl<T: ?Sized> StridedBuf<T> {
     pub const fn new() -> Self {
-        StridedBuf { bytes: KVVec::new(), stride: 0, _t: PhantomData }
+        StridedBuf { bytes: Vec::new(), stride: 0, _t: PhantomData }
     }
 
     /// @nr slots of @stride bytes, zeroed.
     pub fn zeroed(nr: usize, stride: usize) -> Result<Self, AllocError> {
         let len = nr.checked_mul(stride).ok_or(AllocError)?;
-        Ok(StridedBuf { bytes: KVVec::from_elem(0, len)?, stride, _t: PhantomData })
+        Ok(StridedBuf { bytes: Vec::from_elem(0, len)?, stride, _t: PhantomData })
     }
 
     pub fn len(&self) -> usize {

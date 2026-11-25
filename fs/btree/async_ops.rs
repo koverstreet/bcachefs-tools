@@ -18,7 +18,7 @@ use crate::fs::{Fs, WriteRef};
 use crate::init::passes::RecoveryPass;
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
-use crate::util::alloc::{AllocError, Kmalloc, KVVec};
+use crate::util::alloc::{AllocError, Kmalloc, Vec};
 use crate::util::backref::BackRef;
 use crate::util::futex::EventCount;
 use crate::util::late::Late;
@@ -112,8 +112,8 @@ pub(crate) struct AsyncOps {
     table: OpTable,
     /* Queued before the filesystem may go read-write: run_pending_async_btree_ops() runs them */
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pending: Locked<Mutex, KVVec<OpBox>>,
+    #[init(new_lock!(Vec::new()))]
+    pending: Locked<Mutex, Vec<OpBox>>,
     running: AtomicU32,
     running_done: EventCount,
     #[late(Workqueue::new(c"btree_node_rewrite", WqFlags::PERCPU, 0), ENOMEM_btree_interior_update_worker_init)]

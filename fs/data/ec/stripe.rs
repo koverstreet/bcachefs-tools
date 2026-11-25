@@ -31,7 +31,7 @@ use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{cast_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
                             plain_bytes_mut, Validated};
@@ -460,7 +460,7 @@ pub(crate) fn carried_blocks<'k>(map: &[u8], old: StripeK<'k>, new: StripeK<'_>)
 /// a stripe there has - looked up once each: C's widen_cache. Sorted by
 /// (disk_label, sectors).
 #[derive(Default)]
-pub struct WidenCache(KVVec<((u8, u16), u32)>);
+pub struct WidenCache(Vec<((u8, u16), u32)>);
 
 impl WidenCache {
     pub fn new() -> Self {

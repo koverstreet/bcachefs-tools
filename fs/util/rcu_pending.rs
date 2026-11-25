@@ -23,7 +23,7 @@ use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
-use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, Flags, KVVec};
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, Flags, Vec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
 use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
@@ -214,7 +214,7 @@ struct PcpuState {
      * can't efficiently merge radix trees for expired grace periods, so we
      * need darray/vector:
      */
-    objs:     KVVec<Seq>,
+    objs:     Vec<Seq>,
 
     /* Third entry is for expired objects: */
     lists:    [List; ACTIVE + 1],
@@ -612,7 +612,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
 
     unsafe extern "C" fn init_pcpu(slot: *mut Pcpu<'f, T, A>, this: *mut Self, cpu: c_uint) {
         let lock = new_lock!(PcpuState {
-            objs:     KVVec::new(),
+            objs:     Vec::new(),
             lists:    Default::default(),
             cb_armed: false,
         }, "rcu_pending_pcpu.lock");

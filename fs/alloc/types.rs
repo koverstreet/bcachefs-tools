@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
 use crate::format::DataType;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SeqLock, SpinLockIrq};
 use crate::new_lock;
 use crate::types::CacheAligned;
@@ -463,8 +463,8 @@ pub struct bch_fs_discards {
 
     /// Buckets with a discard issued, by any worker, not yet marked free.
     #[pin]
-    #[init(new_lock!(KVVec::new()))]
-    pub(crate) in_flight: Locked<Mutex, KVVec<u64>>,
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) in_flight: Locked<Mutex, Vec<u64>>,
 
     /// The worker's progress, for sysfs and the allocator's stuck report.
     #[pin]

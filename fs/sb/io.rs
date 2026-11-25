@@ -157,7 +157,7 @@ use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut, read_past, ArmRef, Head, SelfSized, InPlace, InState, State, Unsized, Unvalidated, UnvalidatedEntries, Validated, ValidatedEntriesMut};
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_uint, CStr, c_ulong};
-use crate::util::alloc::{Arc, Flags, KVec, KVVec};
+use crate::util::alloc::{Arc, Flags, Vec};
 use crate::init::dev::{SbBio, SbStorage};
 use core::sync::atomic::AtomicPtr;
 use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit};
@@ -1400,7 +1400,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
 
     let enomem = |_| BchError::from(c::ENOMEM);
     io.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
-    let mut name = KVec::new();
+    let mut name = Vec::new();
     name.extend_from_slice(path.to_bytes_with_nul()).map_err(enomem)?;
     io.sb_name = Some(name.into_boxed_slice());
 
@@ -2239,7 +2239,7 @@ struct CopyFailed {
 /// failed - all of them, if there was memory to list them.
 struct Copies {
     written:    c::bch_devs_mask,
-    failed:     KVVec<CopyFailed>,
+    failed:     Vec<CopyFailed>,
     any_failed: bool,
 }
 
@@ -2273,7 +2273,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // Note: we do writes to RO devices here, and we might want to change that
     // in the future. For now, we expect to be able to call write_super() when
     // we're not yet RW.
-    let mut cas = KVVec::new();
+    let mut cas = Vec::new();
     for ca in fs.online_members() {
         if devs.is_some_and(|d| !d.d.test(ca.dev_idx.into())) {
             continue;
@@ -2371,8 +2371,8 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
 }
 
 /// @cas's superblocks, for SbIos to borrow: those with one.
-fn dev_sbs<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, cas: &'a WriteDevs) -> Result<KVVec<DevSbMut<'a>>, BchError> {
-    let mut sbs = KVVec::with_capacity(cas.len()).map_err(|_| BchError::from(c::ENOMEM))?;
+fn dev_sbs<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, cas: &'a WriteDevs) -> Result<Vec<DevSbMut<'a>>, BchError> {
+    let mut sbs = Vec::with_capacity(cas.len()).map_err(|_| BchError::from(c::ENOMEM))?;
     for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
         sbs.push_nofail(dev_sb);
     }
@@ -2432,7 +2432,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Copies, BchError> {
     const WRITE: c::MemberErrorType = c::MemberErrorType::write;
 
-    let mut copies = Copies { written: Default::default(), failed: KVVec::new(), any_failed: false };
+    let mut copies = Copies { written: Default::default(), failed: Vec::new(), any_failed: false };
     let mut sbs = dev_sbs(fs, sb, cas)?;
 
     for idx in 0.. {
@@ -2655,7 +2655,7 @@ impl Fs {
     /// behind us. bch2_write_super_replicas().
     #[track_caller]
     pub fn write_super_replicas_ret(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let mut m = KVVec::new();
+        let mut m = Vec::new();
         let mut devs = c::bch_devs_mask::default();
         let mut total = 0u64;
 
@@ -2896,7 +2896,7 @@ pub const BCHFS_MAGIC: [u8; 16] = [
 #[cfg(feature = "std")]
 pub struct SbBuf<S: State = Validated> {
     /// In u64s: a superblock's alignment. As long as its count says.
-    buf:    Vec<u64>,
+    buf:    std::vec::Vec<u64>,
     _state: core::marker::PhantomData<S>,
 }
 

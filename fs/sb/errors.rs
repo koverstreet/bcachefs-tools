@@ -27,7 +27,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
-use crate::util::alloc::{kvvec_insert, KVVec};
+use crate::util::alloc::Vec;
 use crate::os::kernel::ktime_get_real_seconds;
 use crate::util::{DateTime, Printbuf};
 use crate::sb::io::SbResize;
@@ -162,7 +162,7 @@ fn to_text<E: ErrorEntry>(out: &mut Printbuf, entries: &[E]) {
         out.tabstop_push(16);
     }
 
-    let mut sorted = KVVec::new();
+    let mut sorted = Vec::new();
     let entries = match sorted.extend_from_slice(entries) {
         Ok(()) => {
             sorted.sort_unstable_by_key(|e: &E| Reverse(e.last()));
@@ -392,7 +392,7 @@ impl Fs {
                 e.last_error_time = now;
             }
             Err(i) => {
-                let _ = kvvec_insert(&mut counts, i, cpu_entry(err, 1, now, now));
+                let _ = counts.insert(i, cpu_entry(err, 1, now, now));
             }
         }
     }

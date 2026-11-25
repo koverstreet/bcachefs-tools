@@ -36,7 +36,7 @@ use crate::snapshots::subvolume;
 use crate::dirent::{self, Dirent};
 use crate::{inode, lostfound, namei};
 use crate::inode::Inodes;
-use crate::util::alloc::KVVec;
+use crate::util::alloc::Vec;
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
 use crate::{bch_err_fn, bch_err_msg, bch_warn, here, inode_fsck_err, prt};
@@ -109,7 +109,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
         return Ok(());
     }
 
-    let mut subvol_path: KVVec<u32> = KVVec::new();
+    let mut subvol_path: Vec<u32> = Vec::new();
     let mut parent_iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN,
                                          BtreeIterFlags::empty());
 
@@ -226,7 +226,7 @@ fn bi_depth_renumber(
 
 fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut path: KVVec<u64> = KVVec::new();
+    let mut path: Vec<u64> = Vec::new();
     let mut snapshot = inode_k.k.p.snapshot;
     let mut redo_bi_depth = false;
     let mut min_bi_depth = u32::MAX;
