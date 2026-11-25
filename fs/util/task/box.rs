@@ -501,19 +501,19 @@ where
 /// future goes straight into its box - a spawner that's a future holds the
 /// Join and the CompletionReturn, not the task's state. The box is had before
 /// the Done's armed, so failing to allocate it leaves nothing to wait on.
-pub struct Join<T>(DoneWith<T>);
+pub struct Join<T, W: Waiter = waiter::Async>(DoneWith<T, W>);
 
-impl<T: Send> Join<T> {
+impl<T: Send, W: Waiter> Join<T, W> {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Join(DoneWith::new())
     }
 
     /// @make's future run as a task on @q, for @waiter to wait on - the
-    /// CompletionReturn, which outlives nothing the future borrows. Made in
-    /// the box, as spawn()'s.
+    /// CompletionReturn, which outlives nothing the future borrows: awaited by
+    /// a task, or a thread's waited for. Made in the box, as spawn()'s.
     pub fn spawn<'a, F>(&'a mut self, q: &Queue, list: &TaskList, make: impl FnOnce() -> F + Send + 'a,
-                        waiter: waiter::Async) -> Result<CompletionReturn<'a, T>, BchError>
+                        waiter: W) -> Result<CompletionReturn<'a, T, W>, BchError>
     where
         F: Future<Output = T> + Send + 'a,
     {
