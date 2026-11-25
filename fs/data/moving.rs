@@ -30,6 +30,7 @@ use crate::errcode::BchError;
 use crate::format::DataType;
 use crate::fs::Fs;
 use crate::util::alloc::AllocError;
+use crate::util::backref::BackRef;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::refcount::Refcount;
 use crate::os::kthread::Kthread;
@@ -178,7 +179,7 @@ pub struct Moving<'a>(MovingContext, PhantomData<(&'a Fs, &'a MoveStats)>);
 /// puts the ref.
 #[must_use = "the IO is done as soon as it's dropped"]
 pub struct MovingIo {
-    ctxt:    NonNull<MovingContext>,
+    ctxt:    BackRef<MovingContext>,
     write:   bool,
     sectors: u32,
     /// Dropped last: once it's put, the context may be gone
@@ -214,14 +215,13 @@ fn io_counts(io: &IoCounts, write: bool) -> (&AtomicI32, &AtomicI32) {
 impl MovingIo {
     /// What the context it's in flight in counts into.
     pub fn stats(&self) -> &MoveStats {
-        unsafe { Moving::from_raw(self.ctxt.as_ptr()) }.stats()
+        Moving::of(&self.ctxt).stats()
     }
 }
 
 impl Drop for MovingIo {
     fn drop(&mut self) {
-        // SAFETY: our ref keeps the context
-        let moving = unsafe { Moving::from_raw(self.ctxt.as_ptr()) };
+        let moving = Moving::of(&self.ctxt);
         let (sectors, ios) = io_counts(moving.io(), self.write);
         sectors.fetch_sub(self.sectors as i32, Relaxed);
         ios.fetch_sub(1, Relaxed);
@@ -255,22 +255,21 @@ impl<'a> core::ops::Deref for MovingCtxt<'a> {
 
     fn deref(&self) -> &Moving<'a> {
         // SAFETY: ours, live and pinned until we're dropped
-        unsafe { Moving::from_raw(core::ptr::from_ref::<MovingContext>(&self.ctxt).cast_mut()) }
+        unsafe { &*core::ptr::from_ref::<MovingContext>(&self.ctxt).cast() }
     }
 }
 
 impl<'a> Moving<'a> {
-    /// # Safety
-    /// @ctxt is initialized, and outlives the borrow, and its filesystem and
-    /// stats live for 'a.
-    pub unsafe fn from_raw<'r>(ctxt: *mut MovingContext) -> &'r Self {
-        // SAFETY: the caller's; repr(transparent) over it
-        unsafe { &*ctxt.cast() }
+    /// Moving through @ctxt, for as long as it's borrowed: its filesystem
+    /// and stats outlive it.
+    pub(crate) fn of(ctxt: &'a MovingContext) -> &'a Self {
+        // repr(transparent) over it
+        unsafe { &*core::ptr::from_ref(ctxt).cast() }
     }
 
-    /// For a data update's pointer back to the context it's in flight in.
-    pub(crate) fn raw(&self) -> *mut MovingContext {
-        core::ptr::from_ref(&self.0).cast_mut()
+    /// For a data update's BackRef to the context it's in flight in.
+    pub(crate) fn context(&self) -> &MovingContext {
+        &self.0
     }
 
     /// A read or write of @sectors, in flight in this context until the
@@ -279,7 +278,8 @@ impl<'a> Moving<'a> {
         let (s, ios) = io_counts(self.io(), write);
         s.fetch_add(sectors as i32, Relaxed);
         ios.fetch_add(1, Relaxed);
-        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _ref: self.0.in_flight.get_pinned() }
+        // its ref keeps the context
+        MovingIo { ctxt: unsafe { BackRef::new(&self.0) }, write, sectors, _ref: self.0.in_flight.get_pinned() }
     }
 
     pub fn trans(&self) -> &TransGuard<'a> {
@@ -468,9 +468,7 @@ impl<'a> Moving<'a> {
 impl c::data_update_index {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
-        // SAFETY: an update is in flight in its context from init() to exit(),
-        // and the context's flush_all() waits for it before the context goes
-        NonNull::new(self.ctxt).map(|c| unsafe { Moving::from_raw(c.as_ptr()) })
+        self.ctxt.as_deref().map(Moving::of)
     }
 }
 

@@ -38,6 +38,7 @@ use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Flags};
+use crate::util::backref::BackRef;
 use crate::os::bio::{Bio, BioInPlace, Pages};
 use crate::sb::members::DevRef;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
@@ -126,10 +127,10 @@ pub struct data_update_index {
     pub btree_id: Btree,
     pub k: BkeyBuf,
     pub opts: c::data_update_opts,
-    pub ctxt: *mut crate::data::moving::MovingContext,
+    pub ctxt: Option<BackRef<crate::data::moving::MovingContext>>,
 }
 
-// borrowed by its write, on whatever thread that runs: @ctxt, its one raw
+// borrowed by its write, on whatever thread that runs: @ctxt, its one
 // pointer, is to a moving context that outlives the update
 unsafe impl Sync for c::data_update_index {}
 
@@ -551,7 +552,9 @@ impl c::data_update {
 
         self.index.btree_id = btree_id;
         self.index.opts = data_opts;
-        self.index.ctxt = moving.map_or(core::ptr::null_mut(), Moving::raw);
+        // in flight in its context from here to exit(): the context's
+        // flush_all() waits for it before the context goes
+        self.index.ctxt = moving.map(|m| unsafe { BackRef::new(m.context()) });
 
         // SAFETY: an update is done before the filesystem goes
         unsafe { c::bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
