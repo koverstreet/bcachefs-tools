@@ -70,8 +70,6 @@ pub struct Update {
     #[pin]
     turn:      Gather<(), waiter::Async>,
     listed:    AsyncObjSlot,
-    /// From init() till exit()
-    held:      Option<Held>,
     /// Zeroed until init(), which expects that
     u:         UnsafeCell<MaybeUninit<c::data_update>>,
     /// The listing's walk may be reading its key
@@ -95,7 +93,6 @@ where
             read:      UnsafeCell::new(None),
             turn <- Gather::new(),
             listed:    AsyncObjSlot::none(),
-            held:      None,
             u:         UnsafeCell::new(MaybeUninit::zeroed()),
             // its drop doesn't sleep
             rcu:       unsafe { RcuDropMember::new() },
@@ -127,16 +124,15 @@ where
                 btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, M>, BchError> {
         let mut up = self.slot.home();
         // SAFETY: zeroed, and pinned in the box
-        unsafe {
+        let held = unsafe {
             let u = &mut *up.u.get().cast::<c::data_update>();
-            let held = u.init(t, iter, moving, wp, io_opts, data_opts, btree, k)?;
-            *up.as_mut().project().held = Some(held);
-        }
+            u.init(t, iter, moving, wp, io_opts, data_opts, btree, k)?
+        };
         // SAFETY: the box's home, pinned
         let listed = unsafe { AsyncObjSlot::new(t.fs(), &*up) };
         *up.as_mut().project().listed = listed;
 
-        let body = Body { up: NonNull::from(up.as_ref().get_ref()) };
+        let body = Body { up: NonNull::from(up.as_ref().get_ref()), held };
         Ok(Ready { slot: self.slot, at: self.at, tasks: self.tasks, body })
     }
 }
@@ -238,9 +234,11 @@ unsafe impl AsyncObj for Update {
 
 // ── Body ─────────────────────────────────────────────────────────────────
 
-/// A handle on an init()ed update: the spawner's, in a Ready, then the body's.
+/// A handle on an init()ed update, and what it holds from init() till exit():
+/// the spawner's, in a Ready, then the body's.
 pub struct Body {
-    up: NonNull<Update>,
+    up:   NonNull<Update>,
+    held: Held,
 }
 
 // SAFETY: the update is the task's, and a task may run on any thread
@@ -280,15 +278,17 @@ impl Body {
         Ok(())
     }
 
-    /// Takes the update off its async object list, and exit()s it.
-    pub fn exit(mut self, ret: Result<(), BchError>) {
+    /// Takes the update off its async object list, and exit()s it with what
+    /// it held.
+    pub fn exit(self, ret: Result<(), BchError>) {
+        let Body { up, held } = self;
         // SAFETY: only we touch these - the walk reads the list, not the slot
-        let held = unsafe {
-            let up = self.up.as_ptr();
+        let u = unsafe {
+            let up = up.as_ptr();
             (*up).listed = AsyncObjSlot::none();
-            (*up).held.take()
+            (*(*up).u.get()).assume_init_mut()
         };
-        c::data_update::exit(&mut self, held.expect("a data update exit()ed twice"), ret)
+        u.exit(held, ret)
     }
 }
 
