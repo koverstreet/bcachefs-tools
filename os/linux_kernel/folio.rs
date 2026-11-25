@@ -739,7 +739,8 @@ crate::vfs_ops! {
     fn read_folio(_file: *mut c::file, folio: FolioGuard<'_, Self>) -> Result<(), BchError>;
     fn readahead(ra: Readahead<'_, Self>);
     fn writepages(mapping: Mapping<Self>, wbc: Wbc) -> c_int;
-    /// @folio marked dirty: whether it wasn't.
+    /// @folio marked dirty: whether it wasn't. It mustn't block: mm calls it
+    /// under the PTE lock, unmapping.
     fn dirty_folio(mapping: Mapping<Self>, folio: &Folio<Self>) -> bool;
     /// The folio @len bytes at @pos are written into, locked, in *@foliop,
     /// and what write_end() has of the write, in *@fsdata.

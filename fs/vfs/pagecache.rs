@@ -458,6 +458,8 @@ impl AddressSpaceOps for InodeInfo {
     }
 
     fn dirty_folio(mapping: Mapping, folio: &Folio) -> bool {
+        // the PTE lock's: what's under it mustn't sleep
+        let _noreclaim = MemallocFlags::noreclaim();
         let inode = mapping.inode();
 
         /*
