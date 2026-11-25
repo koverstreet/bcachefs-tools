@@ -1115,7 +1115,7 @@ impl Fs {
 }
 
 /// While one is held, the filesystem can't finish going read-only
-pub type WriteRef = RefGuard<PercpuRef>;
+pub type WriteRef = RefGuard<Placed<PercpuRef, crate::at!(Fs.writes)>>;
 
 impl Fs {
     /// For work holding a write ref: going read-only drains it

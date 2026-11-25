@@ -17,7 +17,7 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::write::{write, WriteBio, WriteFor};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
-use crate::fs::Fs;
+use crate::fs::{Fs, WriteRef};
 use crate::inode_opts;
 use crate::snapshots::subvolume;
 use crate::util::alloc::Kmalloc;
@@ -31,7 +31,7 @@ use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm}
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::ops::IntoRaw;
 use crate::os::workqueue::Queue;
-use crate::util::refcount::{PercpuRef, RefGuard, TryRefcount};
+use crate::util::refcount::TryRefcount;
 use super::direct::End;
 use crate::vfs::folio::Mapping;
 use crate::vfs::inode::DioStarted;
@@ -63,7 +63,7 @@ struct Dio<P: UserPage> {
     /* the dio count and the page cache blocked, and c->writes: till it's
      * done */
     started:   Option<DioStarted>,
-    write_ref: Option<RefGuard<PercpuRef>>,
+    write_ref: Option<WriteRef>,
 
     #[pin]
     op:        c::bch_write_op,

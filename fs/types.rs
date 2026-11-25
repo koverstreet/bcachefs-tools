@@ -523,7 +523,7 @@ pub struct Fs {
         crate::util::refcount::PercpuRef::new_dead::<crate::init::rw::WritesDisabled>(),
         c::Errcode::ENOMEM_fs_other_alloc))]
     #[pin]
-    pub writes: crate::util::refcount::PercpuRef,
+    pub writes: Placed<crate::util::refcount::PercpuRef, crate::at!(Fs.writes)>,
 
     /*
      * Analagous to c->writes, for asynchronous ops that don't necessarily

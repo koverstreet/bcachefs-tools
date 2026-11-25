@@ -138,7 +138,7 @@ nest! {
 
         /* c->writes, held till it's done - a data update's holds its own */
         #[init(None)]
-        pub write_ref: Option<crate::util::refcount::RefGuard<crate::util::refcount::PercpuRef>>,
+        pub write_ref: Option<crate::fs::WriteRef>,
     }
 }
 
