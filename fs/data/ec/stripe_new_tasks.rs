@@ -12,6 +12,7 @@ use crate::c;
 use crate::data::ec::buf::{blocks_good, blocks_in, generate_checksums, generate_ec, validate_msg, StripeBuf, POST, PRE};
 use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::io::BlockIo;
+use crate::util::refcount::TryRefcount;
 use crate::util::gather::Gather;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
@@ -25,7 +26,6 @@ use crate::sb::errors::SbErrorId;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KBox;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::RefGuard;
 use crate::util::task::{waiter, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
@@ -56,11 +56,12 @@ pub(crate) async fn stripe_task(fs: &Fs, s: &StripeNew) {
 
     s.in_flight.wait(at).await;
 
-    // As C's, whatever state writes are in: a stripe goes in flight while
-    // they're stopped too - bch2_open_buckets_stop(), in
-    // __bch2_fs_read_only(), puts the last buckets of full stripes after
-    // c->writes is drained.
-    let _w = unsafe { RefGuard::get(&fs.writes) };
+    // A ref unless writes are dead, not merely stopping: a stripe goes in
+    // flight while they're stopped too - open_buckets_stop(), in going
+    // read-only's stop_rw(), puts the last buckets of full stripes once
+    // c->writes is drained. Then there's none to have, and none needed:
+    // stop_rw()'s ec_flush() waits for the stripe.
+    let _w = fs.writes.tryget_live();
 
     let ret = create(fs, s, w, fold, at).await;
     create_done(fs, s, ret);
