@@ -43,15 +43,29 @@ const WQ_DFL_ACTIVE: usize = 256;
 struct Worker {
     wq:           *mut Workqueue,
     task:         *mut c::task_struct,
-    current_work: *mut c::work_struct,
+    current_work: *mut work_struct,
     /* @current_work, queued again while it runs: where, to wake when it's done */
     requeued_on:  *mut Workqueue,
 }
 
-/// C's struct workqueue_struct, which it only points to. Its workers and
-/// pending work are WQ_LOCK's.
+/// What's queued: its function, and whether it's pending - set by the queue
+/// that takes it, cleared once a worker has it.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct work_struct {
+    data: AtomicUsize,
+    func: Option<super::WorkFn>,
+}
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct delayed_work {
+    pub work: work_struct,
+}
+
+/// struct workqueue_struct. Its workers and pending work are WQ_LOCK's.
 pub struct Workqueue {
-    pending_work: VecDeque<*mut c::work_struct>,
+    pending_work: VecDeque<*mut work_struct>,
     workers:      Vec<*mut Worker>,
     max_active:   usize,
     name:         [u8; 24],
@@ -82,7 +96,7 @@ impl Workqueue {
 /// A delayed work, till @at: queued on @wq then.
 struct Delayed {
     at:    c_ulong,
-    dwork: *mut c::delayed_work,
+    dwork: *mut delayed_work,
     wq:    *mut Workqueue,
 }
 
@@ -108,14 +122,8 @@ static DELAYED_ADDED: Condvar = Condvar::new();
 ///
 /// # Safety
 /// @work is a work_struct's place, not queued.
-pub(super) unsafe fn init_work(work: *mut c::work_struct, func: super::WorkFn) {
-    unsafe {
-        (*work).data.counter = 0;
-        let entry = &raw mut (*work).entry;
-        (*entry).next = entry;
-        (*entry).prev = entry;
-        (*work).func = Some(func);
-    }
+pub(super) unsafe fn init_work(work: *mut work_struct, func: super::WorkFn) {
+    unsafe { work.write(work_struct { data: AtomicUsize::new(0), func: Some(func) }) }
 }
 
 fn lock() -> MutexGuard<'static, State> {
@@ -146,21 +154,21 @@ fn work_starved(wq: *mut Workqueue) -> bool {
     unsafe { (*wq).pending_work.len() > nr_idle_workers(wq) }
 }
 
-fn work_data<'a>(work: *mut c::work_struct) -> &'a AtomicUsize {
-    unsafe { AtomicUsize::from_ptr((&raw mut (*work).data.counter).cast()) }
+fn work_data<'a>(work: *mut work_struct) -> &'a AtomicUsize {
+    unsafe { &(*work).data }
 }
 
 const WORK_PENDING: usize = 1 << 0;
 
-fn work_pending(work: *mut c::work_struct) -> bool {
+fn work_pending(work: *mut work_struct) -> bool {
     work_data(work).load(SeqCst) & WORK_PENDING != 0
 }
 
-fn clear_work_pending(work: *mut c::work_struct) {
+fn clear_work_pending(work: *mut work_struct) {
     work_data(work).fetch_and(!WORK_PENDING, SeqCst);
 }
 
-fn set_work_pending(work: *mut c::work_struct) -> bool {
+fn set_work_pending(work: *mut work_struct) -> bool {
     work_data(work).fetch_or(WORK_PENDING, SeqCst) & WORK_PENDING == 0
 }
 
@@ -172,13 +180,13 @@ fn set_work_pending(work: *mut c::work_struct) -> bool {
  * itself (or is re-queued by someone else) while running is both pending and
  * running at once. Which worker holds it is the only reliable answer.
  */
-fn work_runner(st: &State, work: *mut c::work_struct) -> Option<*mut Worker> {
+fn work_runner(st: &State, work: *mut work_struct) -> Option<*mut Worker> {
     queues(st)
         .flat_map(|wq| unsafe { (*wq).workers.iter().copied() })
         .find(|&w| unsafe { (*w).current_work } == work)
 }
 
-fn work_running(st: &State, work: *mut c::work_struct) -> bool {
+fn work_running(st: &State, work: *mut work_struct) -> bool {
     work_runner(st, work).is_some()
 }
 
@@ -223,7 +231,7 @@ unsafe extern "C" fn worker_thread(arg: *mut c_void) -> c_int {
 
         let Some(i) = find_runnable_work(&st, wq) else {
             drop(st);
-            unsafe { c::schedule() };
+            crate::os::sched::schedule();
             st = lock();
             continue;
         };
@@ -266,7 +274,7 @@ unsafe extern "C" fn worker_thread(arg: *mut c_void) -> c_int {
     0
 }
 
-fn __queue_work(st: &mut State, wq: *mut Workqueue, work: *mut c::work_struct) {
+fn __queue_work(st: &mut State, wq: *mut Workqueue, work: *mut work_struct) {
     assert!(work_pending(work));
 
     unsafe { (*wq).pending_work.push_back(work) };
@@ -324,11 +332,11 @@ fn __queue_work(st: &mut State, wq: *mut Workqueue, work: *mut c::work_struct) {
 /// # Safety
 /// @wq is a queue, there until @work's run, and @work an initialized
 /// work_struct's place.
-pub(super) unsafe fn queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool {
+pub(super) unsafe fn queue_work(wq: *mut Workqueue, work: *mut work_struct) -> bool {
     let mut st = lock();
     let ret = set_work_pending(work);
     if ret {
-        __queue_work(&mut st, wq.cast(), work);
+        __queue_work(&mut st, wq, work);
     }
     ret
 }
@@ -356,7 +364,7 @@ fn delayed_work_thread() {
     }
 }
 
-fn __queue_delayed_work(st: &mut State, wq: *mut Workqueue, dwork: *mut c::delayed_work, delay: c_ulong) {
+fn __queue_delayed_work(st: &mut State, wq: *mut Workqueue, dwork: *mut delayed_work, delay: c_ulong) {
     if delay == 0 {
         __queue_work(st, wq, unsafe { &raw mut (*dwork).work });
         return;
@@ -373,26 +381,26 @@ fn __queue_delayed_work(st: &mut State, wq: *mut Workqueue, dwork: *mut c::delay
     DELAYED_ADDED.notify_one();
 }
 
-pub unsafe fn queue_delayed_work(wq: *mut c::workqueue_struct, dwork: *mut c::delayed_work,
+pub unsafe fn queue_delayed_work(wq: *mut Workqueue, dwork: *mut delayed_work,
                                  delay: c_ulong) -> bool {
     let mut st = lock();
     let ret = set_work_pending(unsafe { &raw mut (*dwork).work });
     if ret {
-        __queue_delayed_work(&mut st, wq.cast(), dwork, delay);
+        __queue_delayed_work(&mut st, wq, dwork, delay);
     }
     ret
 }
 
 /// @work's pending bit, ours: taken off whatever queue or delayed list it's
 /// on - whether it was pending.
-fn grab_pending(st: &mut State, work: *mut c::work_struct, is_dwork: bool) -> bool {
+fn grab_pending(st: &mut State, work: *mut work_struct, is_dwork: bool) -> bool {
     if set_work_pending(work) {
         return false;
     }
 
     if is_dwork {
-        const { assert!(core::mem::offset_of!(c::delayed_work, work) == 0) };
-        let dwork = work.cast::<c::delayed_work>();
+        const { assert!(core::mem::offset_of!(delayed_work, work) == 0) };
+        let dwork = work.cast::<delayed_work>();
 
         if let Some(i) = st.delayed.iter().position(|d| d.dwork == dwork) {
             st.delayed.swap_remove(i);
@@ -411,7 +419,7 @@ fn grab_pending(st: &mut State, work: *mut c::work_struct, is_dwork: bool) -> bo
     unreachable!("work pending, but neither queued nor delayed");
 }
 
-pub unsafe fn flush_work(work: *mut c::work_struct) -> bool {
+pub unsafe fn flush_work(work: *mut work_struct) -> bool {
     let mut ret = false;
 
     let mut st = lock();
@@ -422,14 +430,14 @@ pub unsafe fn flush_work(work: *mut c::work_struct) -> bool {
     ret
 }
 
-fn __flush_work(mut st: MutexGuard<'static, State>, work: *mut c::work_struct) -> MutexGuard<'static, State> {
+fn __flush_work(mut st: MutexGuard<'static, State>, work: *mut work_struct) -> MutexGuard<'static, State> {
     while work_running(&st, work) {
         st = WORK_FINISHED.wait(st).expect("workqueue lock poisoned");
     }
     st
 }
 
-pub unsafe fn cancel_work_sync(work: *mut c::work_struct) -> bool {
+pub unsafe fn cancel_work_sync(work: *mut work_struct) -> bool {
     let mut st = lock();
     let ret = grab_pending(&mut st, work, false);
 
@@ -438,16 +446,16 @@ pub unsafe fn cancel_work_sync(work: *mut c::work_struct) -> bool {
     ret
 }
 
-pub unsafe fn mod_delayed_work(wq: *mut c::workqueue_struct, dwork: *mut c::delayed_work,
+pub unsafe fn mod_delayed_work(wq: *mut Workqueue, dwork: *mut delayed_work,
                                delay: c_ulong) -> bool {
     let mut st = lock();
     let ret = grab_pending(&mut st, unsafe { &raw mut (*dwork).work }, true);
 
-    __queue_delayed_work(&mut st, wq.cast(), dwork, delay);
+    __queue_delayed_work(&mut st, wq, dwork, delay);
     ret
 }
 
-pub unsafe fn cancel_delayed_work(dwork: *mut c::delayed_work) -> bool {
+pub unsafe fn cancel_delayed_work(dwork: *mut delayed_work) -> bool {
     let work = unsafe { &raw mut (*dwork).work };
 
     let mut st = lock();
@@ -457,7 +465,7 @@ pub unsafe fn cancel_delayed_work(dwork: *mut c::delayed_work) -> bool {
     ret
 }
 
-pub unsafe fn cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool {
+pub unsafe fn cancel_delayed_work_sync(dwork: *mut delayed_work) -> bool {
     let work = unsafe { &raw mut (*dwork).work };
 
     let mut st = lock();
@@ -468,18 +476,14 @@ pub unsafe fn cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool {
     ret
 }
 
-pub unsafe fn drain_workqueue(wq: *mut c::workqueue_struct) {
-    let wq = wq.cast::<Workqueue>();
-
+pub unsafe fn drain_workqueue(wq: *mut Workqueue) {
     let mut st = lock();
     while unsafe { !(*wq).pending_work.is_empty() } || wq_busy(wq) {
         st = WORK_FINISHED.wait(st).expect("workqueue lock poisoned");
     }
 }
 
-pub unsafe fn destroy_workqueue(wq: *mut c::workqueue_struct) {
-    let wq = wq.cast::<Workqueue>();
-
+pub unsafe fn destroy_workqueue(wq: *mut Workqueue) {
     /*
      * kthread_stop() waits for the worker, and the worker needs WQ_LOCK to
      * get out of its loop - so stop them all without it. Freeing them is
@@ -506,7 +510,7 @@ pub unsafe fn destroy_workqueue(wq: *mut c::workqueue_struct) {
 /// alloc_workqueue(), the name formatted. @flags are the kernel's, and
 /// ignored: one kind of worker here.
 pub unsafe fn alloc_workqueue_name(name: *const c_char, _flags: c_uint,
-                                   max_active: c_int) -> *mut c::workqueue_struct {
+                                   max_active: c_int) -> *mut Workqueue {
     let name = unsafe { CStr::from_ptr(name) };
 
     /*
@@ -522,5 +526,5 @@ pub unsafe fn alloc_workqueue_name(name: *const c_char, _flags: c_uint,
     let wq = Box::into_raw(Box::new(Workqueue::new(name.to_bytes(), max_active)));
 
     lock().queues.push(wq);
-    wq.cast()
+    wq
 }

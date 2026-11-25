@@ -6,9 +6,9 @@
 use crate::c;
 use crate::os::kernel::{jiffies, HZ, NSEC_PER_SEC};
 use core::cell::Cell;
-use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
+use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use core::ptr::null_mut;
-use core::sync::atomic::{fence, AtomicU32, Ordering::{Acquire, Relaxed, SeqCst}};
+use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 use rustix::thread::futex;
 use std::time::{Duration, Instant};
 
@@ -16,35 +16,69 @@ unsafe extern "C" {
     fn calloc(n: usize, size: usize) -> *mut c_void;
 }
 
-const TASK_RUNNING: u32 = c::TASK_RUNNING;
+pub const TASK_RUNNING:         c_uint = 0;
+pub const TASK_INTERRUPTIBLE:   c_uint = 1;
+pub const TASK_UNINTERRUPTIBLE: c_uint = 2;
+pub const TASK_WAKEKILL:        c_uint = 128;
+pub const TASK_NOLOAD:          c_uint = 1024;
+pub const TASK_FREEZABLE:       c_uint = 1 << 14;
 
-thread_local! {
-    static CURRENT: Cell<*mut c::task_struct> = const { Cell::new(null_mut()) };
+/* Convenience macros for the sake of set_task_state */
+pub const TASK_KILLABLE:        c_uint = TASK_WAKEKILL | TASK_UNINTERRUPTIBLE;
+
+pub const TASK_IDLE:            c_uint = TASK_UNINTERRUPTIBLE | TASK_NOLOAD;
+
+pub const TASK_COMM_LEN:        usize = 16;
+
+pub const PF_MEMALLOC_NOIO:      c_uint = 0x00080000;	/* Allocating memory without IO involved */
+pub const PF_KTHREAD:            c_uint = 0x00200000;	/* I am a kernel thread */
+pub const PF_MEMALLOC_NORECLAIM: c_uint = 0x00800000;	/* All allocation requests will clear __GFP_DIRECT_RECLAIM */
+pub const PF_MEMALLOC_NOWARN:    c_uint = 0x01000000;	/* All allocation requests will inherit __GFP_NOWARN */
+
+/// Zeroed, it's a task, not yet a thread's: calloc()'d.
+#[allow(non_camel_case_types)]
+pub struct task_struct {
+    pub(super) thread_fn:     Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+    pub(super) thread_data:   *mut c_void,
+
+    pub(super) usage:         AtomicU32,
+    /// The futex word a sleep waits on
+    pub(super) state:         AtomicU32,
+
+    /* kthread: */
+    pub(super) kthread_flags: AtomicUsize,
+
+    pub(crate) flags:         c_uint,
+
+    pub(crate) comm:          [c_char; TASK_COMM_LEN],
+    pub(super) pid:           c_int,
 }
 
-/// The task state, the futex word a sleep waits on.
-fn state<'a>(p: *mut c::task_struct) -> &'a AtomicU32 {
-    unsafe { AtomicU32::from_ptr((&raw mut (*p).state).cast()) }
+thread_local! {
+    static CURRENT: Cell<*mut task_struct> = const { Cell::new(null_mut()) };
+}
+
+fn state<'a>(p: *mut task_struct) -> &'a AtomicU32 {
+    unsafe { &(*p).state }
 }
 
 /// A task for the thread that calls this - not one of kthread_create()'s,
 /// which makes its own: the main thread's, a test harness's, fuse's workers.
-fn task_new() -> *mut c::task_struct {
-    let p = unsafe { calloc(1, size_of::<c::task_struct>()) }.cast::<c::task_struct>();
+fn task_new() -> *mut task_struct {
+    let p = unsafe { calloc(1, size_of::<task_struct>()) }.cast::<task_struct>();
     assert!(!p.is_null(), "error allocating a task_struct");
 
     unsafe {
-        (*p).state = TASK_RUNNING as c_int;
+        (*p).state = AtomicU32::new(TASK_RUNNING);
         (*p).pid = rustix::thread::gettid().as_raw_nonzero().get();
-        (*p).usage.counter = 1;
+        (*p).usage = AtomicU32::new(1);
     }
     p
 }
 
 /// This thread's task_struct, made the first time it's asked for, if
 /// kthread_create() didn't make it.
-#[unsafe(no_mangle)]
-pub extern "C" fn get_current() -> *mut c::task_struct {
+pub fn get_current() -> *mut task_struct {
     CURRENT.with(|cur| {
         if cur.get().is_null() {
             cur.set(task_new());
@@ -55,7 +89,7 @@ pub extern "C" fn get_current() -> *mut c::task_struct {
 
 /// This thread's task: current.
 #[inline(always)]
-pub fn current() -> *mut c::task_struct {
+pub fn current() -> *mut task_struct {
     get_current()
 }
 
@@ -84,7 +118,7 @@ pub fn might_sleep() {}
 
 /// # Safety
 /// @task is a task, live.
-pub unsafe fn task_pid(task: *mut c::task_struct) -> c_int {
+pub unsafe fn task_pid(task: *mut task_struct) -> c_int {
     unsafe { (*task).pid }
 }
 
@@ -101,25 +135,42 @@ pub fn signal_pending_state(_state: c_uint) -> bool {
 }
 
 /// A kthread's: its own task_struct, before anything asks for one.
-pub(crate) fn set_current(p: *mut c::task_struct) {
+pub(crate) fn set_current(p: *mut task_struct) {
     CURRENT.with(|cur| cur.set(p));
+}
+
+/// # Safety
+/// @task is a task, live.
+pub unsafe fn get_task_struct(task: *mut task_struct) -> *mut task_struct {
+    unsafe { (*task).usage.fetch_add(1, Relaxed) };
+    task
+}
+
+/// # Safety
+/// @t is a task, and the caller's ref on it is put: nothing of the caller's
+/// uses it after.
+pub unsafe fn put_task_struct(t: *mut task_struct) {
+    if unsafe { (*t).usage.fetch_sub(1, Release) } == 1 {
+        fence(Acquire);
+        unsafe { __put_task_struct(t) }
+    }
 }
 
 /*
  * RCU-freed, as the kernel's delayed_put_task_struct(): a waker may hold a
  * task_struct with no ref under rcu_read_lock() - rcuwait does.
  */
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __put_task_struct(t: *mut c::task_struct) {
+unsafe fn __put_task_struct(t: *mut task_struct) {
     unsafe {
         super::kthread::task_free(t);
-        c::rcu_free_ptr(t.cast());
+        super::alloc::rcu_free_ptr(t.cast());
     }
 }
 
 /* returns true if process was woken up, false if it was already running */
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn wake_up_process(p: *mut c::task_struct) -> c_int {
+/// # Safety
+/// @p is a task, live - or RCU-freed, and the caller in a read section.
+pub unsafe fn wake_up_process(p: *mut task_struct) -> c_int {
     /*
      * A full barrier before the task state, as try_to_wake_up(): else on
      * arm64 the waker's condition store can land after TASK_RUNNING, and
@@ -134,8 +185,7 @@ pub unsafe extern "C" fn wake_up_process(p: *mut c::task_struct) -> c_int {
     ret as c_int
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn schedule() {
+pub fn schedule() {
     let s = state(get_current());
 
     unsafe { c::rcu_quiescent_state() };
@@ -149,8 +199,7 @@ pub extern "C" fn schedule() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn schedule_timeout(timeout: c_long) -> c_long {
+pub fn schedule_timeout(timeout: c_long) -> c_long {
     /*
      * These two special cases are useful to be comfortable in the caller.
      * Nothing more. We could take MAX_SCHEDULE_TIMEOUT from one of the
@@ -206,12 +255,15 @@ pub extern "C" fn schedule_timeout(timeout: c_long) -> c_long {
     (expire.wrapping_sub(jiffies()) as c_long).max(0)
 }
 
+pub fn io_schedule_timeout(timeout: c_long) -> c_long {
+    schedule_timeout(timeout)
+}
+
 /*
  * A thread - a kthread, fuser's workers, a test harness's - registers with
  * RCU and percpu here.
  */
-#[unsafe(no_mangle)]
-pub extern "C" fn linux_thread_init() {
+pub fn linux_thread_init() {
     let p = get_current();
 
     unsafe {
@@ -222,7 +274,6 @@ pub extern "C" fn linux_thread_init() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn linux_thread_exit() {
+pub fn linux_thread_exit() {
     unsafe { c::rcu_unregister_thread() };
 }

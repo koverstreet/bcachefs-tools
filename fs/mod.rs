@@ -346,20 +346,7 @@ pub mod c {
     // ours.
     pub use crate::cstructs::c::*;
 
-    // Userspace #defines timespec64 → timespec (include/linux/time64.h), so
-    // bindgen never emits a timespec64; alias it so fs/ can name the kernel's
-    // real return type (timespec64) uniformly across both builds.
-    #[cfg(not(kernel))]
-    pub type timespec64 = timespec;
-    // Likewise list_head and the hlists, which are liburcu's
-    // (include/linux/list.h): for the types defined in Rust that hold them.
-    #[cfg(not(kernel))]
-    pub type list_head = cds_list_head;
-    #[cfg(not(kernel))]
-    pub type hlist_head = cds_hlist_head;
-    #[cfg(not(kernel))]
-    pub type hlist_node = cds_hlist_node;
-    // And the kernel's rcu_head, which is #define rcu_head callback_head: a
+    // The kernel's rcu_head, which is #define rcu_head callback_head: a
     // macro, which the kernel crate's bindings don't have.
     #[cfg(kernel)]
     pub type rcu_head = callback_head;

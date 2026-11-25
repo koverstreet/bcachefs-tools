@@ -52,8 +52,9 @@ stable_deref_trait = { version = "=1.2.1", default-features = false }
 getrandom = "0.4"
 # Userspace only, util/prompt's: asking on the terminal - polled, echo off
 # for a passphrase - or through systemd's password agents; and the shim's
-# scheduler's futexes and gettid() (os/linux_user/sched.rs).
-rustix   = { version = "1.1.4", features = ["event", "fs", "termios", "thread"] }
+# scheduler's futexes and gettid() (os/linux_user/sched.rs), and its clocks
+# (os/linux_user/kernel.rs).
+rustix   = { version = "1.1.4", features = ["event", "fs", "termios", "thread", "time"] }
 # Userspace only: os/linux_user/percpu.rs's per-thread chunks, mmap()ed, and
 # the pthread key whose destructor gives a thread's back when it exits.
 libc     = "0.2.69"

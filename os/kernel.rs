@@ -5,7 +5,7 @@
 
 use crate::c;
 
-use super::{cond_resched, random_u64, PAGE_SIZE};
+use super::{cond_resched, random_u64, HZ, PAGE_SIZE};
 
 /// C's READ and WRITE, as indices: io_ref[], io_clock[]...
 pub const READ:  usize = 0;
@@ -83,12 +83,6 @@ pub fn random_u64_below(ceil: u64) -> u64 {
     (m >> 64) as u64
 }
 
-// local_clock() is a static inline, with no symbol for Rust: the bindings'
-// wrapper of it, in both builds.
-pub fn local_clock() -> u64 {
-    unsafe { c::local_clock() }
-}
-
 /// C's _RET_IP_: the return address of the function it's expanded in, after
 /// inlining - so a macro, not a function. 0 from a rustc before 1.97, which
 /// hasn't core::intrinsics::return_address().
@@ -146,9 +140,6 @@ pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::
     })
 }
 
-/// Jiffies a second.
-pub const HZ: core::ffi::c_ulong = c::HZ as core::ffi::c_ulong;
-
 /// Whether jiffies @a is after @b, across a wrap: time_after().
 pub fn time_after(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
     (b.wrapping_sub(a) as core::ffi::c_long) < 0
@@ -169,12 +160,6 @@ pub fn time_after64(a: u64, b: u64) -> bool {
     (b.wrapping_sub(a) as i64) < 0
 }
 
-/// The kernel's binding returns its own c_ulong, usize; the same width as
-/// core's.
-pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
-    unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
-}
-
 /// Jiffies in @ms milliseconds, rounded up: msecs_to_jiffies().
 pub const fn msecs_to_jiffies(ms: core::ffi::c_ulong) -> core::ffi::c_ulong {
     (ms * HZ).div_ceil(1000)
@@ -190,27 +175,10 @@ pub const fn jiffies_to_msecs(j: core::ffi::c_ulong) -> core::ffi::c_uint {
     }
 }
 
-/// Wall-clock time, in seconds: ktime_get_real_seconds().
-pub fn ktime_get_real_seconds() -> i64 {
-    unsafe { c::ktime_get_real_seconds() as i64 }
-}
-
-/// The monotonic clock, in nanoseconds: ktime_get_ns().
-pub fn ktime_get_ns() -> u64 {
-    unsafe { c::ktime_get_ns() }
-}
-
 /// A byte position as the kernel takes it: a loff_t, past whose top - LLONG_MAX
 /// - there's nothing, so u64::MAX is "to the end".
 pub fn loff(pos: u64) -> c::loff_t {
     pos.min(i64::MAX as u64) as c::loff_t
-}
-
-/// The wall clock, at the coarse clock's granularity: ktime_get_coarse_real_ts64().
-pub fn ktime_get_coarse_real_ts64() -> c::timespec64 {
-    let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
-    unsafe { c::ktime_get_coarse_real_ts64(&mut now) };
-    now
 }
 
 /// A capability, as the kernel's CAP_* - the values are ABI

@@ -1,12 +1,7 @@
 #include <urcu.h>
 
 #include "include/linux/kernel.h"
-#include "include/linux/llist.h"
-#include "include/linux/percpu-refcount.h"
-#include "include/linux/rcupdate.h"
-#include "include/linux/sched.h"
 #include "include/linux/unicode.h"
-#include "include/linux/workqueue.h"
 #include <lz4.h>
 #include <lz4hc.h>
 #include <zlib.h>

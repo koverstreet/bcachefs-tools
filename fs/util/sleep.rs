@@ -124,12 +124,11 @@ pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Opti
         if crate::os::sched::signal_pending_state(how.state) {
             break Err(E::early(SleepError::Signal));
         }
-        // SAFETY: in a sleeping state we set; a timeout of FOREVER is
-        // returned as is. `as _`: long is isize in the kernel's bindings,
-        // i64 in ours.
-        left = unsafe {
-            if how.io { c::io_schedule_timeout(left as _) } else { c::schedule_timeout(left as _) }
-        } as c_long;
+        left = if how.io {
+            crate::os::sched::io_schedule_timeout(left)
+        } else {
+            crate::os::sched::schedule_timeout(left)
+        };
     };
     crate::os::sched::set_current_state_running();
     ret

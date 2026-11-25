@@ -95,6 +95,38 @@ pub fn jiffies() -> core::ffi::c_ulong {
     unsafe { core::ptr::read_volatile(&raw const ::kernel::bindings::jiffies) as core::ffi::c_ulong }
 }
 
+/// Jiffies a second.
+pub const HZ: core::ffi::c_ulong = c::HZ as core::ffi::c_ulong;
+
+/// The kernel's binding returns its own c_ulong, usize; the same width as
+/// core's.
+pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
+    unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
+}
+
+// local_clock() is a static inline, with no symbol for Rust: the bindings'
+// wrapper of it.
+pub fn local_clock() -> u64 {
+    unsafe { c::local_clock() }
+}
+
+/// The monotonic clock, in nanoseconds: ktime_get_ns().
+pub fn ktime_get_ns() -> u64 {
+    unsafe { c::ktime_get_ns() }
+}
+
+/// Wall-clock time, in seconds: ktime_get_real_seconds().
+pub fn ktime_get_real_seconds() -> i64 {
+    unsafe { c::ktime_get_real_seconds() as i64 }
+}
+
+/// The wall clock, at the coarse clock's granularity: ktime_get_coarse_real_ts64().
+pub fn ktime_get_coarse_real_ts64() -> c::timespec64 {
+    let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
+    unsafe { c::ktime_get_coarse_real_ts64(&mut now) };
+    now
+}
+
 pub struct Comm([u8; c::TASK_COMM_LEN as usize]);
 
 impl Comm {

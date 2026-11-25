@@ -1,20 +1,149 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! What userspace's shim headers had, and fs/ still names by C's names - the
-//! crate's c module has them: a bio, and the block layer's constants. Nothing
-//! in C uses them.
+//! crate's c module has them: a task, work, a bio, and the block layer's
+//! constants. Nothing in C uses them.
 
 #![allow(non_camel_case_types, non_upper_case_globals)]
-
-use bcachefs_shim::c::atomic_t;
 
 pub use super::bio::sys::{bio_vec, bvec_iter};
 pub use super::blkdev::{blk_holder_ops, MINORBITS};
 pub use super::fs::*;
 pub use super::jump_label::static_key_false;
-use core::ffi::c_void;
+pub use super::sched::{get_task_struct, put_task_struct, task_struct, wake_up_process,
+                       PF_KTHREAD, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN,
+                       TASK_COMM_LEN, TASK_FREEZABLE, TASK_IDLE, TASK_INTERRUPTIBLE, TASK_KILLABLE,
+                       TASK_NOLOAD, TASK_RUNNING, TASK_UNINTERRUPTIBLE, TASK_WAKEKILL};
+pub use super::workqueue::{delayed_work, work_struct, workqueue_struct};
+pub use libc::{S_IFDIR, S_IFLNK, S_IFMT, S_IFREG, S_ISGID};
+use core::ffi::{c_int, c_long, c_uint, c_ulong, c_ushort, c_void};
+use core::sync::atomic::{fence, AtomicIsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 
 use super::blkdev::BlockDevice;
+
+pub type umode_t = c_ushort;
+pub type gfp_t   = c_uint;
+
+pub const GFP_KERNEL: gfp_t = 2;
+pub const PAGE_ALLOC_COSTLY_ORDER: u32 = 6;
+
+pub const NSEC_PER_MSEC: u32 = 1_000_000;
+pub const NSEC_PER_SEC:  u32 = 1_000_000_000;
+
+/// Only ever pointed to.
+pub struct page {
+    _opaque: [u8; 0],
+}
+
+#[derive(::pin_init::Zeroable)]
+pub struct atomic_t {
+    pub counter: c_int,
+}
+
+#[derive(Clone, Copy, ::pin_init::Zeroable)]
+pub struct list_head {
+    pub next: *mut list_head,
+    pub prev: *mut list_head,
+}
+
+#[derive(Clone, Copy, Debug, Default, ::pin_init::Zeroable)]
+pub struct timespec64 {
+    pub tv_sec:  i64,
+    pub tv_nsec: c_long,
+}
+
+/// Userspace's user memory is its own: nothing faults.
+///
+/// # Safety
+/// @to and @from are valid for @n bytes, and don't overlap.
+pub unsafe fn copy_to_user(to: *mut c_void, from: *const c_void, n: c_ulong) -> c_ulong {
+    unsafe { core::ptr::copy_nonoverlapping(from.cast::<u8>(), to.cast::<u8>(), n as usize) };
+    0
+}
+
+/// A percpu_ref, where a thread is its own CPU: one atomic count.
+pub struct percpu_ref {
+    count:   AtomicIsize,
+    release: Option<percpu_ref_func_t>,
+}
+
+pub type percpu_ref_func_t = unsafe extern "C" fn(*mut percpu_ref);
+
+/* @flags for percpu_ref_init() */
+pub const PERCPU_REF_INIT_ATOMIC: u32 = 1 << 0;
+/*
+ * Start dead w/ ref == 0 in atomic mode.  Must be revived with
+ * percpu_ref_reinit() before used.  Implies INIT_ATOMIC.
+ */
+pub const PERCPU_REF_INIT_DEAD:   u32 = 1 << 1;
+
+/// # Safety
+/// @r is a percpu_ref's place, not live.
+pub unsafe fn percpu_ref_init(r: *mut percpu_ref, release: Option<percpu_ref_func_t>,
+                              flags: c_uint, _gfp: gfp_t) -> c_int {
+    let count = (flags & PERCPU_REF_INIT_DEAD == 0) as isize;
+    unsafe { r.write(percpu_ref { count: AtomicIsize::new(count), release }) };
+    0
+}
+
+/// # Safety
+/// @r is a percpu_ref, initialized or zeroed.
+pub unsafe fn percpu_ref_exit(_r: *mut percpu_ref) {}
+
+/// # Safety
+/// @r is a percpu_ref, between init and exit.
+pub unsafe fn percpu_ref_get(r: *mut percpu_ref) {
+    unsafe { (*r).count.fetch_add(1, Relaxed) };
+}
+
+/// # Safety
+/// As percpu_ref_get()'s.
+pub unsafe fn percpu_ref_tryget(r: *mut percpu_ref) -> bool {
+    let count = unsafe { &(*r).count };
+    let mut c = count.load(Relaxed);
+    while c != 0 {
+        match count.compare_exchange_weak(c, c + 1, SeqCst, SeqCst) {
+            Ok(_)    => return true,
+            Err(old) => c = old,
+        }
+    }
+    false
+}
+
+/// # Safety
+/// As percpu_ref_get()'s.
+pub unsafe fn percpu_ref_tryget_live(r: *mut percpu_ref) -> bool {
+    unsafe { percpu_ref_tryget(r) }
+}
+
+/// # Safety
+/// As percpu_ref_get()'s, and the caller's ref is put.
+pub unsafe fn percpu_ref_put(r: *mut percpu_ref) {
+    if unsafe { (*r).count.fetch_sub(1, Release) } == 1 {
+        fence(Acquire);
+        unsafe { (*r).release.expect("a percpu_ref's release")(r) }
+    }
+}
+
+/// # Safety
+/// As percpu_ref_get()'s, and @r is killed and released.
+pub unsafe fn percpu_ref_reinit(r: *mut percpu_ref) {
+    unsafe { percpu_ref_get(r) }
+}
+
+/// Drop the initial ref.
+///
+/// # Safety
+/// As percpu_ref_get()'s, and once before shutdown.
+pub unsafe fn percpu_ref_kill(r: *mut percpu_ref) {
+    unsafe { percpu_ref_put(r) }
+}
+
+/// # Safety
+/// As percpu_ref_get()'s.
+pub unsafe fn percpu_ref_is_zero(r: *mut percpu_ref) -> bool {
+    unsafe { (*r).count.load(Relaxed) == 0 }
+}
 
 pub type blk_status_t = u8;
 pub type blk_opf_t    = u32;

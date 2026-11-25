@@ -20,6 +20,14 @@ pub fn schedule() {
     unsafe { c::schedule() }
 }
 
+pub fn schedule_timeout(timeout: core::ffi::c_long) -> core::ffi::c_long {
+    unsafe { c::schedule_timeout(timeout as _) as _ }
+}
+
+pub fn io_schedule_timeout(timeout: core::ffi::c_long) -> core::ffi::c_long {
+    unsafe { c::io_schedule_timeout(timeout as _) as _ }
+}
+
 /// sched_clock(), in nanoseconds.
 #[cfg(CONFIG_SMP)]
 #[inline(always)]

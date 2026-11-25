@@ -4,6 +4,8 @@
 mod common;
 pub use common::*;
 
+use rustix::time::{clock_gettime, ClockId, Timespec};
+
 pub const PAGE_SIZE: usize = 4096;
 /// A file offset is an i64.
 pub const MAX_FILE_SIZE: u64 = i64::MAX as u64;
@@ -87,6 +89,38 @@ pub fn fatal_signal_pending() -> bool {
 /// local_clock() here.
 pub fn jiffies() -> core::ffi::c_ulong {
     nsecs_to_jiffies(local_clock())
+}
+
+/// Jiffies a second.
+pub const HZ: core::ffi::c_ulong = 1000;
+
+pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
+    (ns / (NSEC_PER_SEC / HZ as u64)) as core::ffi::c_ulong
+}
+
+fn nsecs(ts: Timespec) -> u64 {
+    (ts.tv_sec * NSEC_PER_SEC as i64 + ts.tv_nsec) as u64
+}
+
+/// sched_clock(): the coarse monotonic clock, in nanoseconds.
+pub fn local_clock() -> u64 {
+    nsecs(clock_gettime(ClockId::MonotonicCoarse))
+}
+
+/// The monotonic clock, in nanoseconds: ktime_get_ns() - sched_clock() here.
+pub fn ktime_get_ns() -> u64 {
+    local_clock()
+}
+
+/// Wall-clock time, in seconds: ktime_get_real_seconds().
+pub fn ktime_get_real_seconds() -> i64 {
+    clock_gettime(ClockId::Realtime).tv_sec
+}
+
+/// The wall clock, at the coarse clock's granularity: ktime_get_coarse_real_ts64().
+pub fn ktime_get_coarse_real_ts64() -> crate::c::timespec64 {
+    let ts = clock_gettime(ClockId::RealtimeCoarse);
+    crate::c::timespec64 { tv_sec: ts.tv_sec, tv_nsec: ts.tv_nsec as _ }
 }
 
 /// A number identifying this thread while it lives, for hashing by task.

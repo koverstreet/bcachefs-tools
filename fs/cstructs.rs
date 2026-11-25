@@ -62,8 +62,6 @@ pub mod c {
     #[cfg(kernel)]
     pub use kernel::bindings::*;
 
-    #[cfg(not(kernel))]
-    pub use crate::c::{cds_list_head, cds_hlist_head, cds_hlist_node, list_head, hlist_head, hlist_node, timespec64};
     #[cfg(kernel)]
     pub use crate::c::rcu_head;
 

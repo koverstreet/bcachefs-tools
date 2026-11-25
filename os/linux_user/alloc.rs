@@ -306,12 +306,12 @@ pub unsafe fn kvfree_unsized(p: *mut c_void) {
 }
 
 /// C's kvfree_rcu(): @p freed a grace period on - by a callback of its own,
-/// as the shim's rcu_free_ptr() frees it, not by @head.
+/// as rcu_free_ptr() frees it, not by @head.
 ///
 /// # Safety
 /// Only RCU readers use @p after.
 pub unsafe fn kvfree_rcu_head(p: *mut c_void, _head: *mut c::rcu_head) {
-    unsafe { c::rcu_free_ptr(p) }
+    unsafe { rcu_free_ptr(p) }
 }
 
 /// C's kfree_rcu_mightsleep(): @p freed a grace period on.
@@ -319,7 +319,51 @@ pub unsafe fn kvfree_rcu_head(p: *mut c_void, _head: *mut c::rcu_head) {
 /// # Safety
 /// Only RCU readers use @p after.
 pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void) {
-    unsafe { c::rcu_free_ptr(p) }
+    unsafe { rcu_free_ptr(p) }
+}
+
+/*
+ * The rcu_head embedded in the object can't be used directly: call_rcu() hands
+ * the callback &obj->rcu, and free() needs the base of the allocation, which
+ * isn't recoverable from that without knowing the field's offset. So carry the
+ * pointer in a wrapper.
+ *
+ * If the wrapper can't be allocated, block for a grace period rather than free
+ * under readers - slow, but the alternative is the bug this replaced.
+ */
+#[repr(C)]
+struct RcuFreeWrapper {
+    rcu: c::rcu_head,
+    p:   *mut c_void,
+}
+
+unsafe extern "C" fn rcu_free_wrapper_cb(head: *mut c::rcu_head) {
+    let w = head.cast::<RcuFreeWrapper>();
+    unsafe {
+        libc::free((*w).p);
+        libc::free(w.cast());
+    }
+}
+
+/// @p, malloc()'s, freed a grace period on.
+///
+/// # Safety
+/// Only RCU readers use @p after.
+pub(super) unsafe fn rcu_free_ptr(p: *mut c_void) {
+    if p.is_null() {
+        return;
+    }
+
+    let w = unsafe { libc::malloc(size_of::<RcuFreeWrapper>()) }.cast::<RcuFreeWrapper>();
+    if !w.is_null() {
+        unsafe {
+            (&raw mut (*w).p).write(p);
+            super::rcu::Flavor::RCU.call_raw(&raw mut (*w).rcu, rcu_free_wrapper_cb);
+        }
+    } else {
+        super::rcu::synchronize();
+        unsafe { libc::free(p) };
+    }
 }
 
 /// @size bytes, with @gfp, for a bio's data: kmalloc()'s, here.

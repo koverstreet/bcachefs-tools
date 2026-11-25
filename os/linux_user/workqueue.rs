@@ -28,7 +28,10 @@
 
 mod queues;
 
-use crate::c;
+pub use queues::{delayed_work, work_struct};
+#[allow(non_camel_case_types)]
+pub type workqueue_struct = queues::Workqueue;
+
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use bitflags::bitflags;
@@ -57,7 +60,7 @@ bitflags! {
 /// struct's field C sees as its struct workqueue_struct *.
 #[repr(transparent)]
 #[derive(Default)]
-pub struct Workqueue(Option<NonNull<c::workqueue_struct>>);
+pub struct Workqueue(Option<NonNull<workqueue_struct>>);
 
 // SAFETY: queued on, and destroyed, from any thread
 unsafe impl Send for Workqueue {}
@@ -94,13 +97,13 @@ impl Workqueue {
     }
 
     /// Kept as a pointer, for from_raw() to have back.
-    pub fn into_raw(self) -> *mut c::workqueue_struct {
+    pub fn into_raw(self) -> *mut workqueue_struct {
         core::mem::ManuallyDrop::new(self).0.map_or(core::ptr::null_mut(), NonNull::as_ptr)
     }
 
     /// # Safety
     /// @wq is into_raw()'s, had back once.
-    pub unsafe fn from_raw(wq: *mut c::workqueue_struct) -> Self {
+    pub unsafe fn from_raw(wq: *mut workqueue_struct) -> Self {
         Workqueue(NonNull::new(wq))
     }
 }
@@ -129,7 +132,7 @@ impl Drop for Workqueue {
 /// A workqueue by reference: a Workqueue's, a system queue, or one C made and
 /// outlives its use.
 #[repr(transparent)]
-pub struct Queue(Opaque<c::workqueue_struct>);
+pub struct Queue(Opaque<workqueue_struct>);
 
 // SAFETY: work is queued on a workqueue from any thread
 unsafe impl Sync for Queue {}
@@ -137,7 +140,7 @@ unsafe impl Sync for Queue {}
 impl Queue {
     /// # Safety
     /// @wq is a workqueue that lives for 'a.
-    pub unsafe fn from_raw<'a>(wq: *mut c::workqueue_struct) -> &'a Queue {
+    pub unsafe fn from_raw<'a>(wq: *mut workqueue_struct) -> &'a Queue {
         // SAFETY: the caller's; repr(transparent) over the C struct
         unsafe { &*wq.cast() }
     }
@@ -148,39 +151,39 @@ impl Queue {
         unsafe { queues::drain_workqueue(self.as_ptr()) }
     }
 
-    pub fn as_ptr(&self) -> *mut c::workqueue_struct {
+    pub fn as_ptr(&self) -> *mut workqueue_struct {
         self.0.as_ptr()
     }
 
     /// system_long_wq: for work that may run long.
     pub fn system_long() -> &'static Queue {
         // SAFETY: the system's, for as long as there is a system
-        unsafe { Self::from_raw((&raw mut queues::EVENTS_LONG).cast()) }
+        unsafe { Self::from_raw(&raw mut queues::EVENTS_LONG) }
     }
 
     /// system_wq: per-cpu, what schedule_work_on() queues on.
     pub fn system() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw((&raw mut queues::EVENTS).cast()) }
+        unsafe { Self::from_raw(&raw mut queues::EVENTS) }
     }
 
     /// system_dfl_wq: the default, unbound.
     pub fn system_dfl() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw((&raw mut queues::EVENTS_UNBOUND).cast()) }
+        unsafe { Self::from_raw(&raw mut queues::EVENTS_UNBOUND) }
     }
 
     /// system_highpri_wq: per-cpu, high priority.
     pub fn system_highpri() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw((&raw mut queues::EVENTS_HIGHPRI).cast()) }
+        unsafe { Self::from_raw(&raw mut queues::EVENTS_HIGHPRI) }
     }
 }
 
 /// The running worker's description: userspace's workers have none.
 pub fn set_worker_desc(_desc: &CStr) {}
 
-pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
+pub type WorkFn = unsafe extern "C" fn(*mut work_struct);
 
 /// A work_struct at a fixed place in Self, running Self::run(): new_work!()
 /// with run_raw::<Self>, the trampoline, which run() is inlined into.
@@ -194,7 +197,7 @@ pub trait WorkAt {
 }
 
 #[doc(hidden)]
-pub unsafe extern "C" fn run_raw<T: WorkAt>(work: *mut c::work_struct) {
+pub unsafe extern "C" fn run_raw<T: WorkAt>(work: *mut work_struct) {
     // SAFETY: T's work_struct, at T::WORK
     unsafe { T::run(NonNull::new_unchecked(work.byte_sub(T::WORK).cast())) }
 }
@@ -223,7 +226,7 @@ pub(crate) use work::{CancelledWork, DelayedWork, OnQueue, Own, ReffedWork, Work
 
 #[repr(transparent)]
 pub struct RawWork {
-    work: UnsafeCell<c::work_struct>,
+    work: UnsafeCell<work_struct>,
     _pin: PhantomPinned,
 }
 
@@ -242,7 +245,7 @@ impl RawWork {
         }
     }
 
-    fn as_ptr(&self) -> *mut c::work_struct {
+    fn as_ptr(&self) -> *mut work_struct {
         self.work.get()
     }
 
@@ -285,7 +288,7 @@ impl RawWork {
 
 #[repr(transparent)]
 pub struct RawDelayedWork {
-    work: UnsafeCell<c::delayed_work>,
+    work: UnsafeCell<delayed_work>,
     _pin: PhantomPinned,
 }
 
@@ -300,13 +303,13 @@ impl RawDelayedWork {
         // SAFETY: initialized in place, all of it - its work_struct
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                queues::init_work(&raw mut (*slot.cast::<c::delayed_work>()).work, func);
+                queues::init_work(&raw mut (*slot.cast::<delayed_work>()).work, func);
                 Ok(())
             })
         }
     }
 
-    pub fn as_ptr(&self) -> *mut c::delayed_work {
+    pub fn as_ptr(&self) -> *mut delayed_work {
         self.work.get()
     }
 

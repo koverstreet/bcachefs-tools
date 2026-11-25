@@ -325,9 +325,9 @@ mod tests {
     use super::*;
 
     fn run(name: &str, f: fn() -> TestRet) {
-        unsafe { c::linux_thread_init() };
+        crate::os::sched::linux_thread_init();
         let ret = f();
-        unsafe { c::linux_thread_exit() };
+        crate::os::sched::linux_thread_exit();
         ret.unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 

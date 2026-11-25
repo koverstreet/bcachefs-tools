@@ -82,7 +82,7 @@ struct RcuGuard;
 impl Drop for RcuGuard {
     fn drop(&mut self) {
         eprintln!("fuse worker thread exiting, unregistering RCU");
-        unsafe { c::linux_thread_exit() };
+        bcachefs_kernel::os::sched::linux_thread_exit();
     }
 }
 
@@ -99,7 +99,7 @@ thread_local! {
 fn ensure_thread_init() {
     THREAD_INITIALIZED.with(|init| {
         if !init.get() {
-            unsafe { c::linux_thread_init() };
+            bcachefs_kernel::os::sched::linux_thread_init();
             RCU_GUARD.with(|g| g.set(Some(RcuGuard)));
             init.set(true);
             eprintln!("fuse worker thread initialized (current + RCU)");
@@ -946,9 +946,9 @@ impl BcachefsFs {
 
 /// Times before 1970 are valid on bcachefs: a timespec's tv_sec is then
 /// negative, with tv_nsec still counting forwards from it.
-// time_t is 32 bits on some targets (i586): the cast isn't a no-op there
+// tv_nsec is a long, 32 bits on some targets (i586): the cast isn't a no-op there
 #[allow(clippy::unnecessary_cast)]
-fn ts_to_systime(ts: c::timespec) -> SystemTime {
+fn ts_to_systime(ts: c::timespec64) -> SystemTime {
     let nsec = Duration::from_nanos(ts.tv_nsec as u64);
     if ts.tv_sec >= 0 {
         UNIX_EPOCH + Duration::from_secs(ts.tv_sec as u64) + nsec
@@ -957,7 +957,7 @@ fn ts_to_systime(ts: c::timespec) -> SystemTime {
     }
 }
 
-fn systime_to_ts(t: SystemTime) -> c::timespec {
+fn systime_to_ts(t: SystemTime) -> c::timespec64 {
     let (sec, nsec) = match t.duration_since(UNIX_EPOCH) {
         Ok(d)  => (d.as_secs() as i64, d.subsec_nanos()),
         Err(e) => {
@@ -968,7 +968,7 @@ fn systime_to_ts(t: SystemTime) -> c::timespec {
             }
         }
     };
-    c::timespec { tv_sec: sec as _, tv_nsec: nsec as _ }
+    c::timespec64 { tv_sec: sec as _, tv_nsec: nsec as _ }
 }
 
 impl Filesystem for BcachefsFs {
@@ -2459,12 +2459,12 @@ mod tests {
     }
 
     #[test]
-    // tv_sec is a time_t: 32 bits on some targets
+    // tv_nsec is a long: 32 bits on some targets
     #[allow(clippy::unnecessary_cast)]
     fn timespec_systime_round_trip_including_before_1970() {
         for (sec, nsec) in [(0i64, 0u32), (1, 500_000_000), (1_700_000_000, 123),
                             (-1, 0), (-1, 500_000_000), (-2_000_000_000, 999_999_999)] {
-            let ts = c::timespec { tv_sec: sec as _, tv_nsec: nsec as _ };
+            let ts = c::timespec64 { tv_sec: sec as _, tv_nsec: nsec as _ };
             let t = ts_to_systime(ts);
             let back = systime_to_ts(t);
             assert_eq!((back.tv_sec as i64, back.tv_nsec as u32), (sec, nsec),

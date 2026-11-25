@@ -983,9 +983,9 @@ mod tests {
     // libtest runs each on a thread of its own, which libbcachefs code needs
     // made one it can run on
     fn run(name: &str, f: fn() -> TestRet) {
-        unsafe { c::linux_thread_init() };
+        crate::os::sched::linux_thread_init();
         let ret = f();
-        unsafe { c::linux_thread_exit() };
+        crate::os::sched::linux_thread_exit();
         ret.unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 

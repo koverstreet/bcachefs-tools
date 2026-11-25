@@ -276,17 +276,11 @@ fn create_or_update_file(
     Ok(child_inode)
 }
 
-// st_*time is a time_t: 32 bits on some targets - where a timespec may also
-// have padding fields, which the struct update zeroes
-#[allow(clippy::unnecessary_cast, clippy::needless_update)]
+// st_*time is a time_t: 32 bits on some targets
+#[allow(clippy::unnecessary_cast)]
 fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &rustix::fs::Stat) {
     let to_bch_time = |sec: i64, nsec: i64| {
-        let ts = c::timespec64 {
-            tv_sec: sec as _,
-            tv_nsec: nsec as _,
-            ..pin_init::zeroed()
-        };
-        fs.timespec_to_time(ts) as u64
+        fs.timespec_to_time(c::timespec64 { tv_sec: sec, tv_nsec: nsec as _ }) as u64
     };
 
     dst.bi_atime = to_bch_time(src.st_atime as i64, src.st_atime_nsec as i64);

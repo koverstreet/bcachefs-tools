@@ -107,9 +107,6 @@ fn main() {
         .allowlist_var("RUST_CONST_HELPER_.*")
         // and its functions named by macros: liburcu's flavour's
         .allowlist_function("RUST_FN_HELPER_.*")
-        // File mode bits: the kernel crate's bindings have them in-kernel.
-        .allowlist_var("S_IF.*")
-        .allowlist_var("S_ISGID")
         // errnos, for bch2_err_matches() against a bare errno, or returning
         // one as C does (darray_push()'s -ENOMEM) - the kernel crate's
         // bindings have them in-kernel; add as needed:
@@ -129,11 +126,6 @@ fn main() {
         .allowlist_type("z_stream|ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective")
         .allowlist_var("ZLIB_VERSION|MAX_WBITS|Z_OK|Z_STREAM_END|Z_FINISH|Z_DEFLATED")
         .allowlist_var("Z_DEFAULT_STRATEGY|Z_DEFAULT_COMPRESSION|Z_BEST_SPEED|Z_BEST_COMPRESSION")
-        // The kernel's DEFINE_LOCK_GUARD / DEFINE_CLASS cleanup machinery
-        // (class_*_constructor/destructor/lock_ptr) are never called from Rust,
-        // and wrap_static_fns can't emit valid C wrappers for them.
-        .blocklist_function("class_.*")
-        .blocklist_function("__class_.*")
         // printbuf is an fs/ type owned by bcachefs-kernel; don't emit the
         // userspace helpers that take it (they reference the blocklisted type
         // and belong to bch_bindgen anyway).
