@@ -158,8 +158,27 @@ macro_rules! allocs {
 
                 let layout: Layout = $layout(layout);
                 // a zero-sized allocation is dangling: nothing for C to free
-                let p = p.filter(|_| old.size() != 0).map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
-                ebug_assert!(!gfp.contains(flags::NOFAIL) || !memalloc_scope().0,
+                let p = p.filter(|_| old.size() != 0);
+
+                // vfree() may sleep: a vmalloc()'d @p freed or moved where we
+                // can't is copied out of here, and freed by vfree_atomic()
+                if let Some(old_p) = p && in_noreclaim_scope() && super::kernel::is_vmalloc_addr(old_p.as_ptr()) {
+                    unsafe {
+                        let q = if layout.size() == 0 {
+                            let dangling = core::ptr::without_provenance_mut::<u8>(layout.align());
+                            NonNull::slice_from_raw_parts(NonNull::new(dangling).ok_or(AllocError)?, 0)
+                        } else {
+                            let q = Self::c_realloc(None, layout, layout, gfp)?;
+                            q.cast::<u8>().copy_from_nonoverlapping(old_p, old.size().min(layout.size()));
+                            q
+                        };
+                        vfree_atomic(old_p);
+                        return Ok(q);
+                    }
+                }
+
+                let p = p.map_or(core::ptr::null(), |p| p.as_ptr().cast_const().cast());
+                ebug_assert!(!gfp.contains(flags::NOFAIL) || !in_noreclaim_scope(),
                              "a NOFAIL allocation, in a NORECLAIM scope");
                 let gfp = current_gfp_context_raw(gfp.raw());
                 let q = ($realloc)(p, old.size(), layout.size(), layout.align(), gfp, NUMA_NO_NODE);
@@ -200,6 +219,19 @@ unsafe fn kvrealloc_unbounded(p: *const c_void, old: usize, size: usize, align: 
         }
     }
     q
+}
+
+/// vfree() where it can't sleep: kvfree_atomic(), from 7.1. Before, neither
+/// it nor vfree_atomic() is exported: kvfree_rcu(), by @p's own memory - a
+/// page or more - for its head, which never sleeps.
+///
+/// # Safety
+/// @p is vmalloc()'s, and nothing uses it after.
+unsafe fn vfree_atomic(p: NonNull<u8>) {
+    #[cfg(linux_ge = "7.1")]
+    unsafe { kernel::bindings::kvfree_atomic(p.as_ptr().cast()) }
+    #[cfg(not(linux_ge = "7.1"))]
+    unsafe { c::rust_kvfree_rcu(p.as_ptr().cast(), p.as_ptr().cast()) }
 }
 
 /// C's vrealloc(): @p, of @old bytes, as @size - freed if 0.
@@ -260,6 +292,12 @@ fn memalloc_scope() -> (bool, bool) {
 
     let pf = crate::os::sched::memalloc_flags();
     (pf & PF_MEMALLOC_NORECLAIM != 0, pf & PF_MEMALLOC_NOWARN != 0)
+}
+
+/// In a NORECLAIM scope - a spinlock's, an RCU read section's, where we
+/// can't sleep, or one of its own: no allocation reclaims, nor free sleeps.
+fn in_noreclaim_scope() -> bool {
+    memalloc_scope().0
 }
 
 /// @gfp as the task's memalloc scope says: NORECLAIM makes it NOWAIT, if it

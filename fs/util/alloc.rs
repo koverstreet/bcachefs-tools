@@ -20,8 +20,10 @@ use crate::util::rcu::FreeAnytime;
 //
 // core's Allocator: in-kernel, the kernel's C allocators with the flags the
 // task's memalloc scope says - so Vec, KBox and everything built on them
-// honour NORECLAIM and NOWARN, which the page allocator doesn't know. In
-// userspace, std's allocator. Each port's impls are its own (os::alloc).
+// honour NORECLAIM and NOWARN, which the page allocator doesn't know, and
+// what's vmalloc()'d is freed atomically under NORECLAIM, a spinlock's or an
+// RCU read section's, where vfree() can't sleep. In userspace, std's
+// allocator. Each port's impls are its own (os::alloc).
 
 #[derive(Clone, Copy)]
 pub struct Kmalloc;
@@ -34,8 +36,9 @@ pub struct Vmalloc;
 /// An Allocator of ours, which says whether kvfree() frees what it gives.
 ///
 /// # Safety
-/// If KVFREE, kvfree() - in-kernel - frees what it gives, from any context. A
-/// zero-sized one has no state: stateless() makes it from nothing.
+/// If KVFREE, kvfree() - in-kernel - frees what it gives: as kvfree_rcu()
+/// does, from a work item or an RCU callback. A zero-sized one has no state:
+/// stateless() makes it from nothing.
 pub unsafe trait Alloc: Allocator {
     /// Its memory is kvfree()'s to free: so kvfree_rcu()'s, a grace period on.
     const KVFREE: bool = false;
