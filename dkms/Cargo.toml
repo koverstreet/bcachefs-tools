@@ -1,0 +1,12 @@
+[package]
+name = "bcachefs-dkms"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85.0"
+license = "GPL-2.0"
+publish = false
+
+# make install_dkms's: the module's source tree, for DKMS
+[[bin]]
+name = "dkms-install"
+path = "install.rs"

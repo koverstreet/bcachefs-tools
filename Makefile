@@ -430,25 +430,11 @@ install_systemd_generator: install_systemd
 install_dracut: dracut/90bcachefs/module-setup.sh
 	$(INSTALL) -m0755 -D $< -t $(DESTDIR)$(PKGCONFIG_DRACUTMODULESDIR)/90bcachefs
 
-# The module's source tree, in $(1), for DKMS or dkms-reload-interactive: fs/
-# whole - a list of files is how Makefile.rust.vendor was left out of 1.39.0 -
-# less dotfiles and objects; os/linux_kernel, and what it shares with
-# os/linux_user from os/, at the same path from fs/ as here; plus what lives
-# outside fs/, and build.vars.
-# Source mtimes are kept, so kbuild rebuilds only what changed.
-define bch-stage-module
-	$(Q)mkdir -p $(1)/src/fs/bcachefs $(1)/src/fs/os/linux_kernel $(1)/src/fs/os/bio
-	$(Q)tar -C fs --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
-		tar -C $(1)/src/fs/bcachefs --no-same-owner -xf -
-	$(Q)tar -C os/linux_kernel --exclude='*/.*' --exclude='*.o' --exclude='*.d' -cf - . | \
-		tar -C $(1)/src/fs/os/linux_kernel --no-same-owner -xf -
-	$(Q)cp -p os/*.rs $(1)/src/fs/os/
-	$(Q)cp -p os/bio/*.rs $(1)/src/fs/os/bio/
-	$(Q)cp -p dkms/Makefile $(1)/
-	$(Q)cp -p dkms/module-version.c version.h $(1)/src/fs/bcachefs/
-	$(Q)cp -p signing/bcachefs-signing-ca.pem $(1)/src/fs/bcachefs/scripts/
-	$(Q)$(call bch-build-vars,$(BCACHEFS_DKMS_FORWARD),$(1)/build.vars)
-endef
+# The module's source tree, in $(1), for DKMS or dkms-reload-interactive:
+# dkms/install.rs. In a target directory of its own: dkms-reload runs as root,
+# and root's files in target/debug would fail the user's next build.
+bch-stage-module = $(Q)$(CARGO) run -q -p bcachefs-dkms --target-dir target/dkms -- $(1) \
+	$(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),'$(v)=$($(v))'))
 
 .PHONY: install_dkms
 install_dkms: dkms/dkms.conf version.h
