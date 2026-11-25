@@ -208,7 +208,7 @@ pub use cstruct_macros::RcuHead;
 /// # Safety
 /// into_head()'s head is from_head()'s to take back, once, and owned until
 /// then: nothing else frees what it's in, or queues it.
-pub unsafe trait RcuOwned: Sized {
+pub unsafe trait RcuOwned {
     fn into_head(self) -> NonNull<RcuHead>;
 
     /// # Safety

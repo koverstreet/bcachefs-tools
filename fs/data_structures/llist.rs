@@ -31,7 +31,7 @@ impl LlistNode {
 /// # Safety
 /// into_raw()'s Target is from_raw()'s to take back, once, and owned until
 /// then: nothing else frees it, or links it.
-pub(crate) unsafe trait LlistOwned: Sized {
+pub(crate) unsafe trait LlistOwned {
     type Target;
 
     fn into_raw(self) -> NonNull<Self::Target>;
