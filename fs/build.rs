@@ -29,6 +29,8 @@ fn main() {
     if rustc_version() >= (1, 97) {
         println!("cargo::rustc-cfg=bch_return_address");
     }
+    // The module's version, which an external module build gives it.
+    println!("cargo::rustc-check-cfg=cfg(bch_version)");
     // #[define_opaque], which #[in_place] puts on its fn: rustc 1.87+.
     println!("cargo::rustc-check-cfg=cfg(bch_define_opaque)");
     if rustc_version() >= (1, 87) {

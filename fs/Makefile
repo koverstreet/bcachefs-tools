@@ -17,8 +17,10 @@ ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' 
 CONFIG_BCACHEFS_FS :=
 bcachefs-prebuilt := y
 endif
+# The module's version, in its .modinfo: init/module.rs
+RUSTFLAGS_mod.o += --cfg bch_version -Zunstable-options --env-set BCACHEFS_VERSION=$(bcachefs-version)
 else
-$(warning bcachefs: no version in $(src)/version.h - not looking for a prebuilt module (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
+$(warning bcachefs: no version in $(src)/version.h - the module will carry none, and we're not looking for a prebuilt one (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
 endif
 endif
 
@@ -56,16 +58,6 @@ obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
 	../os/linux_kernel/shim.o
-
-ifdef KBUILD_EXTMOD
-ifneq ($(wildcard $(src)/module-version.c),)
-	bcachefs-y += module-version.o
-else
-# A hand-copied tree (field report, 2026-07-23): say so, rather than fail
-# with "no rule to make target".
-$(warning bcachefs: $(src)/module-version.c missing - module will carry no MODULE_VERSION)
-endif
-endif
 
 # A prebuilt module builds nothing, so none of Rust's requirements apply - its
 # checks fail the build on a kernel that can't build our Rust (#1133).

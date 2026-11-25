@@ -253,8 +253,8 @@ tags:
 	ctags -R .
 
 # Not the kernel-only C: os/linux_kernel/vendor (the vendored kernel Rust
-# stack's helpers) and dkms/ (module-version.c).
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './os/linux_kernel/*' ! -path './dkms/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
+# stack's helpers).
+SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './os/linux_kernel/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
 # Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
 SRCS:=$(patsubst ./%,%,$(SRCS))
 

@@ -14,7 +14,7 @@
 //!    source replacement says (a vendored tarball's vendor/, a distro's
 //!    registry); at DEST/src/fs/bcachefs/vendor/NAME;
 //!  - dkms/Makefile, at DEST;
-//!  - dkms/module-version.c and version.h, with fs/;
+//!  - version.h, with fs/;
 //!  - the module signing CA, in fs/scripts;
 //!  - DEST/build.vars: NAME := VALUE, for each NAME=VALUE.
 //!
@@ -194,7 +194,6 @@ fn run() -> Result<()> {
 
     for (from, to) in [
         ("dkms/Makefile", dest.join("Makefile")),
-        ("dkms/module-version.c", src.join("bcachefs/module-version.c")),
         ("version.h", src.join("bcachefs/version.h")),
         ("signing/bcachefs-signing-ca.pem", src.join("bcachefs/scripts/bcachefs-signing-ca.pem")),
     ] {

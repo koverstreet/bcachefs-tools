@@ -14,6 +14,8 @@ crate::module_info!("license" = "GPL");
 crate::module_info!("author" = "Kent Overstreet <kent.overstreet@gmail.com>");
 #[cfg(kernel)]
 crate::module_info!("description" = "bcachefs filesystem");
+#[cfg(all(kernel, bch_version))]
+crate::module_info!("version" = env!("BCACHEFS_VERSION"));
 #[cfg(all(kernel, not(MODULE)))]
 crate::module_info!("file" = env!("RUST_MODFILE"));
 
