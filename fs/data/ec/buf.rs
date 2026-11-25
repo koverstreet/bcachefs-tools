@@ -58,6 +58,7 @@ pub(crate) const EC_BLOCKS_ALL: u32 = !0;
 // waited on the buffer's closure.
 
 /// How a stripe buffer over the limit waits.
+#[derive(Clone, Copy)]
 pub(crate) enum MemWait {
     /// It doesn't: it's let in - a read reconstructing, which can't wait.
     Never,
@@ -215,6 +216,72 @@ impl StripeBuf {
         sh
     }
 
+    /// Whether it has block @i.
+    pub(crate) fn has(&self, i: usize) -> bool {
+        self.blocks & 1 << i != 0
+    }
+
+    /// Block @i, made - its memory counted, as new()'s - unless it has it.
+    pub(crate) fn alloc_block(&mut self, i: usize, wait: MemWait) -> Result<(), BchError> {
+        if self.has(i) {
+            return Ok(());
+        }
+        self.fs.stripe_buf_mem_get(self.bytes, wait)?;
+        match io_buf(self.bytes, Flags::empty()) {
+            Ok(b) => {
+                self.data[i] = Some(b);
+                self.blocks |= 1 << i;
+                Ok(())
+            }
+            Err(_) => {
+                self.fs.stripe_buf_mem_put(self.bytes);
+                self.fs.throw(Errcode::ENOMEM_stripe_buf)
+            }
+        }
+    }
+
+    /// Its block @i moved to @to's @to_idx - a buffer of the same window -
+    /// with what it's charged.
+    pub(crate) fn move_block(&mut self, i: usize, to: &mut StripeBuf, to_idx: usize) {
+        assert!((to.offset, to.size) == (self.offset, self.size),
+                "moving blocks between stripe buffers of other windows");
+        assert!(self.has(i) && !to.has(to_idx),
+                "moving block {i} of a stripe buffer of {:#x} to {to_idx} of one of {:#x}", self.blocks, to.blocks);
+
+        to.data[to_idx] = self.data[i].take();
+        self.blocks &= !(1 << i);
+        to.blocks |= 1 << to_idx;
+    }
+
+    /// Its blocks in @mask moved to @to: see move_block().
+    pub(crate) fn move_blocks(&mut self, to: &mut StripeBuf, mask: u32) {
+        blocks_in(mask).for_each(|i| self.move_block(i, to, i));
+    }
+
+    /// Block @i's memory freed, and given back - and what its IO left.
+    pub(crate) fn free_block(&mut self, i: usize) {
+        assert!(self.has(i), "freeing block {i} of a stripe buffer without it");
+        self.data[i] = None;
+        self.err.iter_mut().for_each(|e| e[i] = None);
+        self.blocks &= !(1 << i);
+        self.fs.stripe_buf_mem_put(self.bytes);
+    }
+
+    /// Data block @i of @s folded into its parity: blocks it has, all of each.
+    pub(crate) fn fold_block(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, i: usize) {
+        let (sh, parity) = (self.shape(s), parity_blocks(s));
+        assert!(self.blocks & parity == parity && self.has(i) && i < sh.nr_data as usize &&
+                self.offset == 0 && self.size == sh.sectors,
+                "folding block {i} into a stripe buffer of {:#x}", self.blocks);
+
+        // in order: the data blocks it has, then the parity
+        let k = (self.blocks & ((1 << i) - 1)).count_ones() as usize;
+        let nr = (self.blocks & !parity).count_ones() as usize;
+        let mut b = self.blocks_mut();
+        let (data, parity) = b.split_at_mut(nr);
+        raid::fold(parity, data[k], i);
+    }
+
     /// The blocks with an error @e - pre or post recovery - as a mask.
     pub(crate) fn failed_mask(&self, e: usize) -> u32 {
         (0..self.nr_blocks as usize)
@@ -283,6 +350,12 @@ impl Drop for StripeBuf {
     }
 }
 
+/// @s's parity blocks, as a mask: those past its data.
+pub(crate) fn parity_blocks(s: BkeySC<'_, c::Stripe<Validated>>) -> u32 {
+    let sh = shape(s);
+    ((1u64 << sh.nr_blocks) - (1u64 << sh.nr_data)) as u32
+}
+
 /// The blocks in @mask, in order.
 pub(crate) fn blocks_in(mask: u32) -> impl Iterator<Item = usize> {
     (0..MAX_BLOCKS).filter(move |i| mask & 1 << i != 0)
@@ -308,21 +381,23 @@ pub(crate) fn block_checksum(s: BkeySC<'_, c::Stripe<Validated>>, b: &StripeBuf,
     sh.csum_type.checksum_unkeyed(granule)
 }
 
-/// Every block's checksums, into @key, from a buffer of the whole stripe.
+/// The checksums of the blocks @buf has, into @key: of the whole stripe.
 pub fn generate_checksums(key: &mut StripeKey, buf: &StripeBuf) {
+    blocks_in(buf.blocks).for_each(|i| generate_block_checksums(key, buf, i));
+}
+
+/// Block @i's checksums, into @key, from a buffer of the whole stripe.
+pub(crate) fn generate_block_checksums(key: &mut StripeKey, buf: &StripeBuf, i: usize) {
     let sh = buf.shape(key.stripe());
     if sh.csum_type == c::CsumType::none {
         return;
     }
 
-    assert!(buf.offset == 0 && buf.size == sh.sectors && buf.blocks.count_ones() == sh.nr_blocks,
-            "checksums of a buffer of part of the stripe");
+    assert!(buf.offset == 0 && buf.size == sh.sectors, "checksums of a buffer of part of the stripe");
 
-    for i in 0..sh.nr_blocks {
-        for j in 0..sh.csums_per_device {
-            let csum = block_checksum(key.stripe(), buf, i, j << sh.csum_granularity_bits);
-            key.stripe_mut().csums_mut().expect("a new stripe's checksum type").set(i, j, csum);
-        }
+    for j in 0..sh.csums_per_device {
+        let csum = block_checksum(key.stripe(), buf, i as u32, j << sh.csum_granularity_bits);
+        key.stripe_mut().csums_mut().expect("a new stripe's checksum type").set(i as u32, j, csum);
     }
 }
 
@@ -393,14 +468,6 @@ pub fn blocks_good(s: BkeySC<'_, c::Stripe<Validated>>, buf: &StripeBuf, mask: u
 /// reconstruction, are over all of them.
 fn has_all(buf: &StripeBuf) -> bool {
     buf.blocks.count_ones() == buf.nr_blocks
-}
-
-/// Stripe @s's parity, from its data.
-pub fn generate_ec(s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf) {
-    let sh = buf.shape(s);
-    assert!(has_all(buf) && buf.offset == 0 && buf.size == sh.sectors, "parity of part of a stripe");
-
-    raid::generate(&mut buf.blocks_mut(), sh.nr_redundant as usize)
 }
 
 /// The blocks that came back bad, rebuilt from the rest - if any of

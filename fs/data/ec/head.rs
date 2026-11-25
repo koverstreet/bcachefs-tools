@@ -434,27 +434,26 @@ pub(crate) fn set_pending(fs: &Fs, b: StripeNewBox) {
     v.last().expect("just pushed").fill(&v);
 }
 
-/// A block of @s, @i its internal state, for this write: the first one on a
-/// device we may allocate from that nobody else has taken - its io ref, the
-/// writer's. NULL means this stripe has nothing for us: its free blocks are
-/// all on devices we're excluded from.
-fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> Option<OpenBucket> {
+/// The stripe's first block for this write - on a device it may allocate
+/// from, and no writer's yet - @i its internal state: None if its free ones
+/// are all on devices it's excluded from.
+fn pick_block(req: &c::alloc_request, i: &Internal) -> Option<usize> {
     let nr_data = i.nr_data() as usize;
-    for &dev in &req.devs_sorted.data[..req.devs_sorted.nr as usize] {
-        for ec_idx in 0..nr_data {
-            let Slot::Bucket(StripeBlock::Pinned(b)) = &i.blocks[ec_idx] else { continue };
-            if b.id().dev() == dev {
-                let Slot::Bucket(StripeBlock::Pinned(b)) = core::mem::take(&mut i.blocks[ec_idx]) else {
-                    unreachable!()
-                };
-                let io = i.io_ref();
-                let (claimed, ob) = b.claim(s, ec_idx as u8, io);
-                i.blocks[ec_idx] = Slot::Bucket(StripeBlock::Claimed(claimed));
-                return Some(ob);
-            }
-        }
-    }
-    None
+    req.devs_sorted.data[..req.devs_sorted.nr as usize].iter().find_map(|&dev| {
+        (0..nr_data).find(|&j| matches!(&i.blocks[j], Slot::Bucket(StripeBlock::Pinned(b)) if b.id().dev() == dev))
+    })
+}
+
+/// Block @idx of @s, pick_block()'s, claimed for this write: its bucket, and
+/// its io ref, the writer's.
+fn claim_block(s: &StripeNew, i: &mut Internal, idx: usize) -> OpenBucket {
+    let Slot::Bucket(StripeBlock::Pinned(b)) = core::mem::take(&mut i.blocks[idx]) else {
+        unreachable!("block {idx}, picked: a pinned block")
+    };
+    let io = i.io_ref();
+    let (claimed, ob) = b.claim(s, idx as u8, io);
+    i.blocks[idx] = Slot::Bucket(StripeBlock::Claimed(claimed));
+    ob
 }
 
 /// @h's stripe staged - allocated, its buffers, its task started - and a
@@ -481,24 +480,35 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
         });
     }
 
+    // Has to come after the stripe's own allocation: that runs the bucket
+    // allocator against the stripe's device mask, clobbering devs_sorted.
+    let idx = wp_stripe.and_then(|stripe| {
+        fs.dev_alloc_list(stripe, req);
+        pick_block(req, &i)
+    });
+
     // The buffers are the stripe's as soon as they're made: the second try,
     // with the locks dropped, or the attempt after a restart from its relock,
-    // makes only what's still missing.
+    // makes only what's still missing - the stripe's, and the block's this
+    // write claims.
     t.allocate_dropping_locks_big(|| {
-        if i.new_buf.is_none() {
-            let wait = match req.wait {
-                AllocWait::Never => MemWait::Never,
-                AllocWait::Sync(_) | AllocWait::Async(_) => MemWait::Blocked,
-            };
-            let seen = Blocked::StripeBuf.events(fs).snapshot();
-            let buf = StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait);
-            if let (Err(e), AllocWait::Sync(blocked) | AllocWait::Async(blocked)) = (&buf, &mut req.wait) {
-                if e.matches(Errcode::stripe_buf_mem_blocked) {
-                    *blocked = Some((Blocked::StripeBuf, seen));
-                }
+        let wait = match req.wait {
+            AllocWait::Never => MemWait::Never,
+            AllocWait::Sync(_) | AllocWait::Async(_) => MemWait::Blocked,
+        };
+        let seen = Blocked::StripeBuf.events(fs).snapshot();
+        let ret = (|| {
+            if i.new_buf.is_none() {
+                i.make_bufs(fs, wait)?;
             }
-            i.new_buf = Some(buf?);
+            idx.map_or(Ok(()), |idx| i.new_buf.as_mut().expect("a new stripe's buffer").alloc_block(idx, wait))
+        })();
+        if let (Err(e), AllocWait::Sync(blocked) | AllocWait::Async(blocked)) = (&ret, &mut req.wait) {
+            if e.matches(Errcode::stripe_buf_mem_blocked) {
+                *blocked = Some((Blocked::StripeBuf, seen));
+            }
         }
+        ret?;
 
         if let Some(r) = i.reuse.as_mut().filter(|r| r.read == OldRead::NoBuf) {
             r.buf = Some(StripeBuf::new_whole(fs, r.stripe.stripe(), MemWait::Never)?);
@@ -508,13 +518,7 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
     })?;
 
     s.launch(&mut i);
-
-    // Has to come after the stripe's own allocation: that runs the bucket
-    // allocator against the stripe's device mask, clobbering devs_sorted.
-    let ob = wp_stripe.and_then(|stripe| {
-        fs.dev_alloc_list(stripe, req);
-        claim_bucket(req, s, &mut i)
-    });
+    let ob = idx.map(|idx| claim_block(s, &mut i, idx));
 
     t.verify_not_restarted();
     Ok(ob)

@@ -84,7 +84,9 @@
 //! Its task, one: made with it, in its box (a TaskBox), unstarted, so
 //! starting it can't fail - and started when it's staged, or when it's
 //! handed on before. It folds the old stripe's carried blocks in, if it's
-//! reading one; waits to be in flight; creates the stripe; and tears it down:
+//! reading one; folds each new data block into the parity as it's written,
+//! and frees its buffer, till it's in flight; creates the stripe; and tears
+//! it down:
 //! what it holds given back. Its done, after its last run, takes it out of
 //! new_stripes and drops the box, the task with it. Every await
 //! resumes on stripe_create_wq. That's what makes its borrow of the
@@ -137,7 +139,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::c;
-use crate::data::ec::buf::StripeBuf;
+use crate::data::ec::buf::{parity_blocks, MemWait, StripeBuf};
 use crate::data::ec::open::StripeClaim;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
 use crate::data::ec::stripe_new_blocks::new_stripe_key;
@@ -149,6 +151,7 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
 use crate::util::alloc::{AllocError, KBox, Vec};
 use crate::util::backref::BackRef;
+use crate::util::futex::EventCount;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::refcount::{RefGuard, RefSlot, Refcount};
 use crate::os::kernel::local_clock;
@@ -190,6 +193,9 @@ pub struct StripeNew {
     pub(crate) err:       FirstErr,
     /// An EcStripeNewState
     state:                AtomicU32,
+    /// Woken as an io ref's put - a block's bucket closing - and as it goes
+    /// in flight
+    pub(crate) io_ref_put:           EventCount,
 
     #[pin]
     internal:             Locked<Mutex, Internal, BlockDevs>,
@@ -328,7 +334,11 @@ pub(crate) struct Internal {
 
     /// Its key: at its slot, once it has one
     pub(crate) new_stripe:       StripeKey,
+    /// Its data blocks' buffer: each block's, from when a writer claims it
+    /// until it's written and folded into the parity
     pub(crate) new_buf:          Option<KBox<StripeBuf>>,
+    /// Its parity blocks', made with @new_buf: its task's, once it's started
+    pub(crate) parity_buf:       Option<KBox<StripeBuf>>,
     /// Its slot, held open: stripe_idx_alloc()'s
     pub(crate) slot_claim:       Option<StripeClaim>,
 
@@ -422,6 +432,7 @@ impl StripeNew {
             seq:        AtomicU64::new(0),
             err:        FirstErr::new(),
             state:      AtomicU32::new(State::open as u32),
+            io_ref_put: EventCount::new(),
             internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),
         }? BchError);
 
@@ -454,6 +465,11 @@ impl StripeNew {
 
     fn state(&self) -> State {
         State::from_bits(self.state.load(Ordering::Relaxed))
+    }
+
+    /// Every bucket back: its writers are done.
+    pub(crate) fn in_flight(&self) -> bool {
+        self.state() == State::in_flight
     }
 
     /// Its task started, unless it has been, and its slot published - @s its
@@ -501,6 +517,8 @@ unsafe impl Refcount for StripeNew {
     /// and has its task go on to create it.
     unsafe fn dec(&self) {
         let fs = &*self.fs;
+        // while ours keeps it: after the put the task may free it
+        self.io_ref_put.wake();
         let v = self.io_refs.fetch_sub(1, Ordering::AcqRel);
         assert!(v > 0, "stripe {} io ref put with none held", self.idx.load(Ordering::Relaxed));
         if v != 1 {
@@ -514,6 +532,7 @@ unsafe impl Refcount for StripeNew {
         self.state.store(State::in_flight as u32, Ordering::Relaxed);
         self.seq.store(fs.ec.stripe_new_seq.fetch_add(1, Ordering::Relaxed) as u64 + 1, Ordering::Release);
         fs.ec.new_stripes_changed.wake();
+        self.io_ref_put.wake();
         self.in_flight_ref.take().expect("the io refs' ref on its in flight, put once").put(());
     }
 }
@@ -533,9 +552,21 @@ impl Internal {
             buckets:             ArrayVec::new(),
             new_stripe           <- StripeKey::empty(),
             new_buf:             None,
+            parity_buf:          None,
             slot_claim:          None,
             reuse:               None,
         })
+    }
+
+    /// Its buffers, both or neither: the parity's, and its data blocks',
+    /// empty - each block's is made as a writer claims it, or carried in.
+    pub(crate) fn make_bufs(&mut self, fs: &Fs, wait: MemWait) -> Result<(), BchError> {
+        let s = self.new_stripe.stripe();
+        let sectors = s.v().sectors.get().into();
+        let parity = StripeBuf::new(fs, s, parity_blocks(s), 0, sectors, wait)?;
+        self.new_buf = Some(StripeBuf::new(fs, s, 0, 0, sectors, MemWait::Never)?);
+        self.parity_buf = Some(parity);
+        Ok(())
     }
 
     pub(crate) fn nr_data(&self) -> u32 {

@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A stripe being made's task: folding in an old stripe's carried blocks,
-//! waiting to be in flight, creating the stripe, and tearing it down - see
-//! stripe_new.rs.
+//! folding its new data blocks into the parity as they're written till it's
+//! in flight, creating the stripe, and tearing it down - see stripe_new.rs.
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags};
 use crate::c;
-use crate::data::ec::buf::{blocks_good, blocks_in, generate_checksums, generate_ec, validate_msg, StripeBuf, POST, PRE};
+use crate::data::ec::buf::{blocks_good, blocks_in, generate_block_checksums, generate_checksums, parity_blocks,
+                           validate_msg, MemWait, StripeBuf, POST, PRE};
 use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::io::BlockIo;
 use crate::util::refcount::TryRefcount;
 use crate::util::gather::Gather;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
-use crate::data::ec::stripe_new::{new_stripes_take, Internal, StripeNew};
+use crate::data::ec::stripe_new::{new_stripes_take, Internal, Slot, StripeBlock, StripeNew};
 use crate::data::ec::stripe_new_reuse::{OldRead, Reuse};
 use crate::data::ec::update::{create_watermark, stripe_update_extents};
 use crate::errcode::{Errcode, BchError};
@@ -31,6 +32,7 @@ use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering::SeqCst;
 use pin_init::{init, init_zeroed, stack_pin_init, Init};
 use crate::format::Btree;
 use cstruct_macros::args_stored_once;
@@ -54,6 +56,22 @@ pub(crate) async fn stripe_task(fs: &Fs, s: &StripeNew) {
     let to_read = s.lock().reuse.as_ref().is_some_and(|r| r.read == OldRead::ToRead);
     let fold = if to_read { old_stripe_fold(fs, s, w, at).await } else { Ok(()) };
 
+    // made before it's launched, or the stripe's cancelled and never made
+    w.parity = s.lock().parity_buf.take();
+
+    // each new data block folded in as it's written, and freed - and with
+    // the writers done, the rest
+    loop {
+        let seen = s.io_ref_put.snapshot();
+        let in_flight = s.in_flight();
+        while let Some(i) = next_written(s, w, in_flight) {
+            zip_block(fs, s, w, i, at).await;
+        }
+        if in_flight {
+            break;
+        }
+        s.io_ref_put.wait_async(seen, at).await;
+    }
     s.in_flight.wait(at).await;
 
     // A ref unless writes are dead, not merely stopping: a stripe goes in
@@ -77,16 +95,13 @@ fn old_stripe_required(s: &Internal) -> u32 {
 }
 
 /// The old stripe's blocks we're carrying forward, in @old, checked out: take
-/// them - their buffers swapped into the new stripe's, whose carried slots
-/// are no writer's, as they're Slot::Carried or Moving.
+/// them - their buffers moved into the new stripe's, whose carried slots are
+/// no writer's, as they're Slot::Carried or Moving.
 pub(crate) fn old_stripe_carry(s: &mut Internal, old: &mut StripeBuf) {
     let map = s.old_block_map();
     let new = s.new_buf.as_mut().expect("a new stripe's buffer");
-    assert_eq!((new.offset, new.size), (old.offset, old.size),
-               "carrying blocks between stripe buffers of other sizes");
-
     for (i, &j) in map.iter().enumerate() {
-        core::mem::swap(&mut new.data[i], &mut old.data[usize::from(j)]);
+        old.move_block(usize::from(j), new, i);
     }
 }
 
@@ -162,6 +177,75 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
     Ok(())
 }
 
+/// The next new data block that's written - its bucket closed by its last
+/// writer, or with @all, its writers done, any left - and not yet folded in.
+/// Nothing for a stripe that's cancelled: it's never made.
+fn next_written(s: &StripeNew, w: &Working, all: bool) -> Option<usize> {
+    let i = s.lock();
+    if s.err.get().is_some() || w.parity.is_none() {
+        return None;
+    }
+
+    (0..i.nr_data() as usize).find(|&j| w.zipped & 1 << j == 0 && match &i.blocks[j] {
+        Slot::Bucket(StripeBlock::Claimed(ob)) => all || ob.pin.load(SeqCst) == 0,
+        Slot::Bucket(StripeBlock::Pinned(_))   => all,
+        _ => false,
+    })
+}
+
+/// Data block @i, written, folded into the parity and freed - the rest of its
+/// bucket zeroed first: zero_out_rest_of_ec_bucket().
+#[args_stored_once]
+async fn zip_block(fs: &Fs, s: &StripeNew, w: &mut Working, i: usize, at: Resume<'_>) {
+    let Working { new_stripe, parity, zipped, .. } = w;
+    let parity = parity.as_mut().expect("the parity, checked by next_written()");
+    *zipped |= 1 << i;
+
+    let (dev, sectors_free) = {
+        let mut l = s.lock();
+        let l = &mut *l;
+        new_stripe.copy_from(&l.new_stripe);
+        let b = l.blocks[i].bucket().expect("a new data block's bucket");
+        let buf = l.new_buf.as_mut().expect("a new stripe's buffer");
+        if buf.has(i) {
+            buf.move_blocks(parity, 1 << i);
+        }
+        (u32::from(b.id().dev()), b.sectors_free.get())
+    };
+
+    // no writer claimed it: made here, by create, which mustn't wait
+    if let Err(e) = parity.alloc_block(i, MemWait::Never) {
+        s.err.set(e);
+        return;
+    }
+
+    if sectors_free != 0 {
+        let offset = {
+            let rcu = read_lock();
+            let ca = fs.dev_rcu(dev, &rcu).expect("an open bucket's device");
+            u32::from(ca.mi.get().bucket_size) - sectors_free
+        };
+        let start = (offset as usize) << 9;
+        parity.block_mut(i)[start..start + ((sectors_free as usize) << 9)].fill(0);
+
+        let errs = {
+            stack_pin_init!(let done = Gather::new());
+            let mut io = BlockIo::<_, waiter::Async>::write(fs, parity, &done);
+            io.submit_range(new_stripe.stripe(), i, offset, sectors_free);
+            io.wait(at).await
+        };
+        errs.record(parity);
+        if parity.failed_mask(PRE) != 0 {
+            bch_err!(fs, "error creating stripe: error zeroing the rest of a data bucket");
+            s.err.set(fs.err(Errcode::ec_block_write));
+        }
+    }
+
+    parity.fold_block(new_stripe.stripe(), i);
+    generate_block_checksums(&mut s.lock().new_stripe, parity, i);
+    parity.free_block(i);
+}
+
 /// Whether a device of @v's is being removed.
 fn stripe_has_removing_dev(fs: &Fs, v: &c::Stripe<Validated>) -> bool {
     let rcu = read_lock();
@@ -193,6 +277,10 @@ fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, c::Stripe<Validated
 struct Working {
     new_stripe:      StripeKey,
     new_buf:         Option<KBox<StripeBuf>>,
+    /// The parity, the task's from its start
+    parity:          Option<KBox<StripeBuf>>,
+    /// The new data blocks folded into it
+    zipped:          u32,
     reuse:           Option<KBox<Reuse>>,
     res:             Option<DiskReservation<'static>>,
     /// The new blocks moved from the old stripe, to be written
@@ -208,6 +296,8 @@ impl Working {
         init!(Working {
             new_stripe      <- StripeKey::empty(),
             new_buf:        None,
+            parity:         None,
+            zipped:         0,
             reuse:          None,
             res:            None,
             moving          <- init_zeroed(),
@@ -309,44 +399,12 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         let v = w.new_stripe.stripe().v();
         (v.nr_data() as usize, usize::from(v.nr_blocks))
     };
-    let Working { new_stripe, new_buf, reuse, moving, old_block_map, allocated, watermark, res } = w;
-    let buf = new_buf.as_mut().expect("a new stripe's buffer");
-
-    // the rest of each data bucket zeroed: zero_out_rest_of_ec_bucket() -
-    // written with the rest, the buffer whole first
-    let mut tails: ArrayVec<(usize, u32, u32), MAX_BLOCKS> = ArrayVec::new();
-    for i in old_block_map.len()..nr_data {
-        // its writer done with it
-        let Some((dev, sectors_free)) = s.lock().blocks[i].bucket().map(|b| (u32::from(b.id().dev()), b.sectors_free.get())) else {
-            continue
-        };
-        if sectors_free == 0 {
-            continue;
-        }
-        let offset = {
-            let rcu = read_lock();
-            let ca = fs.dev_rcu(dev, &rcu).expect("an open bucket's device");
-            u32::from(ca.mi.get().bucket_size) - sectors_free
-        };
-        let start = (offset as usize) << 9;
-        buf.block_mut(i)[start..start + ((sectors_free as usize) << 9)].fill(0);
-        tails.push((i, offset, sectors_free));
-    }
+    let Working { new_stripe, new_buf, parity, reuse, moving, old_block_map, allocated, watermark, res, .. } = w;
 
     // The fold was awaited before we were in flight: its error is settled.
     // The reuse is abandoned, so the old stripe stays as it is and nothing
     // else discovers the loss until someone reads one of those files:
     if let Err(lost) = &fold {
-        let errs = {
-            stack_pin_init!(let done = Gather::new());
-            let mut io = BlockIo::<_, waiter::Async>::write(fs, buf, &done);
-            for &(i, offset, sectors) in &tails {
-                io.submit_range(new_stripe.stripe(), i, offset, sectors);
-            }
-            io.wait(at).await
-        };
-        errs.record(buf);
-
         // Too few blocks to reconstruct: the lost blocks' buffers still hold
         // what we read, and an extent that checks out against it isn't lost
         // - a block fails on one bad granule. After a reconstruct they hold
@@ -362,16 +420,18 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
 
     assert!(*allocated, "creating stripe {}, not allocated", new_stripe.idx());
 
-    generate_ec(new_stripe.stripe(), buf);
+    // the new blocks are in: what's left is the old stripe's
+    let buf = new_buf.as_mut().expect("a new stripe's buffer");
+    parity.as_mut().expect("a new stripe's parity").move_blocks(buf, parity_blocks(new_stripe.stripe()));
+    for i in 0..old_block_map.len() {
+        buf.fold_block(new_stripe.stripe(), i);
+    }
     generate_checksums(new_stripe, buf);
 
-    // the zeroed tails, the data blocks that moved, and p/q
+    // the data blocks that moved, and p/q
     let errs = {
         stack_pin_init!(let done = Gather::new());
         let mut io = BlockIo::<_, waiter::Async>::write(fs, buf, &done);
-        for &(i, offset, sectors) in &tails {
-            io.submit_range(new_stripe.stripe(), i, offset, sectors);
-        }
         for i in (0..old_block_map.len()).filter(|&i| moving.test(i)) {
             io.submit(new_stripe.stripe(), i);
         }

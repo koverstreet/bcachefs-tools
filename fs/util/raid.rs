@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! RAID parity over a stripe's blocks - data, then P, then Q, each a slice of
-//! one length: P is raid5's, an xor, and Q raid6's. generate() makes the
-//! parity of the data, and fold() adds a data block to the parity made so far;
-//! recover() rebuilds the blocks it's told failed from the rest.
+//! one length: P is raid5's, an xor, and Q raid6's. fold() adds a data block
+//! to the parity made so far; recover() rebuilds the blocks it's told failed
+//! from the rest.
 //!
-//! In-kernel it's lib/raid's raid6 and xor - which 7.1 and 7.2 renamed - with
-//! generate() and recover() built here as raid/raid.h's raid_gen() and raid_rec(),
-//! which userspace has. Each C call has a wrapper that takes slices and checks
-//! what the C asks of them: every block one length, a multiple of 512 bytes
-//! (in userspace, 64); in-kernel, 64 byte aligned, and for raid6's recovery a
-//! page at most, page aligned; and the failed blocks in order, in range, and
-//! no more than the parity. That they're slices, &mut - or & where only read -
-//! is what the C assumes and doesn't say: no block aliases another.
+//! fold() is Rust, the same in both builds. recover() is raid/raid.h's
+//! raid_rec() in userspace; in-kernel it's built here from lib/raid's raid6
+//! and xor, which 7.1 and 7.2 renamed. Each C call has a wrapper that takes
+//! slices and checks what the C asks of them: every block one length, a
+//! multiple of 512 bytes (in userspace, 64); in-kernel, 64 byte aligned, and
+//! for raid6's recovery a page at most, page aligned; and the failed blocks in
+//! order, in range, and no more than the parity. That they're slices, &mut -
+//! or & where only read - is what the C assumes and doesn't say: no block
+//! aliases another.
 //!
 //! A stripe of one data block is copies of it - P its xor, Q its first power -
 //! which lib/raid's raid6, wanting four blocks, isn't asked for.
@@ -74,17 +75,6 @@ fn copy_block(blocks: &mut [&mut [u8]], from: usize, to: usize) {
     dst.copy_from_slice(src);
 }
 
-/// The parity of @blocks - its last @np, one or two - from the rest.
-pub fn generate(blocks: &mut [&mut [u8]], np: usize) {
-    let nd = nr_data(blocks, np);
-
-    if nd == 1 {
-        (1..blocks.len()).for_each(|p| copy_block(blocks, 0, p));
-    } else {
-        imp::generate(blocks, nd, np)
-    }
-}
-
 /// @x's bytes, each times 2 in GF(2^8) - raid6's field, mod 0x11d.
 fn gf_mul2(x: u64) -> u64 {
     let carry = (x >> 7) & 0x0101_0101_0101_0101;
@@ -92,9 +82,9 @@ fn gf_mul2(x: u64) -> u64 {
 }
 
 /// Data block @idx, @data, added to @parity - P, and Q if there's two: as
-/// generate() would make them with @data where a zero block was. Parity is
-/// linear, so a stripe's is its data blocks' folded in one by one, in any
-/// order, from zeroes.
+/// they'd be made with @data where a zero block was. Parity is linear, so a
+/// stripe's is its data blocks' folded in one by one, in any order, from
+/// zeroes.
 pub fn fold(parity: &mut [&mut [u8]], data: &[u8], idx: usize) {
     assert!((1..=MAX_PARITY).contains(&parity.len()) && idx + parity.len() < MAX_BLOCKS,
             "raid: folding data block {idx} into {} parity blocks", parity.len());
@@ -258,7 +248,8 @@ mod imp {
         }
     }
 
-    pub(super) fn generate(blocks: &mut [&mut [u8]], nd: usize, np: usize) {
+    /// The parity of @blocks, from the rest.
+    fn generate(blocks: &mut [&mut [u8]], nd: usize, np: usize) {
         match np {
             1 => raid5_rec(blocks, nd),
             _ => gen_syndrome(blocks),
@@ -308,13 +299,6 @@ mod imp {
         });
     }
 
-    pub(super) fn generate(blocks: &mut [&mut [u8]], nd: usize, np: usize) {
-        init();
-        let (mut p, bytes) = ptrs(blocks);
-        // SAFETY: checked - each block's @bytes, and its own
-        unsafe { c::raid_gen(nd as c_int, np as c_int, bytes, p.as_mut_ptr()) }
-    }
-
     pub(super) fn recover(blocks: &mut [&mut [u8]], nd: usize, np: usize, failed: &[u8]) {
         init();
         let mut ir: ArrayVec<c_int, MAX_PARITY> = failed.iter().map(|&f| f.into()).collect();
@@ -336,46 +320,40 @@ mod imp {
 mod tests {
     use super::*;
 
-    /// A block, aligned as the SIMD raid_gen() picks wants it.
-    #[derive(Clone, PartialEq)]
-    #[repr(C, align(64))]
-    struct Block([u8; 4096]);
+    use crate::os::bio::io_buf;
+    use crate::util::alloc::Flags;
 
-    /// @nr blocks of xorshift noise from @seed.
-    fn noise(nr: usize, mut seed: u64) -> Vec<Box<Block>> {
-        (0..nr).map(|_| Box::new(Block(core::array::from_fn(|_| {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            seed as u8
-        })))).collect()
-    }
-
-    fn slices(blocks: &mut [Box<Block>]) -> Vec<&mut [u8]> {
-        blocks.iter_mut().map(|b| &mut b.0[..]).collect()
-    }
-
-    /// generate()'s parity of @nd data blocks, and fold()'s, from zeroes, of
-    /// each block in turn: the same.
-    fn fold_is_generate(nd: usize, np: usize) {
-        let data = noise(nd, 0x9e37_79b9_7f4a_7c15 ^ (nd * 8 + np) as u64);
-
-        let mut blocks = data.clone();
-        blocks.resize(nd + np, Box::new(Block([0; 4096])));
-        generate(&mut slices(&mut blocks), np);
-
-        let mut folded = vec![Box::new(Block([0; 4096])); np];
-        for (i, d) in data.iter().enumerate().rev() {
-            fold(&mut slices(&mut folded), &d.0, i);
+    /// The parity fold() makes of @nd blocks of noise, from zeroes, and the
+    /// parity recover() rebuilds of them, as if lost: the same.
+    fn fold_is_parity(nd: usize, np: usize) {
+        let mut seed = 0x9e37_79b9_7f4a_7c15 ^ (nd * 8 + np) as u64;
+        let mut blocks: Vec<_> = (0..nd + np).map(|_| io_buf(4096, Flags::empty()).expect("a block")).collect();
+        for b in &mut blocks[..nd] {
+            b.fill_with(|| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            });
         }
-        assert!(folded[..] == blocks[nd..], "{nd}+{np}: folded parity isn't generate()'s");
+
+        let (data, parity) = blocks.split_at_mut(nd);
+        for (i, d) in data.iter().enumerate() {
+            fold(&mut parity.iter_mut().map(|p| &mut p[..]).collect::<Vec<_>>(), d, i);
+        }
+        let folded: Vec<Vec<u8>> = parity.iter().map(|p| p.to_vec()).collect();
+
+        let lost: Vec<u8> = (nd..nd + np).map(|i| i as u8).collect();
+        recover(&mut blocks.iter_mut().map(|b| &mut b[..]).collect::<Vec<_>>(), np, &lost);
+        assert!(blocks[nd..].iter().zip(&folded).all(|(b, f)| b[..] == f[..]),
+                "{nd}+{np}: folded parity isn't the stripe's");
     }
 
     #[test]
-    fn fold_matches_generate() {
+    fn fold_makes_parity() {
         for nd in 1..=8 {
             for np in 1..=2 {
-                fold_is_generate(nd, np);
+                fold_is_parity(nd, np);
             }
         }
     }

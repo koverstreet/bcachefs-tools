@@ -670,8 +670,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
 
     let ret = {
         let mut i = ns.lock();
-        StripeBuf::new_whole(fs, i.new_stripe.stripe(), MemWait::Never)
-            .map(|buf| i.new_buf = Some(buf))
+        i.make_bufs(fs, MemWait::Never)
             .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), c::ReservationFlags::empty()) } else { Ok(()) })
     }.and_then(|()| lockrestart_do(trans, |t| stripe_idx_alloc(t, &mut ns.lock())));
     if let Err(e) = ret {
