@@ -63,10 +63,11 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 
 /// The body: reads, counted in the context as @read_io; then waits for its
 /// turn, then writes - nothing, if the read failed. @bucket counts the update
-/// against the bucket it's moving data off, until it's done. @runq is the
-/// context's run queue.
+/// against the bucket it's moving data off, until it's done. A journal scrub's
+/// update puts what it finds bad to @found. @runq is the context's run queue.
 #[args_stored_once]
-async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>, runq: Resume<'_>) {
+async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>, found: Option<BadRef>,
+             runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
         read_update(d.op.fs(), &mut d.rbio, d.index.k.as_ref(), d.index.btree_id, d.index.opts.read_flags,
@@ -91,7 +92,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // error, which a retry may get past, and whose device needn't change.
     let unreadable = u.index.opts.type_ == c::DataUpdateType::reconcile &&
         read.ret.is_err_and(|e| e.matches(Errcode::no_device_to_read_from));
-    u.write(read, runq).await;
+    u.write(read, found.as_ref(), runq).await;
     drop(write_io);
 
     if unreadable {
@@ -134,7 +135,6 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
         Err(e) => return Err(e),
     };
     u.rbio.bio.get_mut().set_ioprio(IOPRIO_IDLE);
-    u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get_pinned());
 
     let size = BkeySC::from(u.index.k.as_ref()).k.size;
@@ -142,7 +142,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
     let runq = Resume::run_queue(moving.runq());
 
-    u.start(|b| async move |_: &Update| run(b, read_io, bucket, runq).await);
+    u.start(|b| async move |_: &Update| run(b, read_io, bucket, found, runq).await);
 
     moving.stats().keys_moved.fetch_add(1, Relaxed);
     moving.stats().sectors_moved.fetch_add(size.into(), Relaxed);

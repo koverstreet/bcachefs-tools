@@ -32,7 +32,7 @@ use crate::c::Errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, extent_ptr_durability,
                                BkeyVDurability};
 use crate::data::moving::Moving;
-use crate::data::scrub_journal;
+use crate::data::scrub_journal::{self, Bad, BadRef};
 use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
@@ -365,6 +365,12 @@ pub(crate) fn dev_ptr_bit(fs: &Fs, k: BkeySC<'_>, dev: u32) -> u32 {
     k.arm::<Ptrs>()
         .and_then(|k| k.ptrs(fs).position(|ptr| u32::from(ptr.dev()) == dev))
         .map_or(0, |i| 1 << i)
+}
+
+fn put_found(found: Option<&BadRef>, bad: Bad) {
+    if let Some(r) = found {
+        r.get().put(bad);
+    }
 }
 
 /// For an update with nothing to write: drops @k's killed pointers and extra
@@ -758,17 +764,18 @@ impl c::data_update {
     /// A failed read's error, recorded where the data is: at btree_id, not
     /// the read path's read_pos, which for an indirect extent is a reflink
     /// position. A scrub that can't repair queues it for the journal scrub,
-    /// which can't commit - see scrub_journal::queue().
+    /// which can't commit - see scrub_journal::queue() - and puts it to
+    /// @found.
     #[cold]
     #[inline(never)]
-    fn read_err_record(&self, e: BchError, pick: Option<&c::extent_ptr_decoded>) {
+    fn read_err_record(&self, e: BchError, pick: Option<&c::extent_ptr_decoded>, found: Option<&BadRef>) {
         if read_err_benign(e) {
             return;
         }
         let fs = self.fs();
         if self.index.opts.type_ == Type::scrub_no_repair {
             let bit = pick.map_or(0, |p| dev_ptr_bit(fs, self.key(), p.ptr.dev().into()));
-            self.found(scrub_journal::queue(fs, self.index.btree_id, 0, self.key(), bit, ret_to_c(Err(e))));
+            put_found(found, scrub_journal::queue(fs, self.index.btree_id, 0, self.key(), bit, ret_to_c(Err(e))));
         } else {
             let err = crate::data::read::data_read_sb_err(e);
             let (btree, pos) = (self.index.btree_id, self.key().k.p);
@@ -820,14 +827,15 @@ impl c::data_update {
     /// issue, of what it read, by its replica's crc. There isn't for a failed
     /// read, a scrub with nothing to repair, or IO errors that leave nothing
     /// to write: then op.error is the update's result. The read's clone of the
-    /// pages' bio ends here: the write has them after, by &mut.
-    pub fn read_done(&mut self, read: ReadDone) -> bool {
-        let write = self.read_result(read);
+    /// pages' bio ends here: the write has them after, by &mut. A journal
+    /// scrub's update puts what it finds bad to @found.
+    pub fn read_done(&mut self, read: ReadDone, found: Option<&BadRef>) -> bool {
+        let write = self.read_result(read, found);
         self.rbio.bio.get_mut().end_clone();
         write
     }
 
-    fn read_result(&mut self, read: ReadDone) -> bool {
+    fn read_result(&mut self, read: ReadDone, found: Option<&BadRef>) -> bool {
         let fs = self.fs();
         let ReadDone { mut ret, pick, ptrs_io_error, poisoned } = read;
         let mut crc = pick.map(|p| p.crc);
@@ -843,7 +851,7 @@ impl c::data_update {
 
         // before the bitrot fixup below, which clears ret
         if let Err(e) = ret {
-            self.read_err_record(e, pick.as_ref());
+            self.read_err_record(e, pick.as_ref(), found);
         }
 
         // A bitrotted extent gets a new checksum so it can be moved; its
@@ -866,7 +874,8 @@ impl c::data_update {
 
         if type_ == Type::scrub_no_repair {
             if self.index.opts.ptrs_io_error != 0 {
-                self.found(scrub_journal::queue(fs, self.index.btree_id, 0, self.key(), self.index.opts.ptrs_io_error.into(), 0));
+                put_found(found, scrub_journal::queue(fs, self.index.btree_id, 0, self.key(),
+                                                      self.index.opts.ptrs_io_error.into(), 0));
             }
             return false;
         }

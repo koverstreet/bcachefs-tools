@@ -100,7 +100,7 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
         fs.event_add_trace(events::data_read_promote, k.k.size.into(), |out| prt!(out, "{}", k.to_text(fs)));
     }
 
-    u.write(read, Resume::queue(fs.promote_wq())).await;
+    u.write(read, None, Resume::queue(fs.promote_wq())).await;
     fs.times.get(c::TimeStat::data_promote as usize).update(start_time);
     drop(listed);
     u.exit(0);
