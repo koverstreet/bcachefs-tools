@@ -5,7 +5,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BkeyV, BKEY_U64S};
-use crate::btree::cache::bch2_btree_id_level_to_text;
+use crate::btree::cache::{bch2_btree_id_level_to_text, OwnedNode};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::key_cache::EntryContents;
 use crate::btree::node::iter::KeyIter;
@@ -1802,6 +1802,12 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
     {
         let node = self.node;
         self.get_mut_of(node.locked_contents())
+    }
+}
+
+impl<'p> LockedNode<'p, BtreeNode, Write> {
+    pub(crate) fn of_owned(n: &'p mut OwnedNode) -> Self {
+        LockedNode { node: n, _mode: PhantomData }
     }
 }
 

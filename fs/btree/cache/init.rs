@@ -2,7 +2,7 @@
 
 /* Filesystem init / exit */
 
-use super::{cached_node, new_node_lock, node_mem_alloc, node_mem_free};
+use super::{node_mem_alloc, node_mem_free, OwnedNode};
 use crate::btree::node::BtreeNode;
 use crate::btree::types::BtreeCacheGuard;
 use crate::c;
@@ -70,15 +70,10 @@ impl Fs {
         self.recalc_btree_reserve();
 
         for _ in 0..bc.lock.nr_reserve.get() {
-            let Some(b) = node_mem_alloc(self) else {
+            let Some(n) = node_mem_alloc(self) else {
                 return self.throw(Errcode::ENOMEM_fs_btree_cache_init);
             };
-            let b = unsafe { cached_node(self, b.as_ptr()) };
-            let held = new_node_lock(b);
-
-            let _ = self.btree_node_transition_state(b, State::FREEABLE);
-
-            drop(held);
+            n.free(self);
         }
 
         bc.shrinkers_register(self)
@@ -109,8 +104,8 @@ impl Fs {
             b.flags.set_dirty(false);
         }
 
-        let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
-        drop(held);
+        let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
+        OwnedNode::new(b, held).release_locked(self, lists);
         cond_resched();
     }
 }

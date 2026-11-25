@@ -9,7 +9,7 @@ use crate::data_structures::array_vec::ArrayVec;
 
 use crate::btree::bkey::{BkeyV, BkeyVMut, POS_MIN, SPOS_MAX};
 use crate::init::error::BkeyValidate;
-use crate::btree::cache::{node_data_free, node_scratch_alloc, node_struct_free};
+use crate::btree::cache::{bufs_free, node_scratch_alloc, node_struct_free};
 use crate::btree::journal_overlay;
 use crate::btree::node::{BtreeNode, NodeKey};
 use crate::btree::path::LockedNode;
@@ -155,7 +155,8 @@ impl NodeBuf {
 impl Drop for NodeBuf {
     fn drop(&mut self) {
         unsafe {
-            node_data_free(self.b);
+            let b = self.b.as_ref();
+            bufs_free(b, b.contents.protected_mut());
             node_struct_free(self.b);
         }
     }

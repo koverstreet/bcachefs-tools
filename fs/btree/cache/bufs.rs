@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use super::OwnedNode;
 use crate::btree::node::bset::BSET_CACHELINE;
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
@@ -247,15 +248,17 @@ pub(crate) unsafe fn cached_node<'f>(_fs: &'f Fs, b: *const BtreeNode) -> &'f Bt
 
 /// node_struct_alloc(), on bc->nodes, as every node the cache has is. Freed by
 /// node_mem_free().
-pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
+pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<&BtreeNode> {
     let slot = {
         let _gfp = MemallocFlags::for_gfp(gfp);
         fs.btree.cache.nodes.get_slot().ok()?
     };
 
     let b = node_struct_alloc(fs, pcpu_read_locks, gfp)?;
-    unsafe { (*b.as_ptr()).nodes_idx = slot.set(b.cast()) };
-    Some(b)
+    unsafe {
+        (*b.as_ptr()).nodes_idx = slot.set(b.cast());
+        Some(cached_node(fs, b.as_ptr()))
+    }
 }
 
 /// A new node's locks, intent and write: no one else has it to hold them.
@@ -265,42 +268,47 @@ pub(super) fn new_node_lock(b: &BtreeNode) -> SixHold<'_> {
         .expect("a new node locked by someone else")
 }
 
-/// A node with its buffers, GFP_KERNEL - off the cache's lists, not hashed -
-/// from @struct_alloc.
-fn node_with_bufs(fs: &Fs, struct_alloc: fn(&Fs, bool, Flags) -> Option<NonNull<BtreeNode>>)
-    -> Option<NonNull<BtreeNode>>
-{
+/// Buffers for a new node, GFP_KERNEL.
+fn node_bufs_alloc(fs: &Fs) -> Option<NodeBufs> {
     let mut bufs = NodeBufs::new(fs);
-    let b = bufs.alloc(fs, Flags::empty(), false).ok().and_then(|()| struct_alloc(fs, false, Flags::empty()));
-    let Some(b) = b else {
+    if bufs.alloc(fs, Flags::empty(), false).is_err() {
+        bufs.free();
+        return None;
+    }
+    Some(bufs)
+}
+
+/// A node for the cache, with its buffers, GFP_KERNEL. Freed by
+/// OwnedNode::release() then node_mem_free().
+pub(super) fn node_mem_alloc(fs: &Fs) -> Option<OwnedNode> {
+    let mut bufs = node_bufs_alloc(fs)?;
+    let Some(b) = cache_node_struct_alloc(fs, false, Flags::empty()) else {
         bufs.free();
         return None;
     };
-    unsafe { (*b.as_ptr()).contents_mut().bufs = bufs };
-    Some(b)
-}
-
-/// A node for the cache, with its buffers. Freed by node_data_free() then
-/// node_mem_free().
-pub fn node_mem_alloc(fs: &Fs) -> Option<NonNull<BtreeNode>> {
-    node_with_bufs(fs, cache_node_struct_alloc)
+    let mut n = OwnedNode::new(b, new_node_lock(b));
+    n.locked().contents_mut().bufs = bufs;
+    Some(n)
 }
 
 /// A node with its buffers for node scan to read into: not the cache's, so
 /// not on bc->nodes, which walks the cache's nodes while they're live and
-/// can't find one freed under it. Freed by node_data_free() then
+/// can't find one freed under it. Freed by bufs_free() then
 /// node_struct_free().
 pub fn node_scratch_alloc(fs: &Fs) -> Option<NonNull<BtreeNode>> {
-    node_with_bufs(fs, node_struct_alloc)
+    let mut bufs = node_bufs_alloc(fs)?;
+    let Some(b) = node_struct_alloc(fs, false, Flags::empty()) else {
+        bufs.free();
+        return None;
+    };
+    unsafe { (*b.as_ptr()).contents.get_mut().bufs = bufs };
+    Some(b)
 }
 
-/// # Safety
-/// @b is ours alone, its write done.
-pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
-    let p = b.as_ptr();
-    ebug_assert!(!unsafe { (*p).flags.write_in_flight() }, "freeing the buffers of a node with a write in flight");
+/// @b's buffers freed, its write done: its owner's, in no list.
+pub fn bufs_free(b: &BtreeNode, contents: &mut NodeContents) {
+    ebug_assert!(!b.flags.write_in_flight(), "freeing the buffers of a node with a write in flight");
 
-    let contents = unsafe { (*p).contents_mut() };
     if contents.bufs.data.is_null() {
         return;
     }
@@ -310,14 +318,12 @@ pub unsafe fn node_data_free(b: NonNull<BtreeNode>) {
      * kmalloc_large() path, so we're working around a slub bug by doing
      * this here:
      */
-    unsafe {
-        crate::os::kernel::account_reclaimed((*p).buf_bytes());
-        if !contents.bufs.aux_data.is_null() {
-            crate::os::kernel::account_reclaimed((*p).aux_data_bytes());
-        }
+    crate::os::kernel::account_reclaimed(b.buf_bytes());
+    if !contents.bufs.aux_data.is_null() {
+        crate::os::kernel::account_reclaimed(b.aux_data_bytes());
     }
 
-    unsafe { (*p).flags.set_just_written(false) };
+    b.flags.set_just_written(false);
     contents.bufs.free();
 }
 

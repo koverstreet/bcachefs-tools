@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node};
+use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedNode};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeRef, BtreeTrans};
 use crate::btree::locking::BtreeNodeLockedType;
@@ -363,10 +363,10 @@ impl BtreeTrans<'_> {
 
         let live_u64s = paths[idx].locked_btree_node(level).expect("a level just write locked").contents().nr.live_u64s;
         fs.btree.evicted_size.record(b.hash_val(), live_u64s);
-        let _ = fs.btree_node_transition_state(b, State::FREED);
+        let _ = fs.btree_node_transition_state(b, State::NONE);
 
-        self.node_unlock_write(paths, idx, level);
-        self.node_unlock(paths, idx, level);
+        let (_, held) = paths[idx].take_level(level).expect("a level just write locked");
+        OwnedNode::new(b, held).release(fs);
         paths[idx].l[level].b = NodePtr::err(Errcode::no_btree_node_drop.into());
         self.node_forget(paths, b);
         Ok(())

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::reclaim::ReclaimFlags;
-use super::{cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
+use super::{bufs_free, cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::util::alloc::{flags, Flags};
 use crate::btree::iter::BtreeTrans;
@@ -94,7 +94,7 @@ impl Deref for OwnedNode<Write> {
 }
 
 impl OwnedNode<Write> {
-    fn new(b: &BtreeNode, held: SixHold<'_>) -> Self {
+    pub(super) fn new(b: &BtreeNode, held: SixHold<'_>) -> Self {
         assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &b.c.lock),
                 "an owned node without its write lock");
         held.into_raw();
@@ -102,7 +102,7 @@ impl OwnedNode<Write> {
     }
 
     pub(crate) fn locked(&mut self) -> LockedNode<'_, BtreeNode, Write> {
-        unsafe { LockedNode::new_write(self.b.as_ref()) }
+        LockedNode::of_owned(self)
     }
 
     pub(crate) fn set_id(&mut self, btree: Btree, level: usize) {
@@ -156,6 +156,20 @@ impl OwnedNode<Write> {
     /// Put back FREEABLE, its locks released.
     pub(crate) fn free(self, fs: &Fs) {
         let _ = fs.btree_node_transition_state(&self, State::FREEABLE);
+        self.unlock();
+    }
+
+    /// Its buffers freed, and put back FREED - a struct for the next
+    /// allocation - its locks released.
+    pub(super) fn release(self, fs: &Fs) {
+        self.release_locked(fs, &mut fs.btree.cache.lock.lock())
+    }
+
+    pub(super) fn release_locked(mut self, fs: &Fs, lists: &mut BtreeCacheGuard<'_>) {
+        let mut v = self.locked();
+        let b = v.node();
+        bufs_free(b, v.contents_mut());
+        let _ = fs.btree_node_transition_state_locked(lists, &self, State::FREED);
         self.unlock();
     }
 }
@@ -267,7 +281,6 @@ impl BtreeTrans<'_> {
                                 }
                             }
                         };
-                        let b = unsafe { cached_node(fs, b.as_ptr()) };
                         (b, new_node_lock(b))
                     }
                 };

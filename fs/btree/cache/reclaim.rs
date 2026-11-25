@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{bch2_btree_pos_to_text, cached_node};
+use super::{bch2_btree_pos_to_text, cached_node, OwnedNode};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
 use crate::btree::types::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard, BtreeWriteType};
@@ -157,8 +157,8 @@ impl Fs {
                 }
 
                 if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
-                    let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
-                    drop(held);
+                    let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
+                    OwnedNode::new(b, held).release_locked(self, lists);
                     freed += 1;
                 }
             }
@@ -178,11 +178,9 @@ impl Fs {
                 } else if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
                     self.btree.evicted_size.record(b.hash_val(),
                                                    LockedNode::of_hold(b, &held).contents().nr.live_u64s);
-                    let _ = self.btree_node_transition_state_locked(lists, b, State::FREED);
-
+                    let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
+                    OwnedNode::new(b, held).release_locked(self, lists);
                     freed += 1;
-
-                    drop(held);
                 }
 
                 if touched >= nr {

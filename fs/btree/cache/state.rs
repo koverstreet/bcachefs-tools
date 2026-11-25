@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{btree_ptr_hash_val, cached_node, node_data_free, node_key_hash_val};
+use super::{btree_ptr_hash_val, cached_node, node_key_hash_val};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::node::BtreeNode;
 use crate::btree::types::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
@@ -203,7 +203,7 @@ impl Fs {
             }
             State::FREED => {
                 assert!(!b.flags.permanent(), "a permanent node freed");
-                unsafe { node_data_free(NonNull::from(b)) };
+                assert!(data.is_null(), "a node freed with its buffer");
                 let freed = if b.c.lock.six().readers.allocated() {
                     &mut lists.freed_pcpu
                 } else {
