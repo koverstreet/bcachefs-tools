@@ -73,9 +73,9 @@
 //! teardown, its writers done, or with it.
 //!
 //! Its io refs, IoRef - a count on the stripe (util/refcount.rs): one per
-//! block a writer has claimed, leaked to C with the block's open bucket and
-//! put as it closes - foreground.c's __bch2_open_bucket_put() - and one of its
-//! own, its head's or repair's, put by fill(). The last put takes it in
+//! block a writer has claimed, held by the block's open bucket, its ec_io,
+//! and put by the bucket's last pin's put - open_bucket_close() - and one of
+//! its own, its head's or repair's, put by fill(). The last put takes it in
 //! flight, there and then - its seq assigned, the flushes woken - as C's did:
 //! a flush must see a stripe in flight as soon as its writers are done, not
 //! when its task next runs. It then puts the one ref on @in_flight, the
@@ -149,8 +149,8 @@ use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
 use crate::util::alloc::{AllocError, KBox, Vec};
 use crate::util::backref::BackRef;
-use crate::util::gather::{Gather, GatherRefSlot};
-use crate::util::refcount::{RefGuard, Refcount};
+use crate::util::gather::{Gather, GatherRef};
+use crate::util::refcount::{RefGuard, RefSlot, Refcount};
 use crate::os::kernel::local_clock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Spawn, TaskBox, TaskRef, TaskSlot};
@@ -181,7 +181,7 @@ pub struct StripeNew {
     io_refs:              AtomicI32,
     /// The io refs' ref on @in_flight, put by the last: before it, as a
     /// Gather's drop waits for its refs
-    in_flight_ref:        GatherRefSlot<'static, (), waiter::Async>,
+    in_flight_ref:        RefSlot<GatherRef<'static, (), waiter::Async>>,
     /// What its task waits on to be in flight
     #[pin]
     pub(crate) in_flight:            Gather<(), waiter::Async>,
@@ -418,7 +418,7 @@ impl StripeNew {
             start_time: local_clock(),
             idx:        AtomicU64::new(0),
             io_refs:    AtomicI32::new(0),
-            in_flight_ref: GatherRefSlot::new(),
+            in_flight_ref: RefSlot::new(),
             in_flight   <- Gather::new(),
             seq:        AtomicU64::new(0),
             err:        FirstErr::new(),
@@ -682,16 +682,6 @@ impl OpenBucketRef {
 }
 
 impl StripeNew {
-    /// A writer's io ref put: its open bucket's, at its last pin's put.
-    ///
-    /// # Safety
-    /// The caller has the io ref - claim_bucket()'s, leaked to the open
-    /// bucket's ->ec - and gives it up.
-    pub(crate) unsafe fn put_io(&self) {
-        // SAFETY: the caller's
-        drop(unsafe { IoRef::adopt(self) });
-    }
-
     /// Whether it has a block on device @dev - or had: BlockDevs.
     pub(crate) fn has_dev(&self, dev: u32) -> bool {
         self.internal.block_devs.get().test(dev as usize)

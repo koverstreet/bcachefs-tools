@@ -46,8 +46,12 @@
 //! a guard hands out its T only for as long as the guard is borrowed, and
 //! leak() gives back nothing.
 
+use crate::util::vstructs::NonZeroWord;
+use core::marker::PhantomData;
+use core::mem::{size_of, transmute_copy, ManuallyDrop};
 use core::ops::Deref;
-use core::ptr::NonNull;
+use core::ptr::{null_mut, NonNull};
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 mod atomic;
 mod percpu;
@@ -212,6 +216,46 @@ impl<T: Refcount + ?Sized> Deref for RefBorrow<'_, T> {
 
     fn deref(&self) -> &T::Target {
         self.t.target()
+    }
+}
+
+/// A ref no one holder has - a count's, put by the count's last put, from any
+/// context: so taken through &, once, by whoever takes it first. A RefGuard
+/// or a GatherRef: a guard of one word, a pointer's. Send and Sync as the ref
+/// is.
+#[derive(cstruct_macros::MaybeZeroable)]
+pub struct RefSlot<P: NonZeroWord> {
+    p:  AtomicPtr<()>,
+    _p: PhantomData<P>,
+}
+
+impl<P: NonZeroWord> RefSlot<P> {
+    const WORD: () = assert!(size_of::<P>() == size_of::<*mut ()>(), "a RefSlot of what isn't a pointer");
+
+    pub const fn new() -> Self {
+        RefSlot { p: AtomicPtr::new(null_mut()), _p: PhantomData }
+    }
+
+    /// @r, to hold till it's taken: the slot's empty.
+    pub fn set(&self, r: P) {
+        let () = Self::WORD;
+        // a pointer, never null, as NonZeroWord says: the slot owns it now
+        let p = unsafe { transmute_copy::<ManuallyDrop<P>, *mut ()>(&ManuallyDrop::new(r)) };
+        let old = self.p.swap(p, Ordering::AcqRel);
+        assert!(old.is_null(), "a RefSlot set twice");
+    }
+
+    /// Its ref, if it hasn't been taken.
+    pub fn take(&self) -> Option<P> {
+        let p = self.p.swap(null_mut(), Ordering::AcqRel);
+        // set()'s, swapped out once: ours alone
+        (!p.is_null()).then(|| unsafe { transmute_copy::<*mut (), P>(&p) })
+    }
+}
+
+impl<P: NonZeroWord> Drop for RefSlot<P> {
+    fn drop(&mut self) {
+        drop(self.take());
     }
 }
 

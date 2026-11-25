@@ -68,8 +68,8 @@ use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
-use core::ptr::{null_mut, NonNull};
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use core::task::{ready, Context, Poll};
 use pin_init::{pin_data, pin_init, PinInit};
 
@@ -465,6 +465,8 @@ impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<T, Wt, W> {
 /// A ref on a Gather, for 'a: its Scope's borrow of it, or 'static, borrowing
 /// nothing, from a pinned owner's. Put with a value, or dropped without one.
 #[must_use = "a ref is put as soon as it's dropped"]
+#[repr(transparent)]
+#[derive(cstruct_macros::NonZeroWord)]
 pub struct GatherRef<'a, T: Fold, Wt: Waiter, W: Width = u32>(
     NonNull<Gather<T, Wt, W>>,
     PhantomData<fn(&'a ()) -> &'a ()>,
@@ -512,40 +514,6 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> GatherRef<'a, T, Wt, W> {
 impl<T: Fold, Wt: Waiter, W: Width> Drop for GatherRef<'_, T, Wt, W> {
     fn drop(&mut self) {
         self.gather().put(None);
-    }
-}
-
-/// A GatherRef with no one holder - a count's, put by the count's last put,
-/// from any context: so taken through &, once, by whoever takes it first.
-/// Send and Sync as the ref is.
-pub struct GatherRefSlot<'a, T: Fold, Wt: Waiter, W: Width = u32> {
-    r:  AtomicPtr<Gather<T, Wt, W>>,
-    _r: PhantomData<GatherRef<'a, T, Wt, W>>,
-}
-
-impl<'a, T: Fold, Wt: Waiter, W: Width> GatherRefSlot<'a, T, Wt, W> {
-    pub const fn new() -> Self {
-        GatherRefSlot { r: AtomicPtr::new(null_mut()), _r: PhantomData }
-    }
-
-    /// @r, to hold till it's taken: the slot's empty.
-    pub fn set(&self, r: GatherRef<'a, T, Wt, W>) {
-        let p = r.into_raw().cast_mut();
-        let old = self.r.swap(p, Ordering::AcqRel);
-        assert!(old.is_null(), "a GatherRefSlot set twice");
-    }
-
-    /// Its ref, if it hasn't been taken.
-    pub fn take(&self) -> Option<GatherRef<'a, T, Wt, W>> {
-        let p = self.r.swap(null_mut(), Ordering::AcqRel);
-        // SAFETY: set()'s into_raw(), swapped out once: ours alone
-        (!p.is_null()).then(|| unsafe { GatherRef::from_raw(p) })
-    }
-}
-
-impl<T: Fold, Wt: Waiter, W: Width> Drop for GatherRefSlot<'_, T, Wt, W> {
-    fn drop(&mut self) {
-        drop(self.take());
     }
 }
 

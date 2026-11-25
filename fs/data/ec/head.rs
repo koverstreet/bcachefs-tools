@@ -447,10 +447,9 @@ fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> Opti
                 let Slot::Bucket(StripeBlock::Pinned(b)) = core::mem::take(&mut i.blocks[ec_idx]) else {
                     unreachable!()
                 };
-                let (claimed, ob) = b.claim(s, ec_idx as u8);
+                let io = i.io_ref();
+                let (claimed, ob) = b.claim(s, ec_idx as u8, io);
                 i.blocks[ec_idx] = Slot::Bucket(StripeBlock::Claimed(claimed));
-                // the writer's, with the open bucket: its last put adopts it
-                i.io_ref().leak();
                 return Some(ob);
             }
         }

@@ -16,6 +16,7 @@ use crate::os::percpu::{Counters, PerCpu};
 use crate::util::futex::EventCount;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::projections::Volatile;
+use crate::util::refcount::RefSlot;
 use crate::util::task::RunQueue;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
@@ -163,6 +164,8 @@ nest! {
     ///   head's lock and the stripe's - before the writer has it; @ec cleared
     ///   when the stripe closes it, EcOpenBucket's drop. Read by its pin
     ///   holders, and by bch2_open_bucket_to_text() under @lock.
+    /// - @ec_io: the claiming writer's io ref on the stripe, set by the claim,
+    ///   taken by its last pin's put.
     ///
     /// Its index in the table - idx, the way back to the filesystem - is its
     /// place's: placed last, the fields before it ordered so that it fills
@@ -179,6 +182,7 @@ nest! {
         pub pin: AtomicI32,
         pub sectors_free: Volatile<u32>,
         pub ec: AtomicPtr<crate::data::ec::stripe_new::StripeNew>,
+        pub ec_io: RefSlot<crate::data::ec::stripe_new::IoRef>,
 
         pub freelist: Volatile<Option<OpenBucketIdx>>,
         pub hash: Volatile<Option<OpenBucketIdx>>,
