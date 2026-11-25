@@ -683,6 +683,20 @@ pub fn reconstruct_subvol_root(
     })
 }
 
+/// The subvolume leaf @snapshot was made for, by its root: the inode there
+/// naming a subvolume - a new subvolume or snapshot writes its root's version
+/// at its own leaf - as (subvolume, inum).
+pub fn subvol_root_at(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Option<(u32, u64)>, BchError> {
+    let fs = t.fs();
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, 0),
+                                  BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_norestart(t, |_, k| Ok(
+        match k.arm::<inode::Inodes>().filter(|k| k.k.p.snapshot == snapshot).map(|k| inode::unpack(fs, k)) {
+            Some(u) if u.bi_subvol != 0 => ControlFlow::Break(Some((u.bi_subvol, u.bi_inum))),
+            _ => ControlFlow::Continue(()),
+        }))
+}
+
 /// Recreate missing subvolume key @subvol, at leaf @snapshot with root inode
 /// @root - from reconstruct_subvol_root() - and point the snapshot, and its
 /// tree if it has no master subvolume, back at it. Where it's mounted is the

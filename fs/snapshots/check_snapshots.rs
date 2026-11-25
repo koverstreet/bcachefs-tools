@@ -87,6 +87,38 @@ fn subvol_claiming(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<u32>, Bch
              |k| subvolume::val(k).is_some_and(|s| s.snapshot() == id))
 }
 
+/// Rebuild the subvolume of live leaf @id, which nothing points at: as the one
+/// its root inode names, unless that id's taken, around that root - or if the
+/// leaf's version of its root is gone too, around the root its tree's
+/// subvolumes share.
+fn rebuild_subvol(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
+    let fs = t.fs();
+    let own = check::subvol_root_at(t, id)?;
+
+    let root = match own {
+        Some((_, inum)) => inum,
+        None => match snapshot::tree_lookup(t, fs.snapshots.tree(id))?.master_subvol.get() {
+            0 => {
+                bch_err!(fs, "snapshot {id} has no subvolume, no root inode, and its tree no master: \
+                              can't rebuild a subvolume for it");
+                return Err(fs.err(Errcode::fsck_repair_unimplemented));
+            }
+            master => subvolume::get(t, master, false)?.inode.get(),
+        },
+    };
+
+    let subvol = match own {
+        Some((subvol, _)) if subvolume::__get_snapshot(t, subvol, false).found()?.is_none() => subvol,
+        _ => {
+            let mut iter = BtreeIter::uninit(t.trans());
+            t.bkey_get_empty_slot(&mut iter, Btree::subvolumes, POS_MIN, pos(0, u32::MAX as u64))?;
+            iter.pos().offset as u32
+        }
+    };
+
+    check::reconstruct_subvol(t, id, subvol, root)
+}
+
 /// A state field by name; "(invalid state)" if it isn't one.
 struct StateName(Option<c::SnapshotState>);
 
@@ -999,8 +1031,9 @@ fn check_to_subvol<'a, 't>(
         }
     } else if should_have_subvol && state == Some(c::SnapshotState::live) {
         // No backref: if a subvolume points here it was wiped - restore it (a second
-        // claimant still hits check_subvols' fail-stop). No claimant is an orphan
-        // leaf, unrepaired.
+        // claimant still hits check_subvols' fail-stop). With none, the subvolume is
+        // gone, and not by deletion, which leaves its leaf will_delete: rebuild it,
+        // so what's in the leaf can be reached.
         if let Some(subvol) = subvol_claiming(t, id)? {
             if fsck_err!(t, id::snapshot_subvol_backref_wrong,
                          "snapshot leaf missing subvol backref, subvolume {subvol} points at it - restoring:\n{}",
@@ -1009,6 +1042,10 @@ fn check_to_subvol<'a, 't>(
                 v.subvol = subvol.into();
                 v.set_subvol_obsolete(true);
             }
+        } else if fsck_err!(t, id::subvol_missing,
+                            "live snapshot leaf has no subvolume, and none points at it - rebuilding it:\n{}",
+                            n.to_text(fs))? {
+            return rebuild_subvol(t, id);
         }
     }
 
