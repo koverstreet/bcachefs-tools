@@ -70,7 +70,7 @@ use crate::util::alloc::Vec;
 use crate::util::atomic::try_update;
 use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev};
 use crate::util::futex::{futex_wait, futex_wake};
-use crate::util::gather::{Gather, GatherRef};
+use crate::util::gather::{Gather, GatherRef, Scope};
 use crate::util::task::{waiter, WaitSync};
 use crate::os::blkdev;
 use crate::os::kernel::{unlikely, READ};
@@ -131,7 +131,7 @@ pub(crate) struct Discard {
 }
 
 /// A worker's discards: those in flight, and those done, to reap.
-type Discards = Gather<'static, Vec<Discard>, waiter::Sync>;
+type Discards<'a> = Scope<'a, Vec<Discard>, waiter::Sync>;
 
 enum NotAdded {
     /// One is in flight for the bucket already.
@@ -143,7 +143,7 @@ enum NotAdded {
 /// A run of discards - a pass of the discard worker, or a run of a device's
 /// fast discard work: its Discards, room for those it reaps, and its counts.
 struct Worker<'a> {
-    g:        &'a Discards,
+    g:        Discards<'a>,
     done:     Vec<Discard>,
     s:        &'a SeqLock<DiscardState>,
     fastpath: bool,
@@ -365,7 +365,7 @@ impl Gathered<Vec<Discard>> for DiscardBio {
 
 impl Discard {
     /// Issue it, to be put to its worker's Discards by @done.
-    fn submit(self, fs: &Fs, done: GatherRef<'static, Vec<Discard>, waiter::Sync>) {
+    fn submit(self, fs: &Fs, done: GatherRef<'_, Vec<Discard>, waiter::Sync>) {
         let ca = &self.ca;
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);
         let size = u32::from(ca.mi.get().bucket_size) << 9;
@@ -386,7 +386,7 @@ impl Discard {
 // ── A run of discards ────────────────────────────────────────────────────
 
 impl<'a> Worker<'a> {
-    fn new(g: &'a Discards, s: &'a SeqLock<DiscardState>, fastpath: bool) -> Self {
+    fn new(g: Discards<'a>, s: &'a SeqLock<DiscardState>, fastpath: bool) -> Self {
         Worker { g, done: Vec::new(), s, fastpath }
     }
 
@@ -629,8 +629,8 @@ fn do_discards(fs: &Fs) {
         s.write(|s| *s = DiscardState::default());
         let mut last = None;
 
-        stack_pin_init!(let g = Discards::new());
-        let mut w = Worker::new(&g, s, false);
+        stack_pin_init!(let g = Gather::new());
+        let mut w = Worker::new(Scope::new(&g), s, false);
 
         // need_discard, by the journal seq each bucket was emptied at, up to
         // what the journal's flushed and can no longer rewind past
@@ -763,8 +763,8 @@ pub(crate) fn do_discards_fast(ca: &Dev) {
     let fs = ca.fs();
     let s = SeqLock::new(DiscardState::default());
     let trans = crate::btree_trans!(fs);
-    stack_pin_init!(let g = Discards::new());
-    let mut w = Worker::new(&g, &s, true);
+    stack_pin_init!(let g = Gather::new());
+    let mut w = Worker::new(Scope::new(&g), &s, true);
 
     let mut ret = Ok(());
     loop {

@@ -12,6 +12,7 @@ use crate::c;
 use crate::data::ec::buf::{blocks_good, blocks_in, generate_checksums, generate_ec, validate_msg, StripeBuf, POST, PRE};
 use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::io::BlockIo;
+use crate::util::gather::Gather;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
 use crate::data::ec::stripe_new::{new_stripes_take, Internal, StripeNew};
@@ -129,21 +130,23 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
     let all = ((1u64 << old.stripe().v().nr_blocks) - 1) as u32;
 
     let errs = {
-        stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, buf));
+        stack_pin_init!(let done = Gather::new());
+        let mut io = BlockIo::<_, waiter::Async>::read(fs, buf, &done);
         for i in blocks_in(required) {
-            io.as_mut().submit(old.stripe(), i);
+            io.submit(old.stripe(), i);
         }
-        io.as_mut().wait(at).await
+        io.wait(at).await
     };
     errs.record(buf);
 
     if !blocks_good(old.stripe(), buf, required) {
         let errs = {
-            stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, buf));
+            stack_pin_init!(let done = Gather::new());
+            let mut io = BlockIo::<_, waiter::Async>::read(fs, buf, &done);
             for i in blocks_in(all & !required) {
-                io.as_mut().submit(old.stripe(), i);
+                io.submit(old.stripe(), i);
             }
-            io.as_mut().wait(at).await
+            io.wait(at).await
         };
         errs.record(buf);
 
@@ -334,11 +337,12 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     // else discovers the loss until someone reads one of those files:
     if let Err(lost) = &fold {
         let errs = {
-            stack_pin_init!(let io = BlockIo::<_, waiter::Async>::write(fs, buf));
+            stack_pin_init!(let done = Gather::new());
+            let mut io = BlockIo::<_, waiter::Async>::write(fs, buf, &done);
             for &(i, offset, sectors) in &tails {
-                io.as_mut().submit_range(new_stripe.stripe(), i, offset, sectors);
+                io.submit_range(new_stripe.stripe(), i, offset, sectors);
             }
-            io.as_mut().wait(at).await
+            io.wait(at).await
         };
         errs.record(buf);
 
@@ -362,17 +366,18 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
 
     // the zeroed tails, the data blocks that moved, and p/q
     let errs = {
-        stack_pin_init!(let io = BlockIo::<_, waiter::Async>::write(fs, buf));
+        stack_pin_init!(let done = Gather::new());
+        let mut io = BlockIo::<_, waiter::Async>::write(fs, buf, &done);
         for &(i, offset, sectors) in &tails {
-            io.as_mut().submit_range(new_stripe.stripe(), i, offset, sectors);
+            io.submit_range(new_stripe.stripe(), i, offset, sectors);
         }
         for i in (0..old_block_map.len()).filter(|&i| moving.test(i)) {
-            io.as_mut().submit(new_stripe.stripe(), i);
+            io.submit(new_stripe.stripe(), i);
         }
         for i in nr_data..nr_blocks {
-            io.as_mut().submit(new_stripe.stripe(), i);
+            io.submit(new_stripe.stripe(), i);
         }
-        io.as_mut().wait(at).await
+        io.wait(at).await
     };
     errs.record(buf);
 

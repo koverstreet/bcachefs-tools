@@ -589,7 +589,7 @@ impl<'r> Fragment<'r> {
     }
 }
 
-type Reads = Gather<'static, Result<(), BchError>, waiter::Async>;
+type Reads = Gather<Result<(), BchError>, waiter::Async>;
 type ReadRef = GatherRef<'static, Result<(), BchError>, waiter::Async>;
 
 pub(crate) fn retry_pool() -> impl PinInit<Mempool<Kmalloc>, BchError> {
@@ -1415,7 +1415,7 @@ impl<'r> Planned<'r, '_> {
             fs.event_inc_trace(events::data_read_split, |out| rb.to_text_atomic(out, plan.read_pos, plan.flags));
         }
 
-        let r = reads.get();
+        let r = reads.get_pinned();
         let make = move |home| {
             let kind = Kind::Home(orig, home, buffers);
             fragment_task(r, Fragment { ca, ..Fragment::new(fs, kind, plan, Dst::Range(range)) })
@@ -1448,7 +1448,7 @@ impl<'r> Planned<'r, '_> {
                 return Err(e);
             }
         };
-        let r = reads.get();
+        let r = reads.get_pinned();
         let make = move |_| fragment_task(r, f);
         start_task(t, reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
         Ok(())
@@ -2011,7 +2011,7 @@ pub async fn read(fs: &Fs, orig: &Rbio, inum: c::subvol_inum, flags: F) -> Resul
     {
         // the read's own bio's task: the fragment in the task's future alone,
         // made where it lives, and the future gone before the wait below
-        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get(), f))));
+        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get_pinned(), f))));
         if let Some(own) = own.as_pin_mut() {
             own.await;
         }

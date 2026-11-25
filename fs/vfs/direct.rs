@@ -37,7 +37,7 @@ use cstruct_macros::{args_stored_once, in_place};
 use pin_init::{pin_data, pin_init, stack_pin_init};
 
 type F = c::ReadFlags;
-type Splits = Gather<'static, Result<(), BchError>, waiter::Async>;
+type Splits = Gather<Result<(), BchError>, waiter::Async>;
 type SplitRef = GatherRef<'static, Result<(), BchError>, waiter::Async>;
 type Pool = &'static Mempool<Kmalloc>;
 
@@ -158,7 +158,7 @@ async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, 
             set_up(split.home().pages(), iter.get(), &mut offset, should_dirty).map(|()| split)
         }))
         .try_for_each(|split| {
-            let r = splits.get();
+            let r = splits.get_pinned();
             unsafe {
                 split?.start(Spawn::Inline, fs.tasks(), move |s| split_task(s, fs, r, inum, flags, should_dirty))
             };

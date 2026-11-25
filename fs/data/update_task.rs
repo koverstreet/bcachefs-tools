@@ -68,7 +68,7 @@ pub struct Update {
     read:      UnsafeCell<Option<ReadDone>>,
     /// A mover's turn to write - moving_update.rs; a promote's is never used
     #[pin]
-    turn:      Gather<'static, (), waiter::Async>,
+    turn:      Gather<(), waiter::Async>,
     /// A journal scrub's: where what it finds bad is put
     found:     Option<BadRef>,
     listed:    AsyncObjSlot,
@@ -279,9 +279,8 @@ impl Body {
 
     /// Its turn to write, as a mover's update: shared, as the moving
     /// context's updates fifo holds a ref on it.
-    pub fn turn(&self) -> Pin<&Gather<'static, (), waiter::Async>> {
-        // SAFETY: @turn is structurally pinned
-        unsafe { Pin::new_unchecked(&self.update().turn) }
+    pub fn turn(&self) -> &Gather<(), waiter::Async> {
+        &self.update().turn
     }
 
     pub fn set_found(&mut self, found: Option<BadRef>) {

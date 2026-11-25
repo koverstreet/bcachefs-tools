@@ -21,7 +21,7 @@ use crate::data::dev_bio::DevBio;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
 use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, Buffer, Gathered, HoldsDev, MapBuf};
 use crate::os::blkdev::BlockDevice;
-use crate::util::gather::{Fold, Gather};
+use crate::util::gather::{Fold, Gather, Scope};
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
@@ -40,7 +40,7 @@ use crate::format::{Bpos, Btree, DataType};
 //
 // A round of block IO - the blocks a read, or a write, does together - is a
 // BlockIo: it borrows the buffer's blocks apart, for 'a, and lends each bio its
-// piece of one; a Gather<'a> its bios complete into is waited on - in a task,
+// piece of one; a Scope<'a> its bios complete into is waited on - in a task,
 // or synchronously - before the buffer's had back. A read borrows the buffer
 // &mut, its bios each their piece &mut; a write borrows it &, as its bios do,
 // so everything a write round writes is in the buffer before it's begun.
@@ -166,12 +166,10 @@ impl<M: MapBuf> Gathered<BlockErrs> for EcBio<M> {
 }
 
 /// A round of block IO on a buffer's blocks, M: read into them, or written
-/// from them, as RoundBuf says; waited on by @Wt.
-#[pin_data]
+/// from them, as RoundBuf says; waited on by @Wt, its bios gathered in @done.
 pub(crate) struct BlockIo<'a, M: RoundBuf, Wt: Waiter> {
     /// Waited on before the buffer's had back: its drop asserts it was
-    #[pin]
-    done:   Gather<'a, BlockErrs, Wt>,
+    done:   Scope<'a, BlockErrs, Wt>,
     fs:     &'a Fs,
     /// Each block, till a submit lends it out
     blocks: Blocks<M>,
@@ -180,14 +178,14 @@ pub(crate) struct BlockIo<'a, M: RoundBuf, Wt: Waiter> {
 }
 
 impl<'a, Wt: Waiter> BlockIo<'a, &'a mut [u8], Wt> {
-    pub(crate) fn read(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
-        Self::new(fs, buf.blocks_apart_mut())
+    pub(crate) fn read(fs: &'a Fs, buf: &'a mut StripeBuf, done: &'a Gather<BlockErrs, Wt>) -> Self {
+        Self::new(fs, buf.blocks_apart_mut(), done)
     }
 }
 
 impl<'a, Wt: Waiter> BlockIo<'a, &'a [u8], Wt> {
-    pub(crate) fn write(fs: &'a Fs, buf: &'a StripeBuf) -> impl PinInit<Self> + 'a {
-        Self::new(fs, buf.blocks_apart())
+    pub(crate) fn write(fs: &'a Fs, buf: &'a StripeBuf, done: &'a Gather<BlockErrs, Wt>) -> Self {
+        Self::new(fs, buf.blocks_apart(), done)
     }
 }
 
@@ -195,12 +193,12 @@ impl<'a, M: RoundBuf + 'a, Wt: Waiter> BlockIo<'a, M, Wt>
 where
     DevIoRef<M::Rw>: Into<BlockDev>,
 {
-    fn new(fs: &'a Fs, blocks: Blocks<M>) -> impl PinInit<Self> + 'a {
-        pin_init!(Self { done <- Gather::new(), fs, blocks, errs: BlockErrs::default() })
+    fn new(fs: &'a Fs, blocks: Blocks<M>, done: &'a Gather<BlockErrs, Wt>) -> Self {
+        Self { done: Scope::new(done), fs, blocks, errs: BlockErrs::default() }
     }
 
     /// Block @idx of stripe @s, what the buffer has of it.
-    pub(crate) fn submit(self: Pin<&mut Self>, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize) {
+    pub(crate) fn submit(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize) {
         let (offset, size) = (self.blocks.offset, self.blocks.size);
         self.submit_range(s, idx, offset, size)
     }
@@ -209,10 +207,10 @@ where
     /// stripe, within what the buffer has - read into its buffer, or written
     /// from it: bch2_ec_block_io_range(). A block's IO is once a round. Its
     /// device offline, or its pointer stale, is the block's error at once.
-    pub(crate) fn submit_range(self: Pin<&mut Self>, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize,
+    pub(crate) fn submit_range(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize,
                                sector_offset: u32, sectors: u32) {
-        let this = self.project();
-        let fs = *this.fs;
+        let this = self;
+        let fs = this.fs;
         let sh = shape(s);
         let (offset, size) = (this.blocks.offset, this.blocks.size);
         assert_eq!(sh.nr_blocks, this.blocks.nr_blocks, "a stripe buffer, handed a stripe of another width");
@@ -264,31 +262,30 @@ where
 }
 
 /// Every bio done: each block's error, to record() into the buffer.
-impl<M: RoundBuf> WaitSync for Pin<&mut BlockIo<'_, M, waiter::Sync>> {
+impl<M: RoundBuf> WaitSync for &mut BlockIo<'_, M, waiter::Sync> {
     type Output = BlockErrs;
 
     fn wait_sync(self, how: Sleep) -> BlockErrs {
-        let this = self.project();
-        this.done.wait_sync(how).or(*this.errs)
+        self.done.wait_sync(how).or(self.errs)
     }
 }
 
 impl<M: RoundBuf> BlockIo<'_, M, waiter::Async> {
     /// As wait_sync(), awaited: resumed @at.
-    pub(crate) async fn wait(self: Pin<&mut Self>, at: Resume<'_>) -> BlockErrs {
-        let this = self.project();
-        this.done.wait(at).await.or(*this.errs)
+    pub(crate) async fn wait(&mut self, at: Resume<'_>) -> BlockErrs {
+        self.done.wait(at).await.or(self.errs)
     }
 }
 
 /// The blocks of @s in @blocks read into @buf, waited on.
 pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, blocks: u32) {
     let errs = {
-        stack_pin_init!(let io = BlockIo::<_, waiter::Sync>::read(fs, buf));
+        stack_pin_init!(let done = Gather::new());
+        let mut io = BlockIo::<_, waiter::Sync>::read(fs, buf, &done);
         for i in blocks_in(blocks & ((1u64 << s.v().nr_blocks) - 1) as u32) {
-            io.as_mut().submit(s, i);
+            io.submit(s, i);
         }
-        io.as_mut().wait_sync(Sleep::IDLE)
+        io.wait_sync(Sleep::IDLE)
     };
     errs.record(buf);
 }
@@ -366,14 +363,15 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
     let iter = c::bvec_iter { bi_sector: pick.ptr.offset(), ..bio.raw().bi_iter };
     let (key, mut buf, block) = reconstruct_start(fs, btree, data_pos, iter, pick, flags, msg)?;
     let errs = {
-        stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, &mut buf));
+        stack_pin_init!(let done = Gather::new());
+        let mut io = BlockIo::<_, waiter::Async>::read(fs, &mut buf, &done);
         {
             let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
             for i in blocks_in(EC_BLOCKS_ALL & ((1u64 << s.v().nr_blocks) - 1) as u32) {
-                io.as_mut().submit(s, i);
+                io.submit(s, i);
             }
         }
-        io.as_mut().wait(Resume::queue(Queue::system_dfl())).await
+        io.wait(Resume::queue(Queue::system_dfl())).await
     };
     errs.record(&mut buf);
     reconstruct_finish(fs, &key, &mut buf, block, bio, iter, flags, msg)

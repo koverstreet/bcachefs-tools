@@ -52,7 +52,7 @@ use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
 
 type F = c::ReadFlags;
 /// A single folio's read: its caller waits for each extent's
-type Single = Gather<'static, Result<(), BchError>, waiter::Sync>;
+type Single = Gather<Result<(), BchError>, waiter::Sync>;
 type SingleRef = GatherRef<'static, Result<(), BchError>, waiter::Sync>;
 
 const PAGE_SECTORS: u64 = (PAGE_SIZE >> 9) as u64;
@@ -268,7 +268,7 @@ fn read_extent(t: &TransAttempt<'_, '_>, w: &PagecacheRead<'_>, iter: &mut Reada
         TaskSlot::exclusive_bio_in(&READS, &READ_BVECS, nr_vecs, c::req_op_REQ_OP_READ,
                                    |b| pin_init!(ReadBio {
             rbio   <- Rbio::new(w.opts, subvol, None, b.init()),
-            single: w.single.map(Single::get),
+            single: w.single.map(Single::get_pinned),
         }? BchError))
     })?;
     t.relock()?;

@@ -9,9 +9,10 @@
 //! themselves; or a Vec of what each put, taken as they come - reaped.
 //!
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>, waiter::Sync>::new());
-//!     let r = g.get();                // one more in flight
+//!     let s = Scope::new(&g);
+//!     let r = s.get();                // one more in flight
 //!     r.put(ret);                     // folded in; dropped unput, nothing is
-//!     let ret = g.wait_sync(Sleep::IDLE); // an Async Gather: g.wait(at).await
+//!     let ret = s.wait_sync(Sleep::IDLE); // an Async Gather: s.wait(at).await
 //!
 //! It's waited on by & - everything in it is atomic - so one in something
 //! shared is waited on by whoever's job that is: a scope's jobs, by the
@@ -22,17 +23,18 @@
 //! owner's, as closure_init()'s; the wait drops it, so the count only
 //! reaches zero once the owner waits, and never goes from zero back up.
 //!
-//! A ref has no lifetime of its own. What keeps the Gather there for it is
-//! that a Gather is only ever made pinned (PinInit), so its Drop runs before
-//! its memory is reused - and is waited on, or awaited, before it's dropped,
-//! which its Drop asserts if any ref's still out. So a ref can go anywhere -
-//! to C, an endio's private pointer, through into_raw() - and the owner's
-//! wait waits for it.
+//! A ref goes where a borrow can't be seen - to C, an endio's private
+//! pointer, into_raw() - so what keeps the Gather there for it is a borrow
+//! held till it's waited on: a Scope's. Its refs are for 's, its borrow of
+//! the Gather - invariant, so what's in flight may borrow for 's: a bio a
+//! buffer, a task what its frame lends - and its Drop is the brand, holding
+//! 's till then, and asserting it was waited on, or nothing's out. That
+//! rests on nothing forgetting it, as a Gather's wait does.
 //!
-//! What's in flight may borrow, for 'a: a Gather<'a> is gone before 'a
-//! ends, and with no ref out - so a bio holding a ref may hold a buffer
-//! borrowed for 'a. 'a is invariant, so a Gather can't be had as one of a
-//! shorter 'a than it lives for. One whose refs borrow nothing is 'static.
+//! Refs held past any borrow of the Gather - a moving context's, a stripe's,
+//! a task box's home's - are for 'static, borrowing nothing: get_pinned(). A
+//! Gather is only ever made pinned (PinInit), so its Drop runs before its
+//! memory's reused, and asserts no ref's out.
 //!
 //! No lock: what's put folds into atomics - Fold, a trait on the result -
 //! from any context, an endio's included, and the count and whether the
@@ -227,22 +229,22 @@ width!(usize, AtomicUsize);
 /// Everything in it is atomic: refs reach it through a pointer, and its
 /// waiter by &.
 #[pin_data(PinnedDrop)]
-pub struct Gather<'a, T: Fold, Wt: Waiter, W: Width = u32> {
+pub struct Gather<T: Fold, Wt: Waiter, W: Width = u32> {
     state:  W::Atomic,
     /// Born in the wait, with its waiter
     done:   UnsafeCell<Done<Wt>>,
     #[pin]
     acc:    T::Acc,
+    /// Only ever made pinned, so a &Gather is one that stays: get_pinned()
     #[pin]
     _pin:   PhantomPinned,
-    _a:     PhantomData<fn(&'a ()) -> &'a ()>,
 }
 
 // SAFETY: @done is written once, by the wait, before WAITED publishes it to
 // the last put; nothing reads it before
-unsafe impl<T: Fold, Wt: Waiter, W: Width> Sync for Gather<'_, T, Wt, W> {}
+unsafe impl<T: Fold, Wt: Waiter, W: Width> Sync for Gather<T, Wt, W> {}
 
-impl<'a, T: Fold, Wt: Waiter, W: Width> Gather<'a, T, Wt, W> {
+impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
     /* The state word: */
     /// Refs not put: the owner's, until it waits, and every GatherRef's.
     const COUNT:   u64 = (1 << (W::BITS - 2)) - 1;
@@ -257,18 +259,25 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> Gather<'a, T, Wt, W> {
             done:   UnsafeCell::new(Done::completed()),
             acc     <- T::acc(),
             _pin:   PhantomPinned,
-            _a:     PhantomData,
         })
     }
 
-    /// A ref: one more thing in flight - from the owner, before it waits.
-    pub fn get(&self) -> GatherRef<'a, T, Wt, W> {
+    /// A ref borrowing nothing, for what's held past any borrow of the
+    /// Gather: one more thing in flight, before it waits. It's only ever made
+    /// pinned, so it's there till its Drop, which asserts no ref's out.
+    pub fn get_pinned(&self) -> GatherRef<'static, T, Wt, W> {
+        self.get_ref_for()
+    }
+
+    /// A ref, from the owner, before it waits: a Scope's 's, or 'static.
+    fn get_ref_for<'b>(&self) -> GatherRef<'b, T, Wt, W> {
         const { assert!(!T::RESERVES, "this Gather's refs are try_get()") };
-        self.owner_get()
+        Self::assert_owner(W::load(&self.state, Ordering::Relaxed));
+        self.get_ref()
     }
 
     /// A ref, with room made for its put: for a Fold that RESERVES.
-    pub fn try_get(&self) -> Result<GatherRef<'a, T, Wt, W>, AllocError> {
+    fn try_get_for<'b>(&self) -> Result<GatherRef<'b, T, Wt, W>, AllocError> {
         let state = W::load(&self.state, Ordering::Relaxed);
         Self::assert_owner(state);
         // the owner's ref counted too: one put it won't make, room to spare
@@ -276,24 +285,19 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> Gather<'a, T, Wt, W> {
         Ok(self.get_ref())
     }
 
-    fn owner_get(&self) -> GatherRef<'a, T, Wt, W> {
-        Self::assert_owner(W::load(&self.state, Ordering::Relaxed));
-        self.get_ref()
-    }
-
     fn assert_owner(state: u64) {
         assert!(state & Self::WAITED == 0, "Gather::get() after its owner waited: get from a ref");
     }
 
     /// A ref, from someone holding one.
-    fn get_ref(&self) -> GatherRef<'a, T, Wt, W> {
+    fn get_ref<'b>(&self) -> GatherRef<'b, T, Wt, W> {
         // checked before it's changed: a panic leaves the word as it was
         let mut old = W::load(&self.state, Ordering::Relaxed);
         loop {
             assert!(old & Self::COUNT != 0, "Gather ref got with none held");
             assert!(old & Self::COUNT != Self::COUNT, "Gather: too many refs");
             match W::compare_exchange_weak(&self.state, old, old + 1) {
-                Ok(_)    => return GatherRef(NonNull::from(self)),
+                Ok(_)    => return GatherRef(NonNull::from(self), PhantomData),
                 Err(cur) => old = cur,
             }
         }
@@ -326,7 +330,7 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> Gather<'a, T, Wt, W> {
     }
 
     /// A wait begun: the Done ours, till it's dropped.
-    fn begin_wait(&self) -> InWait<'_, 'a, T, Wt, W> {
+    fn begin_wait(&self) -> InWait<'_, T, Wt, W> {
         // checked before it's changed: a panic leaves the word as it was
         let mut old = W::load(&self.state, Ordering::Relaxed);
         loop {
@@ -336,6 +340,13 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> Gather<'a, T, Wt, W> {
                 Err(cur) => old = cur,
             }
         }
+    }
+
+    /// Going: not waited on, its owner's ref the only one - no ref's out to
+    /// put into it once it's gone.
+    fn assert_drained(&self) {
+        assert!(self.waited() || W::load(&self.state, Ordering::Acquire) & Self::COUNT == 1,
+                "a Gather dropped with refs out, unwaited: wait on it, or await it, first");
     }
 
     /// Waited on before: that wait is over, as a Completion's drop asserts.
@@ -361,9 +372,9 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> Gather<'a, T, Wt, W> {
     }
 }
 
-struct InWait<'w, 'a, T: Fold, Wt: Waiter, W: Width>(&'w Gather<'a, T, Wt, W>);
+struct InWait<'w, T: Fold, Wt: Waiter, W: Width>(&'w Gather<T, Wt, W>);
 
-impl<T: Fold, Wt: Waiter, W: Width> Drop for InWait<'_, '_, T, Wt, W> {
+impl<T: Fold, Wt: Waiter, W: Width> Drop for InWait<'_, T, Wt, W> {
     fn drop(&mut self) {
         let state = &self.0.state;
         let mut old = W::load(state, Ordering::Relaxed);
@@ -376,7 +387,7 @@ impl<T: Fold, Wt: Waiter, W: Width> Drop for InWait<'_, '_, T, Wt, W> {
 /// Every ref put, and the result. Sleep::IDLE, for no hung task warnings;
 /// freezable, for refs whose holders freeze in place - kthreads that do -
 /// whose owner must too.
-impl<T: Fold, W: Width> WaitSync for &Gather<'_, T, waiter::Sync, W> {
+impl<T: Fold, W: Width> WaitSync for &Gather<T, waiter::Sync, W> {
     type Output = T;
 
     fn wait_sync(self, how: Sleep) -> T {
@@ -388,9 +399,9 @@ impl<T: Fold, W: Width> WaitSync for &Gather<'_, T, waiter::Sync, W> {
     }
 }
 
-impl<'a, T: Fold, W: Width> Gather<'a, T, waiter::Async, W> {
+impl<T: Fold, W: Width> Gather<T, waiter::Async, W> {
     /// Wait for every ref to be put, resumed @at, for the result.
-    pub fn wait<'w>(&'w self, at: Resume<'w>) -> Resumed<'w, GatherWait<'w, 'a, T, W>> {
+    pub fn wait<'w>(&'w self, at: Resume<'w>) -> Resumed<'w, GatherWait<'w, T, W>> {
         GatherWait { c: None, w: self.begin_wait() }.resume_on(at)
     }
 }
@@ -399,13 +410,13 @@ impl<'a, T: Fold, W: Width> Gather<'a, T, waiter::Async, W> {
 /// first polls it, unless it's been waited on before. In every task that
 /// waits on a Gather, so a hand-rolled future - an async fn would hold the
 /// Gather and @at twice.
-pub struct GatherWait<'w, 'a, T: Fold, W: Width> {
+pub struct GatherWait<'w, T: Fold, W: Width> {
     /* first: dropped unfinished, it waits for the Done before the wait ends */
     c: Option<Completion<'w, waiter::Async>>,
-    w: InWait<'w, 'a, T, waiter::Async, W>,
+    w: InWait<'w, T, waiter::Async, W>,
 }
 
-impl<T: Fold, W: Width> Resumable for GatherWait<'_, '_, T, W> {
+impl<T: Fold, W: Width> Resumable for GatherWait<'_, T, W> {
     type Output = T;
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
@@ -421,7 +432,7 @@ impl<T: Fold, W: Width> Resumable for GatherWait<'_, '_, T, W> {
     }
 }
 
-impl<T: Send, Wt: Waiter, W: Width> Gather<'_, Vec<T>, Wt, W> {
+impl<T: Send, Wt: Waiter, W: Width> Gather<Vec<T>, Wt, W> {
     /// What's been put since the last take, in @out - emptied first - with
     /// refs still out: the puts move into the buffer @out had, which is
     /// given the room theirs had, so any yet to come still fit.
@@ -438,18 +449,19 @@ impl<T: Send, Wt: Waiter, W: Width> Gather<'_, Vec<T>, Wt, W> {
 }
 
 #[pin_init::pinned_drop]
-impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<'_, T, Wt, W> {
+impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<T, Wt, W> {
     fn drop(self: Pin<&mut Self>) {
-        // not waited on, its owner's ref the only one: no ref's out to put
-        // into it once it's gone
-        assert!(self.waited() || W::load(&self.state, Ordering::Acquire) & Self::COUNT == 1,
-                "a Gather dropped with refs out, unwaited: wait on it, or await it, first");
+        self.assert_drained();
     }
 }
 
-/// A ref on a Gather: put with a value, or dropped without one.
+/// A ref on a Gather, for 'a: its Scope's borrow of it, or 'static, borrowing
+/// nothing, from a pinned owner's. Put with a value, or dropped without one.
 #[must_use = "a ref is put as soon as it's dropped"]
-pub struct GatherRef<'a, T: Fold, Wt: Waiter, W: Width = u32>(NonNull<Gather<'a, T, Wt, W>>);
+pub struct GatherRef<'a, T: Fold, Wt: Waiter, W: Width = u32>(
+    NonNull<Gather<T, Wt, W>>,
+    PhantomData<fn(&'a ()) -> &'a ()>,
+);
 
 // SAFETY: a Gather is atomics, and stays where it is until every ref is put;
 // what's put crosses to the owner's thread, so T::Item: Send
@@ -457,7 +469,7 @@ unsafe impl<T: Fold, Wt: Waiter, W: Width> Send for GatherRef<'_, T, Wt, W> wher
 unsafe impl<T: Fold, Wt: Waiter, W: Width> Sync for GatherRef<'_, T, Wt, W> where T::Item: Send {}
 
 impl<'a, T: Fold, Wt: Waiter, W: Width> GatherRef<'a, T, Wt, W> {
-    fn gather(&self) -> &Gather<'a, T, Wt, W> {
+    fn gather(&self) -> &Gather<T, Wt, W> {
         // SAFETY: a ref holds the Gather where it is: its Drop waits for it
         unsafe { self.0.as_ref() }
     }
@@ -476,16 +488,17 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> GatherRef<'a, T, Wt, W> {
 
     /// The ref as a pointer, for C - an endio's private - to put with
     /// from_raw().put().
-    pub fn into_raw(self) -> *const Gather<'a, T, Wt, W> {
+    pub fn into_raw(self) -> *const Gather<T, Wt, W> {
         ManuallyDrop::new(self).0.as_ptr()
     }
 
     /// The ref into_raw() made.
     ///
     /// # Safety
-    /// @g is from into_raw(), and this is the one from_raw() of it.
-    pub unsafe fn from_raw(g: *const Gather<'a, T, Wt, W>) -> Self {
-        GatherRef(NonNull::new(g.cast_mut()).expect("a GatherRef from_raw() of null"))
+    /// @g is from into_raw() of a ref for 'a, and this is the one from_raw()
+    /// of it.
+    pub unsafe fn from_raw(g: *const Gather<T, Wt, W>) -> Self {
+        GatherRef(NonNull::new(g.cast_mut()).expect("a GatherRef from_raw() of null"), PhantomData)
     }
 }
 
@@ -499,7 +512,7 @@ impl<T: Fold, Wt: Waiter, W: Width> Drop for GatherRef<'_, T, Wt, W> {
 /// from any context: so taken through &, once, by whoever takes it first.
 /// Send and Sync as the ref is.
 pub struct GatherRefSlot<'a, T: Fold, Wt: Waiter, W: Width = u32> {
-    r:  AtomicPtr<Gather<'a, T, Wt, W>>,
+    r:  AtomicPtr<Gather<T, Wt, W>>,
     _r: PhantomData<GatherRef<'a, T, Wt, W>>,
 }
 
@@ -526,5 +539,48 @@ impl<'a, T: Fold, Wt: Waiter, W: Width> GatherRefSlot<'a, T, Wt, W> {
 impl<T: Fold, Wt: Waiter, W: Width> Drop for GatherRefSlot<'_, T, Wt, W> {
     fn drop(&mut self) {
         drop(self.take());
+    }
+}
+
+/// A borrow of a Gather, held till it's waited on: its refs are for 's. What's
+/// in flight may borrow for 's - a bio a buffer, a task's home and future
+/// (TaskSlot::start_in()), dropped before what it returns is put, which,
+/// 'static, can't hold what it was lent. 's is never 'static: that'd take a
+/// Gather never dropped.
+///
+/// Its Drop is the brand: 's is held till it's dropped, so what its refs
+/// borrow outlives it - and it's waited on before then, as its Gather is.
+pub struct Scope<'s, T: Fold, Wt: Waiter, W: Width = u32> {
+    gather: &'s Gather<T, Wt, W>,
+    _s:     PhantomData<fn(&'s ()) -> &'s ()>,
+}
+
+impl<'s, T: Fold, Wt: Waiter, W: Width> Scope<'s, T, Wt, W> {
+    pub fn new(gather: &'s Gather<T, Wt, W>) -> Self {
+        Scope { gather, _s: PhantomData }
+    }
+
+    /// A ref: one more thing in flight, before the wait.
+    pub fn get(&self) -> GatherRef<'s, T, Wt, W> {
+        self.gather.get_ref_for()
+    }
+
+    /// A ref, with room made for its put: for a Fold that RESERVES.
+    pub fn try_get(&self) -> Result<GatherRef<'s, T, Wt, W>, AllocError> {
+        self.gather.try_get_for()
+    }
+}
+
+impl<T: Fold, Wt: Waiter, W: Width> core::ops::Deref for Scope<'_, T, Wt, W> {
+    type Target = Gather<T, Wt, W>;
+
+    fn deref(&self) -> &Gather<T, Wt, W> {
+        self.gather
+    }
+}
+
+impl<T: Fold, Wt: Waiter, W: Width> Drop for Scope<'_, T, Wt, W> {
+    fn drop(&mut self) {
+        self.gather.assert_drained();
     }
 }

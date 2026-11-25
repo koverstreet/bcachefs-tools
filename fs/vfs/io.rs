@@ -67,7 +67,7 @@ impl InodeInfo {
             let bio = fs.vfs.nocow_flush_bioset
                 .alloc::<BchError, _>(0, c::req_op_REQ_OP_WRITE | c::REQ_PREFLUSH, |b| DevBio::new(b.init()))
                 .expect("a nocow flush bio: the bioset's mempool waits rather than fail");
-            bio.submit_gathered(ca.into(), 0, g.get());
+            bio.submit_gathered(ca.into(), 0, g.get_pinned());
         }
         g.wait_sync(Sleep::IDLE);
     }

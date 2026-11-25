@@ -135,7 +135,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     };
     u.rbio.bio.get_mut().set_ioprio(IOPRIO_IDLE);
     u.set_found(found);
-    u.io_seq = moving.update_issue(u.turn().get());
+    u.io_seq = moving.update_issue(u.turn().get_pinned());
 
     let size = BkeySC::from(u.index.k.as_ref()).k.size;
     let read_io = moving.io_start(false, size);

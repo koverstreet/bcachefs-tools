@@ -799,7 +799,7 @@ fn write_opf(fs: &Fs, data: &c::JsetBuf, key: &c::JournalKey, separate_flush: bo
 
 /// An empty REQ_PREFLUSH to every rw member with unflushed writes, or in
 /// @devs, which the entry's going to, submitted to @g.
-fn write_preflush(w: &c::journal_buf, devs: &c::bch_devs_list, g: &Gather<'static, PreflushErrs, waiter::Async>) {
+fn write_preflush(w: &c::journal_buf, devs: &c::bch_devs_list, g: &Gather<PreflushErrs, waiter::Async>) {
     let fs = w.journal().fs();
     let _noio = MemallocFlags::noio();
 
@@ -816,7 +816,7 @@ fn write_preflush(w: &c::journal_buf, devs: &c::bch_devs_list, g: &Gather<'stati
         let opf = c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META | c::REQ_PREFLUSH;
         let bio = ca.journal.bio_set.alloc::<BchError, _>(0, opf, |b| DevBio::new(b.init()))
             .expect("a journal preflush: its bioset waits for one");
-        bio.submit_gathered(ca.into(), 0, g.get());
+        bio.submit_gathered(ca.into(), 0, g.get_pinned());
     }
 }
 

@@ -135,7 +135,7 @@ pub struct MovingContext {
 
     /* A ref each for what's in flight - MovingIo's - which drop waits out */
     #[pin]
-    in_flight:      Gather<'static, (), waiter::Sync>,
+    in_flight:      Gather<(), waiter::Sync>,
 
     io:             IoCounts,
 
@@ -279,7 +279,7 @@ impl<'a> Moving<'a> {
         let (s, ios) = io_counts(self.io(), write);
         s.fetch_add(sectors as i32, Relaxed);
         ios.fetch_add(1, Relaxed);
-        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _ref: self.0.in_flight.get() }
+        MovingIo { ctxt: NonNull::from(&self.0), write, sectors, _ref: self.0.in_flight.get_pinned() }
     }
 
     pub fn trans(&self) -> &TransGuard<'a> {

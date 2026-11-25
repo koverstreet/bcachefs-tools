@@ -184,7 +184,7 @@ pub struct StripeNew {
     in_flight_ref:        GatherRefSlot<'static, (), waiter::Async>,
     /// What its task waits on to be in flight
     #[pin]
-    pub(crate) in_flight:            Gather<'static, (), waiter::Async>,
+    pub(crate) in_flight:            Gather<(), waiter::Async>,
     seq:                  AtomicU64,
     /// Why it's cancelled - a writer's IO failed, or its head gave up on it:
     /// the first error
@@ -440,7 +440,7 @@ impl StripeNew {
             s.maker = Some(unsafe { IoRef::get(&b) });
         }
 
-        b.in_flight_ref.set(b.in_flight.get());
+        b.in_flight_ref.set(b.in_flight.get_pinned());
         Ok(b)
     }
 

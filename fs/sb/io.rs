@@ -161,7 +161,7 @@ use crate::util::alloc::{Arc, Flags, Vec};
 use crate::init::dev::{SbBio, SbStorage};
 use core::sync::atomic::AtomicPtr;
 use crate::os::bio::{Bio, BioBox, BioOwner, BioSubmit};
-use crate::util::gather::Gather;
+use crate::util::gather::{Gather, Scope};
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};
 use crate::os::kernel::NSEC_PER_SEC;
@@ -169,8 +169,6 @@ use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
 use core::mem::{size_of, size_of_val};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::dst_room::DstRoom;
-use core::pin::Pin;
-use pin_init::PinInit;
 use crate::published;
 use crate::format::{Btree, DataType, Nonce, MetadataVersion, SbFeature};
 
@@ -2118,19 +2116,17 @@ impl Fs {
 /// its device's superblock, its bio and buffer or scratch, for 'g, as long
 /// as the SbIos: nothing reaches them till it's waited on and gone, and
 /// each IO's result is its bio's then - DevSbMut::io_result().
-#[pin_init::pin_data]
 pub struct SbIos<'g> {
-    #[pin]
-    gather: Gather<'g, (), waiter::Sync>,
+    gather: Scope<'g, (), waiter::Sync>,
 }
 
 impl<'g> SbIos<'g> {
-    pub fn new() -> impl PinInit<Self> {
-        pin_init::pin_init!(Self { gather <- Gather::new() })
+    pub fn new(gather: &'g Gather<(), waiter::Sync>) -> Self {
+        Self { gather: Scope::new(gather) }
     }
 
     /// @sb's first @bytes written to @sector of its device, FUA: a copy of it.
-    pub fn write(self: Pin<&mut Self>, sb: &'g mut DevSbMut<'_>, sector: u64, bytes: usize) {
+    pub fn write(&mut self, sb: &'g mut DevSbMut<'_>, sector: u64, bytes: usize) {
         // blk-wbt throttles all writes but those with REQ_SYNC and REQ_IDLE
         let opf = c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META | c::REQ_FUA;
         let r = self.gather.get();
@@ -2139,7 +2135,7 @@ impl<'g> SbIos<'g> {
     }
 
     /// @sb's scratch read from @sector of its device.
-    pub fn read(self: Pin<&mut Self>, sb: &'g mut DevSbMut<'_>, sector: u64) {
+    pub fn read(&mut self, sb: &'g mut DevSbMut<'_>, sector: u64) {
         let opf = c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META;
         let r = self.gather.get();
         let (bio, _, bdev) = sb.io.bio(opf);
@@ -2147,7 +2143,7 @@ impl<'g> SbIos<'g> {
     }
 
     /// Every IO complete.
-    pub fn wait(self: Pin<&mut Self>) {
+    pub fn wait(&mut self) {
         self.gather.wait_sync(Sleep::IDLE);
     }
 }
@@ -2389,14 +2385,15 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 
     let mut sbs = dev_sbs(fs, sb, cas)?;
     {
-        pin_init::stack_pin_init!(let ios = SbIos::new());
+        pin_init::stack_pin_init!(let gather = Gather::new());
+        let mut ios = SbIos::new(&gather);
         for dev_sb in sbs.iter_mut() {
             let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
             dev_sb.scratch.fill(0);
             dev_sb.ca.io_done_add(crate::os::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
-            ios.as_mut().read(dev_sb, sector);
+            ios.read(dev_sb, sector);
         }
-        ios.as_mut().wait();
+        ios.wait();
     }
 
     for dev_sb in sbs.iter() {
@@ -2439,14 +2436,15 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
         let in_slot = |dev_sb: &DevSbMut<'_>| idx < usize::from(dev_sb.io.buf.sb().layout.nr_superblocks);
         let mut wrote = false;
         {
-            pin_init::stack_pin_init!(let ios = SbIos::new());
+            pin_init::stack_pin_init!(let gather = Gather::new());
+            let mut ios = SbIos::new(&gather);
             for dev_sb in sbs.iter_mut().filter(|s| in_slot(s)) {
                 let (sector, bytes) = dev_sb.copy_for(fs, idx);
                 dev_sb.ca.io_done_add(crate::os::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
-                ios.as_mut().write(dev_sb, sector, bytes);
+                ios.write(dev_sb, sector, bytes);
                 wrote = true;
             }
-            ios.as_mut().wait();
+            ios.wait();
         }
 
         for dev_sb in sbs.iter_mut().filter(|s| in_slot(s)) {

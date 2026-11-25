@@ -130,7 +130,7 @@ where
     stack_pin_init!(let join = Gather::<(), waiter::Sync>::new());
     for job in jobs.iter() {
         // SAFETY: set before its start, taken by its done
-        unsafe { *job.join.get() = Some(join.get()) };
+        unsafe { *job.join.get() = Some(join.get_pinned()) };
         // SAFETY: freed only after the join
         unsafe { job.task().start() };
     }
