@@ -1876,9 +1876,9 @@ The remaining files in the debugfs root are:
 		Lists outstanding interior btree updates: the mode (nothing
 		updated yet, or updated a btree node, or wrote a new btree root,
 		or was reparented by another btree update), whether its new
-		btree nodes have finished writing, its embedded closure's
-		refcount (while nonzero, the btree update is still waiting), and
-		the pinned journal sequence number.
+		btree nodes have finished writing, the count of what it's
+		still waiting on (while nonzero, the btree update is still
+		waiting), and the pinned journal sequence number.
 
 	\item \texttt{journal\_pins} \\
 		Lists what is preventing each journal entry from being

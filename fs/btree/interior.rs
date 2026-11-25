@@ -477,7 +477,7 @@ impl BtreeUpdate {
             Some(Mode::Update)  => "update",
         };
         let pending = self.pending.load(Relaxed);
-        prt!(out, "mode={} nodes_written={} cl.remaining={} journal_seq={}\n",
+        prt!(out, "mode={} nodes_written={} pending={} journal_seq={}\n",
              mode, u32::from(pending == 0), pending, self.journal.seq());
     }
 }
