@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #![allow(non_camel_case_types)]
-// The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS
-#![cfg(not(NO_BCACHEFS_FS))]
+// The VFS's: kernel only
+#![cfg(kernel)]
 
 use crate::cstructs::c;
 use cstruct_macros::MaybeZeroable;

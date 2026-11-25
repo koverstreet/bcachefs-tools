@@ -182,9 +182,9 @@ pub mod c {
     pub use super::util_util_types::*;
     pub use super::vfs_fdm_types::*;
     pub use super::vfs_fs_types::*;
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     pub use super::vfs_io_types::*;
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     pub use super::vfs_pagecache_types::*;
     pub use super::vfs_types::*;
     pub use crate::alloc::background::{BUCKET_GC_GEN_MAX};

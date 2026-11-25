@@ -80,9 +80,7 @@ fn emit_userspace_config_cfgs(root: &std::path::Path) {
         .lines()
         .filter_map(|l| l.trim().strip_prefix("#define"))
         .filter_map(|l| l.split_whitespace().next())
-        // And NO_BCACHEFS_FS - no VFS layer in userspace - and
-        // NO_BCACHEFS_CHARDEV - no ioctls - which the Rust tests, as the C does.
-        .filter(|n| n.starts_with("CONFIG_") || matches!(*n, "NO_BCACHEFS_FS" | "NO_BCACHEFS_CHARDEV"))
+        .filter(|n| n.starts_with("CONFIG_"))
         .map(String::from)
         .collect();
     let mut names = set.clone();

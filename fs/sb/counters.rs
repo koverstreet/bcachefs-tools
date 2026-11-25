@@ -286,7 +286,7 @@ pub fn counters_init(fs: &Fs) {
 
 // ── BCH_IOCTL_QUERY_COUNTERS ─────────────────────────────────────────────────
 
-#[cfg(not(NO_BCACHEFS_CHARDEV))]
+#[cfg(kernel)]
 pub mod ioctl {
     use super::*;
     use crate::errcode::{Errcode, BchError};

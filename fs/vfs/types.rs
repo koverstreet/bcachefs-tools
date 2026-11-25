@@ -3,11 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-#[cfg(not(NO_BCACHEFS_FS))]
+#[cfg(kernel)]
 use crate::os::workqueue::{Workqueue, WqFlags};
-#[cfg(not(NO_BCACHEFS_FS))]
+#[cfg(kernel)]
 use crate::os::bio::BioSet;
-#[cfg(not(NO_BCACHEFS_FS))]
+#[cfg(kernel)]
 use crate::util::{alloc::KVmalloc, late::Late, mempool::Mempool};
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::pin_data;
@@ -20,18 +20,18 @@ pub struct bch_fs_vfs {
     #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_other_alloc))]
     pub inodes: c::fast_list,
     /* every VFS inode of ours, and which subvolumes hold an inode number */
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     #[pin]
     #[init(crate::vfs::inode_cache::InodeCache::default())]
     pub(crate) inode_cache: crate::vfs::inode_cache::InodeCache,
 
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     #[late(BioSet::new(1), ENOMEM_nocow_flush_bioset_init)]
     pub nocow_flush_bioset: Late<BioSet<crate::data::dev_bio::DevBio>>,
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
     pub writepage_buf_pool: Late<Mempool<KVmalloc>>,
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     #[late(Workqueue::new(c"bcachefs_vfs_writeback",
                           WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE | WqFlags::UNBOUND, 1),
            ENOMEM_fs_other_alloc)]

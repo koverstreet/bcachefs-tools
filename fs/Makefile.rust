@@ -70,8 +70,8 @@ endif
 bch-rust-L := -L$(objtree)/rust
 
 # bindgen has to see the headers as the C build does, or struct layouts diverge
-# silently (NO_BCACHEFS_FS gates bch_fs.vfs; -fplan9-extensions changes struct
-# filename): so the kernel's full C flags, less the ones libclang can't parse.
+# silently (-fplan9-extensions changes struct filename): so the kernel's full
+# C flags, less the ones libclang can't parse.
 # That list is rust/Makefile's bindgen_skip_c_flags, which isn't reachable
 # out-of-tree - keep it in sync.
 #

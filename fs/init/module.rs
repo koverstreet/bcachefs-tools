@@ -43,11 +43,11 @@ pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     // what's freed a grace period on runs our code, and goes back to our
     // caches and pools
     let q = m.quiesce();
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     crate::vfs::new_inode::vfs_exit(&q);
     crate::btree::key_cache::btree_key_cache_module_exit(&q);
     crate::util::maybe_rcu_alloc::free_exit(&q);
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     {
         crate::vfs::direct::pools_exit(&q);
         crate::vfs::direct_write::pools_exit(&q);
@@ -80,7 +80,7 @@ crate::init_fn! {
         crate::btree::key_cache::btree_key_cache_module_init()?;
         #[cfg(kernel)]
         crate::init::chardev::bch2_chardev_init(m)?;
-        #[cfg(not(NO_BCACHEFS_FS))]
+        #[cfg(kernel)]
         crate::vfs::new_inode::vfs_init(m)?;
         #[cfg(CONFIG_DEBUG_FS)]
         ret_to_result_void(crate::debug::debug::bch2_debug_init())?;

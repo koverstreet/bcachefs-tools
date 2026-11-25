@@ -197,8 +197,7 @@ pub mod locking;
 pub mod os;
 pub mod typeinfo;
 pub mod util;
-/// The VFS, for its Rust entry points - kernel only, as C's
-/// #ifndef NO_BCACHEFS_FS.
+/// The VFS, for its Rust entry points - kernel only.
 #[cfg(kernel)]
 pub mod vfs {
     pub mod attr;

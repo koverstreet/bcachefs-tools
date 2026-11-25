@@ -725,12 +725,12 @@ pub struct Fs {
     #[init(crate::data::reflink::ReflinkGc::new())]
     pub(crate) reflink_gc: crate::data::reflink::ReflinkGc,
 
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     #[pin]
     #[init(c::bch_fs_vfs::init())]
     #[late]
     pub vfs: c::bch_fs_vfs,
-    #[cfg(not(NO_BCACHEFS_FS))]
+    #[cfg(kernel)]
     #[init(c::fdm_hash::init())]
     pub fdm_table: c::fdm_hash,
 

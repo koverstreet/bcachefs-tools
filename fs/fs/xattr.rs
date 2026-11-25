@@ -359,7 +359,7 @@ pub fn set(
 pub use vfs::*;
 
 /// The VFS's entry points: listxattr, the handlers and their tables, and the
-/// bcachefs.* namespace - kernel only, as C's #ifndef NO_BCACHEFS_FS.
+/// bcachefs.* namespace - kernel only.
 #[cfg(kernel)]
 mod vfs {
     use super::*;

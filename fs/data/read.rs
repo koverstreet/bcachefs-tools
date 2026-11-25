@@ -1843,7 +1843,7 @@ async fn fragment_read(mut f: Fragment<'_>) -> Result<(), BchError> {
 /// A page cache extent's read: @e, into all of the bio of the Rbio the task's
 /// made for - planned as it's made, under @t, in the task's start(). A restart
 /// is put in @restart, and the task reads nothing.
-#[cfg(not(NO_BCACHEFS_FS))]
+#[cfg(kernel)]
 pub(crate) fn extent_make<'a>(fs: &'a Fs, t: &'a TransAttempt<'_, '_>, e: Extent<'a>, flags: F,
                               restart: &'a mut Result<(), BchError>)
     -> impl FnOnce(&'static Rbio) -> ExtentFut<'a> + 'a
@@ -1869,7 +1869,7 @@ pub(crate) fn extent_make<'a>(fs: &'a Fs, t: &'a TransAttempt<'_, '_>, e: Extent
 
 /// @read's one fragment read, if it has one; a @restarted read never was one,
 /// and isn't timed.
-#[cfg(not(NO_BCACHEFS_FS))]
+#[cfg(kernel)]
 #[in_place(ExtentFut)]
 pub(crate) async fn extent_task<'r>(fs: &'r Fs, f: Option<Fragment<'r>>, read: &'r Rbio, restarted: bool) {
     if restarted {
