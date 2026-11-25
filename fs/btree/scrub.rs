@@ -23,9 +23,9 @@ use crate::fs::{Dev, Fs, WriteRef};
 use crate::os::workqueue::Queue;
 use crate::sb::members::DevIoRef;
 use crate::os::bio::{Bio, BioBox, BioSubmit, Buffer};
-use crate::util::task::{spawn_static, waiter, Resumable, Resume};
+use crate::util::task::{spawn, waiter, Resumable, Resume};
 use crate::util::vstructs::{cast_plain, Head, Unvalidated};
-use crate::util::{backref::BackRef, refcount::TryRefcount, Printbuf};
+use crate::util::{refcount::TryRefcount, Printbuf};
 use crate::prt;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -190,9 +190,15 @@ fn inline_data_bad(fs: &Fs, key: &BtreeKeyBuf) -> u64 {
     bad
 }
 
-async fn rewrite_if_bad(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, mut r: ReplicaRead<'static>,
-                        io: MovingIo) {
-    let fs = &*fs;
+async fn rewrite_if_bad(fs: &Fs, key: BtreeKeyBuf, dev: u32, io: MovingIo) {
+    let mut r = match ReplicaRead::new(fs, key.key(), dev) {
+        Ok(Some(r)) => r,
+        Ok(None) => return,
+        Err(e) => {
+            crate::bch_err_ratelimited!(fs, "btree node scrub: reading replica on dev {dev}: {}", e.msg());
+            return;
+        }
+    };
     let read = read_replicas(core::slice::from_mut(&mut r), &fs.btree.read_complete_wq).await[0];
     let good = r.good(read, &key, ", rewriting node");
     drop(r);
@@ -232,13 +238,11 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     }
 
     let fs = m.trans().fs();
+    // the task's filesystem: going read-only waits for it
     let write = fs.writes.tryget().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes))?;
-    // the task holds it, and its write ref: going read-only waits for that
-    let fs_ref = unsafe { BackRef::new(fs) };
-    let fs = unsafe { fs_ref.get() };
-    let Some(r) = ReplicaRead::new(fs, k, dev)? else { return Ok(()) };
     let key = BtreeKeyBuf::new(btree, level, k);
     let io = m.io_start(false, fs.btree_sectors());
 
-    spawn_static(&fs.btree.read_complete_wq, fs.tasks(), move || rewrite_if_bad(write, fs_ref, key, r, io))
+    spawn(write, |w| (&w.btree.read_complete_wq, w.tasks()),
+          async move |w: &WriteRef| rewrite_if_bad(w, key, dev, io).await)
 }

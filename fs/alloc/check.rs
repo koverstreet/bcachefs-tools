@@ -36,7 +36,7 @@ use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::errcode::BchError;
-use crate::fs::Fs;
+use crate::fs::{Fs, WriteRef};
 use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
@@ -533,8 +533,8 @@ fn delete_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
     if who == FreespaceCheck::Allocator {
         let pos = c::bbpos { btree: iter.btree(), pos: iter.pos() };
         // No write ref - the filesystem is going read-only - and it is left for fsck
-        let _ = fs.spawn_write(move |fs| async move {
-            let _ = crate::bch_err_fn!(&*fs, recheck_freespace_key(&fs, pos));
+        let _ = fs.spawn_write(async move |fs: &WriteRef| {
+            let _ = crate::bch_err_fn!(&**fs, recheck_freespace_key(fs, pos));
         });
         return fs.err(Errcode::bucket_not_allocatable);
     }

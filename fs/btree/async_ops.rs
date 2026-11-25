@@ -19,14 +19,13 @@ use crate::init::passes::RecoveryPass;
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, Kmalloc, Vec};
-use crate::util::backref::BackRef;
 use crate::util::futex::EventCount;
 use crate::util::late::Late;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::rcu::Detach;
 use crate::util::refcount::TryRefcount;
 use crate::util::sleep::Sleep;
-use crate::util::task::spawn_static;
+use crate::util::task::spawn;
 use crate::os::workqueue::{Workqueue, WqFlags};
 
 /*
@@ -139,8 +138,7 @@ impl AsyncOps {
     }
 }
 
-async fn task(_write: WriteRef, fs: BackRef<Fs>, a: OpBox) {
-    let fs = &*fs;
+async fn task(fs: &Fs, a: OpBox) {
     let trans = crate::btree_trans!(fs);
     if let Err(e) = lockrestart_do(&trans, |t| a.run(t)) {
         if !e.matches(c::ENOENT) && !e.matches(c::EROFS) &&
@@ -161,11 +159,9 @@ impl Fs {
     /// @a run, counted in running already: under the lock that took it, for
     /// flush to see it.
     fn async_btree_op_start(&self, write: WriteRef, a: OpBox) {
-        // the task holds it, and its write ref: going read-only waits for that
-        let fs_ref = unsafe { BackRef::new(self) };
-        let fs = unsafe { fs_ref.get() };
-
-        if spawn_static(&fs.btree.async_ops.worker, fs.tasks(), move || task(write, fs_ref, a)).is_err() {
+        // the task holds its write ref: going read-only waits for that
+        if spawn(write, |w| (&w.btree.async_ops.worker, w.tasks()),
+                 async move |w: &WriteRef| task(w, a).await).is_err() {
             self.btree.async_ops.op_done();
         }
     }

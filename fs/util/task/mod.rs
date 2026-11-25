@@ -104,7 +104,7 @@ pub use list::{TaskList, TASKS};
 pub use queue::RunQueue;
 pub use select::{Select, SelectWait};
 pub use waitlist::{Complete, DynComplete, WaitList, WaitlistCompletion};
-pub use r#box::{exclusive_size, spawn_detached, spawn_static, Exclusive, Join, Shared, TaskBox, TaskSlot};
+pub use r#box::{exclusive_size, spawn, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
 use crate::c;
 use crate::data_structures::llist::LlistNode;

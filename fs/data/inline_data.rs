@@ -18,9 +18,8 @@ use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits};
 use crate::fs::{Fs, WriteRef};
 use crate::init::damage;
 use crate::init::error::{id, BkeyValidate};
-use crate::util::backref::BackRef;
 use crate::util::refcount::TryRefcount;
-use crate::util::task::spawn_static;
+use crate::util::task::spawn;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
@@ -183,19 +182,17 @@ impl BkeyOps for c::InlineDataV2 {
 /// commit mustn't wait under. Nothing on a read-only filesystem, as a
 /// pointer extent's poisoning.
 pub(crate) fn poison(fs: &Fs, btree: Btree, k: BkeySC<'_>, read_pos: Bpos, record: bool) {
+    // the task holds its write ref: going read-only waits for that
     let Some(write) = fs.writes.tryget() else { return };
-    // the task holds it, and its write ref: going read-only waits for that
-    let fs_ref = unsafe { BackRef::new(fs) };
-    let tasks = unsafe { fs_ref.get() }.tasks();
     let key = BtreeKeyBuf::new(btree, 0, k);
 
-    if let Err(e) = spawn_static(Queue::system_dfl(), tasks, move || poison_task(write, fs_ref, key, read_pos, record)) {
+    if let Err(e) = spawn(write, |w| (Queue::system_dfl(), w.tasks()),
+                          async move |w: &WriteRef| poison_task(w, key, read_pos, record).await) {
         bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}", e.msg());
     }
 }
 
-async fn poison_task(_write: WriteRef, fs: BackRef<Fs>, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
-    let fs = &*fs;
+async fn poison_task(fs: &Fs, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
     let trans = btree_trans!(fs);
     // an extents update commits with a reservation: an empty one, the key's
     // size unchanged

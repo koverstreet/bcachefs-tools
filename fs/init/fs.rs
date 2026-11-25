@@ -47,7 +47,7 @@ use crate::util::place::Placed;
 #[cfg(kernel)]
 use crate::util::refcount::AtomicRef;
 use core::ffi::CStr;
-use core::future::Future;
+use core::ops::AsyncFnOnce;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
@@ -1123,16 +1123,13 @@ impl Fs {
 
     /// @make's future, given a write ref - the filesystem, while it holds it;
     /// EROFS if going read-only
-    pub fn spawn_write<M, F>(&self, make: M) -> Result<(), BchError>
+    pub fn spawn_write<M>(&self, make: M) -> Result<(), BchError>
     where
-        M: FnOnce(WriteRef) -> F + Send + 'static,
-        F: Future<Output = ()> + Send + 'static,
+        M: for<'w> AsyncFnOnce<(&'w WriteRef,), Output = ()> + 'static,
+        for<'w> <M as AsyncFnOnce<(&'w WriteRef,)>>::CallOnceFuture: Send,
     {
         let w: WriteRef = RefGuard::tryget(&self.writes).ok_or(BchError::from(c::EROFS))?;
-        // SAFETY: what the future has of the filesystem, it has by the write
-        // ref; the queue and task list are drained in teardown(), before the
-        // filesystem's freed
-        unsafe { crate::util::task::spawn_detached(self.write_ref_wq(), self.tasks(), move || make(w)) }
+        crate::util::task::spawn(w, |w| (w.write_ref_wq(), w.tasks()), make)
     }
 }
 

@@ -19,7 +19,7 @@ use bcachefs_kernel::os::kernel::HZ;
 use bcachefs_kernel::os::workqueue::Queue;
 use bcachefs_kernel::util::futex::{bch2_futex_init, EventCount};
 use bcachefs_kernel::util::sleep::SleepError;
-use bcachefs_kernel::util::task::{spawn_detached, Resume, TASKS};
+use bcachefs_kernel::util::task::{self, Resume, TASKS};
 
 use std::future::Future;
 use std::sync::mpsc;
@@ -33,7 +33,7 @@ fn init() {
 
 /// @f as a task on the system queue, nothing joining it.
 fn spawn<F: Future<Output = ()> + Send + 'static>(f: F) {
-    unsafe { spawn_detached(Queue::system_dfl(), &TASKS, move || f) }.unwrap();
+    task::spawn((), |_| (Queue::system_dfl(), &TASKS), async move |_: &()| f.await).unwrap();
 }
 
 /// @ev waited on for @timeout jiffies by a task: what it returned, and how

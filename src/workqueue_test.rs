@@ -25,7 +25,7 @@
 //! other: a single fault can show up as two failures.
 
 use bcachefs_kernel::util::task::{waiter, Completion, Done, Resumable};
-use bcachefs_kernel::util::task::{spawn_detached, TASKS};
+use bcachefs_kernel::util::task::{self, TASKS};
 use bcachefs_kernel::os::workqueue::Queue;
 
 use std::future::{poll_fn, Future};
@@ -38,8 +38,7 @@ use std::time::Duration;
 
 /// @f as a task on @q, nothing joining it.
 fn spawn<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, f: F) {
-    // SAFETY: 'static: it borrows nothing
-    unsafe { spawn_detached(q, &TASKS, move || f) }.unwrap();
+    task::spawn((), |_| (q, &TASKS), async move |_: &()| f.await).unwrap();
 }
 
 /// Run `f` on a helper thread and fail rather than hang if it wedges.

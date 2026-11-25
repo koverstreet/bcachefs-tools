@@ -13,7 +13,7 @@
 //! the box frees itself when its task is done. An Exclusive task's is what a
 //! closure returns, handed Pin<&mut H>: a future with a name, if it's an
 //! #[in_place] fn's, so a pool can be sized for its box - exclusive_size().
-//! Started, the box is the task's alone, freed when it's done: spawn_detached()'s,
+//! Started, the box is the task's alone, freed when it's done: spawn()'s,
 //! a Join's. A Join is a task its spawner awaits, for what it returns, through
 //! a CompletionReturn. Started in a Scope (util::gather), what it returns is
 //! put to the scope once its future and home are dropped: so they may borrow
@@ -463,25 +463,22 @@ impl<H> Drop for TaskBox<'_, H> {
     }
 }
 
-/// A task nothing joins, in a box of its own, started on @q: @make's future,
-/// made in the box - the caller's frame holds only what @make captures, not
-/// the state machine.
-///
-/// # Safety
-/// @q, and what the future borrows, outlive the task.
-pub unsafe fn spawn_detached<F: Future<Output = ()> + Send>(q: &Queue, list: &TaskList, make: impl FnOnce() -> F)
-    -> Result<(), BchError>
+/// A task nothing joins, on the queue and task list @on finds through
+/// @held: @make's future, in a box with @held, which it borrows. @held is
+/// lent only as &H and dropped after the future, so what @on found lasts the
+/// task - but for its work returning, which the queue's drain waits on.
+pub fn spawn<H, M>(held: H, on: impl FnOnce(&H) -> (&Queue, &TaskList), make: M) -> Result<(), BchError>
+where
+    H: Send + Sync + 'static,
+    M: for<'h> AsyncFnOnce<(&'h H,), Output = ()> + 'static,
+    for<'h> <M as AsyncFnOnce<(&'h H,)>>::CallOnceFuture: Send,
 {
-    unsafe { TaskSlot::exclusive_in(Kmalloc, ())?.start(Spawn::Queue(q), list, move |_| make()) };
+    let slot = TaskSlot::<H, M>::alloc(held)?;
+    unsafe {
+        let (q, list) = on(slot.home.as_ref());
+        slot.init(Spawn::Queue(q), list, make, None)?.start_unchecked();
+    }
     Ok(())
-}
-
-/// spawn_detached(), for a task that borrows nothing, on a queue and a list
-/// that last.
-pub fn spawn_static<F: Future<Output = ()> + Send + 'static>(q: &'static Queue, list: &'static TaskList,
-                                                           make: impl FnOnce() -> F) -> Result<(), BchError>
-{
-    unsafe { spawn_detached(q, list, make) }
 }
 
 /// A task its spawner awaits, for what it returns: its CompletionReturn's
@@ -500,7 +497,7 @@ impl<T: Send> Join<T> {
 
     /// @make's future run as a task on @q, for @waiter to wait on - the
     /// CompletionReturn, which outlives nothing the future borrows. Made in
-    /// the box, as spawn_detached()'s.
+    /// the box, as spawn()'s.
     pub fn spawn<'a, F>(&'a mut self, q: &Queue, list: &TaskList, make: impl FnOnce() -> F + Send + 'a,
                         waiter: waiter::Async) -> Result<CompletionReturn<'a, T>, BchError>
     where
