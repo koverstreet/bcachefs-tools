@@ -142,7 +142,7 @@ pub fn run_shrinkers(gfp: Flags, allocation_failed: bool) {
         return;
     }
 
-    let info = super::kernel::sysinfo();
+    let info = rustix::system::sysinfo();
 
     /* Aim for 6% of physical RAM free without anything in swap */
     let want_shrink = (info.totalram >> 4) as i64 - info.freeram as i64

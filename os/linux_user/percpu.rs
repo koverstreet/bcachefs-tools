@@ -315,15 +315,17 @@ pub(crate) fn thread_init() {
     }
 
     /* Address space, not memory - pages fault in as they're touched: */
-    let chunk = unsafe {
-        libc::mmap(ptr::null_mut(), CHUNK_SIZE, libc::PROT_READ | libc::PROT_WRITE,
-                   libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE, -1, 0)
+    use rustix::mm::{mmap_anonymous, MapFlags, ProtFlags};
+    let chunk = match unsafe {
+        mmap_anonymous(ptr::null_mut(), CHUNK_SIZE, ProtFlags::READ | ProtFlags::WRITE,
+                       MapFlags::PRIVATE | MapFlags::NORESERVE)
+    } {
+        Ok(p) => p.cast::<u8>(),
+        Err(e) => {
+            eprintln!("bch_percpu_thread_init: chunk mmap failed: {}", std::io::Error::from(e));
+            std::process::abort();
+        }
     };
-    if chunk == libc::MAP_FAILED {
-        eprintln!("bch_percpu_thread_init: chunk mmap failed: {}", std::io::Error::last_os_error());
-        std::process::abort();
-    }
-    let chunk = chunk.cast::<u8>();
 
     CHUNKS[id].store(chunk, Ordering::Relaxed);
     claim_slot(key, id, chunk);

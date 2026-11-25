@@ -330,13 +330,13 @@ unsafe fn submit_ring(r: &Ring, bio: *mut c::bio) {
         c::req_op_REQ_OP_WRITE =>
             opcode::Writev::new(fd, iov.as_ptr(), iov.len() as u32)
                 .offset(offset)
-                .rw_flags(if b.bi_opf & c::REQ_FUA != 0 { libc::RWF_SYNC } else { 0 })
+                .rw_flags(if b.bi_opf & c::REQ_FUA != 0 { rustix::io::ReadWriteFlags::SYNC.bits() as i32 } else { 0 })
                 .build(),
         c::req_op_REQ_OP_FLUSH => opcode::Fsync::new(fd).build(),
         c::req_op_REQ_OP_DISCARD =>
             opcode::Fallocate::new(fd, b.bi_iter.bi_size.into())
                 .offset(offset)
-                .mode(libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE)
+                .mode((rustix::fs::FallocateFlags::PUNCH_HOLE | rustix::fs::FallocateFlags::KEEP_SIZE).bits() as i32)
                 .build(),
         _ => panic!("submit_bio(): a bio of op {op}"),
     }.user_data(bio as u64);
@@ -476,40 +476,40 @@ pub unsafe fn submit_bio_wait(bio: *mut c::bio) -> Result<(), BchError> {
 }
 
 fn status_to_errno(status: c::blk_status_t) -> i32 {
-    -match status {
+    -(match status {
         0                               => 0,
-        c::BLK_STS_NOTSUPP              => libc::EOPNOTSUPP,
-        c::BLK_STS_TIMEOUT              => libc::ETIMEDOUT,
-        c::BLK_STS_NOSPC                => libc::ENOSPC,
-        c::BLK_STS_TRANSPORT            => libc::ENOLINK,
-        c::BLK_STS_TARGET               => libc::EREMOTEIO,
-        c::BLK_STS_RESV_CONFLICT        => libc::EBADE,
-        c::BLK_STS_MEDIUM               => libc::ENODATA,
-        c::BLK_STS_PROTECTION           => libc::EILSEQ,
-        c::BLK_STS_RESOURCE             => libc::ENOMEM,
-        c::BLK_STS_DEV_RESOURCE         => libc::EBUSY,
-        c::BLK_STS_AGAIN                => libc::EAGAIN,
-        c::BLK_STS_OFFLINE              => libc::ENODEV,
+        c::BLK_STS_NOTSUPP              => c::EOPNOTSUPP,
+        c::BLK_STS_TIMEOUT              => c::ETIMEDOUT,
+        c::BLK_STS_NOSPC                => c::ENOSPC,
+        c::BLK_STS_TRANSPORT            => c::ENOLINK,
+        c::BLK_STS_TARGET               => c::EREMOTEIO,
+        c::BLK_STS_RESV_CONFLICT        => c::EBADE,
+        c::BLK_STS_MEDIUM               => c::ENODATA,
+        c::BLK_STS_PROTECTION           => c::EILSEQ,
+        c::BLK_STS_RESOURCE             => c::ENOMEM,
+        c::BLK_STS_DEV_RESOURCE         => c::EBUSY,
+        c::BLK_STS_AGAIN                => c::EAGAIN,
+        c::BLK_STS_OFFLINE              => c::ENODEV,
 
         /* device mapper special case, should not leak out: */
-        c::BLK_STS_DM_REQUEUE           => libc::EREMCHG,
+        c::BLK_STS_DM_REQUEUE           => c::EREMCHG,
 
         /* zone device specific errors */
-        c::BLK_STS_ZONE_OPEN_RESOURCE   => libc::ETOOMANYREFS,
-        c::BLK_STS_ZONE_ACTIVE_RESOURCE => libc::EOVERFLOW,
+        c::BLK_STS_ZONE_OPEN_RESOURCE   => c::ETOOMANYREFS,
+        c::BLK_STS_ZONE_ACTIVE_RESOURCE => c::EOVERFLOW,
 
         /* Command duration limit device-side timeout */
-        c::BLK_STS_DURATION_LIMIT       => libc::ETIME,
+        c::BLK_STS_DURATION_LIMIT       => c::ETIME,
 
-        c::BLK_STS_INVAL                => libc::EINVAL,
+        c::BLK_STS_INVAL                => c::EINVAL,
 
         /* everything else not covered above: */
-        c::BLK_STS_IOERR                => libc::EIO,
+        c::BLK_STS_IOERR                => c::EIO,
         _ => {
             crate::warn_on_once!(true);
-            libc::EIO
+            c::EIO
         }
-    }
+    } as i32)
 }
 
 unsafe extern "C" fn submit_bio_wait_endio(bio: *mut c::bio) {

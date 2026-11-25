@@ -38,21 +38,14 @@ pub fn random_u64() -> u64 {
     getrandom::u64().unwrap_or_else(|e| panic!("getrandom() of a u64: {e}"))
 }
 
-pub(super) fn sysinfo() -> libc::sysinfo {
-    let mut info = core::mem::MaybeUninit::uninit();
-    let ret = unsafe { libc::sysinfo(info.as_mut_ptr()) };
-    assert_eq!(ret, 0, "sysinfo(): {}", std::io::Error::last_os_error());
-    unsafe { info.assume_init() }
-}
-
 pub fn totalram_bytes() -> usize {
-    let info = sysinfo();
+    let info = rustix::system::sysinfo();
     info.totalram as usize * info.mem_unit as usize
 }
 
 /// Free memory: sysinfo() has no MemAvailable.
 pub fn mem_available_bytes() -> usize {
-    let info = sysinfo();
+    let info = rustix::system::sysinfo();
     info.freeram as usize * info.mem_unit as usize
 }
 

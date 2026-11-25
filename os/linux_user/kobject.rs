@@ -481,7 +481,7 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), BchError> {
             }
             Ok(())
         }
-        Entry::Dir(_) | Entry::Group(_) => Err(BchError::from_raw(-libc::EISDIR)),
+        Entry::Dir(_) | Entry::Group(_) => Err(BchError::from(c::EISDIR)),
     }
 }
 
