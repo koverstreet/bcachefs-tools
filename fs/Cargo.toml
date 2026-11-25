@@ -64,8 +64,8 @@ getrandom = "0.4"
 # scheduler's futexes and gettid() (os/linux_user/sched.rs), and its clocks
 # (os/linux_user/kernel.rs).
 rustix   = { version = "1.1.4", features = ["event", "fs", "mm", "system", "termios", "thread", "time"] }
-# Userspace only: os/linux_user/percpu.rs's per-thread chunks, mmap()ed, and
-# the pthread key whose destructor gives a thread's back when it exits.
+# Userspace only: os/linux_user/blkdev.rs's preadv()/pwritev2(), and
+# stacktrace.rs's signal and symbol lookups.
 libc     = "0.2.69"
 # Userspace only: os/linux_user/blkdev.rs's IO.
 io-uring = "0.7"

@@ -147,9 +147,25 @@ static CHUNKS: [AtomicPtr<u8>; MAX_CPUS] = [const { AtomicPtr::new(ptr::null_mut
 #[allow(non_upper_case_globals)]
 pub static bch_percpu_nr_cpus: AtomicI32 = AtomicI32::new(0);
 
+/*
+ * The thread's slot, given back when the thread exits: Rust runs its
+ * destructor then, for every thread, however it was made. Only thread_init()
+ * touches it; my_chunk() is MY_CHUNK alone.
+ */
+struct Slot(Cell<Option<usize>>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if let Some(id) = self.0.take() {
+            lock().free_slots.push(id);
+            MY_CHUNK.set(ptr::null_mut());
+        }
+    }
+}
+
 thread_local! {
     static MY_CHUNK: Cell<*mut u8> = const { Cell::new(ptr::null_mut()) };
-    static MY_ID:    Cell<usize>   = const { Cell::new(0) };
+    static MY_SLOT:  Slot          = const { Slot(Cell::new(None)) };
 }
 
 struct FreeRun {
@@ -171,7 +187,6 @@ struct State {
      * slot next, as a CPU's percpu state does across the tasks that run on it.
      */
     free_slots:    Vec<usize>,
-    exit_key:      Option<libc::pthread_key_t>,
     free_runs:     Vec<FreeRun>,
     dynamic_inits: Vec<DynamicInit>,
     dynamic_used:  usize,
@@ -192,7 +207,6 @@ unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State {
     free_slots:    Vec::new(),
-    exit_key:      None,
     free_runs:     Vec::new(),
     dynamic_inits: Vec::new(),
     dynamic_used:  GRAIN,
@@ -238,24 +252,14 @@ unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
 }
 
 /*
- * The key's value is only there so that its destructor runs at thread exit:
- * pthread runs a destructor only for keys with a non-NULL value.
+ * Thread locals drop in the reverse of their first use, so MY_SLOT's - first
+ * used here - runs after those of any used since. One used before, whose
+ * destructor touches percpu memory, would take a slot after MY_SLOT is gone:
+ * the slot's never given back. Nothing does, so far.
  */
-fn claim_slot(key: libc::pthread_key_t, id: usize, chunk: *mut u8) {
+fn claim_slot(id: usize, chunk: *mut u8) {
     MY_CHUNK.set(chunk);
-    MY_ID.set(id);
-    unsafe { libc::pthread_setspecific(key, chunk.cast()) };
-}
-
-/*
- * Runs after the thread's Rust thread_local destructors (glibc runs
- * __call_tls_dtors() before pthread key destructors), so those may still use
- * percpu memory. If anything after this does, it takes a slot again and sets
- * the key again, and pthread calls us again.
- */
-unsafe extern "C" fn thread_exit(_chunk: *mut c_void) {
-    lock().free_slots.push(MY_ID.get());
-    MY_CHUNK.set(ptr::null_mut());
+    let _ = MY_SLOT.try_with(|s| s.0.set(Some(id)));
 }
 
 /*
@@ -287,23 +291,9 @@ pub(crate) fn thread_init() {
 
     let mut s = lock();
 
-    let key = match s.exit_key {
-        Some(key) => key,
-        None => {
-            let mut key = 0;
-            let ret = unsafe { libc::pthread_key_create(&mut key, Some(thread_exit)) };
-            if ret != 0 {
-                eprintln!("bch_percpu_thread_init: pthread_key_create: {}",
-                          std::io::Error::from_raw_os_error(ret));
-                std::process::abort();
-            }
-            *s.exit_key.insert(key)
-        }
-    };
-
     if let Some(id) = s.free_slots.pop() {
         /* Already published and initialized - it carries on as it was: */
-        claim_slot(key, id, CHUNKS[id].load(Ordering::Relaxed));
+        claim_slot(id, CHUNKS[id].load(Ordering::Relaxed));
         return;
     }
 
@@ -328,7 +318,7 @@ pub(crate) fn thread_init() {
     };
 
     CHUNKS[id].store(chunk, Ordering::Relaxed);
-    claim_slot(key, id, chunk);
+    claim_slot(id, chunk);
 
     for di in &s.dynamic_inits {
         unsafe { (di.init)(chunk.wrapping_add(di.pcv).cast(), di.ctx, id as c_uint) };
