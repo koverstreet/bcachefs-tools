@@ -72,7 +72,7 @@ const IN_FLIGHT: usize = 2 * PTRS;
 /// takes the next only if the set has it now, and otherwise waits for those
 /// it holds first. So no two writes wait for each other's clones.
 pub(crate) struct InFlight<'a> {
-    fs:     &'static Fs,
+    fs:     &'a Fs,
     /* the set a device's clones are from, and their priority */
     clones: fn(&Dev) -> &BioSet<DevBio>,
     ioprio: u16,
@@ -93,12 +93,12 @@ pub(crate) enum Refs<'r, R: IoRefIdx> {
 }
 
 impl<'a> InFlight<'a> {
-    pub fn new(fs: &'static Fs) -> Self {
+    pub fn new(fs: &'a Fs) -> Self {
         Self::with(fs, |ca| &ca.write_clones, 0)
     }
 
     /// Its clones from the set @clones picks, at @ioprio: a journal write's.
-    pub fn with(fs: &'static Fs, clones: fn(&Dev) -> &BioSet<DevBio>, ioprio: u16) -> Self {
+    pub fn with(fs: &'a Fs, clones: fn(&Dev) -> &BioSet<DevBio>, ioprio: u16) -> Self {
         InFlight { fs, clones, ioprio, bios: ArrayVec::new(), errs: ReplicaErrs::default() }
     }
 
@@ -199,7 +199,7 @@ impl<'a> InFlight<'a> {
 /// to each device of @k's pointers: the replicas that failed, once all are
 /// done, resumed @at.
 #[args_stored_once]
-pub async fn write_replicas<O: BioOwner<Owns = Data>>(fs: &'static Fs, bio: Remapped<'_, O, &[u8]>, ty: DataType,
+pub async fn write_replicas<O: BioOwner<Owns = Data>>(fs: &Fs, bio: Remapped<'_, O, &[u8]>, ty: DataType,
                                                      k: &BkeyI, at: Resume<'_>) -> ReplicaErrs {
     /* the replicas' clones borrow the mapping, and are done with it here */
     let mut io = InFlight::new(fs);
