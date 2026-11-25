@@ -16,6 +16,7 @@ use crate::errcode::BchError;
 use crate::os::file::Any;
 use crate::os::folio::Folio;
 use crate::os::bio::{Bio, Bvec, FolioHold, Holds};
+use crate::util::rcu::{DropAnytime, DropAtomic};
 use crate::util::task::requeue;
 use crate::os::workqueue::Queue;
 use core::ffi::{c_int, c_uint, c_ulong};
@@ -23,7 +24,7 @@ use core::ptr::NonNull;
 
 /// What a bio of an iov_iter's pages holds of their folios: Pinned, a
 /// user-backed iter's - iov_iter_extract_will_pin() - or Callers'.
-pub trait UserPage: FolioHold<A = Any> + Send + 'static {
+pub trait UserPage: FolioHold<A = Any> + Send + DropAtomic + DropAnytime + 'static {
     /// @bio's bvecs @iter's next pages, a run of one folio a bvec, as many as
     /// it has room for - @iter advanced past them. Fails only if it got none.
     /// Panics if @iter's pages aren't held as Self holds them.

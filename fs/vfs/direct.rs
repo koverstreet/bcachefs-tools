@@ -5,8 +5,8 @@
 //! with the task and its bvecs, from a pool of the module's: a box is freed
 //! when its task is done, after the dio's ended - when the filesystem may be
 //! gone. The first bio's task is the dio's: it sets up the bios in order, and
-//! reads the first: started, then the rest started - each a split, that puts
-//! what it read in the dio's Gather - then the splits awaited, if there are
+//! reads the first: started, then the rest started - each a split, a task in
+//! the dio's Scope, what it read put there - then the splits awaited, if there are
 //! any, then the first; and the dio's ended: the kiocb's completion, or the
 //! caller waiting for it.
 
@@ -20,7 +20,7 @@ use crate::inode_opts::get_inode;
 use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
 use crate::os::bio::{Bio, BvecMempool, Holds};
-use crate::util::gather::{Gather, GatherRef};
+use crate::util::gather::{Gather, Scope};
 use crate::os::iov_iter::IovIter;
 use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::unlikely;
@@ -37,8 +37,7 @@ use cstruct_macros::{args_stored_once, in_place};
 use pin_init::{pin_data, pin_init, stack_pin_init};
 
 type F = c::ReadFlags;
-type Splits = Gather<Result<(), BchError>, waiter::Async>;
-type SplitRef = GatherRef<'static, Result<(), BchError>, waiter::Async>;
+type Splits<'s> = Scope<'s, Result<(), BchError>, waiter::Async>;
 type Pool = &'static Mempool<Kmalloc>;
 
 static DIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
@@ -130,10 +129,11 @@ fn set_up<P: UserPage>(b: &mut Bio<Holds<P>>, iter: &mut IovIter<'_>, offset: &m
 }
 
 #[in_place(SplitFut)]
-async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h Fs, r: SplitRef, inum: c::subvol_inum,
-                                     flags: F, should_dirty: bool) {
-    r.put(read::read(fs, split.rbio.erased(), inum, flags).await);
+async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h Fs, inum: c::subvol_inum,
+                                     flags: F, should_dirty: bool) -> Result<(), BchError> {
+    let ret = read::read(fs, split.rbio.erased(), inum, flags).await;
     split.as_mut().pages().release_user_pages(should_dirty).await;
+    ret
 }
 
 /// What's left of @iter past the dio's first bio, in splits.
@@ -141,7 +141,8 @@ async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h 
 #[args_stored_once]
 async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u64,
                                   inum: c::subvol_inum, flags: F, should_dirty: bool) -> Result<(), BchError> {
-    stack_pin_init!(let splits = Splits::new());
+    stack_pin_init!(let gather = Gather::new());
+    let splits: Splits<'_> = Scope::new(&gather);
 
     // @iter is the caller's, and gone once this parks: it's walked before the
     // wait, with nothing awaited till then - see CallersIter::new().
@@ -158,10 +159,7 @@ async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, 
             set_up(split.home().pages(), iter.get(), &mut offset, should_dirty).map(|()| split)
         }))
         .try_for_each(|split| {
-            let r = splits.get_pinned();
-            unsafe {
-                split?.start(Spawn::Inline, fs.tasks(), move |s| split_task(s, fs, r, inum, flags, should_dirty))
-            };
+            split?.start_in(&splits, Spawn::Inline, fs.tasks(), move |s| split_task(s, fs, inum, flags, should_dirty));
             Ok(())
         })
     };
