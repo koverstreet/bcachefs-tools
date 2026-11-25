@@ -87,6 +87,21 @@ fn subvol_claiming(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<u32>, Bch
              |k| subvolume::val(k).is_some_and(|s| s.snapshot() == id))
 }
 
+/// Whether live subvolume @subvol, @s, which leaf @id backrefs, points
+/// elsewhere unattested: its snapshot doesn't backref it, and nothing else
+/// points at @id.
+fn subvol_misdirected(t: &TransAttempt<'_, '_>, id: u32, subvol: u32, s: &c::Subvolume)
+    -> Result<bool, BchError>
+{
+    if s.state_decoded() == Some(c::SubvolumeState::deleted) {
+        return Ok(false);
+    }
+    if snapshot::lookup(t, s.snapshot()).found()?.is_some_and(|other| other.subvol() == subvol) {
+        return Ok(false);
+    }
+    Ok(subvol_claiming(t, id)?.is_none())
+}
+
 /// Rebuild the subvolume of live leaf @id, which nothing points at: as the one
 /// its root inode names, unless that id's taken, around that root - or if the
 /// leaf's version of its root is gone too, around the root its tree's
@@ -998,8 +1013,24 @@ fn check_to_subvol<'a, 't>(
 
         // Wrong backref, or not rebuildable: the repair belongs to the pass after
         // check_subvols. Report only - an error would break mounts mid-deletion.
+        //
+        // Except a live subvolume whose snapshot doesn't point back, while this
+        // live leaf does, and no other subvolume points here: two keys say the
+        // subvolume is ours, none that it's elsewhere - point it here.
         let subvol = match subvol {
             Some(s) if s.snapshot() == id => s,
+            Some(s) if !snap_deleting && subvol_misdirected(t, id, subvol_id, &s)? => {
+                if fsck_err!(t, id::snapshot_subvol_backref_wrong,
+                             "subvolume points to snapshot {}, which doesn't point back - this one does, repointing it:\n{}\n{}",
+                             s.snapshot(), n.to_text(fs), subvol_k.to_text(fs))? {
+                    let root = match check::subvol_root_at(t, id)? {
+                        Some((root_subvol, inum)) if root_subvol == subvol_id => inum,
+                        _ => s.inode.get(),
+                    };
+                    check::repoint_subvol(t, id, subvol_id, root)?;
+                }
+                return Ok(());
+            }
             Some(_) => {
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot's subvolume doesn't point back at it:\n{}\n{}",

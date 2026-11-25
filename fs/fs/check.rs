@@ -697,6 +697,43 @@ pub fn subvol_root_at(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Option<
         }))
 }
 
+/// Where root inode @root, at @snapshot, says its subvolume is mounted.
+fn root_fs_path_parent(t: &TransAttempt<'_, '_>, snapshot: u32, root: u64) -> Result<u32, BchError> {
+    match inode::find_by_inum_snapshot(t, root, snapshot, BtreeIterFlags::empty()) {
+        Ok(u)                          => Ok(u.bi_parent_subvol),
+        Err(e) if e.matches(c::ENOENT) => Ok(0),
+        Err(e)                         => Err(e),
+    }
+}
+
+/// Point subvolume @subvol at leaf @snapshot, which backrefs it, with root
+/// inode @root; the rest of its key - otime, creation_parent, ro - stays.
+/// Where it's mounted, and whether it's a snapshot, as reconstruct_subvol()
+/// has them.
+pub fn repoint_subvol(
+    t:        &TransAttempt<'_, '_>,
+    snapshot: u32,
+    subvol:   u32,
+    root:     u64,
+) -> Result<(), BchError> {
+    let fs = t.fs();
+
+    let fs_path_parent = root_fs_path_parent(t, snapshot, root)?;
+    let master = snapshot::tree_lookup(t, fs.snapshots.tree(snapshot))?.master_subvol.get();
+
+    bch_err_msg!(fs,
+        t.bkey_get_mut::<c::Subvolume, _>(Btree::subvolumes, pos(0, subvol as u64),
+                                           BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(), |s| {
+            let v = s.v_mut();
+            v.snapshot       = snapshot.into();
+            v.inode          = root.into();
+            v.fs_path_parent = fs_path_parent.into();
+            v.set_snap(master != 0 && master != subvol);
+            Ok(())
+        }),
+        "getting subvolume {subvol}")
+}
+
 /// Recreate missing subvolume key @subvol, at leaf @snapshot with root inode
 /// @root - from reconstruct_subvol_root() - and point the snapshot, and its
 /// tree if it has no master subvolume, back at it. Where it's mounted is the
@@ -711,11 +748,7 @@ pub fn reconstruct_subvol(
 
     bch_info!(fs, "reconstructing subvol {subvol} with root inode {root}");
 
-    let fs_path_parent = match inode::find_by_inum_snapshot(t, root, snapshot, BtreeIterFlags::empty()) {
-        Ok(u)                          => u.bi_parent_subvol,
-        Err(e) if e.matches(c::ENOENT) => 0,
-        Err(e)                         => return Err(e),
-    };
+    let fs_path_parent = root_fs_path_parent(t, snapshot, root)?;
 
     let tree = bch_err_msg!(fs,
         t.bkey_get_mut::<c::Snapshot, _>(Btree::snapshots, pos(0, snapshot as u64),
