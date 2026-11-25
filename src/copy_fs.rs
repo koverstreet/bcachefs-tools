@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};
-use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
@@ -416,16 +415,6 @@ fn write_data(
     Ok(())
 }
 
-/// @buf, read from @src_fd at @offset - up to @len bytes, the file's - and
-/// zeroes past what the read got.
-fn pread_zero_tail<'b>(src_fd: BorrowedFd<'_>, buf: &'b mut [MaybeUninit<u8>], len: usize, offset: u64)
-    -> Result<&'b mut [u8], BchError>
-{
-    let got = rustix::io::pread(src_fd, &mut buf[..len], offset).map_err(rustix_err)?.0.len();
-    buf[got..].fill(MaybeUninit::new(0));
-    Ok(unsafe { crate::util::assume_init_mut(buf) })
-}
-
 fn copy_data(
     fs: &Fs,
     dst_inode: &mut c::bch_inode_unpacked,
@@ -441,9 +430,9 @@ fn copy_data(
         let padded = (len as u64).next_multiple_of(block_size) as usize;
 
         let mut buf = io_buf(padded, Flags::empty())?;
-        let buf = pread_zero_tail(src_fd, &mut buf, len, pos)?;
+        rustix::io::pread(src_fd, &mut buf[..len], pos).map_err(rustix_err)?;
 
-        write_data(fs, dst_inode, pos, buf)?;
+        write_data(fs, dst_inode, pos, &buf)?;
         pos += len as u64;
     }
 
@@ -721,14 +710,14 @@ fn copy_sync_file_range(
 
         let mut src_buf = io_buf(b, Flags::empty())?;
         let read_len = std::cmp::min(b, (src_size - start) as usize);
-        let src_buf = pread_zero_tail(src_fd, &mut src_buf, read_len, start)?;
+        rustix::io::pread(src_fd, &mut src_buf[..read_len], start).map_err(rustix_err)?;
 
         let mut dst_buf = io_buf(b, Flags::empty())?;
-        let dst_buf = fs.read(dst_inum, start, dst, &mut dst_buf)?;
+        fs.read(dst_inum, start, dst, &mut dst_buf)?;
 
         let mut m = Range { start: 0, end: 0 };
         loop {
-            m = seek_mismatch_aligned(src_buf, dst_buf, m.end as usize, b, block_size);
+            m = seek_mismatch_aligned(&src_buf, &dst_buf, m.end as usize, b, block_size);
             if m.end == 0 {
                 break;
             }

@@ -3,7 +3,6 @@
 //! What a bio owns of what its bvecs point at, as its B: pages of its own, or
 //! a mapped buffer.
 
-use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ptr::NonNull;
 
@@ -221,21 +220,9 @@ unsafe impl MapBuf for &[u8] {
     }
 }
 
-/// A caller's buffer for a read to fill: not written from, as what's in it
-/// isn't initialized.
-unsafe impl MapBuf for &mut [MaybeUninit<u8>] {
-    fn allows_op(op: u32) -> bool {
-        op == c::req_op_REQ_OP_READ
-    }
-
+unsafe impl<const A: usize> MapBuf for AlignedBox<[u8], A> {
     fn as_raw(&self) -> (*mut u8, usize) {
-        (self.as_ptr().cast::<u8>().cast_mut(), self.len())
-    }
-}
-
-unsafe impl<const A: usize> MapBuf for AlignedBox<[MaybeUninit<u8>], A> {
-    fn as_raw(&self) -> (*mut u8, usize) {
-        (self.as_ptr().cast::<u8>().cast_mut(), self.len())
+        (self.as_ptr().cast_mut(), self.len())
     }
 }
 
@@ -243,14 +230,13 @@ unsafe impl<const A: usize> MapBuf for AlignedBox<[MaybeUninit<u8>], A> {
 /// it O_DIRECT.
 pub const IO_ALIGN: usize = PAGE_SIZE;
 
-/// A buffer for IO. Not initialized: what reads into it, or writes it, has
-/// its bytes.
-pub type IoBuf = AlignedBox<[MaybeUninit<u8>], IO_ALIGN>;
+/// A buffer for IO: zeroed until a read, or a writer, fills it - so what
+/// isn't, a read that failed, is bytes all the same.
+pub type IoBuf = AlignedBox<[u8], IO_ALIGN>;
 
-/// An IoBuf of @bytes, with @gfp, not zeroed: as kvmalloc() leaves them, as
-/// C's buffers were.
+/// An IoBuf of @bytes, with @gfp, zeroed.
 pub fn io_buf(bytes: usize, gfp: Flags) -> Result<IoBuf, AllocError> {
-    AlignedBox::try_new_uninit_slice_gfp(bytes, gfp)
+    AlignedBox::try_new_zeroed_slice_gfp(bytes, gfp)
 }
 
 /// The bio's buffer, @M: mapped as the bio's made, and held as long as it

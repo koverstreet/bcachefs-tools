@@ -31,7 +31,7 @@ use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
-use crate::util::vstructs::{assume_init_mut, cast_plain, cast_plain_mut, Head, SelfSized,
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized,
                             Unvalidated};
 use crate::os::workqueue::Queue;
 use crate::util::ToText;
@@ -692,7 +692,7 @@ fn read_at<'b>(ca: &DevIoRef<c::DevReadRefKind>, bio: &'b mut BioBox<Bio<Buffer<
     bio.reset(c::req_op_REQ_OP_READ);
     bio.bio_mut().shrink(bytes.try_into().expect("a journal read of 4G or more"));
     bio.submit_wait(ca.bdev(), sector)?;
-    Ok(unsafe { assume_init_mut(&mut bio.as_mut().get_mut().buf_mut()[..bytes]) })
+    Ok(&mut bio.as_mut().get_mut().buf_mut()[..bytes])
 }
 
 /// A device's ring, as a read has it: its buckets, and the newest seq each

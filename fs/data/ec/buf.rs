@@ -29,7 +29,7 @@ use crate::util::backref::BackRef;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::ratelimit::Ratelimit;
 use crate::util::sleep::Sleep;
-use crate::util::vstructs::{assume_init_mut, assume_init_ref, Validated};
+use crate::util::vstructs::Validated;
 use crate::{here, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::CStr;
@@ -226,28 +226,24 @@ impl StripeBuf {
         self.failed_mask(e).count_ones()
     }
 
-    // XXX: which blocks have been written - read, filled by a writer, made by
-    // the parity math - isn't tracked: these hand out each block's window as
-    // bytes whether it has been or not - a block whose read failed, parity not
-    // yet generated.
-
-    /// Block @i's window, @size sectors from @offset: one it has.
+    /// Block @i's window, @size sectors from @offset: one it has. Zeroes, where
+    /// nothing's been read or written - a block whose read failed.
     pub(crate) fn block(&self, i: usize) -> &[u8] {
         let b = self.data[i].as_deref().unwrap_or_else(|| panic!("block {i} of a stripe buffer without it"));
-        unsafe { assume_init_ref(&b[..(self.size as usize) << 9]) }
+        &b[..(self.size as usize) << 9]
     }
 
     /// block(), to write.
     pub(crate) fn block_mut(&mut self, i: usize) -> &mut [u8] {
         let bytes = (self.size as usize) << 9;
         let b = self.data[i].as_deref_mut().unwrap_or_else(|| panic!("block {i} of a stripe buffer without it"));
-        unsafe { assume_init_mut(&mut b[..bytes]) }
+        &mut b[..bytes]
     }
 
     /// Its blocks' windows, in order, each @size sectors: for the parity math.
     fn blocks_mut(&mut self) -> ArrayVec<&mut [u8], MAX_BLOCKS> {
         let bytes = (self.size as usize) << 9;
-        self.data.iter_mut().flatten().map(|b| unsafe { assume_init_mut(&mut b[..bytes]) }).collect()
+        self.data.iter_mut().flatten().map(|b| &mut b[..bytes]).collect()
     }
 
     /// Its blocks apart, to be read into: a round of IO's.

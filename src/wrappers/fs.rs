@@ -8,7 +8,6 @@
 //! callers `use crate::wrappers::fs::FsExt` to get the method syntax back.
 
 use std::ffi::CString;
-use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
@@ -26,8 +25,8 @@ pub trait FsExt {
         -> Result<OpenFs, BchError>;
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64)
         -> Result<WriteResult, BchError>;
-    fn read<'a>(&self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked,
-                buf: &'a mut [MaybeUninit<u8>]) -> Result<&'a mut [u8], BchError>;
+    fn read(&self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked, buf: &mut [u8])
+        -> Result<(), BchError>;
     fn dev_add(&self, path: &str) -> Result<(), BchError>;
 }
 
@@ -56,13 +55,13 @@ impl FsExt for Fs {
         io::write(self, inum, offset, subvol, replicas, data, new_i_size)
     }
 
-    fn read<'a>(
+    fn read(
         &self,
         inum: c::subvol_inum,
         offset: u64,
         inode: &c::bch_inode_unpacked,
-        buf: &'a mut [MaybeUninit<u8>],
-    ) -> Result<&'a mut [u8], BchError> {
+        buf: &mut [u8],
+    ) -> Result<(), BchError> {
         io::read(self, inum, offset, inode, buf)
     }
 

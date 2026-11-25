@@ -5,8 +5,6 @@
 // read() and write() each run the read or write path's on a task, and wait
 // for it.
 
-use std::mem::MaybeUninit;
-
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::spos;
 use bcachefs_kernel::data::read::{self, Rbio};
@@ -18,7 +16,6 @@ use bcachefs_kernel::util::alloc::init_at;
 use bcachefs_kernel::os::bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer};
 use bcachefs_kernel::util::sleep::Sleep;
 use bcachefs_kernel::util::task::{waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
-use bcachefs_kernel::util::vstructs::assume_init_mut;
 use bcachefs_kernel::os::workqueue::Queue;
 
 /// Maximum single IO size.
@@ -85,16 +82,15 @@ pub fn write(
     wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a write's task, ended with what it wrote")
 }
 
-/// @buf read from @offset of inode @inum, by a task, waited for: the buffer
-/// as bytes - the read writes all of it, holes and what's past the data as
-/// zeroes.
-pub fn read<'a>(
+/// @buf read from @offset of inode @inum, by a task, waited for - all of it,
+/// holes and what's past the data as zeroes.
+pub fn read(
     fs: &Fs,
     inum: c::subvol_inum,
     offset: u64,
     inode: &c::bch_inode_unpacked,
-    buf: &'a mut [MaybeUninit<u8>],
-) -> Result<&'a mut [u8], BchError> {
+    buf: &mut [u8],
+) -> Result<(), BchError> {
     type F = c::ReadFlags;
     let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
@@ -113,6 +109,5 @@ pub fn read<'a>(
         r.complete(read::read(fs, b.erased(), inum, flags).await);
     }, None).expect("a queue's task: nothing in it fails");
     unsafe { task.start_unchecked() };
-    wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")?;
-    Ok(unsafe { assume_init_mut(buf) })
+    wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a read's task, ended with what it read")
 }

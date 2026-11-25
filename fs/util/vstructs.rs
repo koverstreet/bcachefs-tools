@@ -1188,23 +1188,6 @@ pub fn plain_bytes_mut<T: Plain + ?Sized>(v: &mut T) -> &mut [u8] {
     unsafe { core::slice::from_raw_parts_mut((v as *mut T).cast(), len) }
 }
 
-/// @b, every byte of which has been written, as bytes: std's
-/// <[MaybeUninit<T>]>::assume_init_ref(), which the 1.85 MSRV hasn't.
-///
-/// # Safety
-/// Every byte of @b is initialized.
-pub unsafe fn assume_init_ref(b: &[core::mem::MaybeUninit<u8>]) -> &[u8] {
-    unsafe { &*(core::ptr::from_ref(b) as *const [u8]) }
-}
-
-/// assume_init_ref(), to write.
-///
-/// # Safety
-/// As assume_init_ref()'s.
-pub unsafe fn assume_init_mut(b: &mut [core::mem::MaybeUninit<u8>]) -> &mut [u8] {
-    unsafe { &mut *(core::ptr::from_mut(b) as *mut [u8]) }
-}
-
 /// @v's bytes, mutably - for the walks over a container's entries, not for
 /// its owner to hand out: through them, a count could change.
 pub(crate) fn bytes_of_mut<T: Unsized + ?Sized>(v: &mut T) -> &mut [u8] {

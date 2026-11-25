@@ -41,7 +41,6 @@ use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::Flags;
 use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
-use crate::util::vstructs::assume_init_ref;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
@@ -154,8 +153,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
         Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ as u32, |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;
     bio.submit_wait(ca.bdev(), p.ptr.offset())?;
-    // the read's
-    let buf = unsafe { assume_init_ref(bio.buf()) };
+    let buf = bio.buf();
 
     let mut why = Printbuf::new();
     let good = if is_btree_ptr {

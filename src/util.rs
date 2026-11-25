@@ -7,8 +7,6 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use crossterm::{cursor, execute, terminal};
 
-pub use bcachefs_kernel::util::vstructs::assume_init_mut;
-
 /// Print error to stderr and exit with failure status.
 /// Matches the C `die()` function behavior.
 pub fn die(msg: &str) -> ! {
