@@ -419,19 +419,16 @@ where
 }
 
 /// Every Self is its parent's field: it holds an At, which at() made where
-/// the At says - a field of type Self::At, so a Self is had only from an
+/// the At says - a field of the At's type, so a Self is had only from an
 /// initializer at() was given. #[placed] implements it.
 pub(crate) trait Contained: Sized {
     /// What it's the field of - or, that placed in a Wrapper, the struct
     /// holding it: its Base's Enclosing.
     type Parent;
-    /// Its proof - which ties Parent to where at() made it.
+    /// Its At's field - field!(_placed_at) - the proof which ties Parent to
+    /// where at() made it.
     #[doc(hidden)]
-    type At: Place<Type = Self, Base: Enclosing<Visible = Self::Parent>>;
-
-    /// Where its At field is in it.
-    #[doc(hidden)]
-    const AT_OFFSET: usize;
+    type AtField: FieldPath<Self, To: Place<Type = Self, Base: Enclosing<Visible = Self::Parent>>>;
 
     /// The parent this is the field of.
     fn container(&self) -> &Self::Parent {
@@ -468,10 +465,13 @@ pub(crate) unsafe fn container_of_raw<T: Contained>(p: *mut T) -> *mut T::Parent
     // SAFETY: Contained's - p is in its At's Base, at its offset(), the At
     // fixed once made - and Enclosing's
     unsafe {
-        let at = &*p.byte_add(T::AT_OFFSET).cast::<T::At>();
-        p.byte_sub(at.offset() + <<T::At as Place>::Base as Enclosing>::VISIBLE_OFFSET).cast()
+        let at = &*p.byte_add(<T::AtField as FieldPath<T>>::OFFSET).cast::<AtOf<T>>();
+        p.byte_sub(at.offset() + <<AtOf<T> as Place>::Base as Enclosing>::VISIBLE_OFFSET).cast()
     }
 }
+
+/// A Contained's At.
+type AtOf<T> = <<T as Contained>::AtField as FieldPath<T>>::To;
 
 /// C, at the field A names - at!(Fs.ro_ref) - so container() is the struct
 /// it's in. What C is, it is as itself: a ref on a Placed AtomicRef is a ref
@@ -488,8 +488,7 @@ pub struct Placed<C, A> {
 
 impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A> {
     type Parent = <A::Base as Enclosing>::Visible;
-    type At = A;
-    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
+    type AtField = crate::field!(_placed_at);
 }
 
 impl<C, A> Placed<C, A> {
@@ -637,7 +636,7 @@ where
 
 impl<T, P: Path<T>, const N: u64> Path<T> for FieldOf<P, N>
 where
-    P::To: PathField<N> + 'static,
+    P::To: PathField<N>,
 {
     type To = <P::To as Field<N>>::Type;
     fn get(t: &T) -> &Self::To {
@@ -690,7 +689,7 @@ impl<T> FieldPath<T> for Here {
 
 impl<T, P: FieldPath<T>, const N: u64> FieldPath<T> for FieldOf<P, N>
 where
-    P::To: Field<N> + 'static,
+    P::To: Field<N>,
 {
     type To = <P::To as Field<N>>::Type;
     const OFFSET: usize = P::OFFSET + <P::To as Field<N>>::OFFSET;

@@ -242,8 +242,7 @@ pub(crate) fn placed(PlaceAttr { base, field, kind }: PlaceAttr, mut item: ItemS
                 #[automatically_derived]
                 impl crate::util::place::Contained for #name {
                     type Parent = <#base as crate::util::place::Enclosing>::Visible;
-                    type At = #at;
-                    const AT_OFFSET: usize = core::mem::offset_of!(Self, #at_field);
+                    type AtField = crate::field!(#at_field);
                 }
                 #init_at
                 #no_drop

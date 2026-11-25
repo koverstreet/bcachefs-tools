@@ -9,6 +9,7 @@ use crate::c;
 use crate::util::late::{Late, LateLock};
 use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
+use cstruct_macros::Fields;
 use core::ffi::c_ulong;
 use core::marker::PhantomData;
 use pin_init::{pin_data, pin_init, pinned_drop};
@@ -64,6 +65,7 @@ pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 /// parents would still move one: place.rs's known gap, Fs never had by &mut.
 #[pin_data]
 #[repr(C)]
+#[derive(Fields)]
 pub(crate) struct ReffedWork<F: WorkFunc, Refs> {
     #[pin]
     work:       RawWork,
@@ -95,8 +97,7 @@ where
     F::At: Place<Type = Self>,
 {
     type Parent = Parent<F>;
-    type At = F::At;
-    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
+    type AtField = crate::field!(_placed_at);
 }
 
 /// The refs a ReffedWork holds, by their paths from its parent P: one, or a
@@ -275,6 +276,7 @@ where
 /// its fields', so what the run needs mustn't go there.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
+#[derive(Fields)]
 pub(crate) struct CancelledWork<F: WorkFunc> {
     #[pin]
     work:       RawWork,
@@ -286,8 +288,7 @@ where
     F::At: Place<Type = Self>,
 {
     type Parent = Parent<F>;
-    type At = F::At;
-    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
+    type AtField = crate::field!(_placed_at);
 }
 
 impl<F: WorkFunc> CancelledWork<F>
@@ -351,6 +352,7 @@ fn raw_delayed_work(func: WorkFn, (): DelayedClass) -> impl ::pin_init::PinInit<
 /// A cancel that takes off a pending run puts the refs it held.
 #[pin_data]
 #[repr(C)]
+#[derive(Fields)]
 pub(crate) struct DelayedWork<F: WorkFunc, Refs> {
     #[pin]
     work:       RawDelayedWork,
@@ -363,8 +365,7 @@ where
     F::At: Place<Type = Self>,
 {
     type Parent = Parent<F>;
-    type At = F::At;
-    const AT_OFFSET: usize = core::mem::offset_of!(Self, _placed_at);
+    type AtField = crate::field!(_placed_at);
 }
 
 impl<F: WorkFunc, Refs: WorkRefs<Parent<F>>> DelayedWork<F, Refs>
