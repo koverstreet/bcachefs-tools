@@ -522,7 +522,7 @@ fn link_file_data(
     // First pass: check for unknown extents and fsync if found
     let fm = fiemap::Fiemap::new(&src_fd);
     for extent in fm {
-        let extent = extent.map_err(|_| BchError::from(c::EIO))?;
+        let extent = extent.map_err(|_| BchError::from(c::Errcode::EIO_copy_fs_fiemap_check))?;
         if extent.fe_flags.contains(fiemap::FiemapExtentFlags::UNKNOWN) {
             rustix::fs::fsync(src_fd).map_err(rustix_err)?;
             break;
@@ -532,7 +532,7 @@ fn link_file_data(
     // Second pass: link or copy extents
     let fm = fiemap::Fiemap::new(&src_fd);
     for extent in fm {
-        let extent = extent.map_err(|_| BchError::from(c::EIO))?;
+        let extent = extent.map_err(|_| BchError::from(c::Errcode::EIO_copy_fs_fiemap_link))?;
 
         s.total_input += extent.fe_length;
 
@@ -543,7 +543,7 @@ fn link_file_data(
         if (extent.fe_logical & (block_size - 1)) != 0 || (length & (block_size - 1)) != 0 {
             let msg = format!("Unaligned extent in {} - can't handle", src_path.to_string_lossy());
             eprintln!("{}", msg);
-            return Err(BchError::from(c::EINVAL));
+            return Err(BchError::from(c::Errcode::EINVAL_copy_fs_unaligned_logical));
         }
 
         let needs_copy = s.migrate_type == MigrateType::Copy
@@ -570,7 +570,7 @@ fn link_file_data(
         if (extent.fe_physical & (block_size - 1)) != 0 {
             let msg = format!("Unaligned extent in {} - can't handle", src_path.to_string_lossy());
             eprintln!("{}", msg);
-            return Err(BchError::from(c::EINVAL));
+            return Err(BchError::from(c::Errcode::EINVAL_copy_fs_unaligned_physical));
         }
 
         range_add(&mut s.extents, extent.fe_physical, length);
@@ -951,7 +951,7 @@ fn copy_dir(
 
         if s.migrate_type == MigrateType::Migrate && d.stat.st_dev != s.dev {
             eprintln!("{} does not have correct st_dev!", child_path.to_string_lossy());
-            return Err(BchError::from(c::EINVAL));
+            return Err(BchError::from(c::Errcode::EINVAL_migrate_st_dev));
         }
 
         // Hardlink handling
@@ -1062,7 +1062,7 @@ pub fn copy_fs(
     let stat = rustix::fs::fstat(src_fd).map_err(rustix_err)?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
         eprintln!("{} is not a directory", src_path.to_string_lossy());
-        return Err(BchError::from(c::ENOTDIR));
+        return Err(BchError::from(c::Errcode::ENOTDIR_copy_fs_src));
     }
 
     if s.migrate_type == MigrateType::Migrate {

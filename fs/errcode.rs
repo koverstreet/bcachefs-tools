@@ -851,6 +851,18 @@ xmacro! {
         (EINVAL, EINVAL_sysfs_store_readonly, 823),
         (ERANGE, ERANGE_parse_int, 824),
         (EINVAL, EINVAL_parse_int, 825),
+        (ENOENT, ENOENT_image_nbuckets_used, 826),
+        (EINVAL, EINVAL_mount_arg_nul, 827),
+        (EIO, EIO_copy_fs_fiemap_check, 828),
+        (EIO, EIO_copy_fs_fiemap_link, 829),
+        (EINVAL, EINVAL_copy_fs_unaligned_logical, 830),
+        (EINVAL, EINVAL_copy_fs_unaligned_physical, 831),
+        (EINVAL, EINVAL_migrate_st_dev, 832),
+        (ENOTDIR, ENOTDIR_copy_fs_src, 833),
+        (EIO, EIO_handle_sysfs_path, 834),
+        (EIO, EIO_handle_fs_get_devices, 835),
+        (ENOENT, ENOENT_handle_no_member_devices, 836),
+        (EINVAL, EINVAL_fs_sysfs_path_utf8, 837),
     }
 }
 

@@ -199,18 +199,18 @@ impl BcachefsHandle {
     /// these are.
     pub(crate) fn member_devices(&self) -> Result<Vec<std::path::PathBuf>, BchError> {
         let sysfs_path = sysfs::sysfs_path_from_fd(self.sysfs_fd())
-            .map_err(|_| BchError::from(c::EIO))?;
+            .map_err(|_| BchError::from(c::Errcode::EIO_handle_sysfs_path))?;
 
         let mut devs = Vec::new();
         for d in sysfs::fs_get_devices(&sysfs_path, sysfs::DeviceNameMode::Raw)
-                .map_err(|_| BchError::from(c::EIO))? {
+                .map_err(|_| BchError::from(c::Errcode::EIO_handle_fs_get_devices))? {
             if d.online {
                 devs.push(std::path::PathBuf::from(format!("/dev/{}", d.dev)));
             }
         }
 
         if devs.is_empty() {
-            return Err(BchError::from(c::ENOENT));
+            return Err(BchError::from(c::Errcode::ENOENT_handle_no_member_devices));
         }
         Ok(devs)
     }
@@ -221,7 +221,7 @@ impl BcachefsHandle {
         let sysfs_fd = if let Ok(fs_path) = unsafe { rustix::ioctl::ioctl(&ioctl_fd, GetFsSysfsPath::new()) } {
             let name_len = fs_path.len as usize;
             let name = std::str::from_utf8(&fs_path.name[..name_len])
-                .map_err(|_| BchError::from(c::EINVAL))?;
+                .map_err(|_| BchError::from(c::Errcode::EINVAL_fs_sysfs_path_utf8))?;
             let sysfs = format!("/sys/fs/{}", name);
             rustix::fs::open(
                 sysfs.as_str(),

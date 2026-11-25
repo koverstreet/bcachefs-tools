@@ -181,7 +181,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let result: Result<(BkeyType, u64), _> = lockrestart_do(&trans, |t| {
         match iter.peek_prev(t)? {
             Some(k) => Ok((k.k.key_type(), k.k.p.offset)),
-            None => Err(bcachefs_kernel::errcode::BchError::from(c::ENOENT)),
+            None => Err(bcachefs_kernel::errcode::BchError::from(c::Errcode::ENOENT_image_nbuckets_used)),
         }
     });
 

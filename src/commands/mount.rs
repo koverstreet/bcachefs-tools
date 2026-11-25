@@ -379,7 +379,7 @@ fn mount_legacy(
     // An interior NUL can't be expressed in a C string at all. Nothing has been
     // attempted at this point, so the errno is ours rather than the kernel's.
     let bad_arg = |what: &str| MountError {
-        code: c::EINVAL.into(),
+        code: c::Errcode::EINVAL_mount_arg_nul.into(),
         text: format!("{what} contains a NUL byte"),
     };
 
