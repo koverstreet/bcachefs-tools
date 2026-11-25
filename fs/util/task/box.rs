@@ -15,13 +15,16 @@
 //! #[in_place] fn's, so a pool can be sized for its box - exclusive_size().
 //! Started, the box is the task's alone, freed when it's done: spawn_detached()'s,
 //! a Join's. A Join is a task its spawner awaits, for what it returns, through
-//! a CompletionReturn.
+//! a CompletionReturn. Started in a Scope (util::gather), what it returns is
+//! put to the scope once its future and home are dropped: so they may borrow
+//! what the scope's body lends, and the start is safe.
 
 use crate::errcode::BchError;
 use crate::util::alloc::{init_at, init_with, Alloc, Kmalloc};
+use crate::util::gather::{Fold, GatherRef, Scope, Width};
 use crate::util::rcu::{DropAnytime, DropAtomic, Flavor, HasRcuHead, RcuHead, RcuOwned};
 use crate::os::workqueue::Queue;
-use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef};
+use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef, Waiter};
 use core::alloc::Layout;
 use core::future::Future;
 use core::marker::PhantomData;
@@ -35,10 +38,10 @@ use pin_init::PinInit;
 /// the box keeps it.
 type FutureOf<M, H> = <M as AsyncFnOnce<(&'static H,)>>::CallOnceFuture;
 
-/// An Exclusive task's future: what @M returns, given the home as its own -
-/// a type with a name, if M calls an #[in_place] fn, so a pool can be sized
-/// for it.
-type FutureOfMut<M, H> = <M as FnOnce<(Pin<&'static mut H>,)>>::Output;
+/// An Exclusive task's future: what @M returns, given the home as its own for
+/// 'q - a type with a name, if M calls an #[in_place] fn, so a pool can be
+/// sized for it.
+type FutureOfMut<'q, M, H> = <M as FnOnce<(Pin<&'q mut H>,)>>::Output;
 
 /// A TaskSlot whose task shares its home: the future has &H, and so may the
 /// box's owner, who keeps the box while the task runs.
@@ -54,16 +57,19 @@ pub struct Exclusive;
 /// first page.
 #[repr(C)]
 #[derive(RcuHead)]
-struct WithTask<'q, H, F: Future<Output = ()>, A: Alloc + Copy> {
+struct WithTask<'q, H, F: Future, A: Alloc + Copy> {
     #[rcu_head]
     task:  MaybeUninit<Task<'q, F>>,
     home:  H,
     done:  Option<unsafe fn(NonNull<H>)>,
+    /// A scope's task's ref on it, as into_raw() made it: written by
+    /// start_in(), put by scoped_done()
+    scope: *const (),
     alloc: A,
     given: usize,
 }
 
-impl<H, F: Future<Output = ()>, A: Alloc + Copy> WithTask<'_, H, F, A> {
+impl<H, F: Future, A: Alloc + Copy> WithTask<'_, H, F, A> {
     /// # Safety
     /// @home is a WithTask<H, F>'s.
     unsafe fn of_home(home: NonNull<H>) -> NonNull<Self> {
@@ -127,7 +133,7 @@ where
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            let task = init_task::<H, _, A>(home, at, list, move || make(home.as_ref()), done)?;
+            let task = init_task::<H, _, A>(home, at, list, move || make(home.as_ref()), done, task_done::<H, _, A>)?;
             Ok(TaskBox { home, task, free: free::<H, FutureOf<M, H>, A>, _q: PhantomData })
         }
     }
@@ -135,17 +141,17 @@ where
 
 impl<'q, H, M, A: Alloc + Copy> TaskSlot<'q, H, M, A, Exclusive>
 where
-    H: Send + 'static,
-    M: FnOnce<(Pin<&'static mut H>,)>,
-    FutureOfMut<M, H>: Future<Output = ()> + Send,
+    H: Send + 'q,
+    M: FnOnce<(Pin<&'q mut H>,)>,
+    FutureOfMut<'q, M, H>: Future + Send,
 {
     /// An Exclusive task's TaskSlot, from @alloc.
     pub fn exclusive_in<E>(alloc: A, home: impl PinInit<H, E>) -> Result<Self, BchError>
     where
         BchError: From<E>,
     {
-        let home = unsafe { alloc_mem::<H, FutureOfMut<M, H>, A, E>(alloc, home)? };
-        Ok(Self { home, free: free_slot::<H, FutureOfMut<M, H>, A>, _p: PhantomData })
+        let home = unsafe { alloc_mem::<H, FutureOfMut<'q, M, H>, A, E>(alloc, home)? };
+        Ok(Self { home, free: free_slot::<H, FutureOfMut<'q, M, H>, A>, _p: PhantomData })
     }
 
     /// The task of the future @make makes from the home, started @at: the
@@ -154,22 +160,52 @@ where
     /// call.
     ///
     /// # Safety
-    /// @at's queue, and what the future borrows beyond the home, outlive the
-    /// task; the home, handed @make as 'static, is borrowed by nothing but the
+    /// @at's queue, and what the home and the future borrow, outlive the
+    /// task; the home, handed @make for 'q, is borrowed by nothing but the
     /// future it makes.
-    pub unsafe fn start(self, at: Spawn<'q, '_>, list: &'q TaskList, make: M) {
+    pub unsafe fn start(self, at: Spawn<'_, '_>, list: &TaskList, make: M)
+    where
+        FutureOfMut<'q, M, H>: Future<Output = ()>,
+    {
         let home = ManuallyDrop::new(self).home;
         unsafe {
-            init_task::<H, _, A>(home, at, list, move || make(Pin::new_unchecked(&mut *home.as_ptr())), None)
+            init_task::<H, _, A>(home, at, list, move || make(Pin::new_unchecked(&mut *home.as_ptr())), None,
+                                 task_done::<H, _, A>)
                 .expect("a task: only a thread's fails to start")
                 .start()
+        }
+    }
+
+    /// The task of the future @make makes from the home, started @at on @s:
+    /// what it returns is put to @s, once the box has dropped the future and
+    /// the home - so they may borrow for 'q, @s's, and the home's lent for
+    /// it, which what's returned, 'static, can't hold. Its memory's given
+    /// back a grace period on, to @A, which outlives that.
+    pub fn start_in<T, Wt, W>(self, s: &Scope<'q, T, Wt, W>, at: Spawn<'q, '_>, list: &'q TaskList, make: M)
+    where
+        T: Fold<Item: 'static>,
+        Wt: Waiter,
+        W: Width,
+        H: DropAtomic + DropAnytime,
+        A: 'static,
+        M: 'q,
+        FutureOfMut<'q, M, H>: Future<Output = T::Item> + 'q,
+    {
+        let home = ManuallyDrop::new(self).home;
+        unsafe {
+            let task = init_task::<H, _, A>(home, at, list, move || make(Pin::new_unchecked(&mut *home.as_ptr())),
+                                            None, scoped_done::<H, _, A, T, Wt, W>)
+                .expect("a task: only a thread's fails to start");
+            let w = WithTask::<H, FutureOfMut<'q, M, H>, A>::of_home(home).as_ptr();
+            (&raw mut (*w).scope).write(s.get().into_raw().cast());
+            task.start()
         }
     }
 }
 
 /// The size of an Exclusive box of @H and @F's task, from @A: what a pool's
 /// elements are, for one.
-pub fn exclusive_size<H, F: Future<Output = ()>, A: Alloc + Copy>() -> usize {
+pub fn exclusive_size<H, F: Future, A: Alloc + Copy>() -> usize {
     size_of::<WithTask<'static, H, F, A>>()
 }
 
@@ -192,7 +228,7 @@ impl<H, M, A: Alloc + Copy, K> Drop for TaskSlot<'_, H, M, A, K> {
 ///
 /// # Safety
 /// F is the future the box's task will be.
-unsafe fn alloc_mem<'q, H, F: Future<Output = ()>, A: Alloc + Copy, E>(
+unsafe fn alloc_mem<'q, H, F: Future, A: Alloc + Copy, E>(
     alloc: A, home: impl PinInit<H, E>,
 ) -> Result<NonNull<H>, BchError>
 where
@@ -218,9 +254,9 @@ where
 /// # Safety
 /// @home is alloc_mem::<H, F, A>()'s, its task not made, and @make's future
 /// borrows nothing of it but the home.
-unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
+unsafe fn init_task<'q, H, F: Future + Send, A: Alloc + Copy>(
     home: NonNull<H>, at: Spawn<'q, '_>, list: &'q TaskList, make: impl FnOnce() -> F,
-    done: Option<unsafe fn(NonNull<H>)>,
+    done: Option<unsafe fn(NonNull<H>)>, task_done: unsafe fn(NonNull<Task<'q, F>>, F::Output),
 ) -> Result<TaskRef, BchError> {
     unsafe {
         let w = WithTask::<'q, H, F, A>::of_home(home).as_ptr();
@@ -229,7 +265,7 @@ unsafe fn init_task<'q, H, F: Future<Output = ()> + Send, A: Alloc + Copy>(
         // move of one is a copy of all of it - what's moved here is what
         // @make holds, its args
         let future = init_with(make);
-        let task = Task::new(at, list, future, task_done::<H, F, A>);
+        let task = Task::new(at, list, future, task_done);
         if let Err(e) = init_at(task, (&raw mut (*w).task).cast()) {
             free_slot::<H, F, A>(home);
             return Err(e);
@@ -259,7 +295,7 @@ unsafe fn task_done<'q, H, F: Future<Output = ()>, A: Alloc + Copy>(task: NonNul
 ///
 /// # Safety
 /// @home is a WithTask<H, F, A>'s, its task not made or dropped.
-unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>) {
+unsafe fn free_slot<H, F: Future, A: Alloc + Copy>(home: NonNull<H>) {
     unsafe {
         let w = WithTask::<'_, H, F, A>::of_home(home);
         if <H as HomeDrop>::deferred() {
@@ -274,6 +310,29 @@ unsafe fn free_slot<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>
             return crate::util::alloc::kvfree_rcu_head(w.as_ptr().cast(), head.cast());
         }
         Flavor::RCU.call(SlotMem::<H, F, A>(w.cast()), SlotMem::free);
+    }
+}
+
+/// A scope's task's done: the task and its home dropped, as start_in()'s
+/// home is at once, and last @out put to the scope - so nothing the scope
+/// lent is touched once it's put.
+///
+/// # Safety
+/// The executor's, as the task's done function: @task is finished, and its
+/// box's scope written by start_in().
+unsafe fn scoped_done<'q, H, F, A, T, Wt, W>(task: NonNull<Task<'q, F>>, out: T::Item)
+where
+    F: Future<Output = T::Item>,
+    A: Alloc + Copy,
+    T: Fold,
+    Wt: Waiter,
+    W: Width,
+{
+    unsafe {
+        let w = task.byte_sub(core::mem::offset_of!(WithTask<'q, H, F, A>, task)).cast::<WithTask<'q, H, F, A>>();
+        let r = GatherRef::<'q, T, Wt, W>::from_raw((*w.as_ptr()).scope.cast());
+        free::<H, F, A>(NonNull::new_unchecked(&raw mut (*w.as_ptr()).home));
+        r.put(out);
     }
 }
 
@@ -312,14 +371,14 @@ impl<H> DropSleeps<H> {
 
 /// A WithTask's memory, its task gone, and its home - but an RcuDropMember's,
 /// dropped with it: A's again a grace period on.
-struct SlotMem<H, F: Future<Output = ()>, A: Alloc + Copy>(NonNull<WithTask<'static, H, F, A>>);
+struct SlotMem<H, F: Future, A: Alloc + Copy>(NonNull<WithTask<'static, H, F, A>>);
 
 // memory, which any thread may give back to A - and an RcuDropMember's home,
 // which any thread may drop: every home is Send, as TaskSlot's makers require
-unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> Send for SlotMem<H, F, A> {}
+unsafe impl<H, F: Future, A: Alloc + Copy> Send for SlotMem<H, F, A> {}
 
 // its home and task gone, the memory is free_slot()'s alone
-unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> RcuOwned for SlotMem<H, F, A> {
+unsafe impl<H, F: Future, A: Alloc + Copy> RcuOwned for SlotMem<H, F, A> {
     fn into_head(self) -> NonNull<RcuHead> {
         unsafe { self.0.byte_add(<WithTask<'_, H, F, A> as HasRcuHead>::HEAD).cast() }
     }
@@ -329,7 +388,7 @@ unsafe impl<H, F: Future<Output = ()>, A: Alloc + Copy> RcuOwned for SlotMem<H, 
     }
 }
 
-impl<H, F: Future<Output = ()>, A: Alloc + Copy> SlotMem<H, F, A> {
+impl<H, F: Future, A: Alloc + Copy> SlotMem<H, F, A> {
     /// An RcuDropMember's home dropped, then its memory freed.
     fn drop_free(self) {
         unsafe { core::ptr::drop_in_place(&raw mut (*self.0.as_ptr()).home) };
@@ -351,7 +410,7 @@ impl<H, F: Future<Output = ()>, A: Alloc + Copy> SlotMem<H, F, A> {
 ///
 /// # Safety
 /// @home is a WithTask<H, F, A>'s, its task made and not running.
-unsafe fn free<H, F: Future<Output = ()>, A: Alloc + Copy>(home: NonNull<H>) {
+unsafe fn free<H, F: Future, A: Alloc + Copy>(home: NonNull<H>) {
     unsafe {
         let w = WithTask::<'_, H, F, A>::of_home(home);
         core::ptr::drop_in_place((*w.as_ptr()).task.as_mut_ptr());

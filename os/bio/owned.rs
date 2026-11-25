@@ -769,15 +769,16 @@ where
 
 impl<'q, T, M, A> TaskSlot<'q, T, M, A, Exclusive>
 where
-    T: HasBio + Send + 'static,
+    T: HasBio + Send + 'q,
     A: Alloc + Copy,
-    M: FnOnce<(Pin<&'static mut T>,)>,
-    <M as FnOnce<(Pin<&'static mut T>,)>>::Output: Future<Output = ()> + Send,
+    M: FnOnce<(Pin<&'q mut T>,)>,
+    <M as FnOnce<(Pin<&'q mut T>,)>>::Output: Future + Send,
 {
     /// An Exclusive task's TaskSlot from @alloc, its home a T made around its
-    /// bio, as BioBox::new_in()'s is.
+    /// bio, as BioBox::new_in()'s is - which may borrow for 'q, as long as the
+    /// home's handed to the task's future.
     pub fn exclusive_bio_in<E, I>(alloc: A, bvecs: &'static BvecMempool, nr_vecs: u16, opf: u32,
-                                  init: impl FnOnce(BioInPlace<'static>) -> I) -> Result<Self, BchError>
+                                  init: impl FnOnce(BioInPlace<'q>) -> I) -> Result<Self, BchError>
     where
         I: PinInit<T, E>,
         E: From<BchError>,
