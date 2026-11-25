@@ -24,7 +24,7 @@ use crate::sb::io::SbFieldOps;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
-use crate::locking::{Locked, Mutex};
+use crate::locking::{Locked, SpinLock};
 use crate::new_lock;
 use crate::data_structures::genradix::SharedGenRadix;
 use core::sync::atomic::AtomicU32;
@@ -75,18 +75,19 @@ pub struct QuotaLimit {
 /// The in-memory quotas of one type, as C's struct bch_memquota_type: the
 /// limits, and the counters by id - allocated without the lock, genradix
 /// being safe against concurrent allocation and lookup, and touched only
-/// with it held. quota.rs's guard is the way in.
+/// with it held. quota.rs's guard is the way in. A spinlock, as an inode's
+/// ei_quota is: a folio's dirtying charges its quota, and mustn't sleep.
 #[pin_data]
 pub struct MemquotaType {
     pub limits:       [QuotaLimit; c::QuotaCounter::NR as usize],
     #[pin]
-    pub(crate) lock:  Locked<Mutex>,
+    pub(crate) lock:  Locked<SpinLock>,
     pub(crate) table: SharedGenRadix<crate::locking::LockedBy<Memquota, (), MemquotaType>>,
 }
 crate::genradix_entry!(crate::locking::LockedBy<Memquota, (), MemquotaType>);
 
 impl MemquotaType {
-    fn new(lock: impl PinInit<Locked<Mutex>>) -> impl PinInit<Self> {
+    fn new(lock: impl PinInit<Locked<SpinLock>>) -> impl PinInit<Self> {
         pin_init!(Self {
             limits:  Default::default(),
             lock    <- lock,
@@ -190,10 +191,20 @@ pub use vfs::*;
 pub const Q_SPC: usize = c::QuotaCounter::Q_SPC.0 as usize;
 pub const Q_INO: usize = c::QuotaCounter::Q_INO.0 as usize;
 
-/// Without quotas, nothing's counted.
+/// Without quotas, nothing's counted, and there's nothing to warn of.
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
-pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: QuotaAcctMode)
-    -> Result<(), BchError> {
+pub struct QuotaWarnings<'f>(core::marker::PhantomData<&'f Fs>);
+
+#[cfg(not(CONFIG_BCACHEFS_QUOTA))]
+impl<'f> QuotaWarnings<'f> {
+    pub fn new(_fs: &'f Fs) -> Self {
+        QuotaWarnings(core::marker::PhantomData)
+    }
+}
+
+#[cfg(not(CONFIG_BCACHEFS_QUOTA))]
+pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: QuotaAcctMode,
+            _w: &mut QuotaWarnings<'_>) -> Result<(), BchError> {
     Ok(())
 }
 
@@ -204,7 +215,12 @@ pub fn fs_quota_read(_fs: &Fs) -> Result<(), BchError> {
 
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
 pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: c::bch_qid, _src: c::bch_qid, _space: u64,
-                _mode: QuotaAcctMode) -> Result<(), BchError> {
+                _mode: QuotaAcctMode, _w: &mut QuotaWarnings<'_>) -> Result<(), BchError> {
+    Ok(())
+}
+
+#[cfg(not(CONFIG_BCACHEFS_QUOTA))]
+pub fn prealloc(_fs: &Fs, _qid: c::bch_qid) -> Result<(), BchError> {
     Ok(())
 }
 
@@ -304,41 +320,52 @@ mod vfs {
         }
     }
 
-    /// The warnings an accounting call has for after it unlocks: quota type,
-    /// netlink warning. Two at most from each check_limit() - a below message
-    /// for each limit - and a transfer checks both counters, of each type.
-    #[derive(Default)]
-    struct QuotaMsgs {
+    /// The warnings accounting has for when no lock's held - a netlink send
+    /// sleeps: quota type, id, netlink warning. Sent when it's dropped, so
+    /// it's made before the locks they're found under - the quota types',
+    /// and an inode's ei_quota. Two at most from each check_limit() - a below
+    /// message for each limit - and a transfer checks both counters, of each
+    /// type: as many as the two accountings ei_quota is held across, at most,
+    /// i_sectors_acct_put()'s.
+    pub struct QuotaWarnings<'f> {
+        fs: &'f Fs,
         nr: usize,
-        m:  [(usize, u32); QTYP_NR * c::QuotaCounter::NR as usize * 2],
+        m:  [(usize, u32, u32); QTYP_NR * c::QuotaCounter::NR as usize * 2],
     }
 
-    impl QuotaMsgs {
-        fn prepare(&mut self, qtype: usize, counter: usize, msg: QuotaMsg) {
+    impl<'f> QuotaWarnings<'f> {
+        pub fn new(fs: &'f Fs) -> Self {
+            QuotaWarnings { fs, nr: 0, m: Default::default() }
+        }
+
+        fn prepare(&mut self, qtype: usize, id: usize, counter: usize, msg: QuotaMsg) {
             assert!(self.nr < self.m.len());
 
-            self.m[self.nr] = (qtype, msg.nl(counter));
+            self.m[self.nr] = (qtype, id as u32, msg.nl(counter));
             self.nr += 1;
         }
 
         /// Once, until usage goes back below the limit.
-        fn prepare_warning(&mut self, qc: &mut c::MemquotaCounter, qtype: usize, counter: usize, msg: QuotaMsg) {
+        fn prepare_warning(&mut self, qc: &mut c::MemquotaCounter, qtype: usize, id: usize, counter: usize,
+                           msg: QuotaMsg) {
             if qc.warning_issued & msg.bit() != 0 {
                 return;
             }
 
             qc.warning_issued |= msg.bit();
-            self.prepare(qtype, counter, msg);
+            self.prepare(qtype, id, counter, msg);
         }
+    }
 
-        fn flush(&self, fs: &Fs, qid: c::bch_qid) {
+    impl Drop for QuotaWarnings<'_> {
+        fn drop(&mut self) {
             if self.nr == 0 {
                 return;
             }
             // Charged only through the VFS:
-            let sb = fs.vfs_super().expect("quota warnings, but not mounted");
-            for &(qtype, msg) in &self.m[..self.nr] {
-                c::kqid::new(qtype as c::quota_type, qid.q[qtype]).send_warning(sb.dev(), msg as c_char);
+            let sb = self.fs.vfs_super().expect("quota warnings, but not mounted");
+            for &(qtype, id, msg) in &self.m[..self.nr] {
+                c::kqid::new(qtype as c::quota_type, id).send_warning(sb.dev(), msg as c_char);
             }
         }
     }
@@ -371,7 +398,7 @@ mod vfs {
     struct Locked<'a> {
         qtype:  usize,
         q:      &'a c::MemquotaType,
-        _guard: ExclusiveGuard<'a, Mutex>,
+        _guard: ExclusiveGuard<'a, SpinLock>,
     }
 
     // its type's lock, and its type: what its counters name
@@ -414,7 +441,7 @@ mod vfs {
             counter: usize,
             v:       i64,
             mode:    QuotaAcctMode,
-            msgs:    &mut QuotaMsgs,
+            msgs:    &mut QuotaWarnings<'_>,
         ) -> Result<(), BchError> {
             let (qtype, q) = (self.qtype, self.q);
             let qc = &mut self.get_mut(idx).c[counter];
@@ -430,16 +457,16 @@ mod vfs {
                 let cleared = clear_over(qc, n);
 
                 if cleared & QuotaMsg::HardWarn.bit() != 0 {
-                    msgs.prepare(qtype, counter, QuotaMsg::HardBelow);
+                    msgs.prepare(qtype, idx, counter, QuotaMsg::HardBelow);
                 }
                 if cleared & QuotaMsg::SoftWarn.bit() != 0 {
-                    msgs.prepare(qtype, counter, QuotaMsg::SoftBelow);
+                    msgs.prepare(qtype, idx, counter, QuotaMsg::SoftBelow);
                 }
                 return Ok(());
             }
 
             if over(qc.hardlimit, n) && !ignore_hardlimit() {
-                msgs.prepare_warning(qc, qtype, counter, QuotaMsg::HardWarn);
+                msgs.prepare_warning(qc, qtype, idx, counter, QuotaMsg::HardWarn);
                 return Err(c::EDQUOT.into());
             }
 
@@ -448,9 +475,9 @@ mod vfs {
 
                 if qc.timer == 0 {
                     qc.timer = now + q.limits[counter].timelimit.load(Ordering::Relaxed) as i64;
-                    msgs.prepare_warning(qc, qtype, counter, QuotaMsg::SoftWarn);
+                    msgs.prepare_warning(qc, qtype, idx, counter, QuotaMsg::SoftWarn);
                 } else if now >= qc.timer && !ignore_hardlimit() {
-                    msgs.prepare_warning(qc, qtype, counter, QuotaMsg::SoftLongWarn);
+                    msgs.prepare_warning(qc, qtype, idx, counter, QuotaMsg::SoftLongWarn);
                     return Err(c::EDQUOT.into());
                 }
             }
@@ -460,45 +487,52 @@ mod vfs {
     }
 
     /// @f, with each type in @qtypes locked - in type order, as C's
-    /// mutex_lock_nested() subclasses: a lock class each, QuotaType.rs - and
-    /// then, unlocked, the warnings it prepared for @qid.
+    /// mutex_lock_nested() subclasses: a lock class each, QuotaType.rs.
     fn with_locks<'a>(
         fs:     &'a Fs,
         qtypes: u32,
-        qid:    c::bch_qid,
-        f:      impl FnOnce(&mut [Option<Locked<'a>>; QTYP_NR], &mut QuotaMsgs) -> Result<(), BchError>,
+        f:      impl FnOnce(&mut [Option<Locked<'a>>; QTYP_NR]) -> Result<(), BchError>,
     ) -> Result<(), BchError> {
-        let mut msgs = QuotaMsgs::default();
-        let ret = {
-            let mut locked = [None, None, None];
-            for i in set_qtypes(qtypes) {
-                locked[i] = Some(Locked::new(fs, i));
-            }
-            f(&mut locked, &mut msgs)
-        };
-
-        msgs.flush(fs, qid);
+        let mut locked = [None, None, None];
+        for i in set_qtypes(qtypes) {
+            locked[i] = Some(Locked::new(fs, i));
+        }
+        let ret = f(&mut locked);
+        // unlocked last taken first: each is a NORECLAIM scope, which restores
+        // what it found - an array drops first to last
+        for l in locked.iter_mut().rev() {
+            drop(l.take());
+        }
         ret
     }
 
+    /// @qid's entries, in each quota type accounted: what accounting to it
+    /// under a lock - an inode's ei_quota - needs made first, as it can't
+    /// allocate there.
+    pub fn prealloc(fs: &Fs, qid: c::bch_qid) -> Result<(), BchError> {
+        for i in set_qtypes(enabled_qtypes(fs)) {
+            fs.quotas.get(i).table.prealloc(qid.q[i] as usize)?;
+        }
+        Ok(())
+    }
+
     /// Charge @v of @counter to @qid, in each quota type accounted - all or
-    /// none of them: as bch2_quota_acct().
+    /// none of them: as bch2_quota_acct(). Its warnings are @w's to send.
     pub fn acct(
         fs:      &Fs,
         qid:     c::bch_qid,
         counter: usize,
         v:       i64,
         mode:    QuotaAcctMode,
+        w:       &mut QuotaWarnings<'_>,
     ) -> Result<(), BchError> {
         let qtypes = enabled_qtypes(fs);
 
-        for i in set_qtypes(qtypes) {
-            fs.quotas.get(i).table.prealloc(qid.q[i] as usize)?;
-        }
+        prealloc(fs, qid)?;
 
-        with_locks(fs, qtypes, qid, |locked, msgs| {
+        with_locks(fs, qtypes, |locked| {
             for l in locked.iter_mut().flatten() {
-                l.check_limit(qid.q[l.qtype] as usize, counter, v, mode, msgs)?;
+                l.check_limit(qid.q[l.qtype] as usize, counter, v, mode, w)?;
             }
             for l in locked.iter_mut().flatten() {
                 let qc = &mut l.get_mut(qid.q[l.qtype] as usize).c[counter];
@@ -510,7 +544,7 @@ mod vfs {
 
     /// Move an inode's charges - @space and the inode itself - from @src's
     /// ids to @dst's, in the quota types @qtypes that are accounted: as
-    /// bch2_quota_transfer().
+    /// bch2_quota_transfer(). Its warnings are @w's to send.
     pub fn transfer(
         fs:     &Fs,
         qtypes: u32,
@@ -518,20 +552,18 @@ mod vfs {
         src:    c::bch_qid,
         space:  u64,
         mode:   QuotaAcctMode,
+        w:      &mut QuotaWarnings<'_>,
     ) -> Result<(), BchError> {
         let qtypes = qtypes & enabled_qtypes(fs);
 
-        for i in set_qtypes(qtypes) {
-            let table = &fs.quotas.get(i).table;
-            table.prealloc(src.q[i] as usize)?;
-            table.prealloc(dst.q[i] as usize)?;
-        }
+        prealloc(fs, src)?;
+        prealloc(fs, dst)?;
 
-        with_locks(fs, qtypes, dst, |locked, msgs| {
+        with_locks(fs, qtypes, |locked| {
             for l in locked.iter_mut().flatten() {
                 let d = dst.q[l.qtype] as usize;
-                l.check_limit(d, Q_SPC, space as i64, mode, msgs)?;
-                l.check_limit(d, Q_INO, 1, mode, msgs)?;
+                l.check_limit(d, Q_SPC, space as i64, mode, w)?;
+                l.check_limit(d, Q_INO, 1, mode, w)?;
             }
 
             // __bch2_quota_transfer(): from src, then to dst - the same
@@ -566,8 +598,8 @@ mod vfs {
         };
 
         let id = k.k.p.offset as usize;
+        fs.quotas.get(ty).table.prealloc(id)?;
         let mut l = Locked::new(fs, ty);
-        l.q.table.prealloc(id)?;
         let mq = l.get_mut(id);
 
         for (m, d) in mq.c.iter_mut().zip(dq.c) {
@@ -665,8 +697,10 @@ mod vfs {
             r => r?,
         };
 
-        let _ = acct(fs, qid(&u), Q_SPC, u.bi_sectors as i64, QuotaAcctMode::NOCHECK);
-        let _ = acct(fs, qid(&u), Q_INO, 1, QuotaAcctMode::NOCHECK);
+        // NOCHECK: nothing to warn of
+        let w = &mut QuotaWarnings::new(fs);
+        let _ = acct(fs, qid(&u), Q_SPC, u.bi_sectors as i64, QuotaAcctMode::NOCHECK, w);
+        let _ = acct(fs, qid(&u), Q_INO, 1, QuotaAcctMode::NOCHECK, w);
         Ok(())
     }
 

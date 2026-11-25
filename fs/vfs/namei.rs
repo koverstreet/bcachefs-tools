@@ -22,7 +22,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::init::passes;
 use crate::inode;
 use crate::namei;
-use crate::quota::QuotaAcctMode;
+use crate::quota::{QuotaAcctMode, QuotaWarnings};
 use crate::quota;
 use crate::snapshots::subvolume;
 use crate::str_hash;
@@ -99,7 +99,7 @@ impl InodeInfo {
                                 default_acl.as_ref(), acl.as_ref(), snapshot_src, flags)?;
             let qid = quota::qid(&inode_u);
             if quota {
-                quota::acct(fs, qid, quota::Q_INO, 1, QuotaAcctMode::PREALLOC)?;
+                quota::acct(fs, qid, quota::Q_INO, 1, QuotaAcctMode::PREALLOC, &mut QuotaWarnings::new(fs))?;
             }
 
             let inum = c::subvol_inum {
@@ -119,7 +119,7 @@ impl InodeInfo {
                 t.commit(None, CommitFlags::empty())
             })();
             if ret.is_err() && quota {
-                let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN);
+                let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN, &mut QuotaWarnings::new(fs));
             }
             ret.map(|()| inum)
         })?;
@@ -438,7 +438,7 @@ impl InodeOps for DirOps {
                                         None, None, c::subvol_inum::default(), 0)?;
                     if !src_dir.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
                         quota::acct(fs, quota::qid(w), c::QuotaCounter::Q_INO.0 as usize, 1,
-                                    QuotaAcctMode::PREALLOC)?;
+                                    QuotaAcctMode::PREALLOC, &mut QuotaWarnings::new(fs))?;
                     }
                 }
 

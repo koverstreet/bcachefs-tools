@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::{Locked, Mutex, SpinLockIrq};
+use crate::locking::{Locked, Mutex, SpinLock, SpinLockIrq};
 use crate::published;
 use crate::data_structures::bitmap::AtomicBitflags;
 use crate::util::projections::Volatile;
@@ -48,7 +48,7 @@ pub struct InodeInfo<St = Live> {
      * under either.
      */
     #[pin]
-    pub ei_quota: Locked<Mutex, InodeQuota>,
+    pub ei_quota: Locked<SpinLock, InodeQuota>,
 
     /*
      * When we've been doing nocow writes we'll need to issue flushes to the

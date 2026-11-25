@@ -48,7 +48,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::locking::{ExclusiveGuard, Mutex};
-use crate::quota::QuotaAcctMode;
+use crate::quota::{QuotaAcctMode, QuotaWarnings};
 use crate::quota;
 use crate::snapshots::subvolume;
 use crate::prt;
@@ -169,8 +169,9 @@ impl InodeInfo {
 
         if delete {
             if !self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
-                let _ = quota::acct(fs, qid, quota::Q_SPC, -(v.blocks() as i64), QuotaAcctMode::WARN);
-                let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN);
+                let w = &mut QuotaWarnings::new(fs);
+                let _ = quota::acct(fs, qid, quota::Q_SPC, -(v.blocks() as i64), QuotaAcctMode::WARN, w);
+                let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN, w);
             }
             let _ = inode::rm(fs, self.inum());
 
@@ -404,6 +405,9 @@ impl<'i> UpdateLock<'i> {
     {
         let inode = self.inode;
         let fs = inode.fs();
+        // @qid's entries, made before ei_quota, a spinlock: ours are there
+        quota::prealloc(fs, qid)?;
+        let w = &mut QuotaWarnings::new(fs);
         let mut q = inode.ei_quota.lock();
 
         let qtypes = quota::set_qtypes(qtypes & quota::enabled_qtypes(fs))
@@ -416,7 +420,7 @@ impl<'i> UpdateLock<'i> {
         // Quotas don't count snapshot inodes: only the qid changes.
         if !inode.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
             // blocks(): stable, under ei_quota_lock
-            quota::transfer(fs, qtypes, qid, q.ei_qid, inode.vfs().blocks() + q.ei_quota_reserved, mode)?;
+            quota::transfer(fs, qtypes, qid, q.ei_qid, inode.vfs().blocks() + q.ei_quota_reserved, mode, w)?;
         }
 
         for i in quota::set_qtypes(qtypes) {
@@ -519,22 +523,33 @@ impl<'i> UpdateLock<'i> {
     }
 }
 
+/// i_blocks gone below 0 - @blocks, less @sectors - and clamped there.
+#[must_use = "an underflow is logged, once ei_quota is unlocked"]
+struct IBlocksUnderflow {
+    blocks:  u64,
+    sectors: i64,
+}
+
 /// i_blocks and quota reservations, under ei_quota_lock: the _locked() forms
-/// take it as @q.
+/// take it as @q. A spinlock - a folio's dirtying charges the quota, and
+/// mustn't sleep - so what's found under it that would is done after: quota
+/// warnings by a QuotaWarnings made first, an underflow's log by the caller.
 impl InodeInfo {
     /// i_blocks changed by @sectors, and the quota charged - from @quota_res
     /// for an allocation it reserved.
     fn i_sectors_acct_locked(&self, q: &mut c::InodeQuota, quota_res: Option<&mut c::quota_res>,
-                                 mut sectors: i64) {
+                             mut sectors: i64, w: &mut QuotaWarnings<'_>) -> Option<IBlocksUnderflow> {
         let blocks = self.vfs().blocks();
-        if (blocks as i64) + sectors < 0 {
-            sectors = self.i_blocks_underflow(blocks, sectors);
-        }
+        let underflow = ((blocks as i64) + sectors < 0).then(|| {
+            let u = IBlocksUnderflow { blocks, sectors };
+            sectors = -(blocks as i64);
+            u
+        });
 
         self.vfs().set_blocks(blocks.wrapping_add_signed(sectors));
 
         if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
-            return;
+            return underflow;
         }
 
         match quota_res {
@@ -549,21 +564,27 @@ impl InodeInfo {
             }
             _ => {
                 let _ = quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors,
-                                    QuotaAcctMode::WARN);
+                                    QuotaAcctMode::WARN, w);
             }
         }
+        underflow
     }
 
     pub fn i_sectors_acct(&self, quota_res: Option<&mut c::quota_res>, sectors: i64) {
         if sectors != 0 {
-            self.i_sectors_acct_locked(&mut self.ei_quota.lock(), quota_res, sectors);
+            let w = &mut QuotaWarnings::new(self.fs());
+            let underflow = self.i_sectors_acct_locked(&mut self.ei_quota.lock(), quota_res, sectors, w);
+            if let Some(u) = underflow {
+                self.i_blocks_underflow(u);
+            }
         }
     }
 
-    /// What's left of @sectors once i_blocks is clamped at zero.
+    /// An underflow i_sectors_acct_locked() clamped, logged with ei_quota
+    /// unlocked: an fsck error's count takes a mutex.
     #[cold]
     #[inline(never)]
-    fn i_blocks_underflow(&self, blocks: u64, sectors: i64) -> i64 {
+    fn i_blocks_underflow(&self, IBlocksUnderflow { blocks, sectors }: IBlocksUnderflow) {
         let fs = self.fs();
         let inum = self.inum();
         let mut msg = LogMsg::new(fs);
@@ -572,8 +593,6 @@ impl InodeInfo {
 
         let log = count_fsck_err(fs, id::vfs_inode_i_blocks_underflow, &mut msg);
         msg.set_suppressed(!log);
-
-        if sectors < 0 { -(blocks as i64) } else { 0 }
     }
 
     pub(crate) fn quota_reservation_add(&self, res: &mut c::quota_res, sectors: u64, check_enospc: bool)
@@ -583,20 +602,22 @@ impl InodeInfo {
             return Ok(());
         }
 
+        let w = &mut QuotaWarnings::new(self.fs());
         let mut q = self.ei_quota.lock();
         let mode = if check_enospc {
             QuotaAcctMode::PREALLOC
         } else {
             QuotaAcctMode::NOCHECK
         };
-        quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors as i64, mode)?;
+        quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, sectors as i64, mode, w)?;
 
         q.ei_quota_reserved += sectors;
         res.sectors += sectors;
         Ok(())
     }
 
-    fn quota_reservation_put_locked(&self, q: &mut c::InodeQuota, res: &mut c::quota_res) {
+    fn quota_reservation_put_locked(&self, q: &mut c::InodeQuota, res: &mut c::quota_res,
+                                    w: &mut QuotaWarnings<'_>) {
         if !cfg!(CONFIG_BCACHEFS_QUOTA) {
             return;
         }
@@ -606,23 +627,31 @@ impl InodeInfo {
                 res.sectors, q.ei_quota_reserved);
 
         let _ = quota::acct(self.fs(), q.ei_qid, quota::Q_SPC, -(res.sectors as i64),
-                            QuotaAcctMode::PREALLOC);
+                            QuotaAcctMode::PREALLOC, w);
         q.ei_quota_reserved -= res.sectors;
         res.sectors = 0;
     }
 
     pub(crate) fn quota_reservation_put(&self, res: &mut c::quota_res) {
         if cfg!(CONFIG_BCACHEFS_QUOTA) && res.sectors != 0 {
-            self.quota_reservation_put_locked(&mut self.ei_quota.lock(), res);
+            let w = &mut QuotaWarnings::new(self.fs());
+            self.quota_reservation_put_locked(&mut self.ei_quota.lock(), res, w);
         }
     }
 
     /// i_sectors_acct() from @res, and what's left of it put, under one hold
     /// of the quota lock: a DIO write's, as each of its bios is written.
     pub(crate) fn i_sectors_acct_put(&self, res: &mut c::quota_res, sectors: i64) {
-        let mut q = self.ei_quota.lock();
-        self.i_sectors_acct_locked(&mut q, Some(&mut *res), sectors);
-        self.quota_reservation_put_locked(&mut q, res);
+        let w = &mut QuotaWarnings::new(self.fs());
+        let underflow = {
+            let mut q = self.ei_quota.lock();
+            let underflow = self.i_sectors_acct_locked(&mut q, Some(&mut *res), sectors, w);
+            self.quota_reservation_put_locked(&mut q, res, w);
+            underflow
+        };
+        if let Some(u) = underflow {
+            self.i_blocks_underflow(u);
+        }
     }
 
     /// A direct write started: inode_dio_begin(), and the page cache blocked,
