@@ -152,7 +152,7 @@ fn writepage_do_io(w: &mut WritepageState) {
     let mut slot = w.io.take().expect("writepage_do_io() with no io");
     let fs = io_of(&mut slot).op.fs();
 
-    unsafe { slot.start(Spawn::Inline, fs.tasks(), writepage_task) };
+    unsafe { slot.start_unchecked(Spawn::Inline, fs.tasks(), writepage_task) };
 }
 
 /*

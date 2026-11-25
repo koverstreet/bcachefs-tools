@@ -420,7 +420,7 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     /* no block layer work while the caller holds btree node locks */
     let at = Spawn::Queue(&fs.btree_update_wq);
     unsafe {
-        slot.start(at, fs.tasks(), move |home| write_task(home, fs_ref, b, w, key, sector_offset, shard_cpu, start_time))
+        slot.start_unchecked(at, fs.tasks(), move |home| write_task(home, fs_ref, b, w, key, sector_offset, shard_cpu, start_time))
     };
 }
 

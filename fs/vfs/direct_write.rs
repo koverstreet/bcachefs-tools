@@ -415,7 +415,7 @@ fn direct_write_of<P: UserPage>(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'
         let (caller, wait) = sync_end(sync, &mut slot);
         let end = unsafe { k.owed(caller) };
 
-        unsafe { dio.start(Spawn::Inline, fs.tasks(), move |d| dio_write_task(d, end)) };
+        unsafe { dio.start_unchecked(Spawn::Inline, fs.tasks(), move |d| dio_write_task(d, end)) };
 
         let Some(wait) = wait else {
             break 'out -(c::EIOCBQUEUED as isize);

@@ -113,8 +113,8 @@ unsafe impl Send for CallersIter {}
 impl CallersIter {
     /// # Safety
     /// For the dio's task, started inline: @iter is the caller's, gone once
-    /// start() returns - when the task first parks - so it's only got
-    /// from in the task's first poll.
+    /// start_unchecked() returns - when the task first parks - so it's only
+    /// got from in the task's first poll.
     unsafe fn new(iter: &mut IovIter<'_>) -> Self {
         CallersIter(NonNull::from(iter).cast())
     }
@@ -260,7 +260,7 @@ fn read_of<P: UserPage>(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, 
 
     unsafe {
         let callers = CallersIter::new(&mut iter);
-        dio.start(Spawn::Inline, fs.tasks(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
+        dio.start_unchecked(Spawn::Inline, fs.tasks(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
     };
     drop(iter);
 

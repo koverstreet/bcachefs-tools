@@ -937,7 +937,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
     let fs_ref = unsafe { BackRef::new(fs) };
     let (q, tasks) = (&fs.btree.read_complete_wq, fs.tasks());
     let at = if ca.is_some() { Spawn::Inline } else { Spawn::Queue(q) };
-    unsafe { slot.start(at, tasks, move |home| read_task(home, fs_ref, node, pick, ca)) };
+    unsafe { slot.start_unchecked(at, tasks, move |home| read_task(home, fs_ref, node, pick, ca)) };
 
     if sync {
         b.wait_on_flag(c::BtreeNodeFlags::read_in_flight);

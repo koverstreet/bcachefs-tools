@@ -174,7 +174,8 @@ impl<'scope, 'env> Scope<'scope, 'env> {
             unsafe { *home.ret.get() = Some(f()) };
         }, Some(job_done))?;
         // SAFETY: what @f borrows outlives 'scope, and run_scope() joins or
-        // drops every job before 'scope ends
+        // drops every job before 'scope ends - and starts it through its
+        // task(), never by TaskBox::start(): a Job<'static> borrows 'scope
         let job = unsafe { core::mem::transmute::<TaskBox<'scope, JobHome>, Job<'env>>(job) };
         // not pushed, it's dropped: discarded
         self.jobs.borrow_mut().push(job)?;

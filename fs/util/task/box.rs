@@ -163,7 +163,7 @@ where
     /// @at's queue, and what the home and the future borrow, outlive the
     /// task; the home, handed @make for 'q, is borrowed by nothing but the
     /// future it makes.
-    pub unsafe fn start(self, at: Spawn<'_, '_>, list: &TaskList, make: M)
+    pub unsafe fn start_unchecked(self, at: Spawn<'_, '_>, list: &TaskList, make: M)
     where
         FutureOfMut<'q, M, H>: Future<Output = ()>,
     {
@@ -446,7 +446,14 @@ impl<H> TaskBox<'_, H> {
     pub unsafe fn start_unchecked(self) {
         unsafe { ManuallyDrop::new(self).task.start() };
     }
+}
 
+impl<H> TaskBox<'static, H> {
+    /// Started: its queue lasts, and its future borrows nothing beyond its
+    /// home.
+    pub fn start(self) {
+        unsafe { self.start_unchecked() }
+    }
 }
 
 impl<H> core::ops::Deref for TaskBox<'_, H> {
@@ -465,19 +472,18 @@ impl<H> Drop for TaskBox<'_, H> {
 
 /// A task nothing joins, on the queue and task list @on finds through
 /// @held: @make's future, in a box with @held, which it borrows. @held is
-/// lent only as &H and dropped after the future, so what @on found lasts the
-/// task - but for its work returning, which the queue's drain waits on.
+/// lent only as &H and dropped after the future, as the box frees itself, so
+/// what @on found lasts the task - but for its work returning, which the
+/// queue's drain waits on: the box borrows nothing outside itself.
 pub fn spawn<H, M>(held: H, on: impl FnOnce(&H) -> (&Queue, &TaskList), make: M) -> Result<(), BchError>
 where
     H: Send + Sync + 'static,
     M: for<'h> AsyncFnOnce<(&'h H,), Output = ()> + 'static,
     for<'h> <M as AsyncFnOnce<(&'h H,)>>::CallOnceFuture: Send,
 {
-    let slot = TaskSlot::<H, M>::alloc(held)?;
-    unsafe {
-        let (q, list) = on(slot.home.as_ref());
-        slot.init(Spawn::Queue(q), list, make, None)?.start_unchecked();
-    }
+    let slot = TaskSlot::alloc(held)?;
+    let (q, list) = on(unsafe { slot.home.as_ref() });
+    slot.init(Spawn::Queue(q), list, make, None)?.start();
     Ok(())
 }
 
@@ -505,7 +511,7 @@ impl<T: Send> Join<T> {
     {
         let slot = TaskSlot::exclusive_in(Kmalloc, ())?;
         let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
-        unsafe { slot.start(Spawn::Queue(q), list, move |_| async move { ret.complete(make().await) }) };
+        unsafe { slot.start_unchecked(Spawn::Queue(q), list, move |_| async move { ret.complete(make().await) }) };
         Ok(wait)
     }
 }
