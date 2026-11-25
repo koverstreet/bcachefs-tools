@@ -681,7 +681,7 @@ pub struct Fs {
     pub btree_update_wq: Late<Workqueue>,
     #[pin]
     #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
-    pub read_retry_pool: crate::util::mempool::Mempool<crate::util::alloc::Kmalloc>,
+    pub read_retry_pool: crate::util::mempool::Mempool,
     #[late(BioSet::new(1), ENOMEM_bio_write_init)]
     pub(crate) bio_write: Late<BioSet<Bio<crate::data::write::ExtentBuf>>>,
     #[pin]

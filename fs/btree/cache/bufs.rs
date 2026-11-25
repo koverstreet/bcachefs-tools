@@ -9,7 +9,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::six::six_lock_exit;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc, WithFlags};
+use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, Global, KVmalloc, Vmalloc, WithFlags};
 use crate::os::kernel::is_vmalloc_addr;
 use crate::util::maybe_rcu_alloc::alloc_at;
 use core::alloc::Layout;
@@ -19,10 +19,10 @@ use cstruct_macros::MaybeZeroable;
 
 /// The bounce pool's elements, kvmalloc()'d as a bounce buffer is: accounted
 /// and reclaimable.
-pub type BounceBufs = WithFlags<KVmalloc>;
+pub type BounceBufs = WithFlags<Global>;
 
 pub fn bounce_bufs() -> BounceBufs {
-    KVmalloc.with_flags(flags::ACCOUNT | flags::RECLAIMABLE)
+    Global.with_flags(flags::ACCOUNT | flags::RECLAIMABLE)
 }
 
 /// Up to a node's size, to sort a node's keys into: kvmalloc()'d, or the
@@ -265,7 +265,7 @@ pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags
     };
 
     let flags = if pcpu_read_locks { c::SixLockInitFlags::pcpu } else { c::SixLockInitFlags::empty() };
-    let b = alloc_at::<_, Kmalloc, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()?;
+    let b = alloc_at::<_, Global, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()?;
     unsafe {
         (*b.as_ptr()).nodes_idx = slot.set(b.cast());
         Some(cached_node(fs, b.as_ptr()))

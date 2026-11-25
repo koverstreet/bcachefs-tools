@@ -36,7 +36,6 @@ use crate::init::error::bch2_inum_offset_err_msg_trans;
 use crate::inode_opts::get_inode;
 use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
-use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
 use crate::os::bio::{Bvec, BvecMempool, Holds};
 use crate::util::gather::{Gather, GatherRef};
@@ -216,12 +215,12 @@ impl PinnedDrop for ReadBio {
 
 /// A read's box is freed when its task is done, after the read - when the
 /// filesystem may be gone: so from a pool of the module's.
-static READS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static READS: Mempool = ::pin_init::zeroed();
 static READ_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<ReadBio, read::ExtentFut<'static>, &'static Mempool<Kmalloc>>();
-    Mempool::init_static(&READS, Mempool::kmalloc(1, size), m)?;
+    let size = exclusive_size::<ReadBio, read::ExtentFut<'static>, &'static Mempool>();
+    Mempool::init_static(&READS, Mempool::new(1, size), m)?;
     BvecMempool::init_static(&READ_BVECS, 1, m)
 }
 

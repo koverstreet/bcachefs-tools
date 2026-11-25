@@ -14,7 +14,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::inode_opts;
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{Box, Kmalloc};
+use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;
 use crate::os::bio::{Bio, BioSubmit, Bvec, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
@@ -44,15 +44,15 @@ struct Io {
 }
 crate::has_bio!(Io, wbio, owns Holds<Writeback>);
 
-type Pool = &'static Mempool<Kmalloc>;
+type Pool = &'static Mempool;
 /// An io, being filled: its task not started.
 type IoSlot = TaskSlot<'static, Io, WritepageFut<'static>, Pool, Exclusive>;
 
-static WRITEPAGES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static WRITEPAGES: Mempool = ::pin_init::zeroed();
 static WRITEPAGE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    Mempool::init_static(&WRITEPAGES, Mempool::kmalloc(4, exclusive_size::<Io, WritepageFut<'static>, Pool>()), m)?;
+    Mempool::init_static(&WRITEPAGES, Mempool::new(4, exclusive_size::<Io, WritepageFut<'static>, Pool>()), m)?;
     BvecMempool::init_static(&WRITEPAGE_BVECS, 4, m)
 }
 

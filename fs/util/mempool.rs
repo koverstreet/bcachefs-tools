@@ -17,7 +17,7 @@ use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::os::kernel::HZ;
-use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vec};
+use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, Vec};
 use crate::util::futex::EventCount;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::late::LateInit;
@@ -32,7 +32,7 @@ use pin_init::{pin_data, pinned_drop, PinInit};
 
 /// A pool's allocator is Copy: it's held, never dropped.
 #[pin_data(PinnedDrop)]
-pub struct Mempool<A: AllocGfp + Copy> {
+pub struct Mempool<A: AllocGfp + Copy = crate::os::alloc::Global> {
     /* the reserve, and its length published, for free_raw()'s unlocked check */
     #[pin]
     reserve: Locked<SpinLockIrq, Vec<Element>, Volatile<usize>>,
@@ -101,7 +101,7 @@ fn drain<A: AllocGfp>(alloc: &A, reserve: &mut Vec<Element>, layout: Layout) {
 impl<A: AllocGfp + Copy> Mempool<A> {
     /// @min_nr elements of @size bytes, from @alloc. Nothing to undo if it
     /// fails.
-    pub fn new(alloc: A, min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
+    pub fn new_in(alloc: A, min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
         let layout = kv_layout(size);
         ::pin_init::pin_init!(Self {
             reserve <- new_lock!(fill(&alloc, min_nr, layout?)?, Volatile::new(min_nr), "mempool"),
@@ -217,16 +217,10 @@ impl<A: AllocGfp + Copy> Mempool<A> {
     }
 }
 
-impl Mempool<Kmalloc> {
-    /// mempool_init_kmalloc_pool().
-    pub fn kmalloc(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
-        Self::new(Kmalloc, min_nr, size)
-    }
-}
-
-impl Mempool<KVmalloc> {
-    pub fn kvmalloc(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
-        Self::new(KVmalloc, min_nr, size)
+impl Mempool {
+    /// mempool_init_kmalloc_pool(), of the port's allocator.
+    pub fn new(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
+        Self::new_in(crate::os::alloc::Global, min_nr, size)
     }
 }
 

@@ -32,7 +32,6 @@ use crate::inode_opts::get_io_opts;
 use crate::locking::six::{six_lock_counts, six_lock_write_held};
 use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::Kmalloc;
 use crate::util::backref::BackRef;
 use crate::os::bio::{Bio, BioInPlace, BioOwner, BvecMempool};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
@@ -59,12 +58,12 @@ const WRITE_OPF: u32 = c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::R
 /// The module's, not the filesystem's: a write's box is freed a grace period
 /// after its write, when the filesystem may be gone. A mempool: node writes
 /// must make progress under memory pressure.
-static NODE_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static NODE_WRITES: Mempool = ::pin_init::zeroed();
 static NODE_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<Bio, NodeWriteFut<'static>, &'static Mempool<Kmalloc>>();
-    Mempool::init_static(&NODE_WRITES, Mempool::kmalloc(1, size), m)?;
+    let size = exclusive_size::<Bio, NodeWriteFut<'static>, &'static Mempool>();
+    Mempool::init_static(&NODE_WRITES, Mempool::new(1, size), m)?;
     BvecMempool::init_static(&NODE_WRITE_BVECS, 1, m)
 }
 

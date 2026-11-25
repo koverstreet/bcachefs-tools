@@ -20,7 +20,7 @@
 //! what the scope's body lends, and the start is safe.
 
 use crate::errcode::BchError;
-use crate::util::alloc::{init_at, init_with, Alloc, Kmalloc};
+use crate::util::alloc::{init_at, init_with, Alloc, Global};
 use crate::util::gather::{Fold, GatherRef, Scope, Width};
 use crate::util::rcu::{DropAnytime, DropAtomic, Flavor, HasRcuHead, RcuHead, RcuOwned};
 use crate::os::workqueue::Queue;
@@ -79,7 +79,7 @@ impl<H, F: Future, A: Alloc + Copy> WithTask<'_, H, F, A> {
 /// lifetime - not bounded by its AsyncFnOnce: a bound naming its future type
 /// would be what rustc infers the closure's signature from, and that's for
 /// one lifetime, not every one - or an Exclusive slot's future itself.
-pub struct TaskSlot<'q, H, M, A: Alloc + Copy = Kmalloc, K = Shared> {
+pub struct TaskSlot<'q, H, M, A: Alloc + Copy = Global, K = Shared> {
     home: NonNull<H>,
     /// The home dropped, and the memory freed
     free: unsafe fn(NonNull<H>),
@@ -99,7 +99,7 @@ where
     where
         BchError: From<E>,
     {
-        Self::alloc_in(Kmalloc, home)
+        Self::alloc_in(Global, home)
     }
 }
 
@@ -514,7 +514,7 @@ impl<T: Send, W: Waiter> Join<T, W> {
     where
         F: Future<Output = T> + Send + 'a,
     {
-        let slot = TaskSlot::exclusive_in(Kmalloc, ())?;
+        let slot = TaskSlot::exclusive_in(Global, ())?;
         let (wait, ret) = CompletionReturn::new(&mut self.0, waiter);
         unsafe { slot.start_unchecked(Spawn::Queue(q), list, move |_| async move { ret.complete(make().await) }) };
         Ok(wait)

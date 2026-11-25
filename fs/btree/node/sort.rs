@@ -12,7 +12,7 @@ use crate::fs::Fs;
 use crate::types::Le64;
 use crate::os::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::{Box, Kmalloc};
+use crate::util::alloc::Box;
 use crate::util::mempool::Mempool;
 use crate::util::vstructs::{plain_bytes, Head};
 use crate::data_structures::array_vec::ArrayVec;
@@ -52,7 +52,7 @@ impl WriteSortRuns {
 /// The runs a node read merges, in a fill_iter element: room for a run per
 /// block of the node, twice over.
 pub struct SortRuns<'p> {
-    buf:  Box<[SortRun], &'p Mempool<Kmalloc>>,
+    buf:  Box<[SortRun], &'p Mempool>,
     used: usize,
 }
 

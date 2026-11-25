@@ -16,7 +16,7 @@ use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::BchError;
 use crate::locking::{Locked, MemallocFlags, SpinLock};
 use crate::new_lock;
-use crate::util::alloc::{AllocError, Kmalloc};
+use crate::util::alloc::AllocError;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::printbuf::{Printbuf, ToText};
 use crate::util::rcu::{read_lock, RcuMember};
@@ -39,7 +39,7 @@ struct Group<K, V, const N: usize> {
 
 crate::keyed_by!(impl[K: Hash + Eq, V, const N: usize] Group<K, V, N>, |g| &g.key => K);
 
-type GroupBox<K, V, const N: usize> = MaybeRcuAlloc<Group<K, V, N>, Kmalloc>;
+type GroupBox<K, V, const N: usize> = MaybeRcuAlloc<Group<K, V, N>>;
 
 /// @V's under @K - @N of a key's in its group itself, more on the heap -
 /// hashed by @S in @W ways. Empty when it's dropped: a group in it is leaked.

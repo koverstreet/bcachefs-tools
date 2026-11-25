@@ -20,7 +20,7 @@
 //! at once, has its entries shared.
 
 use crate::data_structures::array_vec::ArrayVec;
-use crate::util::alloc::{AllocError, AllocGfp, Box, Flags, Kmalloc};
+use crate::util::alloc::{AllocError, AllocGfp, Box, Flags, Global};
 use crate::util::once_either::{Either, OnceEither};
 use core::iter::Enumerate;
 use core::marker::PhantomData;
@@ -87,8 +87,8 @@ fn leaf<I, L>(e: Either<I, L>) -> L {
 }
 
 /// Zeroed.
-fn alloc_node<N: Zeroable>(gfp: Flags) -> Result<Box<N, Kmalloc>, AllocError> {
-    Box::init_in(init_zeroed(), Kmalloc.with_flags(gfp)).map(Box::into_unflagged)
+fn alloc_node<N: Zeroable>(gfp: Flags) -> Result<Box<N>, AllocError> {
+    Box::init_in(init_zeroed(), Global.with_flags(gfp)).map(Box::into_unflagged)
 }
 
 /// @idx's leaf number, its place in the leaf, and its tree: the depth its
@@ -108,8 +108,8 @@ fn child(q: usize, height: usize) -> usize {
 /// interior node. An allocation that needs more takes what's there, and
 /// fails for the rest only if it can't allocate them.
 pub struct NewNode<T: Entry> {
-    interior: Option<Box<Interior<T>, Kmalloc>>,
-    leaf:     Option<Box<Leaf<T>, Kmalloc>>,
+    interior: Option<Box<Interior<T>>>,
+    leaf:     Option<Box<Leaf<T>>>,
 }
 
 impl<T: Entry> NewNode<T> {
@@ -128,11 +128,11 @@ impl<T: Entry> NewNode<T> {
         Ok(())
     }
 
-    fn interior(&mut self, gfp: Flags) -> Result<Box<Interior<T>, Kmalloc>, AllocError> {
+    fn interior(&mut self, gfp: Flags) -> Result<Box<Interior<T>>, AllocError> {
         self.interior.take().map_or_else(|| alloc_node(gfp), Ok)
     }
 
-    fn leaf(&mut self, gfp: Flags) -> Result<Box<Leaf<T>, Kmalloc>, AllocError> {
+    fn leaf(&mut self, gfp: Flags) -> Result<Box<Leaf<T>>, AllocError> {
         self.leaf.take().map_or_else(|| alloc_node(gfp), Ok)
     }
 }

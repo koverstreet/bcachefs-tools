@@ -50,7 +50,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::os::bio::{BioRange, Mapped};
-use crate::util::{alloc::{Box, KVmalloc},
+use crate::util::{alloc::Box,
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::{Out, VolatileSlice}, Printbuf, ToText};
 use crate::os::compress::{lz4, zlib, zstd};
@@ -156,9 +156,9 @@ fn extent_max(fs: &Fs) -> usize {
 /// read pay the write side's footprint. lz4 decompresses with no workspace.
 #[derive(::pin_init::Zeroable)]
 pub struct Compress {
-    bounce:     [Late<Mempool<KVmalloc>, SbLock>; 2],
-    workspace:  [Late<Mempool<KVmalloc>, SbLock>; OPT_NR],
-    decompress: [Late<Mempool<KVmalloc>, SbLock>; OPT_NR],
+    bounce:     [Late<Mempool, SbLock>; 2],
+    workspace:  [Late<Mempool, SbLock>; OPT_NR],
+    decompress: [Late<Mempool, SbLock>; OPT_NR],
 }
 
 // ── Bounce buffers ───────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ pub struct Compress {
  * bio's pages (no copy) or a private allocation the caller can scribble on
  * without touching the bio.
  */
-pub(crate) type Bounce<'a, T> = Box<T, &'a Mempool<KVmalloc>>;
+pub(crate) type Bounce<'a, T> = Box<T, &'a Mempool>;
 
 /// What a codec reads: the bio's memory, or a copy of it. 'a is what it
 /// borrows: the bio whose memory it maps, or the filesystem whose pool it's
@@ -647,7 +647,7 @@ fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: SbFeatures) -> Result<
         return Ok(());
     }
 
-    let pool = |p: &Late<Mempool<KVmalloc>, SbLock>, size, err: e| p.init(sb, || Mempool::kvmalloc(1, size)).map_err(|_| fs.err(err));
+    let pool = |p: &Late<Mempool, SbLock>, size, err: e| p.init(sb, || Mempool::new(1, size)).map_err(|_| fs.err(err));
     let pools = &fs.compress;
     pool(&pools.bounce[READ], extent_max(fs), e::ENOMEM_compression_bounce_read_init)?;
     pool(&pools.bounce[WRITE], extent_max(fs), e::ENOMEM_compression_bounce_write_init)?;

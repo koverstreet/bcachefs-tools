@@ -23,7 +23,7 @@ use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
 use crate::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
-use crate::util::alloc::{Kmalloc, Vec};
+use crate::util::alloc::{Global, Vec};
 use crate::util::log::LogMsg;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef, Scope};
@@ -173,7 +173,7 @@ fn scrub_node<'s, 'f: 's>(fs: &'f Fs, nodes: &Scope<'s, Bad, waiter::Sync>, btre
     // made in the task's box, its home: room for BCH_BKEY_PTRS_MAX replicas
     // is a kilobyte, and this can be under scrub(), under the moves
     // flush_all() runs on its stack
-    let mut slot = TaskSlot::exclusive_in(Kmalloc, ::pin_init::init_zeroed::<Replicas<ReplicaRead<'s>>>())?;
+    let mut slot = TaskSlot::exclusive_in(Global, ::pin_init::init_zeroed::<Replicas<ReplicaRead<'s>>>())?;
     let reads = slot.home().get_mut();
     let mut ret = Ok(());
 

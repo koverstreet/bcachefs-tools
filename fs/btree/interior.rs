@@ -36,7 +36,7 @@ use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Mu
 use crate::new_lock;
 use crate::types::{Fifo, Le64, Lent};
 use crate::util::Printbuf;
-use crate::util::alloc::{Box, Vec, Kmalloc};
+use crate::util::alloc::{Box, Vec};
 use crate::util::atomic::try_update;
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
@@ -164,8 +164,8 @@ fn write_blocked<'a>(b: &'a BtreeNode, updates: &'a mut UpdatesGuard<'_>) -> &'a
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
 pub struct bch_fs_btree_interior_updates {
-    #[late(Mempool::kmalloc(1, size_of::<BtreeUpdate>()), ENOMEM_btree_interior_update_pool_init)]
-    pub pool: Late<Mempool<Kmalloc>>,
+    #[late(Mempool::new(1, size_of::<BtreeUpdate>()), ENOMEM_btree_interior_update_pool_init)]
+    pub pool: Late<Mempool>,
     #[pin]
     #[init(new_lock!(Updates::default(), (), "&c->btree.interior_updates.lock"))]
     lock: Placed<Locked<Mutex, Updates>, UpdatesLockAt>,
@@ -409,7 +409,7 @@ macro_rules! rewrite_reason_strs {
 c::BtreeNodeRewriteReason_arms!(rewrite_reason_strs);
 
 /// An update, in an element of the interior updates' pool.
-type UpdateBox = Box<BtreeUpdate, &'static Mempool<Kmalloc>>;
+type UpdateBox = Box<BtreeUpdate, &'static Mempool>;
 
 impl BtreeUpdate {
     fn fs(&self) -> &Fs {

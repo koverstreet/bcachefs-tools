@@ -44,7 +44,7 @@ impl BouncePool {
         let max = opts.btree_node_size.max(opts.encoded_extent_max);
         pin_init!(Self {
             lock <- new_lock!((), "&c->bio_bounce_pages_lock"),
-            pool <- Mempool::new(BouncePages, max as usize / POOL_LEN, POOL_LEN),
+            pool <- Mempool::new_in(BouncePages, max as usize / POOL_LEN, POOL_LEN),
         }? BchError)
     }
 

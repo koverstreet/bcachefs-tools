@@ -12,7 +12,7 @@
 //! The storage is its own element type, not T's: a T's tail may be bytes
 //! under a header of words, as a typed key's value is under its bkey.
 
-use crate::util::alloc::{flags, AlignedBox, Alloc, AllocError, AllocGfp, Box, Flags, Kmalloc};
+use crate::util::alloc::{flags, AlignedBox, Alloc, AllocError, AllocGfp, Box, Flags, Global};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, DstHead, Plain, SelfSized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
@@ -111,7 +111,7 @@ impl<S: ?Sized + Storage, A: Alloc> Storage for Box<S, A> {
 #[repr(C, u8)]
 pub enum InlineOrBoxed<E, const N: usize, const B: usize> {
     Inline([E; N]),
-    Boxed(Box<[E], Kmalloc>),
+    Boxed(Box<[E]>),
 }
 
 // zeroed, the tag is Inline's, and its elements zeroes
@@ -153,7 +153,7 @@ impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> Inl
     fn grow_slow(&mut self, n: usize) -> &mut [E] {
         let have = self.elems().len();
         if n > have {
-            let mut b = Box::try_zeroed_slice_in(n.max(B).max(have * 2), Kmalloc.with_flags(flags::NOFAIL))
+            let mut b = Box::try_zeroed_slice_in(n.max(B).max(have * 2), Global.with_flags(flags::NOFAIL))
                 .expect("a __GFP_NOFAIL allocation");
             b[..have].copy_from_slice(self.elems());
             *self = Self::Boxed(Box::into_unflagged(b));

@@ -18,7 +18,7 @@ use crate::fs::{Fs, WriteRef};
 use crate::init::passes::RecoveryPass;
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
-use crate::util::alloc::{AllocError, Kmalloc, Vec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::futex::EventCount;
 use crate::util::late::Late;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
@@ -52,7 +52,7 @@ pub(crate) struct NodePos {
 }
 
 type OpTable = Cuckoo<Entry<NodePos>>;
-type OpBox = MaybeRcuAlloc<Op, Kmalloc>;
+type OpBox = MaybeRcuAlloc<Op>;
 
 /*
  * Async btree ops (rewrite on read error, merge of an underfull node)

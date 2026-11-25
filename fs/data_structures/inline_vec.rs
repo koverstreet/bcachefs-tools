@@ -25,7 +25,7 @@
 
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_vec::DstVec;
-use crate::util::alloc::{Alloc, AllocError, KVmalloc};
+use crate::util::alloc::{Alloc, AllocError, Global};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu;
 use core::mem::{offset_of, ManuallyDrop, MaybeUninit};
@@ -35,7 +35,7 @@ use core::slice;
 use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Release}};
 
 #[repr(C)]
-pub struct InlineVec<T, const N: usize, L: LenUint = u32, A: Alloc + Copy = KVmalloc> {
+pub struct InlineVec<T, const N: usize, L: LenUint = u32, A: Alloc + Copy = crate::os::alloc::Global> {
     repr:  Repr<T, N, L, A>,
     alloc: A,
 }
@@ -59,7 +59,7 @@ unsafe impl<T: Sync, const N: usize, L: LenUint, A: Alloc + Copy + Sync> Sync fo
 
 impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
     pub const fn new() -> Self {
-        Self::new_in(KVmalloc)
+        Self::new_in(Global)
     }
 
     /// new(), its inline room zeroes: so what an RCU reader may see before
@@ -72,7 +72,7 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
         const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
 
         let inline = Inline { pad: L::WORD_PAD, tag: L::ONE, elems: [const { MaybeUninit::zeroed() }; N] };
-        Self { repr: Repr { inline: ManuallyDrop::new(inline) }, alloc: KVmalloc }
+        Self { repr: Repr { inline: ManuallyDrop::new(inline) }, alloc: Global }
     }
 }
 

@@ -227,17 +227,17 @@ impl<B: BioOwns> Drop for Lent<'_, B> {
 #[derive(::pin_init::Zeroable)]
 pub struct BvecMempool {
     #[pin]
-    pool: Mempool<Kmalloc>,
+    pool: Mempool,
 }
 
 impl BvecMempool {
     /// @min_nr held in reserve: as many as the bios it serves.
     pub fn new(min_nr: usize) -> impl PinInit<Self, BchError> {
-        pin_init!(Self { pool <- Mempool::kmalloc(min_nr, Self::element_size()) }? BchError)
+        pin_init!(Self { pool <- Mempool::new(min_nr, Self::element_size()) }? BchError)
     }
 
     pub fn init_static(this: &'static Self, min_nr: usize, m: &ThisModule) -> Result<(), BchError> {
-        Mempool::init_static(&this.pool, Mempool::kmalloc(min_nr, Self::element_size()), m)
+        Mempool::init_static(&this.pool, Mempool::new(min_nr, Self::element_size()), m)
     }
 
     fn element_size() -> usize {
@@ -328,7 +328,7 @@ unsafe fn bio_init(bio: *mut Bio, nr_vecs: u16, opf: u32, bvecs: BvecAlloc) -> R
 #[pin_data]
 pub struct BioPool {
     #[pin]
-    pool:      Mempool<Kmalloc>,
+    pool:      Mempool,
     #[pin]
     bvecs:     BvecMempool,
     /* where in an element its bio is, and the element */
@@ -348,7 +348,7 @@ pub struct BioSet<T: HasBio> {
 impl BioPool {
     fn new(pool_size: u32, front_pad: usize, layout: Layout) -> impl PinInit<Self, BchError> {
         pin_init!(Self {
-            pool  <- Mempool::kmalloc(pool_size as usize, layout.size()),
+            pool  <- Mempool::new(pool_size as usize, layout.size()),
             bvecs <- BvecMempool::new(pool_size as usize),
             front_pad,
             layout,
@@ -660,19 +660,19 @@ where
 /// A box submitted: given up to its IO till it's done, and then, awaited,
 /// given back - its bio's status its own. Dropped before that, it asserts.
 #[must_use = "a bio's IO is waited on, or awaited, to its end"]
-pub struct Submitted<'a, T: AtEnd, A: Alloc, W: Waiter> {
+pub struct Submitted<'a, T: AtEnd, W: Waiter, A: Alloc = Kmalloc> {
     /* first: its Done is the box's bi_private, so it's done before the box goes */
     c: Completion<'static, W>,
     b: Option<BioBox<'a, T, A>>,
 }
 
 // moving it moves neither the box's allocation nor the Done in it
-impl<T: AtEnd, A: Alloc, W: Waiter> Unpin for Submitted<'_, T, A, W> {}
+impl<T: AtEnd, W: Waiter, A: Alloc> Unpin for Submitted<'_, T, W, A> {}
 
 impl<'a, T: AtEnd + HoldsDev, A: Alloc> BioBox<'a, T, A> {
     /// Submitted at @sector of @dev's device, which it holds, its T's
     /// at_end() run in the endio: Submitted's till it's awaited.
-    pub fn submit_owned<W: Waiter>(mut self, dev: T::Dev, sector: u64, waiter: W) -> Submitted<'a, T, A, W> {
+    pub fn submit_owned<W: Waiter>(mut self, dev: T::Dev, sector: u64, waiter: W) -> Submitted<'a, T, W, A> {
         let bio = hold_dev(self.as_mut(), dev, sector);
         let c = unsafe {
             let c = Completion::init_at((&raw mut (*bio).bi_private).cast(), waiter);
@@ -684,7 +684,7 @@ impl<'a, T: AtEnd + HoldsDev, A: Alloc> BioBox<'a, T, A> {
     }
 }
 
-impl<'a, T: AtEnd, A: Alloc> Resumable for Submitted<'a, T, A, waiter::Async> {
+impl<'a, T: AtEnd, A: Alloc> Resumable for Submitted<'a, T, waiter::Async, A> {
     type Output = BioBox<'a, T, A>;
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

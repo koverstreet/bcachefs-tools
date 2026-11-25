@@ -42,7 +42,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::data::promote::InFlight;
 use crate::fs::Fs;
 use crate::os::workqueue::Queue;
-use crate::util::alloc::Kmalloc;
+use crate::util::alloc::Global;
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Exclusive, Resume, Spawn, TaskList, TaskSlot};
 use crate::util::rcu::RcuDropMember;
@@ -89,7 +89,7 @@ impl Update {
     }
 }
 
-type Slot<'q, F> = TaskSlot<'q, Update, F, Kmalloc, Exclusive>;
+type Slot<'q, F> = TaskSlot<'q, Update, F, Global, Exclusive>;
 
 /// How an update's task has its queue: the spawner's, which it says outlives
 /// the task - spawn()'s - or, a promote's, @on's in the filesystem the
@@ -113,7 +113,7 @@ fn alloc<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, enomem: c::Errcode) -> 
             // its drop doesn't sleep
             rcu:       unsafe { RcuDropMember::new() },
         });
-        TaskSlot::exclusive_in(Kmalloc, init)
+        TaskSlot::exclusive_in(Global, init)
     })
     .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })
 }

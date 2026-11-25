@@ -20,7 +20,6 @@ use crate::format::Btree;
 use crate::fs::{Fs, WriteRef};
 use crate::inode_opts;
 use crate::snapshots::subvolume;
-use crate::util::alloc::Kmalloc;
 use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
@@ -72,15 +71,15 @@ struct Dio<P: UserPage> {
 }
 crate::has_bio!(Dio<P>, wbio, owns Holds<P> where P: UserPage);
 
-type Pool = &'static Mempool<Kmalloc>;
+type Pool = &'static Mempool;
 
-static DIO_WRITES: Mempool<Kmalloc> = ::pin_init::zeroed();
+static DIO_WRITES: Mempool = ::pin_init::zeroed();
 static DIO_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<Dio<Pinned>, DioWriteFut<'static, Pinned>, Pool>()
         .max(exclusive_size::<Dio<Callers>, DioWriteFut<'static, Callers>, Pool>());
-    Mempool::init_static(&DIO_WRITES, Mempool::kmalloc(4, size), m)?;
+    Mempool::init_static(&DIO_WRITES, Mempool::new(4, size), m)?;
     BvecMempool::init_static(&DIO_WRITE_BVECS, 4, m)
 }
 

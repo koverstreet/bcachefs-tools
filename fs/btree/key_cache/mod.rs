@@ -27,7 +27,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
-use crate::util::alloc::{init_at, Box, Kmalloc};
+use crate::util::alloc::{init_at, Box, Global};
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::local_clock;
 use crate::os::module::Quiesced;
@@ -343,13 +343,12 @@ impl c::bch_fs_btree_key_cache {
     }
 }
 
-/// An entry's key buffer: kmalloc()'d, as C's commit path reallocs and
-/// kfree()s it.
-pub(crate) type KeyBuf = Box<DstRoom<BkeyI>, Kmalloc>;
+/// An entry's key buffer: the commit path reallocates it as its key grows.
+pub(crate) type KeyBuf = Box<DstRoom<BkeyI>>;
 
 /// A key buffer of @u64s, holding a deleted key.
 pub(crate) fn key_buf(u64s: usize) -> Option<KeyBuf> {
-    DstRoom::new_boxed_in(u64s, Kmalloc).ok()
+    DstRoom::new_boxed_in(u64s, Global).ok()
 }
 
 /// What an entry's lock protects: written with it write locked, read with it

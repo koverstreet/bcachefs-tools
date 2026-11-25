@@ -106,7 +106,7 @@ use crate::data_structures::dst_room::DstRoom;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::util::alloc::{Box, KVmalloc};
+use crate::util::alloc::{Box, Global};
 use crate::util::place::{Contained, PlacedDrop};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
@@ -163,7 +163,7 @@ impl c::btree_evicted_size {
         }
         let nr = 1usize << bits;
 
-        let Ok(entries) = Box::try_new_zeroed_slice_in(nr, KVmalloc) else {
+        let Ok(entries) = Box::try_new_zeroed_slice_in(nr, Global) else {
             return fs.throw(Errcode::ENOMEM_fs_other_alloc);
         };
         // an AtomicU64 may be zero

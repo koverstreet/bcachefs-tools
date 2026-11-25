@@ -19,7 +19,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Rele
 use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{flags, init_at, stateless, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
+use crate::util::alloc::{flags, init_at, stateless, Alloc, AllocError, AllocGfp, Flags, Global};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuOwned, RcuWorkHead};
@@ -46,7 +46,7 @@ pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T
 
 #[repr(transparent)]
 #[derive(cstruct_macros::NonZeroWord)]
-pub struct MaybeRcuAlloc<T, A: Alloc = KVmalloc> {
+pub struct MaybeRcuAlloc<T, A: Alloc = Global> {
     p:  NonNull<T>,
     _p: PhantomData<(T, A)>,
 }

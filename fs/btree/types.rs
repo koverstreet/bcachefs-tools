@@ -15,7 +15,7 @@ use crate::errcode::BchError;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
-use crate::util::alloc::{Box, Flags, Vec, Kmalloc};
+use crate::util::alloc::{Box, Flags, Vec, Global};
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::time_stats::TimeStatsArray;
@@ -610,10 +610,10 @@ pub struct trans_kmalloc_trace {
 #[repr(C)]
 #[derive(MaybeZeroable, Default)]
 pub struct TransMem {
-    pub(crate) buf:                    crate::util::alloc::Vec<u64, Kmalloc, u32>,
+    pub(crate) buf:                    crate::util::alloc::Vec<u64, Global, u32>,
     /* bytes: what the next begin grows it to, restarted for room */
     pub(crate) realloc_bytes_required: u32,
-    /* a mempool element - kmalloc()'d, but the pool's to have back */
+    /* a mempool element: the pool's to have back */
     pub(crate) used_mempool:           bool,
 }
 
@@ -848,11 +848,11 @@ pub struct bch_fs_btree_trans {
     #[init(new_lock!(::pin_init::zeroed(), "&c->btree.trans.lock"))]
     pub list: Locked<cs::seqmutex, crate::btree::trans::TransList>,
     #[pin]
-    #[init(Mempool::kmalloc(1, core::mem::size_of::<BtreeTrans<'_>>()))]
-    pub pool: Mempool<Kmalloc>,
+    #[init(Mempool::new(1, core::mem::size_of::<BtreeTrans<'_>>()))]
+    pub pool: Mempool,
     #[pin]
-    #[init(Mempool::kmalloc(1, c::BTREE_TRANS_MEM_MAX as usize))]
-    pub malloc_pool: Mempool<Kmalloc>,
+    #[init(Mempool::new(1, c::BTREE_TRANS_MEM_MAX as usize))]
+    pub malloc_pool: Mempool,
     #[pin]
     #[init(PerCpu::alloc(), ENOMEM_fs_other_alloc)]
     pub bufs: PerCpu<cs::btree_trans_buf>,
@@ -980,14 +980,14 @@ pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
     #[pin]
-    #[init(Mempool::new(crate::btree::cache::bounce_bufs(), 1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
+    #[init(Mempool::new_in(crate::btree::cache::bounce_bufs(), 1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
     pub bounce_pool: Mempool<crate::btree::cache::BounceBufs>,
 
     pub write_stats: [cs::btree_write_stats; cs::BtreeWriteType::NR as usize],
 
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
-    pub fill_iter: Mempool<Kmalloc>,
+    pub fill_iter: Mempool,
     #[pin]
     #[init(Workqueue::new(c"bcachefs_btree_read_complete",
                           WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
@@ -1070,9 +1070,9 @@ pub fn btree_max_u64s(btree_node_size: u32) -> usize {
     (btree_node_size as usize - size_of::<crate::util::vstructs::Head<cs::btree_node>>()) / size_of::<u64>()
 }
 
-fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool<Kmalloc>, BchError> {
+fn fill_iter_pool(opts: &c::bch_opts) -> impl PinInit<Mempool, BchError> {
     let btree_blocks = (opts.btree_node_size as usize >> 9) >> (opts.block_size as usize >> 9).ilog2();
-    Mempool::kmalloc(1, (btree_blocks + 1) * 2 * size_of::<SortRun>())
+    Mempool::new(1, (btree_blocks + 1) * 2 * size_of::<SortRun>())
 }
 
 /* Btree ID properties: */

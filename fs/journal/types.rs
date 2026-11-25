@@ -13,7 +13,7 @@ use crate::journal::write::JournalWrite;
 use crate::data::dev_bio::DevBio;
 use crate::errcode::BchError;
 use crate::os::bio::{BioRange, MappedPages};
-use crate::util::alloc::{init_with, AllocGfp, Box, Flags, Vec, Kmalloc};
+use crate::util::alloc::{init_with, AllocGfp, Box, Flags, Vec, Global};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::Printbuf;
 use crate::util::printbuf::HumanReadable;
@@ -61,12 +61,12 @@ pub const JOURNAL_BUF_NR: u32 = 256;
 /// nothing: the two go from j->free_buf to an open entry's buf, side by side;
 /// the buffer into the write as it starts, then its task, and back as it's
 /// done.
-pub type JsetBuf = DstRoom<c::jset<Unvalidated>, Box<MappedPages, Kmalloc>>;
+pub type JsetBuf = DstRoom<c::jset<Unvalidated>, Box<MappedPages>>;
 
 impl JsetBuf {
     pub fn new(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
         let pages = MappedPages::new(size as usize, gfp)?;
-        Ok(DstRoom::from_storage(Box::into_unflagged(Box::init_in(init_with(|| pages), Kmalloc.with_flags(gfp))?)))
+        Ok(DstRoom::from_storage(Box::into_unflagged(Box::init_in(init_with(|| pages), Global.with_flags(gfp))?)))
     }
 
     /// The bio its first @bytes are written from - by clones, which borrow it.

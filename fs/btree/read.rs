@@ -50,7 +50,6 @@ use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, re
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::locking::MemallocFlags;
-use crate::util::alloc::Kmalloc;
 use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
@@ -128,12 +127,12 @@ crate::has_bio!(NodeReadBio, bio);
 /// The module's, not the filesystem's: a box is freed a grace period after its
 /// read, when the filesystem may be gone. A mempool: node reads must make
 /// progress under memory pressure.
-static NODE_READS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static NODE_READS: Mempool = ::pin_init::zeroed();
 static NODE_READ_BVECS: BvecMempool = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    let size = exclusive_size::<NodeReadBio, NodeReadFut<'static>, &'static Mempool<Kmalloc>>();
-    Mempool::init_static(&NODE_READS, Mempool::kmalloc(1, size), m)?;
+    let size = exclusive_size::<NodeReadBio, NodeReadFut<'static>, &'static Mempool>();
+    Mempool::init_static(&NODE_READS, Mempool::new(1, size), m)?;
     BvecMempool::init_static(&NODE_READ_BVECS, 1, m)
 }
 

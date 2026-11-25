@@ -5,7 +5,7 @@
 //! pointer's low bit. What it points to doesn't move while it's borrowed, and
 //! is freed with it.
 
-use crate::util::alloc::{stateless, Alloc, Box, Kmalloc};
+use crate::util::alloc::{stateless, Alloc, Box, Global};
 use crate::util::rcu::rcu_dereference;
 use core::marker::PhantomData;
 use core::mem::align_of;
@@ -19,7 +19,7 @@ pub enum Either<L, R> {
 
 const RIGHT: usize = 1;
 
-pub struct OnceEither<L, R, A: Alloc = Kmalloc> {
+pub struct OnceEither<L, R, A: Alloc = Global> {
     p:  AtomicPtr<u8>,
     _t: PhantomData<(Box<L, A>, Box<R, A>, *mut ())>,
 }

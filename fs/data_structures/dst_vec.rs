@@ -8,7 +8,7 @@
 
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::DstArray;
-use crate::util::alloc::{stateless, Alloc, AllocError, KVmalloc};
+use crate::util::alloc::{stateless, Alloc, AllocError, Global};
 use crate::util::thin::ThinBox;
 use crate::util::vstructs::{FlexArray, SelfSized};
 use core::marker::PhantomData;
@@ -26,14 +26,14 @@ pub struct DstVecHead<L> {
 type Buf<T, L> = DstArray<DstVecHead<L>, MaybeUninit<T>, L>;
 
 #[repr(transparent)]
-pub struct DstVec<T, L: LenUint = u32, A: Alloc + Copy = KVmalloc> {
+pub struct DstVec<T, L: LenUint = u32, A: Alloc + Copy = crate::os::alloc::Global> {
     buf: ThinBox<Buf<T, L>, A>,
     _t:  PhantomData<T>,
 }
 
 impl<T, L: LenUint> DstVec<T, L> {
     pub fn with_capacity(cap: usize) -> Result<Self, AllocError> {
-        Self::with_capacity_in(cap, KVmalloc)
+        Self::with_capacity_in(cap, Global)
     }
 
     /// with_capacity(), for what mustn't fail to allocate: past its length

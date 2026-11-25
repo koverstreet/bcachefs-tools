@@ -48,7 +48,7 @@ use crate::fs::{btree_id_is_alloc, Fs};
 use crate::init::recovery::NotRw;
 use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
 use crate::util::projections::VolatilePublish;
-use crate::util::alloc::{Box, Vec, Kmalloc};
+use crate::util::alloc::{Box, Vec, Global};
 use crate::util::thin::{ThinBox, ThinMut, ThinRef};
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
@@ -252,7 +252,7 @@ impl Drop for c::journal_key {
 }
 
 /// A key a journal key has of its own, inserted since the journal was read.
-type KeyBox = ThinBox<BkeyI, Kmalloc>;
+type KeyBox = ThinBox<BkeyI>;
 
 #[inline]
 fn btree_cmp(btree: Btree, level: u32, r: &c::journal_key) -> Ordering {
@@ -686,7 +686,7 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
 }
 
 pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-    let k = Box::try_clone_from_ref_in(k, Kmalloc).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
+    let k = Box::try_clone_from_ref_in(k, Global).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
     insert_take(not_rw, btree, level, ThinBox::new(k))
 }
 

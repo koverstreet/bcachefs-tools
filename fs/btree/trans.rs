@@ -21,7 +21,7 @@ use crate::journal::validate::journal_entry_to_text;
 use crate::locking::MemallocFlags;
 use crate::prt;
 use crate::types::bits_to_longs;
-use crate::util::alloc::{AllocError, Kmalloc, Vec};
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::mempool::Mempool;
 use super::types::TransMem;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -713,7 +713,7 @@ impl TransMem {
     }
 
     /// Its buffer freed: given back to the pool, if it's one of its elements.
-    fn free(self, pool: &Mempool<Kmalloc>) {
+    fn free(self, pool: &Mempool) {
         if self.used_mempool {
             let (p, _, _) = self.buf.into_raw_parts();
             unsafe { pool.free_raw(NonNull::new_unchecked(p).cast()) };

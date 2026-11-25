@@ -18,7 +18,6 @@ use crate::data::read::{self, ReadErrReport, Rbio};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::get_inode;
-use crate::util::alloc::Kmalloc;
 use crate::os::blkdev::plugged;
 use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::gather::{Gather, Scope};
@@ -38,10 +37,10 @@ use pin_init::{pin_data, pin_init, stack_pin_init};
 
 type F = c::ReadFlags;
 type Splits<'s> = Scope<'s, Result<(), BchError>, waiter::Async>;
-type Pool = &'static Mempool<Kmalloc>;
+type Pool = &'static Mempool;
 
-static DIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
-static SPLITS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static DIOS: Mempool = ::pin_init::zeroed();
+static SPLITS: Mempool = ::pin_init::zeroed();
 static DIO_BVECS: BvecMempool = ::pin_init::zeroed();
 static SPLIT_BVECS: BvecMempool = ::pin_init::zeroed();
 
@@ -50,8 +49,8 @@ pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
         .max(exclusive_size::<DioBio<Callers>, DioFut<'static, Callers>, Pool>());
     let split = exclusive_size::<DioBio<Pinned>, SplitFut<'static, Pinned>, Pool>()
         .max(exclusive_size::<DioBio<Callers>, SplitFut<'static, Callers>, Pool>());
-    Mempool::init_static(&DIOS, Mempool::kmalloc(4, dio), m)?;
-    Mempool::init_static(&SPLITS, Mempool::kmalloc(1, split), m)?;
+    Mempool::init_static(&DIOS, Mempool::new(4, dio), m)?;
+    Mempool::init_static(&SPLITS, Mempool::new(1, split), m)?;
     BvecMempool::init_static(&DIO_BVECS, 4, m)?;
     BvecMempool::init_static(&SPLIT_BVECS, 1, m)
 }

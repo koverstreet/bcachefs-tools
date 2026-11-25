@@ -101,7 +101,7 @@ use crate::os::bio::{pages, Bio, BioBox, BioFuture, BioLend, BioOwns, BioRange, 
                        BvecMempool, Data, HasBio, Lent, Pages, Typed};
 use crate::util::gather::{Gather, Scope};
 use crate::os::kernel::{local_clock, READ};
-use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
+use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Global};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
@@ -340,7 +340,7 @@ pub struct ReadDone {
 
 /// The key a read poisoned, as it now is in the btree: boxed, as it's rare and
 /// a ReadDone is moved through its awaiters' stack frames.
-pub type Poisoned = Box<BkeyBuf, Kmalloc>;
+pub type Poisoned = Box<BkeyBuf>;
 
 impl ReadDone {
     fn unretried(ret: Result<(), BchError>, pick: Option<c::extent_ptr_decoded>) -> Self {
@@ -451,22 +451,22 @@ crate::has_bio!(FragmentBio, rbio.bio);
 
 /// A fragment's task, in place: freed when it's done, after its read is - so
 /// from a pool of the module's, as the box may outlive the filesystem.
-static FRAGMENTS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static FRAGMENTS: Mempool = ::pin_init::zeroed();
 
 /// The fragments read in their caller's task - a retry's, a data update's, a
 /// page cache extent's: each caller has one at a time, read and dropped before
 /// the next is made, so one in reserve keeps them all going.
-static FRAGMENT_BIOS: Mempool<Kmalloc> = ::pin_init::zeroed();
+static FRAGMENT_BIOS: Mempool = ::pin_init::zeroed();
 
 static FRAGMENT_BVECS: BvecMempool = ::pin_init::zeroed();
 static FRAGMENT_BIO_BVECS: BvecMempool = ::pin_init::zeroed();
 
-type Pool = &'static Mempool<Kmalloc>;
+type Pool = &'static Mempool;
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>();
-    Mempool::init_static(&FRAGMENTS, Mempool::kmalloc(1, size), m)?;
-    Mempool::init_static(&FRAGMENT_BIOS, Mempool::kmalloc(1, size_of::<Rbio<Pages<'static>>>()), m)?;
+    Mempool::init_static(&FRAGMENTS, Mempool::new(1, size), m)?;
+    Mempool::init_static(&FRAGMENT_BIOS, Mempool::new(1, size_of::<Rbio<Pages<'static>>>()), m)?;
     BvecMempool::init_static(&FRAGMENT_BVECS, 1, m)?;
     BvecMempool::init_static(&FRAGMENT_BIO_BVECS, 1, m)
 }
@@ -593,10 +593,10 @@ impl<'r> Fragment<'r> {
 
 type Reads<'s> = Scope<'s, Result<(), BchError>, waiter::Async>;
 
-pub(crate) fn retry_pool() -> impl PinInit<Mempool<Kmalloc>, BchError> {
+pub(crate) fn retry_pool() -> impl PinInit<Mempool, BchError> {
     let layout = Layout::new::<RetryOwnedFut<'static>>();
     assert!(layout.align() <= 8, "a retry's future, aligned past a kmalloc()'s");
-    Mempool::kmalloc(1, layout.size())
+    Mempool::new(1, layout.size())
 }
 
 struct FailureState {
@@ -1125,7 +1125,7 @@ fn maybe_poison_extent(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, fla
     new.reborrow().arm::<PtrsMut>().expect("poisoning an extent whose entries can't be edited")
         .extent_flags_set(fs, extent_flags | c::ExtentFlags::poisoned).expect("room for an extent flags entry: made for it");
     let poisoned = read.is_update().then(|| {
-        Box::init_in(BkeyBuf::from_key(new.as_sc()), Kmalloc.with_flags(flags::NOFAIL))
+        Box::init_in(BkeyBuf::from_key(new.as_sc()), Global.with_flags(flags::NOFAIL))
             .expect("a NOFAIL allocation")
     });
     t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
@@ -1526,7 +1526,7 @@ async fn fragment_io(f: &mut Fragment<'_>, target: Resume<'_>, ec_msg: Option<&m
         let f = &mut *f;
         let ec = {
             let _noio = MemallocFlags::noio();
-            Box::init_in(init_with(move || ec_read(f, fs, msg, target)), Kmalloc)
+            Box::init_in(init_with(move || ec_read(f, fs, msg, target)), Global)
         }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
         Box::into_pin(ec).await?;
     } else {
@@ -1765,7 +1765,7 @@ async fn retry(fs: &Fs, read: &Rbio, s: &mut RetryState<'_>, at: Locate<'_>) -> 
     ret
 }
 
-type RetryBox<'a> = Pin<Box<RetryOwnedFut<'a>, &'a Mempool<Kmalloc>>>;
+type RetryBox<'a> = Pin<Box<RetryOwnedFut<'a>, &'a Mempool>>;
 
 // Out of line, @f ended in it: its RetryState is in this frame, not its
 // caller's

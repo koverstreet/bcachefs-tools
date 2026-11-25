@@ -8,7 +8,7 @@ use crate::os::workqueue::{Workqueue, WqFlags};
 #[cfg(kernel)]
 use crate::os::bio::BioSet;
 #[cfg(kernel)]
-use crate::util::{alloc::KVmalloc, late::Late, mempool::Mempool};
+use crate::util::{late::Late, mempool::Mempool};
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::pin_data;
 
@@ -29,8 +29,8 @@ pub struct bch_fs_vfs {
     #[late(BioSet::new(1), ENOMEM_nocow_flush_bioset_init)]
     pub nocow_flush_bioset: Late<BioSet<crate::data::dev_bio::DevBio>>,
     #[cfg(kernel)]
-    #[late(Mempool::kvmalloc(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
-    pub writepage_buf_pool: Late<Mempool<KVmalloc>>,
+    #[late(Mempool::new(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
+    pub writepage_buf_pool: Late<Mempool>,
     #[cfg(kernel)]
     #[late(Workqueue::new(c"bcachefs_vfs_writeback",
                           WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE | WqFlags::UNBOUND, 1),
