@@ -664,10 +664,12 @@ where
     }
 }
 
-/// A path of fields and elements only: what it reaches is at a fixed offset
-/// in the T it starts from, so the T is had back from it - up(). Sealed:
-/// what's trusted is OFFSET, so only these are.
-pub(crate) trait FieldPath<T>: Path<T> + sealed::FieldPath {
+/// A path of fields and elements only: what it reaches, a To, is at a fixed
+/// offset in the T it starts from - where, not a reference to it, so the T
+/// is had back from it - up(). Sealed: what's trusted is OFFSET, so only
+/// these are.
+pub(crate) trait FieldPath<T>: sealed::FieldPath {
+    type To;
     const OFFSET: usize;
 }
 
@@ -676,6 +678,7 @@ impl<P, const N: u64> sealed::FieldPath for FieldOf<P, N> {}
 impl<P, const I: usize> sealed::FieldPath for ElemOf<P, I> {}
 
 impl<T> FieldPath<T> for Here {
+    type To = T;
     const OFFSET: usize = 0;
 }
 
@@ -683,6 +686,7 @@ impl<T, P: FieldPath<T>, const N: u64> FieldPath<T> for FieldOf<P, N>
 where
     P::To: Field<N> + 'static,
 {
+    type To = <P::To as Field<N>>::Type;
     const OFFSET: usize = P::OFFSET + <P::To as Field<N>>::OFFSET;
 }
 
@@ -690,6 +694,7 @@ impl<T, P, E, const I: usize, const N: usize> FieldPath<T> for ElemOf<P, I>
 where
     P: FieldPath<T, To = [E; N]>,
 {
+    type To = E;
     const OFFSET: usize = {
         assert!(I < N, "an array path's index past its end");
         P::OFFSET + I * size_of::<E>()
