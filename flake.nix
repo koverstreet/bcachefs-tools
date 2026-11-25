@@ -187,7 +187,6 @@
             inherit (self'.packages)
               bcachefs-tools
               bcachefs-tools-aarch64-linux
-              bcachefs-tools-fuse
               bcachefs-module-linux-latest
               bcachefs-module-linux-testing
               ;

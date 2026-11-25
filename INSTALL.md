@@ -133,39 +133,3 @@ outputs =
 ```
 Note that this not only pulls in the latest bcachefs-tools, but also replaces
 your system's bcachefs kernel module with the snapshot version.
-
-Experimental features
----------------------
-
-Experimental fuse support is currently disabled by default. Fuse support is at
-an early stage and may corrupt your filesystem, so it should only be used for
-testing. To enable, you'll also need to add:
-
-* libfuse3 >= 3.7
-
-On Debian/Ubuntu (Bullseye/20.04 or later needed for libfuse >= 3.7):
-```shell
-apt install -y libfuse3-dev
-```
-
-On Fedora (32 or later needed for libfuse >= 3.7):
-```shell
-dnf install -y fuse3-devel
-```
-
-Arch:
-```shell
-pacman -S fuse3
-```
-
-openSUSE:
-```shell
-zypper in -y fuse3-devel
-```
-
-Then, make using the `BCACHEFS_FUSE` environment variable (make clean first if
-previously built without fuse support):
-
-```shell
-BCACHEFS_FUSE=1 make && make install
-```

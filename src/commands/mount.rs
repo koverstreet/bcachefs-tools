@@ -436,7 +436,6 @@ pub(crate) struct ParsedMountOptions {
     pub flags:        core::ffi::c_ulong,
     /// `flags` expressed as fuser options, for the FUSE path. Flags with no
     /// fuser equivalent are omitted here but still apply via `flags`.
-    #[cfg(feature = "fuse")]
     pub fuse_options: Vec<fuser::MountOption>,
 }
 
@@ -448,14 +447,11 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
     let mut parsed = ParsedMountOptions::default();
     let mut fs_opts: Vec<&str> = Vec::new();
 
-    // A kernel flag, optionally paired with its fuser option. The fuser arm is
-    // only referenced under the `fuse` feature, so its tokens must live inside
-    // the cfg - hence the macro rather than a plain match value.
+    // A kernel flag, optionally paired with its fuser option.
     macro_rules! flag {
         ($ms:expr) => {{ parsed.flags |= $ms; }};
         ($ms:expr, $fuse:expr) => {{
             parsed.flags |= $ms;
-            #[cfg(feature = "fuse")]
             parsed.fuse_options.push($fuse);
         }};
     }
@@ -882,29 +878,21 @@ fn mount(cli: Cli) -> std::process::ExitCode {
             info!("fake mount (-f/--fake): skipping FUSE mount");
             return std::process::ExitCode::SUCCESS;
         }
-        #[cfg(feature = "fuse")]
-        {
-            let fuse_cli = super::fusemount::Cli {
-                options: if options.is_empty() { None } else { Some(options) },
-                foreground: false,
-                device: cli.dev.clone(),
-                mountpoint: cli.mountpoint.as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            };
-            return match super::fusemount::cmd_fusemount(fuse_cli) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(e) => {
-                    error!("FUSE mount failed: {e}");
-                    std::process::ExitCode::FAILURE
-                }
-            };
-        }
-        #[cfg(not(feature = "fuse"))]
-        {
-            error!("FUSE support not compiled in (build with the 'fuse' feature)");
-            return std::process::ExitCode::FAILURE;
-        }
+        let fuse_cli = super::fusemount::Cli {
+            options: if options.is_empty() { None } else { Some(options) },
+            foreground: false,
+            device: cli.dev.clone(),
+            mountpoint: cli.mountpoint.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        return match super::fusemount::cmd_fusemount(fuse_cli) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                error!("FUSE mount failed: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
 
     let module = check_bcachefs_module();

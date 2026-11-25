@@ -11,7 +11,6 @@
   versionCheckHook,
 
   # run time
-  fuse3,
   libaio,
   libunwind,
   liburcu,
@@ -146,13 +145,6 @@ let
     }
   );
 
-  packageFuse = package.overrideAttrs (
-    final: prev: {
-      makeFlags = prev.makeFlags ++ [ "BCACHEFS_FUSE=1" ];
-      buildInputs = prev.buildInputs ++ [ fuse3 ];
-    }
-  );
-
   cargo-clippy = craneLib.cargoClippy (
     args
     // {
@@ -185,6 +177,5 @@ in
     cargo-clippy
     cargo-test
     package
-    packageFuse
     ;
 }

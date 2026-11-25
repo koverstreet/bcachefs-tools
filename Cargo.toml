@@ -14,9 +14,6 @@ rust-version = "1.85.0"
 name = "bcachefs"
 path = "src/bcachefs.rs"
 
-[features]
-default = ["fuse"]
-fuse = ["dep:fuser"]
 
 [dependencies]
 log = { version = "0.4", features = ["std"] }
@@ -42,7 +39,7 @@ owo-colors = "4"
 crossterm = { version = "0.29", default-features = false, features = ["events"] }
 tiny_http = "0.12.0"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
-fuser = { version = "0.17", optional = true }
+fuser = "0.17"
 # rustyline 18 requires home 0.5.12, which requires rustc 1.88 (> our 1.85 MSRV)
 rustyline = "17.0.2"
 

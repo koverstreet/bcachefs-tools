@@ -9,7 +9,6 @@ in
 {
   bcachefsPackages = {
     "bcachefs-tools" = craneBuild.package;
-    "bcachefs-tools-fuse" = craneBuild.packageFuse;
     "bcachefs-module-linux-latest" =
       final.linuxPackages_latest.callPackage craneBuild.package.kernelModule
         { };

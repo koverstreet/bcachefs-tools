@@ -99,7 +99,6 @@ pub mod fs_failure_domains;
 pub mod fs_usage;
 pub mod generator;
 pub mod fsck;
-#[cfg(feature = "fuse")]
 pub mod fusemount;
 pub mod image;
 pub mod key;
@@ -240,7 +239,6 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
     GroupDef { heading: "Mount",                    commands: &[
         &mount::CMD,
-        #[cfg(feature = "fuse")]
         &fusemount::CMD,
         &wait_devices::CMD,
         &generator::CMD,
