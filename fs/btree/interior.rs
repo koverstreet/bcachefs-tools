@@ -887,7 +887,8 @@ impl<'t> InteriorUpdate<'t> {
             self.node_free_inmem(paths, idx, level);
         }
         for n in new {
-            self.trans().node_add(self.t, &mut paths.paths_and_updates(), n.held());
+            let hold = n.node.as_ref().expect("a new node, until it's dropped").hold();
+            self.trans().node_add(self.t, &mut paths.paths_and_updates(), n.held(), &hold);
         }
         for &b in &freed {
             self.trans().node_verify_not_in_iters(paths, level, b);

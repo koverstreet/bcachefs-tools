@@ -358,13 +358,13 @@ impl BtreeTrans<'_> {
                        want: c::SixLockType) -> bool {
         let Some(i) = self.node_lock_holder(paths, idx, b, level, want) else { return false };
         let (src, dst) = paths.pair(i, idx);
-        let (Some(node), Some(hold)) = (src.locked_node(level), src.increment_level(level, want)) else { return false };
+        let Some((node, held)) = src.hold(level) else { return false };
 
         ebug_assert!(!dst.write_locked(level), "a level held for write, its lock replaced");
         if dst.unlock_level(level) {
             self.lock_hold_time_update(dst, level);
         }
-        dst.put_level(level, &node, hold);
+        dst.put_level(level, node, held.increment(want));
         true
     }
 
@@ -427,11 +427,8 @@ impl BtreeTrans<'_> {
     /// it, or waited for.
     fn node_lock_slowpath<'b>(&self, paths: &Paths<'_>, idx: PathIdx, b: &'b c::btree_bkey_cached_common,
                               level: usize, ty: c::SixLockType) -> Result<SixHold<'b>, BchError> {
-        match self.node_lock_holder(paths, idx, b, level, ty).and_then(|i| paths[i].increment_level(level, ty)) {
-            Some(held) => {
-                let ty = held.into_raw();
-                Ok(unsafe { SixHold::from_raw(&b.lock, ty) })
-            }
+        match self.node_lock_holder(paths, idx, b, level, ty).and_then(|i| paths[i].hold(level)) {
+            Some((_, held)) => Ok(held.increment_on(&b.lock, ty)),
             None => self.node_lock_contended(b, ty, paths[idx].ip_allocated()),
         }
     }
@@ -469,24 +466,31 @@ impl BtreeTrans<'_> {
     fn node_lock_write_may_fail(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, lock_may_not_fail: bool)
         -> Result<(), BchError>
     {
+        self.node_lock_write_at(paths, idx, level, lock_may_not_fail, crate::ret_ip!())
+    }
+
+    /// Path @idx's level, held for intent, write locked: @ip is lockdep's, C's
+    /// _RET_IP_. The level's marked write locked from before the lock's had to
+    /// when it is, or it's marked intent again on failure - and only here.
+    #[inline(always)]
+    pub(in crate::btree) fn node_lock_write_at(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
+                                               lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
         /*
          * six locks are unfair, and read locks block while a thread wants a
          * write lock: thus, we need to tell the cycle detector we have a write
          * lock _before_ taking the lock - try_lock_write() does:
          */
-        let ip = crate::ret_ip!();
-        if paths[idx].try_lock_write::<c::btree_bkey_cached_common>(level, ip).is_some() {
+        if paths[idx].try_lock_write(level, ip) {
             Ok(())
         } else {
             self.node_lock_write_wait(paths, idx, level, lock_may_not_fail, ip)
         }
     }
 
-    /// The wait for a write lock BtreePath::try_lock_write() didn't get: @ip is
-    /// lockdep's, C's _RET_IP_.
+    /// The wait for a write lock BtreePath::try_lock_write() didn't get.
     #[inline(never)]
-    pub(crate) fn node_lock_write_wait(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
-                                       lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
+    fn node_lock_write_wait(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
+                            lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
         self.locking_hash_val.set(0);
         self.locking_root_id.set(Btree(u32::MAX));
 
@@ -498,8 +502,8 @@ impl BtreeTrans<'_> {
          */
         let ret = {
             let paths = &*paths;
-            let b = paths[idx].locked_node(level).expect("write locking a node the path doesn't hold");
-            self.node_lock_nopath(b.node(), lock_may_not_fail, |wait, should_sleep_fn| {
+            let (b, _) = paths[idx].hold_marked_write(level);
+            self.node_lock_nopath(b, lock_may_not_fail, |wait, should_sleep_fn| {
                 paths.lock_write_marked(idx, level, wait, should_sleep_fn, ip)
             })
         };

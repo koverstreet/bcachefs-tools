@@ -132,7 +132,7 @@ impl OwnedNode<Write> {
         }
     }
 
-    fn hold(&self) -> ManuallyDrop<SixHold<'_>> {
+    pub(crate) fn hold(&self) -> ManuallyDrop<SixHold<'_>> {
         ManuallyDrop::new(unsafe { SixHold::from_raw(&self.c.lock, SIX_LOCK_write) })
     }
 

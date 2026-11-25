@@ -1325,6 +1325,14 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
         }
     }
 
+    /// increment(), had for as long as @lock - this hold's lock, reached
+    /// through what has it for longer than this hold is.
+    pub fn increment_on<'b>(&self, lock: &'b Locked<c::six_lock, G, P>, ty: SixLockType) -> SixHold<'b, G, P> {
+        assert!(ptr::eq(self.lock(), lock), "a six lock incremented by a hold on another");
+        let ty = self.increment(ty).into_raw();
+        unsafe { SixHold::from_raw(lock, ty) }
+    }
+
     /// Intent to read, write to intent: another hold as the weaker, then this
     /// one dropped.
     pub fn downgrade(self) -> Self {

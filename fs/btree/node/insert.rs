@@ -244,15 +244,9 @@ impl BtreeTrans<'_> {
     #[inline]
     pub(in crate::btree) fn node_lock_write_prep(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
                                                  idx: PathIdx, level: usize) -> Result<(), BchError> {
-        let ip = crate::ret_ip!();
-        let fast = pu.paths[idx].try_lock_write::<BtreeNode>(level, ip).map(|mut b| self.prep_for_write(&mut b));
-        let reinit_iter = match fast {
-            Some(reinit_iter) => reinit_iter,
-            None => {
-                self.node_lock_write_wait(&mut pu.paths, idx, level, false, ip)?;
-                self.prep_for_write(&mut pu.paths[idx].locked_btree_node_mut(level).expect("a node just write locked"))
-            }
-        };
+        self.node_lock_write_at(pu.paths, idx, level, false, crate::ret_ip!())?;
+        let reinit_iter =
+            self.prep_for_write(&mut pu.paths[idx].locked_btree_node_mut(level).expect("a node just write locked"));
 
         if reinit_iter {
             self.node_reinit_iter(t, pu, idx, level);

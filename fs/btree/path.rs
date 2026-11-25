@@ -32,7 +32,7 @@ use crate::util::Printbuf;
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Locked, LockedBy};
-use crate::locking::six::{six_lock_increment_ip, six_trylock_ip, SixHold};
+use crate::locking::six::{six_trylock_ip, SixHold};
 use crate::c::SixLockType;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
@@ -231,14 +231,10 @@ impl Paths<'_> {
     /// intent, and the caller marks the level so, after the wait.
     pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &c::six_lock_waiter,
                                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
-        ebug_assert!(self[idx].write_locked(level), "taking write at a level not marked for it");
-        let node = self[idx].held_node(level);
-        let readers = self.trans.node_lock_counts(self, None, node, level).n[c::SixLockType::SIX_LOCK_read as usize] as c_int;
+        let (node, intent) = self[idx].hold_marked_write(level);
+        let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[c::SixLockType::SIX_LOCK_read as usize] as c_int;
 
-        match unsafe {
-            SixHold::from_raw(&node.as_ref().lock, SixLockType::SIX_LOCK_intent)
-                .write_waiting_over(readers, wait, should_sleep_fn, ip)
-        } {
+        match unsafe { ManuallyDrop::into_inner(intent).write_waiting_over(readers, wait, should_sleep_fn, ip) } {
             Ok(write) => {
                 write.into_raw();
                 Ok(())
@@ -798,9 +794,8 @@ impl<'t> Paths<'t> {
         }
 
         for i in 0..c::BTREE_MAX_DEPTH as usize {
-            let t = dst.locked_type(i);
-            if t != BTREE_NODE_UNLOCKED {
-                unsafe { six_lock_increment_ip(dst.held_lock(i).six(), t.six(), 0) };
+            if let Some((_, hold)) = src.hold(i) {
+                hold.increment(hold.ty()).into_raw();
             }
         }
     }
@@ -1207,21 +1202,19 @@ impl BtreePath {
     }
 
     /// The level, held for intent, write locked too if no one holds it for
-    /// read: its node's Write view. It's marked write locked first - the cycle
+    /// read: whether it was. It's marked write locked first - the cycle
     /// detector has to see that before the lock's taken - and left so if the
-    /// lock wasn't had, for node_lock_write_wait().
+    /// lock wasn't had: node_lock_write_at()'s, which waits for it.
     #[inline(always)]
-    pub(crate) fn try_lock_write<T: PathNode>(&mut self, level: usize, ip: c_ulong) -> Option<LockedNode<'_, T, Write>> {
+    pub(crate) fn try_lock_write(&mut self, level: usize, ip: c_ulong) -> bool {
         assert!(self.locked(level), "write locking a node the path doesn't hold");
         ebug_assert!(self.intent_locked(level));
         self.mark_locked_noreset(level, BTREE_NODE_WRITE_LOCKED);
 
-        let node = self.downcast::<T>().expect("write locking a node as another type")
-            .locked_node(level).expect("a level just marked write locked").node();
+        let (node, _) = self.hold_marked_write(level);
         ebug_assert!(self.l[level].lock_seq == node.common().lock.six().seq.get());
 
         six_trylock_ip(node.common().lock.six(), SixLockType::SIX_LOCK_write, ip)
-            .then(|| LockedNode { node, _mode: PhantomData })
     }
 
     /// The level, held for intent, write locked too if that's had without
@@ -1884,15 +1877,30 @@ impl BtreeNodeLockedType {
 }
 
 impl<T: PathNode> BtreePath<T> {
-    /// Another hold on the level's node, as @want, if the level's is no
-    /// weaker.
-    pub fn increment_level(&self, level: usize, want: SixLockType) -> Option<SixHold<'_>> {
+    /// The level's node and its hold, still the path's: a guard never dropped,
+    /// had for as long as the path is borrowed. What nodes_locked says is held
+    /// is put_level()'s node and hold, till take_level() - but for a level
+    /// marked write before it's had, hold_marked_write()'s.
+    pub fn hold(&self, level: usize) -> Option<(&T, ManuallyDrop<SixHold<'_>>)> {
         let locked = self.locked_type(level);
-        (locked != BTREE_NODE_UNLOCKED && locked as i32 >= want as i32).then(|| {
-            ManuallyDrop::new(unsafe { SixHold::from_raw(self.held_lock(level), locked.six()) }).increment(want)
-        })
+        if locked == BTREE_NODE_UNLOCKED {
+            return None;
+        }
+        unsafe {
+            let node = self.held_node(level).as_ref();
+            Some((node, ManuallyDrop::new(SixHold::from_raw(&node.common().lock, locked.six()))))
+        }
     }
 
+    /// hold(), of a level marked write before the write lock's had - for the
+    /// cycle detector to see the wait: its intent hold, which is all it has.
+    pub(crate) fn hold_marked_write(&self, level: usize) -> (&T, ManuallyDrop<SixHold<'_>>) {
+        assert!(self.write_locked(level), "a level marked write, that isn't");
+        unsafe {
+            let node = self.held_node(level).as_ref();
+            (node, ManuallyDrop::new(SixHold::from_raw(&node.common().lock, SixLockType::SIX_LOCK_intent)))
+        }
+    }
     /// The level's node, relocked as @ty if nothing's written it since the
     /// level's lock_seq: if it's still the node the level had.
     pub fn relock_level(&mut self, level: usize, ty: SixLockType) -> bool {
@@ -1943,8 +1951,10 @@ impl<T: PathNode> BtreePath<T> {
         }
 
         self.mark_locked_noreset(level, BTREE_NODE_UNLOCKED);
-        let node = self.held_node(level);
-        Some(unsafe { (node.as_ref(), SixHold::from_raw(self.held_lock(level), locked.six())) })
+        unsafe {
+            let node = self.held_node(level).as_ref();
+            Some((node, SixHold::from_raw(&node.common().lock, locked.six())))
+        }
     }
 
     /// Whether there was a lock to drop.
@@ -1982,15 +1992,10 @@ impl<T: PathNode> BtreePath<T> {
         self.l[level].b.get().ok().flatten().expect("a locked level has its node")
     }
 
-    /// Its lock.
-    fn held_lock(&self, level: usize) -> &Locked<c::six_lock> {
-        self.unlocked_node(level).expect("a locked level has its node").lock()
-    }
-
     /// The level's node, if the path holds its lock: what makes it the path's,
     /// and keeps it while the path's borrowed.
     pub fn locked_node(&self, level: usize) -> Option<LockedNode<'_, T>> {
-        self.locked(level).then(|| LockedNode { node: unsafe { self.held_node(level).as_ref() }, _mode: PhantomData })
+        self.hold(level).map(|(node, _)| LockedNode { node, _mode: PhantomData })
     }
 
     /// The level's node, as far as it's known without its lock: its memory

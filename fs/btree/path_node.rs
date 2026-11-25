@@ -15,7 +15,7 @@ use crate::btree::traverse::level_init_iter;
 use crate::c;
 use crate::errcode::Errcode;
 use crate::format::Btree;
-use crate::locking::six::{six_lock_increment_ip, SixHold};
+use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::Printbuf;
 
@@ -109,7 +109,7 @@ impl BtreeTrans<'_> {
      * node:
      */
     pub(in crate::btree) fn node_add(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                     b: LockedNode<'_, BtreeNode>) {
+                                     b: LockedNode<'_, BtreeNode>, hold: &SixHold<'_>) {
         let level = b.c.level.get() as usize;
         let paths = &mut pu.paths;
 
@@ -124,12 +124,8 @@ impl BtreeTrans<'_> {
             self.node_unlock(paths, idx, level);
 
             if ty != BTREE_NODE_UNLOCKED {
-                let hold = unsafe {
-                    six_lock_increment_ip(b.c.lock.six(), ty.six(), 0);
-                    SixHold::from_raw(&b.c.lock, ty.six())
-                };
                 let path = &mut paths[idx];
-                path.put_level(level, &b.c, hold);
+                path.put_level(level, &b.c, hold.increment(ty.six()));
                 path.lock_taken(level);
             }
 
