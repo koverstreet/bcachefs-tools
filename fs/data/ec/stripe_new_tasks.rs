@@ -128,22 +128,24 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
 {
     let all = ((1u64 << old.stripe().v().nr_blocks) - 1) as u32;
 
-    {
+    let errs = {
         stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, buf));
         for i in blocks_in(required) {
             io.as_mut().submit(old.stripe(), i);
         }
-        io.as_mut().wait(at).await;
-    }
+        io.as_mut().wait(at).await
+    };
+    errs.record(buf);
 
     if !blocks_good(old.stripe(), buf, required) {
-        {
+        let errs = {
             stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, buf));
             for i in blocks_in(all & !required) {
                 io.as_mut().submit(old.stripe(), i);
             }
-            io.as_mut().wait(at).await;
-        }
+            io.as_mut().wait(at).await
+        };
+        errs.record(buf);
 
         if let Err(err) = validate_msg(fs, old.stripe(), buf, true, required, c"ec_old_stripe_read_done") {
             // Reconstruct either couldn't run - too many failures, so
@@ -306,9 +308,9 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     let Working { new_stripe, new_buf, reuse, moving, old_block_map, allocated, watermark, res } = w;
     let buf = new_buf.as_mut().expect("a new stripe's buffer");
 
-    stack_pin_init!(let io = BlockIo::<_, waiter::Async>::write(fs, buf));
-
-    // the rest of each data bucket zeroed: zero_out_rest_of_ec_bucket()
+    // the rest of each data bucket zeroed: zero_out_rest_of_ec_bucket() -
+    // written with the rest, the buffer whole first
+    let mut tails: ArrayVec<(usize, u32, u32), MAX_BLOCKS> = ArrayVec::new();
     for i in old_block_map.len()..nr_data {
         // its writer done with it
         let Some((dev, sectors_free)) = s.lock().blocks[i].bucket().map(|b| (u32::from(b.id().dev()), b.sectors_free.get())) else {
@@ -323,15 +325,22 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
             u32::from(ca.mi.get().bucket_size) - sectors_free
         };
         let start = (offset as usize) << 9;
-        io.as_mut().buf().block_mut(i)[start..start + ((sectors_free as usize) << 9)].fill(0);
-        io.as_mut().submit_range(new_stripe.stripe(), i, offset, sectors_free);
+        buf.block_mut(i)[start..start + ((sectors_free as usize) << 9)].fill(0);
+        tails.push((i, offset, sectors_free));
     }
 
     // The fold was awaited before we were in flight: its error is settled.
     // The reuse is abandoned, so the old stripe stays as it is and nothing
     // else discovers the loss until someone reads one of those files:
     if let Err(lost) = &fold {
-        io.as_mut().wait(at).await;
+        let errs = {
+            stack_pin_init!(let io = BlockIo::<_, waiter::Async>::write(fs, buf));
+            for &(i, offset, sectors) in &tails {
+                io.as_mut().submit_range(new_stripe.stripe(), i, offset, sectors);
+            }
+            io.as_mut().wait(at).await
+        };
+        errs.record(buf);
 
         // Too few blocks to reconstruct: the lost blocks' buffers still hold
         // what we read, and an extent that checks out against it isn't lost
@@ -348,23 +357,26 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
 
     assert!(*allocated, "creating stripe {}, not allocated", new_stripe.idx());
 
-    generate_ec(new_stripe.stripe(), io.as_mut().buf());
-    generate_checksums(new_stripe, io.as_mut().buf());
+    generate_ec(new_stripe.stripe(), buf);
+    generate_checksums(new_stripe, buf);
 
-    // write out data blocks that moved
-    for i in 0..old_block_map.len() {
-        if moving.test(i) {
+    // the zeroed tails, the data blocks that moved, and p/q
+    let errs = {
+        stack_pin_init!(let io = BlockIo::<_, waiter::Async>::write(fs, buf));
+        for &(i, offset, sectors) in &tails {
+            io.as_mut().submit_range(new_stripe.stripe(), i, offset, sectors);
+        }
+        for i in (0..old_block_map.len()).filter(|&i| moving.test(i)) {
             io.as_mut().submit(new_stripe.stripe(), i);
         }
-    }
+        for i in nr_data..nr_blocks {
+            io.as_mut().submit(new_stripe.stripe(), i);
+        }
+        io.as_mut().wait(at).await
+    };
+    errs.record(buf);
 
-    // write p/q:
-    for i in nr_data..nr_blocks {
-        io.as_mut().submit(new_stripe.stripe(), i);
-    }
-    io.as_mut().wait(at).await;
-
-    if io.as_mut().buf().failed_mask(PRE) != 0 {
+    if buf.failed_mask(PRE) != 0 {
         bch_err!(fs, "error creating stripe: error writing redundancy buckets");
         return fs.throw(Errcode::ec_block_write);
     }

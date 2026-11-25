@@ -10,8 +10,8 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::util::alloc::KBox;
-use crate::data::ec::buf::{block_checksum, blocks_in, errs_only_dev_offline, errs_to_text, validate, MemWait, StripeBuf,
-                           EC_BLOCKS_ALL, POST, PRE};
+use crate::data::ec::buf::{block_checksum, blocks_in, errs_only_dev_offline, errs_to_text, validate, Blocks, MemWait,
+                           StripeBuf, EC_BLOCKS_ALL, POST, PRE};
 use crate::data::ec::stripe::{ptr_matches_stripe, shape, MAX_BLOCKS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -19,7 +19,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::data::dev_bio::DevBio;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
-use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, Buffer, Gathered, HoldsDev};
+use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, Buffer, Gathered, HoldsDev, MapBuf};
 use crate::os::blkdev::BlockDevice;
 use crate::util::gather::{Fold, Gather};
 use crate::os::kernel::WRITE;
@@ -30,7 +30,6 @@ use crate::os::workqueue::Queue;
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{log_msg_ratelimited, prt};
-use core::marker::PhantomData;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::args_stored_once;
@@ -40,16 +39,18 @@ use crate::format::{Bpos, Btree, DataType};
 // ── Block IO ─────────────────────────────────────────────────────────────
 //
 // A round of block IO - the blocks a read, or a write, does together - is a
-// BlockIo: it has the buffer for as long, and a Gather its bios complete into,
-// waited on - in a task, or synchronously - before the buffer's had back. Each
-// bio holds an io ref on its device, leaked into it as it's submitted and
-// adopted back by its endio, which puts it before its Gather ref. A Gather is
-// used once, so each round has its own, where C reused the buffer's closure.
-// A bio's endio doesn't touch the buffer, which the round has by &mut: its
-// block's error goes into the Gather, and the wait writes them to err[PRE] -
+// BlockIo: it borrows the buffer's blocks apart, for 'a, and lends each bio its
+// piece of one; a Gather<'a> its bios complete into is waited on - in a task,
+// or synchronously - before the buffer's had back. A read borrows the buffer
+// &mut, its bios each their piece &mut; a write borrows it &, as its bios do,
+// so everything a write round writes is in the buffer before it's begun.
+// Each bio holds an io ref on its device, leaked into it as it's submitted
+// and adopted back by its endio, which puts it before its Gather ref. A
+// Gather is used once, so each round has its own, where C reused the
+// buffer's closure. A bio's endio doesn't touch the buffer: its block's error
+// goes into the Gather, and the wait hands them back - recorded to err[PRE],
 // each block's last, as C's endio left it. The key isn't the round's: each
-// submit is handed it, for the block's pointer - so between submits the key
-// can be written, a new stripe's checksums generated.
+// submit is handed it, for the block's pointer.
 
 
 /// Each block's error from a round's bios, if it had one.
@@ -81,20 +82,60 @@ impl Fold for BlockErrs {
     }
 }
 
-/// One bio of a round, from ec.block_bioset.
+impl BlockErrs {
+    /// Each block's error, or @other's.
+    fn or(self, other: Self) -> Self {
+        BlockErrs(core::array::from_fn(|i| self.0[i].or(other.0[i])))
+    }
+
+    /// Into @buf's err[PRE]: each block's, its last.
+    pub(crate) fn record(self, buf: &mut StripeBuf) {
+        for (i, e) in self.0.into_iter().enumerate() {
+            if e.is_some() {
+                buf.err[PRE][i] = e;
+            }
+        }
+    }
+}
+
+/// What a round's bios map of its blocks: &mut [u8] to be read into, & to be
+/// written from - so which way a round goes is which it borrows.
+pub(crate) trait RoundBuf: MapBuf + Sized + Send {
+    type Rw: IoRefIdx;
+
+    fn split_at(self, mid: usize) -> (Self, Self);
+}
+
+impl RoundBuf for &mut [u8] {
+    type Rw = c::DevReadRefKind;
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        self.split_at_mut(mid)
+    }
+}
+
+impl RoundBuf for &[u8] {
+    type Rw = c::DevWriteRefKind;
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        <[u8]>::split_at(self, mid)
+    }
+}
+
+/// One bio of a round, from ec.block_bioset: its piece of a block.
 #[pin_data]
 #[repr(C)]
-pub struct EcBio {
+pub struct EcBio<M: MapBuf> {
     /// The block's pointer, for the endio's staleness check
     ptr: c::bch_extent_ptr,
     idx: u8,
     #[pin]
-    dev: DevBio<Buffer<&'static mut [u8]>>,
+    dev: DevBio<Buffer<M>>,
 }
 
-crate::has_bio!(EcBio, dev.bio, owns Buffer<&'static mut [u8]>);
+crate::has_bio!(EcBio<M>, dev.bio, owns Buffer<M> where M: MapBuf);
 
-impl HoldsDev for EcBio {
+impl<M: MapBuf> HoldsDev for EcBio<M> {
     type Dev = BlockDev;
 
     fn hold(self: Pin<&mut Self>, ca: BlockDev) {
@@ -109,7 +150,7 @@ impl HoldsDev for EcBio {
 /// A round's bio done: its IO accounted against the device, and its block's
 /// error folded into the round's Gather - the device's, or its pointer gone
 /// stale.
-impl Gathered<BlockErrs> for EcBio {
+impl<M: MapBuf> Gathered<BlockErrs> for EcBio<M> {
     fn done(self: Pin<&mut Self>, status: Result<(), BchError>) -> BlockErrs {
         let this = self.project();
         let (ca, _) = this.dev.end();
@@ -124,140 +165,132 @@ impl Gathered<BlockErrs> for EcBio {
     }
 }
 
-/// A round of block IO on @buf: reads, or writes, as @Rw's io ref is; waited
-/// on by @Wt.
-// Not R: 7.4's #[pin_data] generates projections generic over an R of its own
+/// A round of block IO on a buffer's blocks, M: read into them, or written
+/// from them, as RoundBuf says; waited on by @Wt.
 #[pin_data]
-pub(crate) struct BlockIo<'a, Rw: IoRefIdx, Wt: Waiter> {
-    /// Waited on, or its drop waits, before the buffer's had back
+pub(crate) struct BlockIo<'a, M: RoundBuf, Wt: Waiter> {
+    /// Waited on before the buffer's had back: its drop asserts it was
     #[pin]
-    done:    Gather<'static, BlockErrs, Wt>,
-    fs:      &'a Fs,
-    buf:     &'a mut StripeBuf,
-    _r:      PhantomData<fn() -> Rw>,
+    done:   Gather<'a, BlockErrs, Wt>,
+    fs:     &'a Fs,
+    /// Each block, till a submit lends it out
+    blocks: Blocks<M>,
+    /// The blocks whose device was offline, or pointer stale, at submit
+    errs:   BlockErrs,
 }
 
-impl<'a, Wt: Waiter> BlockIo<'a, c::DevReadRefKind, Wt> {
+impl<'a, Wt: Waiter> BlockIo<'a, &'a mut [u8], Wt> {
     pub(crate) fn read(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
-        Self::new(fs, buf)
+        Self::new(fs, buf.blocks_apart_mut())
     }
 }
 
-impl<'a, Wt: Waiter> BlockIo<'a, c::DevWriteRefKind, Wt> {
-    pub(crate) fn write(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
-        Self::new(fs, buf)
+impl<'a, Wt: Waiter> BlockIo<'a, &'a [u8], Wt> {
+    pub(crate) fn write(fs: &'a Fs, buf: &'a StripeBuf) -> impl PinInit<Self> + 'a {
+        Self::new(fs, buf.blocks_apart())
     }
 }
 
-impl<'a, R: IoRefIdx, Wt: Waiter> BlockIo<'a, R, Wt>
+impl<'a, M: RoundBuf + 'a, Wt: Waiter> BlockIo<'a, M, Wt>
 where
-    DevIoRef<R>: Into<BlockDev>,
+    DevIoRef<M::Rw>: Into<BlockDev>,
 {
-    fn new(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
-        pin_init!(Self { done <- Gather::new(), fs, buf, _r: PhantomData })
-    }
-
-    /// The buffer, between submits: to zero what's to be written, say.
-    pub(crate) fn buf(self: Pin<&mut Self>) -> &mut StripeBuf {
-        self.project().buf
+    fn new(fs: &'a Fs, blocks: Blocks<M>) -> impl PinInit<Self> + 'a {
+        pin_init!(Self { done <- Gather::new(), fs, blocks, errs: BlockErrs::default() })
     }
 
     /// Block @idx of stripe @s, what the buffer has of it.
     pub(crate) fn submit(self: Pin<&mut Self>, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize) {
-        let (offset, size) = (self.buf.offset, self.buf.size);
+        let (offset, size) = (self.blocks.offset, self.blocks.size);
         self.submit_range(s, idx, offset, size)
     }
 
     /// Block @idx of stripe @s, @sectors from @sector_offset - into the
     /// stripe, within what the buffer has - read into its buffer, or written
-    /// from it: bch2_ec_block_io_range(). Its device offline, or its pointer
-    /// stale, is the block's error at once.
+    /// from it: bch2_ec_block_io_range(). A block's IO is once a round. Its
+    /// device offline, or its pointer stale, is the block's error at once.
     pub(crate) fn submit_range(self: Pin<&mut Self>, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize,
                                sector_offset: u32, sectors: u32) {
         let this = self.project();
         let fs = *this.fs;
-        let sh = this.buf.shape(s);
-        assert!(this.buf.has(idx), "IO to block {idx} of a stripe buffer without it");
-        assert!(sector_offset >= this.buf.offset && sector_offset + sectors <= this.buf.offset + this.buf.size,
-                "IO to {sector_offset}+{sectors} of a stripe buffer of {}+{}", this.buf.offset, this.buf.size);
+        let sh = shape(s);
+        let (offset, size) = (this.blocks.offset, this.blocks.size);
+        assert_eq!(sh.nr_blocks, this.blocks.nr_blocks, "a stripe buffer, handed a stripe of another width");
+        let block = this.blocks.blocks[idx].take()
+            .unwrap_or_else(|| panic!("IO to block {idx} of a stripe buffer without it, or twice in a round"));
+        assert!(sector_offset >= offset && sector_offset + sectors <= offset + size,
+                "IO to {sector_offset}+{sectors} of a stripe buffer of {offset}+{size}");
 
         let ptr = s.v().block_ptrs()[idx];
         let data_type = if (idx as u32) < sh.nr_data { DataType::user }
                         else { DataType::parity };
 
-        let Some(ca) = fs.dev_get_ioref::<R>(ptr.dev().into()) else {
-            this.buf.err[PRE][idx] = Some(fs.err(Errcode::stripe_read_device_offline));
+        let Some(ca) = fs.dev_get_ioref::<M::Rw>(ptr.dev().into()) else {
+            this.errs.0[idx] = Some(fs.err(Errcode::stripe_read_device_offline));
             return;
         };
         if ca.dev_ptr_stale(&ptr, &read_lock()) {
-            this.buf.err[PRE][idx] = Some(fs.err(Errcode::stripe_read_ptr_stale));
+            this.errs.0[idx] = Some(fs.err(Errcode::stripe_read_ptr_stale));
             return;
         }
-        ca.io_done_add(R::RW, data_type, sectors.into());
+        ca.io_done_add(M::Rw::RW, data_type, sectors.into());
 
-        let write = R::RW == WRITE;
-        let opf = if write { c::req_op_REQ_OP_WRITE } else { c::req_op_REQ_OP_READ };
+        let opf = if M::Rw::RW == WRITE { c::req_op_REQ_OP_WRITE } else { c::req_op_REQ_OP_READ };
         let bytes = (sectors as usize) << 9;
-        let start = ((sector_offset - this.buf.offset) as usize) << 9;
-        let base = this.buf.block_mut(idx)[start..start + bytes].as_mut_ptr();
+        let start = ((sector_offset - offset) as usize) << 9;
+        let (mut rest, _) = block.split_at(start).1.split_at(bytes);
         let set = &fs.ec.block_bioset;
 
-        let mut offset = 0;
-        while offset < bytes {
+        let mut done = 0;
+        while done < bytes {
             // @start is a block's, not a page's: where each bio starts in its
             // page says how much it maps
-            let b = buf_bio_bytes(base.wrapping_add(offset), bytes - offset);
-            let nr_vecs = buf_nr_bvecs(base.wrapping_add(offset), b);
-            // SAFETY: the block's buffer, which the round has until its wait,
-            // after this bio's endio
-            let chunk: &'static mut [u8] = unsafe { core::slice::from_raw_parts_mut(base.wrapping_add(offset), b) };
-            let bio = set.alloc::<BchError, _>(nr_vecs as u16, opf, |at| pin_init!(EcBio {
+            let (p, len) = rest.as_raw();
+            let b = buf_bio_bytes(p, len);
+            let nr_vecs = buf_nr_bvecs(p, b);
+            let (chunk, tail) = rest.split_at(b);
+            rest = tail;
+            let bio = set.alloc_as::<EcBio<M>, BchError, _>(nr_vecs as u16, opf, |at| pin_init!(EcBio {
                 ptr,
                 idx: idx as u8,
                 dev <- DevBio::new(at.init_from(|bio| Ok::<_, BchError>(Buffer::fill(bio, chunk)))),
             }? BchError)).expect("a bio from the stripe bioset's mempool");
 
-            bio.submit_gathered(ca.clone().into(), ptr.offset() + u64::from(sector_offset) + (offset >> 9) as u64,
+            bio.submit_gathered(ca.clone().into(), ptr.offset() + u64::from(sector_offset) + (done >> 9) as u64,
                                 this.done.get());
-            offset += b;
+            done += b;
         }
     }
 }
 
-/// Every bio done, and each block's error in the buffer.
-impl<R: IoRefIdx> WaitSync for Pin<&mut BlockIo<'_, R, waiter::Sync>> {
-    type Output = ();
+/// Every bio done: each block's error, to record() into the buffer.
+impl<M: RoundBuf> WaitSync for Pin<&mut BlockIo<'_, M, waiter::Sync>> {
+    type Output = BlockErrs;
 
-    fn wait_sync(self, how: Sleep) {
+    fn wait_sync(self, how: Sleep) -> BlockErrs {
         let this = self.project();
-        record(this.buf, this.done.wait_sync(how));
+        this.done.wait_sync(how).or(*this.errs)
     }
 }
 
-impl<R: IoRefIdx> BlockIo<'_, R, waiter::Async> {
+impl<M: RoundBuf> BlockIo<'_, M, waiter::Async> {
     /// As wait_sync(), awaited: resumed @at.
-    pub(crate) async fn wait(self: Pin<&mut Self>, at: Resume<'_>) {
+    pub(crate) async fn wait(self: Pin<&mut Self>, at: Resume<'_>) -> BlockErrs {
         let this = self.project();
-        let errs = this.done.wait(at).await;
-        record(this.buf, errs);
-    }
-}
-
-fn record(buf: &mut StripeBuf, errs: BlockErrs) {
-    for (i, e) in errs.0.into_iter().enumerate() {
-        if e.is_some() {
-            buf.err[PRE][i] = e;
-        }
+        this.done.wait(at).await.or(*this.errs)
     }
 }
 
 /// The blocks of @s in @blocks read into @buf, waited on.
 pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, blocks: u32) {
-    stack_pin_init!(let io = BlockIo::<_, waiter::Sync>::read(fs, buf));
-    for i in blocks_in(blocks & ((1u64 << s.v().nr_blocks) - 1) as u32) {
-        io.as_mut().submit(s, i);
-    }
-    io.as_mut().wait_sync(Sleep::IDLE);
+    let errs = {
+        stack_pin_init!(let io = BlockIo::<_, waiter::Sync>::read(fs, buf));
+        for i in blocks_in(blocks & ((1u64 << s.v().nr_blocks) - 1) as u32) {
+            io.as_mut().submit(s, i);
+        }
+        io.as_mut().wait_sync(Sleep::IDLE)
+    };
+    errs.record(buf);
 }
 
 // ── Scrub ────────────────────────────────────────────────────────────────
@@ -332,7 +365,7 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
 {
     let iter = c::bvec_iter { bi_sector: pick.ptr.offset(), ..bio.raw().bi_iter };
     let (key, mut buf, block) = reconstruct_start(fs, btree, data_pos, iter, pick, flags, msg)?;
-    {
+    let errs = {
         stack_pin_init!(let io = BlockIo::<_, waiter::Async>::read(fs, &mut buf));
         {
             let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
@@ -340,8 +373,9 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
                 io.as_mut().submit(s, i);
             }
         }
-        io.as_mut().wait(Resume::queue(Queue::system_dfl())).await;
-    }
+        io.as_mut().wait(Resume::queue(Queue::system_dfl())).await
+    };
+    errs.record(&mut buf);
     reconstruct_finish(fs, &key, &mut buf, block, bio, iter, flags, msg)
 }
 

@@ -53,7 +53,7 @@ pub(crate) const EC_BLOCKS_ALL: u32 = !0;
 // it's let in, or a stripe bigger than the limit would never be made. It
 // waits on ec.stripe_buf_freed, which freeing wakes.
 //
-// IO doesn't outlive a buffer here: a round of IO has the buffer by &mut until
+// IO doesn't outlive a buffer here: a round of IO borrows the buffer until
 // it's waited on (BlockIo), so freeing it waits for nothing - where C's exit
 // waited on the buffer's closure.
 
@@ -215,11 +215,6 @@ impl StripeBuf {
         sh
     }
 
-    /// Whether it has block @i.
-    pub(crate) fn has(&self, i: usize) -> bool {
-        self.blocks & 1 << i != 0
-    }
-
     /// The blocks with an error @e - pre or post recovery - as a mask.
     pub(crate) fn failed_mask(&self, e: usize) -> u32 {
         (0..self.nr_blocks as usize)
@@ -254,6 +249,35 @@ impl StripeBuf {
         let bytes = (self.size as usize) << 9;
         self.data.iter_mut().flatten().map(|b| unsafe { assume_init_mut(&mut b[..bytes]) }).collect()
     }
+
+    /// Its blocks apart, to be read into: a round of IO's.
+    pub(crate) fn blocks_apart_mut(&mut self) -> Blocks<&mut [u8]> {
+        let mut b = Blocks { nr_blocks: self.nr_blocks, offset: self.offset, size: self.size,
+                             blocks: core::array::from_fn(|_| None) };
+        for (i, w) in blocks_in(self.blocks).zip(self.blocks_mut()) {
+            b.blocks[i] = Some(w);
+        }
+        b
+    }
+
+    /// Its blocks apart, to be written from.
+    pub(crate) fn blocks_apart(&self) -> Blocks<&[u8]> {
+        let mut b = Blocks { nr_blocks: self.nr_blocks, offset: self.offset, size: self.size,
+                             blocks: core::array::from_fn(|_| None) };
+        for i in blocks_in(self.blocks) {
+            b.blocks[i] = Some(self.block(i));
+        }
+        b
+    }
+}
+
+/// A buffer's blocks, each its window, apart - what a round of block IO
+/// lends its bios, a block at a time - and the window.
+pub(crate) struct Blocks<M> {
+    pub(crate) nr_blocks: u32,
+    pub(crate) offset:    u32,
+    pub(crate) size:      u32,
+    pub(crate) blocks:    [Option<M>; MAX_BLOCKS],
 }
 
 impl Drop for StripeBuf {

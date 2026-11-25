@@ -114,7 +114,7 @@ pub struct bch_fs_ec {
     /// rounds of IO, which wait for them
     #[pin]
     #[init(BioSet::new(1))]
-    pub block_bioset: BioSet<EcBio>,
+    pub block_bioset: BioSet<EcBio<&'static mut [u8]>>,
 
     /// gc's copies of the stripes: trigger.rs's alone - allocated as the gc
     /// triggers find them, from several threads at once.
