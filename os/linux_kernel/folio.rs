@@ -318,7 +318,7 @@ impl<A> FolioRef<'_, A> {
 
     /// Locked: EAGAIN if @nonblock and that would wait.
     pub fn lock_or_eagain(&self, nonblock: bool) -> Result<FolioGuard<'_, A>, BchError> {
-        if nonblock { self.try_lock().ok_or_else(|| c::EAGAIN.into()) } else { Ok(self.lock()) }
+        if nonblock { self.try_lock().ok_or_else(|| c::Errcode::EAGAIN_folio_lock_nonblock.into()) } else { Ok(self.lock()) }
     }
 }
 

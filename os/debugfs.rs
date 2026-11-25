@@ -132,7 +132,7 @@ impl DebugOut {
     /// buffer is full. For a print_each() that fills the buffer under a lock.
     pub fn try_flush(&mut self) -> Result<ControlFlow<()>, BchError> {
         if self.buf.allocation_failure() {
-            return Err(c::ENOMEM.into());
+            return Err(c::Errcode::ENOMEM_debugfs_flush.into());
         }
 
         let u = unsafe { &mut *self.u };
@@ -143,7 +143,7 @@ impl DebugOut {
             self.buf.drop_front(copied);
 
             if copied != want {
-                return Err(c::EFAULT.into());
+                return Err(c::Errcode::EFAULT_debugfs_flush.into());
             }
         }
 

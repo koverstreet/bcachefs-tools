@@ -94,7 +94,7 @@ impl Srcu {
         // SAFETY: every field written, @slot pinned from here on
         unsafe {
             pin_init_from_closure(move |slot: *mut Self| {
-                let counts = PerCpu::alloc().map_err(|_| BchError::from(c::ENOMEM))?;
+                let counts = PerCpu::alloc().map_err(|_| BchError::from(c::Errcode::ENOMEM_srcu_percpu))?;
                 (&raw mut (*slot).ctr).write(AtomicU64::new(0));
                 (&raw mut (*slot).gp_seq).write(AtomicU64::new(0));
                 (&raw mut (*slot).counts).write(counts);

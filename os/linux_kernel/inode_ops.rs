@@ -82,7 +82,7 @@ crate::vfs_ops! {
         -> Result<Option<PosixAcl>, BchError>
     {
         if rcu {
-            return Err(c::ECHILD.into());
+            return Err(c::Errcode::ECHILD_get_inode_acl_rcu.into());
         }
         inode.get_acl(ty)
     };

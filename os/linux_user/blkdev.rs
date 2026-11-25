@@ -134,7 +134,7 @@ pub fn kobj(bdev: &BlockDevice) -> &Kobject {
 
 /// @path's device, by number: lookup_bdev(), which userspace hasn't got.
 pub fn lookup(_path: &CStr) -> Result<c::dev_t, BchError> {
-    Err(c::EINVAL.into())
+    Err(c::Errcode::EINVAL_lookup_bdev_userspace.into())
 }
 
 /* BLKGETSIZE64: _IOR(0x12, 114, size_t) */

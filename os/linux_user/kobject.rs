@@ -407,7 +407,7 @@ enum Entry<'a> {
 /// The file or directory at @path: a file's kobject is its directory's, or
 /// its named group's.
 fn lookup<'a>(tree: &'a Tree, path: &str) -> Result<Entry<'a>, BchError> {
-    let mut dir = tree.root().ok_or(BchError::from(c::ENOENT))?;
+    let mut dir = tree.root().ok_or(BchError::from(c::Errcode::ENOENT_sysfs_lookup_root))?;
     let mut grp: Option<&'static RawGroup> = None;
 
     let names: Vec<&str> = path.split('/').filter(|n| !n.is_empty()).collect();
@@ -428,7 +428,7 @@ fn lookup<'a>(tree: &'a Tree, path: &str) -> Result<Entry<'a>, BchError> {
         }
 
         if grp.is_some() {
-            return Err(c::ENOENT.into());
+            return Err(c::Errcode::ENOENT_sysfs_lookup_in_group.into());
         }
 
         if let Some(g) = groups(dir).find(|g| g.name.is_some_and(is)) {
@@ -436,7 +436,7 @@ fn lookup<'a>(tree: &'a Tree, path: &str) -> Result<Entry<'a>, BchError> {
         } else if let Some(child) = tree.children(dir).find(|k| is(k.name())) {
             dir = child;
         } else {
-            return Err(c::ENOENT.into());
+            return Err(c::Errcode::ENOENT_sysfs_lookup.into());
         }
     }
 
@@ -450,7 +450,7 @@ fn lookup<'a>(tree: &'a Tree, path: &str) -> Result<Entry<'a>, BchError> {
 /// open it otherwise.
 fn allowed(attr: &Attribute, mask: u16) -> Result<(), BchError> {
     match attr.mode & mask {
-        0 => Err(c::EACCES.into()),
+        0 => Err(c::Errcode::EACCES_sysfs_attr_mode.into()),
         _ => Ok(()),
     }
 }
@@ -467,7 +467,7 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), BchError> {
     match lookup(&tree, path)? {
         Entry::File(k, a) => {
             allowed(a, 0o222)?;
-            let s = core::str::from_utf8(data).map_err(|_| BchError::from(c::EINVAL))?;
+            let s = core::str::from_utf8(data).map_err(|_| BchError::from(c::Errcode::EINVAL_sysfs_write_utf8))?;
             unsafe { (k.ktype().store)(k, a, s) }
         }
         Entry::Bin(k, b) => {
@@ -481,7 +481,7 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), BchError> {
             }
             Ok(())
         }
-        Entry::Dir(_) | Entry::Group(_) => Err(BchError::from(c::EISDIR)),
+        Entry::Dir(_) | Entry::Group(_) => Err(BchError::from(c::Errcode::EISDIR_sysfs_write_dir)),
     }
 }
 
@@ -546,7 +546,7 @@ pub fn read_or_html_dirlist(path: &str, out: &mut Vec<u8>) -> Result<(), BchErro
             let mut buf = Printbuf::new();
             unsafe { (k.ktype().show)(k, a, &mut buf)? };
             if buf.allocation_failure() {
-                return Err(c::ENOMEM.into());
+                return Err(c::Errcode::ENOMEM_sysfs_show.into());
             }
             buf.ensure_trailing_newline();
             out.extend_from_slice(buf.as_bytes());

@@ -137,7 +137,7 @@ fn pagecache_dirty(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end:
     };
 
     match scan(true) {
-        Err(e) if e == BchError::from(c::EAGAIN) => t.drop_locks_do(|| scan(false)),
+        Err(e) if e == BchError::from(c::Errcode::EAGAIN_folio_lock_nonblock) => t.drop_locks_do(|| scan(false)),
         r => r,
     }
 }

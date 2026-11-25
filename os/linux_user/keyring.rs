@@ -14,5 +14,5 @@ pub fn request_key(desc: &CStr) -> Result<Key, BchError> {
     let desc = desc.to_str().expect("a key description, \"bcachefs:<uuid>\"");
     [KeyRingIdentifier::Session, KeyRingIdentifier::User, KeyRingIdentifier::UserSession].into_iter()
         .find_map(|ring| KeyRing::from_special_id(ring, false).and_then(|r| r.search(desc)).ok())
-        .ok_or(BchError::from(c::ENOKEY))
+        .ok_or(BchError::from(c::Errcode::ENOKEY_request_key))
 }

@@ -86,7 +86,7 @@ impl<T> Attr<T> {
         }
         match self.ops {
             Ops::File { store: Some(store), .. } => store(obj, s),
-            Ops::File { store: None, .. }        => Err(c::EINVAL.into()),
+            Ops::File { store: None, .. }        => Err(c::Errcode::EINVAL_sysfs_store_readonly.into()),
             Ops::Entry { i, store, .. }          => store(obj, i, s),
         }
     }
@@ -204,7 +204,7 @@ pub fn parse_int<T>(s: &str) -> Result<T, BchError>
         .parse()
         .map_err(|e: core::num::ParseIntError| match e.kind() {
             IntErrorKind::PosOverflow |
-            IntErrorKind::NegOverflow => c::ERANGE.into(),
-            _                         => c::EINVAL.into(),
+            IntErrorKind::NegOverflow => c::Errcode::ERANGE_parse_int.into(),
+            _                         => c::Errcode::EINVAL_parse_int.into(),
         })
 }

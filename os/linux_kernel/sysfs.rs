@@ -85,7 +85,7 @@ unsafe fn store_buf(buf: *const c_char, size: usize,
     // SAFETY: the caller's
     let bytes = unsafe { core::slice::from_raw_parts(buf.cast::<u8>(), size) };
     let ret = core::str::from_utf8(bytes)
-        .map_err(|_| BchError::from(c::EINVAL))
+        .map_err(|_| BchError::from(c::Errcode::EINVAL_sysfs_store_utf8))
         .and_then(f);
 
     match ret {

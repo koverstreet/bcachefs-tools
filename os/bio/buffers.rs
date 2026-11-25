@@ -140,7 +140,7 @@ impl MappedPages {
         })?;
 
         let m = Yoke::<Mapped<'static>, _>::try_attach_to_cart(bio, |b: &Bio<AllocPages>| {
-            HasBio::bio(b).range().map().ok_or(BchError::from(c::ENOMEM))
+            HasBio::bio(b).range().map().ok_or(BchError::from(c::Errcode::ENOMEM_bio_buffers_map))
         })?;
         #[cfg(kernel)]
         if let Mapped::Vmap { offset, .. } = m.get() {

@@ -119,7 +119,7 @@ impl UserStr {
         let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
             .strcpy_into_buf(&mut buf)?.to_bytes().len();
         if len >= max {
-            return Err(c::EINVAL.into());
+            return Err(c::Errcode::EINVAL_user_str_too_long.into());
         }
         buf.truncate(len + 1);
         Ok(UserStr(buf))
