@@ -42,6 +42,12 @@ pub struct RunQueue {
     /// A worked one's: where its work is queued, from set_queue()
     #[init(SetOnce::new())]
     queue:   SetOnce<&'static Queue>,
+    /// A dispatch is an RCU reader of it after its task's pushed, when the
+    /// task may run, finish and free its owner: so it's an allocation of its
+    /// own, a MaybeRcuAlloc, dropped a grace period on - its work cancelled
+    /// once no dispatch can queue it - and its owner's drop stays its own.
+    #[init(rcu::RcuDropWorkMember::default())]
+    _rcu:    rcu::RcuDropWorkMember,
 }
 
 fn run_queue_work(rq: &RunQueue) {
@@ -64,8 +70,7 @@ impl RunQueue {
     /// # Safety
     /// As push()'s.
     pub(super) unsafe fn dispatch(&self, h: NonNull<Header>) {
-        // the task, once pushed, may run, finish and free us: drop() waits
-        // out what follows the push
+        // the task, once pushed, may run, finish and free us: _rcu's
         let _rcu = rcu::read_lock();
         unsafe { self.push(h) };
         if let Some(&q) = self.queue.as_ref() {
@@ -124,8 +129,5 @@ impl RunQueue {
 impl PinnedDrop for RunQueue {
     fn drop(self: Pin<&mut Self>) {
         assert!(!self.has_ready(), "RunQueue dropped with tasks dispatched to it");
-        // dispatches out before the work's drop cancels it, so none queues
-        // it after
-        rcu::synchronize();
     }
 }

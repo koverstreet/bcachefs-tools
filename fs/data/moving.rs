@@ -142,8 +142,7 @@ pub struct MovingContext {
      * Its updates' tasks, run in its waits - data/moving_update.rs - whose
      * EventCount every completion wakes: Moving::wake()
      */
-    #[pin]
-    runq:           RunQueue,
+    runq:           MaybeRcuAlloc<RunQueue>,
     /*
      * Its data updates in flight, in the order they were issued, by seq - an
      * update's index in it - and the first whose write hasn't started. The
@@ -242,7 +241,7 @@ impl<'a> MovingCtxt<'a> {
             wait_on_copygc,
             in_flight <- Gather::new(),
             io:             Default::default(),
-            runq           <- RunQueue::init(),
+            runq:           MaybeRcuAlloc::new(RunQueue::init())?,
             updates:        UnsafeCell::new(Fifo::new()),
             write_next:     Cell::new(0),
         }? BchError);
@@ -453,7 +452,7 @@ impl<'a> Moving<'a> {
 
     pub(crate) fn runq(&self) -> core::pin::Pin<&RunQueue> {
         // SAFETY: the context's, pinned, and live while borrowed
-        unsafe { core::pin::Pin::new_unchecked(&self.0.runq) }
+        unsafe { core::pin::Pin::new_unchecked(&*self.0.runq) }
     }
 
     pub fn io_mark(&self) -> IoMark {

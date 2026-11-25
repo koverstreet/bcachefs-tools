@@ -846,7 +846,7 @@ pub(crate) fn index_update_wq(op: &Op) -> &'static Queue {
 
 impl c::write_point {
     pub(crate) fn index_updates(&self) -> Pin<&RunQueue> {
-        unsafe { Pin::new_unchecked(&self.index_updates) }
+        unsafe { Pin::new_unchecked(&*self.index_updates) }
     }
 }
 

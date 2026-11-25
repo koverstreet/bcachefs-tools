@@ -14,6 +14,7 @@ use crate::os::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
 use crate::os::percpu::{Counters, PerCpu};
 use crate::util::futex::EventCount;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::projections::Volatile;
 use crate::util::task::RunQueue;
 use crate::published;
@@ -295,9 +296,8 @@ pub struct write_point {
      * its writes, their IO done, run by its work item: their index updates -
      * queued on the queue it's given, once that's made
      */
-    #[pin]
-    #[init(RunQueue::init())]
-    pub index_updates: RunQueue,
+    #[init(MaybeRcuAlloc::new(RunQueue::init()))]
+    pub index_updates: MaybeRcuAlloc<RunQueue>,
 }
 
 #[repr(C)]
