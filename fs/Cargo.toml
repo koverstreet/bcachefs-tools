@@ -43,6 +43,11 @@ zerocopy = "0.8"
 # Its derives, by their own crate's name, as the kernel has them: FromZeros
 # and FromBytes for an RcuArray's elements.
 zerocopy-derive = "0.8"
+# An owner and a value borrowed from it, together - no alloc: carts of our own.
+# Exactly fs/vendor's, which the kernel builds: from crates.io here, so yoke's
+# stable_deref_trait is ours.
+yoke = { version = "=0.8.4", default-features = false }
+stable_deref_trait = { version = "=1.2.1", default-features = false }
 # Userspace only: os/linux_user/kernel.rs's random_bytes(), the OS's CSPRNG.
 getrandom = "0.4"
 # Userspace only, util/prompt's: asking on the terminal - polled, echo off

@@ -289,7 +289,7 @@ bch-pmac-deps := $(bch-host)/libsyn.rmeta FORCE
 # dependencies) - and a rustc bump would otherwise break the build (#830).
 # cstruct-macros is ours, and gets the lints.
 $(obj)/libpaste.so $(obj)/bitflags.o $(obj)/num_traits.o \
-	$(obj)/uuid.o: private rs-flags := --cap-lints=allow
+	$(obj)/uuid.o $(obj)/stable_deref_trait.o $(obj)/yoke.o: private rs-flags := --cap-lints=allow
 $(obj)/libbitfield_struct.so $(obj)/libnestify.so: private rs-flags := $(bch-pmac)
 
 $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
@@ -314,6 +314,13 @@ $(obj)/num_traits.o: private rs-flags += --cfg has_total_cmp --cfg has_num_satur
 $(obj)/num_traits.o: $(src)/vendor/num-traits/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
+	$(call if_changed_dep,bch_rlib)
+# yoke, with no features: no alloc, carts of our own
+$(obj)/stable_deref_trait.o: private rs-edition := 2015
+$(obj)/stable_deref_trait.o: $(src)/vendor/stable_deref_trait/src/lib.rs FORCE
+	$(call if_changed_dep,bch_rlib)
+$(obj)/yoke.o: private rs-flags += --extern stable_deref_trait=$(obj)/libstable_deref_trait.rmeta
+$(obj)/yoke.o: $(src)/vendor/yoke/src/lib.rs $(obj)/stable_deref_trait.o FORCE
 	$(call if_changed_dep,bch_rlib)
 
 # Rust's library source - rust-src, which either path needs: RUST_LIB_SRC if
@@ -356,19 +363,22 @@ bch-externs := paste:libpaste.so \
 	cstruct_macros:libcstruct_macros.so bitfield_struct:libbitfield_struct.so \
 	nestify:libnestify.so \
 	bitflags:libbitflags.rmeta \
-	num_traits:libnum_traits.rmeta uuid:libuuid.rmeta
+	num_traits:libnum_traits.rmeta uuid:libuuid.rmeta \
+	stable_deref_trait:libstable_deref_trait.rmeta yoke:libyoke.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
+# and where what they depend on is: yoke's stable_deref_trait
+RUSTFLAGS_mod.o += -Ldependency=$(obj)
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: $(obj)/rust/bindings.rs $(addprefix $(obj)/,$(bch-arch-asm-rs)) $(obj)/libpaste.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
-	$(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o
+	$(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o $(obj)/yoke.o
 
 targets += codegen rust/bindings.rs libpaste.so \
 	libcstruct_macros.so libbitfield_struct.so libnestify.so \
 	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
 
 # The Rust objects, linked into the module as one: rust.o, below.
-bch-rust-gc-in := mod.o bitflags.o num_traits.o uuid.o bch_builtins.o
+bch-rust-gc-in := mod.o bitflags.o num_traits.o uuid.o stable_deref_trait.o yoke.o bch_builtins.o
 bcachefs-y += rust.o rust/extern.o
 
 # And what those rules write besides their targets: the rest of the codegen's
