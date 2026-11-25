@@ -22,6 +22,9 @@ pub type KBox<T> = std::boxed::Box<T>;
 /// And a KVBox.
 pub type KVBox<T> = std::boxed::Box<T>;
 
+/// What a box or array is allocated by, unless it says otherwise: std's allocator.
+pub use crate::util::alloc::KVmalloc as Global;
+
 impl Kmalloc {
     /// The kernel's, PAGE_SIZE << MAX_PAGE_ORDER: what's too big for a
     /// kmalloc() there is here.

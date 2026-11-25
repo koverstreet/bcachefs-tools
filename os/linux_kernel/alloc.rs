@@ -24,6 +24,11 @@ use kernel::bindings::{krealloc_node_align, kvrealloc_node_align};
 pub type KBox<T> = kernel::alloc::Box<T, Kmalloc>;
 pub type KVBox<T> = kernel::alloc::Box<T, KVmalloc>;
 
+/// What a box or array is allocated by, unless it says otherwise: kvmalloc(),
+/// which is kmalloc() where vmalloc() can't be - an atomic gfp - and grows past
+/// kmalloc()'s limit where it can.
+pub use crate::util::alloc::KVmalloc as Global;
+
 impl Kmalloc {
     pub const MAX_SIZE: usize = super::kernel::PAGE_SIZE << c::MAX_PAGE_ORDER;
 }

@@ -125,7 +125,7 @@ impl<T: ?Sized + SelfSized> DerefMut for ThinMut<'_, T> {
 /// would be.
 #[repr(transparent)]
 #[derive(cstruct_macros::NonZeroWord)]
-pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc> {
+pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc = crate::os::alloc::Global> {
     p:  NonNull<()>,
     _t: PhantomData<(Box<T, A>, A)>,
 }

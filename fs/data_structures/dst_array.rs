@@ -17,7 +17,8 @@
 //! spinlock, where a kvfree_rcu() with no head to queue may sleep.
 
 use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags, KVmalloc};
+use crate::os::alloc::Global;
+use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags};
 use core::alloc::Layout;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::HasRcuHead;
@@ -128,7 +129,7 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     }
 
     /// One of @nr elements, all zero, with @head: freed as its markers say.
-    pub fn alloc(nr: usize, head: H) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    pub fn alloc(nr: usize, head: H) -> Result<ThinBox<Self>, AllocError>
     where
         T: FromZeros,
     {
@@ -137,19 +138,19 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
 
     /// alloc(), for what mustn't fail to allocate: a size past isize::MAX
     /// bytes, or past what its count holds, is a bug.
-    pub fn alloc_nofail(nr: usize, head: H) -> ThinBox<Self, KVmalloc>
+    pub fn alloc_nofail(nr: usize, head: H) -> ThinBox<Self>
     where
         T: FromZeros,
     {
         Self::alloc_gfp(nr, head, flags::NOFAIL).expect("a DstArray past isize::MAX bytes, or its count")
     }
 
-    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self, KVmalloc>, AllocError>
+    fn alloc_gfp(nr: usize, head: H, gfp: Flags) -> Result<ThinBox<Self>, AllocError>
     where
         T: FromZeros,
     {
         let (layout, offset) = Self::layout(nr)?;
-        let given = KVmalloc.allocate_zeroed_gfp(layout, gfp)?;
+        let given = Global.allocate_zeroed_gfp(layout, gfp)?;
         Ok(Self::place(head, nr, given, offset))
     }
 

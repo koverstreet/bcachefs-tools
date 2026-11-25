@@ -25,7 +25,7 @@ use crate::journal::buckets::JournalRing;
 use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
 use crate::sb::members::DevIoRef;
 use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{kvzalloc, AllocError, Flags, KVVec, KVmalloc};
+use crate::util::alloc::{kvzalloc, AllocError, Flags, KVVec};
 use crate::util::thin::ThinBox;
 use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
@@ -149,7 +149,7 @@ pub fn replay_devs(fs: &Fs, i: &c::journal_replay) -> c::bch_devs_list {
 }
 
 /// kvmalloc()'d, its jset in it: C's journal_replay *, null for an empty slot.
-pub type Replay = ThinBox<c::journal_replay, KVmalloc>;
+pub type Replay = ThinBox<c::journal_replay>;
 
 crate::genradix_entry!(Option<Replay>);
 

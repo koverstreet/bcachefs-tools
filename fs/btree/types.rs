@@ -15,7 +15,7 @@ use crate::errcode::BchError;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM,
                      PF_MEMALLOC_NOWARN};
-use crate::util::alloc::{Box, Flags, KVVec, KVmalloc, Kmalloc};
+use crate::util::alloc::{Box, Flags, KVVec, Kmalloc};
 use crate::util::late::Late;
 use crate::util::Printbuf;
 use crate::util::time_stats::TimeStatsArray;
@@ -957,7 +957,7 @@ pub enum BtreeNodeRewriteReason {
 #[repr(C)]
 pub struct btree_evicted_size {
     /* a power of 2 of them; none until btree_init_rw() */
-    pub entries: SetOnce<Box<[AtomicU64], KVmalloc>>,
+    pub entries: SetOnce<Box<[AtomicU64]>>,
 }
 
 pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;

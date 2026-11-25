@@ -47,7 +47,7 @@ use zerocopy::{FromBytes, FromZeros};
 
 use crate::c;
 use crate::data_structures::dst_array::DstArray;
-use crate::util::alloc::{AllocError, KVmalloc};
+use crate::util::alloc::AllocError;
 use crate::util::vstructs::NonZeroWord;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::thin::ThinBox;
@@ -405,7 +405,7 @@ impl<H> RcuArrayHead<H> {
 pub type RcuArrayBuf<T, H = ()> = DstArray<RcuArrayHead<H>, T>;
 
 /// An RcuArray's buffer, owned: freed as its head says, a grace period on.
-pub type RcuArrayBox<T, H = ()> = ThinBox<RcuArrayBuf<T, H>, KVmalloc>;
+pub type RcuArrayBox<T, H = ()> = ThinBox<RcuArrayBuf<T, H>>;
 
 /// Its elements and header Sync, as readers share them. A new buffer's
 /// elements are zeroes, so FromZeros; grow_to() copies them bytewise, so

@@ -5,7 +5,8 @@ use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::dst_array::DstArray;
 use crate::errcode::BchError;
-use crate::util::alloc::{KVmalloc, KVVec};
+use crate::os::alloc::Global;
+use crate::util::alloc::KVVec;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::thin::ThinBox;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
@@ -13,7 +14,7 @@ use nestify::nest;
 use crate::format::Bpos;
 
 /// A printbuf's buffer: its capacity the array's count.
-type Buf = ThinBox<DstArray<(), u8, u32>, KVmalloc>;
+type Buf = ThinBox<DstArray<(), u8, u32>>;
 
 nest! {
     /// Through fmt::Write, `\t`, `\r` and `\n` are tabstops and indent.
@@ -316,8 +317,8 @@ impl Printbuf {
         let new_size = (self.capacity() + extra + 1).next_power_of_two();
         let new = match &self.buf {
             // what's written moved, the rest zeroed: the nul after it too
-            Some(old) => unsafe { DstArray::realloc_in(old, self.pos(), new_size, (), &KVmalloc) },
-            None      => DstArray::alloc_in(new_size, (), &KVmalloc),
+            Some(old) => unsafe { DstArray::realloc_in(old, self.pos(), new_size, (), &Global) },
+            None      => DstArray::alloc_in(new_size, (), &Global),
         };
 
         match new {

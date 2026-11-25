@@ -146,7 +146,7 @@ pub fn try_stateless<A: Alloc>() -> Option<A> {
 /// std's Box<T, A>, as much of it as is used, in both builds: the kernel has
 /// no alloc crate. Unlike std's, it frees by the size A gave, not T's - a
 /// mempool tells its elements by their size.
-pub struct Box<T: ?Sized, A: Alloc> {
+pub struct Box<T: ?Sized, A: Alloc = crate::os::alloc::Global> {
     ptr:   NonNull<T>,
     /// what A gave, which its free goes by
     given: usize,
