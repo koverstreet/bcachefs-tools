@@ -9,6 +9,10 @@ rust-version = "1.89.0"
 crate-type = ["lib"]
 path = "mod.rs"
 
+[[bench]]
+name = "raid"
+harness = false
+
 [features]
 # `std` pulls in the userspace-only helpers (path/OsStr conversions). On by
 # default for the tools build; the in-kernel build uses --no-default-features

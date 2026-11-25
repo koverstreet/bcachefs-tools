@@ -36,6 +36,8 @@ use crate::format::{Btree, BkeyType};
 mod cuckoo;
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 mod srcu;
+#[cfg(any(CONFIG_BCACHEFS_TESTS, not(kernel)))]
+pub mod raid;
 
 type TestRet = Result<(), BchError>;
 type TestFn = fn(&Fs, u64) -> TestRet;
@@ -1029,6 +1031,8 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_srcu", srcu::test_srcu),
         #[cfg(CONFIG_BCACHEFS_TESTS)]
         (b"test_srcu_torture", srcu::test_srcu_torture),
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        (b"test_raid_bench", raid::test_raid_bench),
     ];
 
     TESTS.iter().copied().find(|(name, _)| testname == *name)
