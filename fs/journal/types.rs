@@ -225,7 +225,7 @@ pub struct journal_buf {
     pub write: BufLocked<Option<MaybeRcuAlloc<JournalWrite>>>,
     /* its write's ref on the journal's writes_in_flight */
     #[init(LockedBy::new(None, ()))]
-    pub in_flight: BufLocked<Option<RefGuard<AtomicRef<()>>>>,
+    pub in_flight: BufLocked<Option<JournalWriteRef>>,
 
     /* its write's, published as it's allocated */
     #[init(LockedBy::new(Default::default(), ()))]
@@ -602,6 +602,11 @@ pub type JournalGuard<'a> =
 /// The journal lock's place, for what it covers to name.
 pub type JournalLockAt = crate::at!(journal.lock);
 
+type WritesInFlightAt = crate::at!(journal.writes_in_flight);
+
+/// A journal write's ref on the journal, held to the end of write_done().
+pub type JournalWriteRef = RefGuard<Placed<AtomicRef<()>, WritesInFlightAt>>;
+
 /* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -687,7 +692,7 @@ nest! {
          * flushers: the filesystem's exit waits them out */
         #[pin]
         #[init(AtomicRef::new(()))]
-        pub writes_in_flight: AtomicRef<()>,
+        pub writes_in_flight: Placed<AtomicRef<()>, WritesInFlightAt>,
         pub oldest_seq_found_ondisk: Volatile<u64>,
 
         /*
