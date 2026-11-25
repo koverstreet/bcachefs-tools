@@ -58,7 +58,11 @@ use crate::btree::iter::{
 };
 use crate::btree::trans::TransGuard;
 use crate::init::error::{id, BkeyValidate};
+use crate::inode_opts::InodeOpt;
 use crate::snapshots::subvolume;
+use crate::str_hash;
+use crate::util::alloc::KVVec;
+use crate::util::refcount::TryRefcount;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on, prt};
@@ -1344,7 +1348,10 @@ fn may_delete_deleted_inode(
     }
 
     if from_deleted_inodes {
+        // Don't warn about deleted inodes from tmpdirs; those are supposed
+        // to get deleted every mount.
         if fs.flags.get(c::FsFlag::clean_recovery) &&
+           InodeOpt::of(c::InodeOptId::tmpdir).get(inode) == 0 &&
            !fsck_err!(t, id::deleted_inode_but_clean,
                       "filesystem marked as clean but have deleted inode {}:{}",
                       { p.offset }, { p.snapshot })? {
@@ -1458,6 +1465,195 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
 
     delete_ancestor_snapshot_inodes(&trans, spos(0, inum.inum, snapshot))
 }
+
+/// Collect every directory in a tmpdir subtree, breadth-first.
+fn collect_dirs_in_tmpdir(
+    t:         &TransAttempt<'_, '_>,
+    snapshot:  u32,
+    root_inum: u64,
+) -> Result<KVVec<u64>, BchError> {
+    let mut dirs = KVVec::new();
+    dirs.push(root_inum)?;
+
+    let mut i = 0;
+    while let Some(&inum) = dirs.get(i) {
+        i += 1;
+
+        let mut iter = BtreeIter::new(t, Btree::dirents, spos(inum, 0, snapshot),
+                                      BtreeIterFlags::PREFETCH);
+        iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
+            if let Some(inum) = dirent::Dirent::new(k)
+                .filter(|d| d.d_type() as u32 == c::DT_DIR)
+                .map(|d| d.v().d_inum())
+            {
+                dirs.push(inum)?;
+            }
+            Ok(())
+        })?;
+    }
+
+    Ok(dirs)
+}
+
+/// Unlink every entry in one directory. Its subdirectories have already been
+/// emptied by the reverse BFS walk in unlink_tmpdir_in_subvol(), so unlinking
+/// them is safe.
+fn unlink_tmpdir_contents(
+    t:        &TransAttempt<'_, '_>,
+    dir:      c::subvol_inum,
+    snapshot: u32,
+) -> Result<(), BchError> {
+    let fs = t.fs();
+    let mut dir_iter = BtreeIter::uninit(t.trans());
+    let mut dir_inode = peek(t, &mut dir_iter, dir, BtreeIterFlags::INTENT)?;
+    let dir_hash = str_hash::hash_info_init(fs, &dir_inode)?;
+
+    let mut dirent_iter = BtreeIter::new(t, Btree::dirents, spos(dir.inum, 0, snapshot),
+                                         BtreeIterFlags::PREFETCH | BtreeIterFlags::INTENT);
+    while let Some(k) = dirent_iter.peek_max(t, pos(dir.inum, u64::MAX))? {
+        // Filter out subvolume roots
+        let Some(d) = dirent::Dirent::new(k)
+            .filter(|d| d.d_type() as u32 != c::DT_SUBVOL) else {
+            dirent_iter.advance();
+            continue;
+        };
+        let child_inum = c::subvol_inum { subvol: dir.subvol, inum: d.v().d_inum() };
+        let mut inode_iter = BtreeIter::uninit(t.trans());
+        let mut child_inode = peek(t, &mut inode_iter, child_inum, BtreeIterFlags::INTENT)?;
+
+        namei::__unlink_trans(t, &mut dir_iter, &mut dir_inode, &dir_hash,
+                              &mut dirent_iter, child_inum, &mut inode_iter,
+                              &mut child_inode, false)?;
+
+        // Commit and restart if the transaction has grown too large
+        t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+        dirent_iter.advance();
+    }
+
+    Ok(())
+}
+
+/// Unlink the tmpdir at @tmpdir_inum in this subvolume. The tmpdir option is
+/// stored per snapshot version, and the ones that have it set are unlinked
+/// here.
+fn unlink_tmpdir_in_subvol(
+    trans:       &BtreeTrans<'_>,
+    subvol:      u32,
+    snapshot:    u32,
+    tmpdir_inum: u64,
+) -> Result<(), BchError> {
+    let subvol = subvol as u64;
+    let inum = c::subvol_inum { subvol, inum: tmpdir_inum };
+
+    let Some(tmpdir_root_inode) = lockrestart_do(trans, |t| {
+        let mut inode_iter = BtreeIter::uninit(t.trans());
+        peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)
+    }).found()? else {
+        return Ok(());    // not visible in this subvolume
+    };
+
+    if !tmpdir_root_inode.is_dir() ||
+       InodeOpt::of(c::InodeOptId::tmpdir).get(&tmpdir_root_inode) == 0 {
+        return Ok(());    // Not a tmpdir in this subvolume's snapshot.
+    }
+
+    let dirs = lockrestart_do(trans, |t| {
+        collect_dirs_in_tmpdir(t, snapshot, tmpdir_inum)
+    })?;
+
+    // Reverse BFS order: __unlink_trans() requires directories to be empty before
+    // they can be unlinked. With a reverse BFS, we can start at the leaves and delete
+    // as we go backwards/upwards.
+    for &inum in dirs.iter().rev() {
+        commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+            unlink_tmpdir_contents(t, c::subvol_inum { subvol, inum }, snapshot)
+        })?;
+    }
+
+    Ok(())
+}
+
+fn collect_tmpdir_roots(trans: &BtreeTrans<'_>) -> Result<KVVec<u64>, BchError> {
+    let fs = trans.fs();
+    let mut tmpdir_inode_numbers = KVVec::new();
+
+    // An inode number is the same across all snapshots, so if we come across a tmpdir once,
+    // we can record it and skip its occurences in other snapshots
+    let mut last_tmpdir_inode_number = None;
+
+    let mut iter = BtreeIter::new(trans, Btree::inodes, POS_MIN,
+                                  BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_max(trans, SPOS_MAX, |_, _, key| {
+        let Some(inode_key) = key.arm::<Inodes>() else { return Ok(()) };
+
+        let inode_number = inode_key.k.p.offset;
+
+        // Already recorded this tmpdir from an earlier snapshot.
+        if inode_key.mode() & c::S_IFMT != c::S_IFDIR ||
+           last_tmpdir_inode_number
+               .is_some_and(|last_inode_number| last_inode_number == inode_number) {
+            return Ok(());
+        }
+
+        let inode = unpack(fs, inode_key);
+        if InodeOpt::of(c::InodeOptId::tmpdir).get(&inode) != 0 {
+            last_tmpdir_inode_number = Some(inode_number);
+            tmpdir_inode_numbers.push(inode_number)?;
+        }
+        Ok(())
+    })?;
+
+    Ok(tmpdir_inode_numbers)
+}
+
+fn collect_live_subvols(trans: &BtreeTrans<'_>) -> Result<KVVec<u32>, BchError> {
+    let mut subvols = KVVec::new();
+
+    let mut iter = BtreeIter::new(trans, Btree::subvolumes, POS_MIN, BtreeIterFlags::PREFETCH);
+    iter.for_each_max(trans, SPOS_MAX, |_, _, k| {
+        let Some(s) = k.arm::<c::Subvolume>() else { return Ok(()) };
+
+        if !s.v().ro() && s.v().state_decoded() == Some(c::SubvolumeState::live) {
+            subvols.push(k.k.p.offset as u32)?;
+        }
+        Ok(())
+    })?;
+
+    Ok(subvols)
+}
+
+/// Entry point for unlinking tmpdirs. This function unlinks them
+/// and leaves it to a later pass to clean up the remaining inodes.
+fn unlink_tmpdirs(fs: &Fs) -> Result<(), BchError> {
+    // No need to run this pass if we don't have any tmpdirs
+    if !fs.feature(SbFeature::tmpdir) {
+        return Ok(());
+    }
+
+    // Don't unlink tmpdirs on read-only mounts
+    let Some(_write) = fs.writes.tryget_live() else { return Ok(()) };
+
+    let trans = crate::btree_trans!(fs);
+    trans.write_buffer_flush_sync()?;
+
+    let tmpdir_inode_numbers = collect_tmpdir_roots(&trans)?;
+    // Read-only snapshots keep tmpdirs because they're readonly, so they can't be modified.
+    // Collect all the writable ones.
+    let subvols = collect_live_subvols(&trans)?;
+
+    // Now that we have all writable subvolumes and all tmpdirs, unlink the tmpdirs in the writable ones.
+    for &subvol in subvols.iter() {
+        let snapshot = lockrestart_do(&trans, |t| subvolume::get_snapshot(t, subvol))?;
+
+        for &inode_number in tmpdir_inode_numbers.iter() {
+            unlink_tmpdir_in_subvol(&trans, subvol, snapshot, inode_number)?;
+        }
+    }
+
+    Ok(())
+}
+
+crate::recovery_pass!(unlink_tmpdirs => unlink_tmpdirs);
 
 /// Delete inode @inum in @snapshot and its contents there - each content
 /// btree's in its own loop - then the inode, and its damage record: as
@@ -1732,9 +1928,28 @@ pub fn set_casefold(
     fs.check_set_feature(SbFeature::casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
-    crate::inode_opts::InodeOpt::of(c::InodeOptId::casefold).set_own(inode, true);
+    InodeOpt::of(c::InodeOptId::casefold).set_own(inode, true);
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
+}
+
+pub fn set_tmpdir(
+    t:     &TransAttempt<'_, '_>,
+    inode: &mut c::bch_inode_unpacked,
+    v:     u32,
+) -> Result<(), BchError> {
+    let fs = t.fs();
+
+    if !inode.is_dir() {
+        return Err(fs.err(Errcode::tmpdir_opt_is_dir_only));
+    }
+
+    fs.request_incompat_feature(MetadataVersion::tmpdir)?;
+    fs.check_set_feature(SbFeature::tmpdir);
+
+    inode.bi_tmpdir = v.wrapping_add(1) as _;
+    InodeOpt::of(c::InodeOptId::tmpdir).set_own(inode, true);
+    Ok(())
 }
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,

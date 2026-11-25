@@ -1126,6 +1126,9 @@ pub enum MetadataVersion {
     /// backpointers carry the stripe index, so stripes sharing a block
     /// during reuse don't share a backpointer
     inline_data_csum = BCH_VERSION(1, 40),
+    /// 2026-09: Directories that get wiped on mounts and whose contents
+    /// aren't made durable
+    tmpdir = BCH_VERSION(1, 41),
 }
 
 impl MetadataVersion {
@@ -1367,7 +1370,8 @@ pub struct bch_sb_flags6 {
      */
     dirents_sanitized:                  bool,
     #[bits(2)]  write_degraded_action:  WriteDegradedAction,
-    __:                                 u2,
+    tmpdir:                             bool,
+    __:                                 u1,
 }
 
 pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
@@ -1422,6 +1426,7 @@ pub enum SbFeature {
     no_alloc_info = 21,
     small_image = 22,
     no_default_sb = 23,
+    tmpdir = 24,
 }
 
 #[bch_enum(open)]

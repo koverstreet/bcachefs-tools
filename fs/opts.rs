@@ -268,6 +268,10 @@ pub struct bch_opts {
     #[opt(bool, flags = fs | mount)]
     pub casefold_disabled: u8,
 
+    /// Directory is wiped on mount
+    #[opt(bool, flags = fs | inode, sb = bch_sb::tmpdir)]
+    pub tmpdir: u8,
+
     /// Constrain inode numbers to 32 bits
     #[opt(bool, flags = fs | inode | format | mount | runtime, sb = bch_sb::inode_32bit)]
     pub inodes_32bit: u8,

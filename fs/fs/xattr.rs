@@ -539,6 +539,10 @@ mod vfs {
             inode::set_casefold(t, inum, bi, v as u32)?;
         }
 
+        if opt.id() == c::InodeOptId::tmpdir {
+            inode::set_tmpdir(t, bi, v as u32)?;
+        }
+
         if opt.id() == c::InodeOptId::inodes_32bit &&
            fs.request_incompat_feature(
                MetadataVersion::dirent_offset_31bit).is_ok() {
