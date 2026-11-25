@@ -1470,46 +1470,38 @@ fn trace_fragment(fs: &Fs, orig: &Rbio, rb: &Rbio, plan: &Plan, bounced: bool, k
     fs.io_clock[READ].increment(sectors);
 }
 
-/// The futures made in boxes of their own, apart: before rustc 1.87, every
-/// item of the module a future's type is named in that has the type in its
-/// signature must be its defining use - here, only the fns that make them.
-mod boxed {
-    use super::*;
-
-    /// @f's read of its stripe, its own task joined: in a box, made when it's
-    /// awaited, so that a fragment's future isn't the size of one.
-    #[in_place(EcReadFut)]
-    pub(super) async fn ec_read<'f, 'r: 'f>(f: &'f mut Fragment<'r>, fs: &'f Fs, msg: &'f mut Printbuf,
-                                            target: Resume<'f>) -> Result<(), BchError>
-    {
-        let waiter = waiter::Async::current().await;
-        let (bio, p) = (f.kind.bio_mut(), &f.plan);
-        let mut join = Join::new();
-        let wait = {
-            let _noio = MemallocFlags::noio();
-            join.spawn(Queue::system_dfl(), fs.tasks(),
-                       move || ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
-        }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
-        wait.resume_on(target).await.expect("a joined task's output, handed back")
-    }
-
-    /// A retry, its state and its future together in an element of the
-    /// filesystem's retry pool: a fragment's future holds neither. Its
-    /// failures stay in it: what they come to is what the awaiter gets.
-    #[in_place(RetryOwnedFut)]
-    pub(super) async fn retry_owned<'a>(fs: &'a Fs, read: &'a Rbio, mut s: RetryState<'a>, at: Locate<'a>)
-        -> ReadDone
-    {
-        let ret = retry(fs, read, &mut s, at).await;
-        let f = s.failures;
-        let ptrs_io_error = match at {
-            Locate::Key(k, _) => ptrs_io_error(fs, BkeySC::from(k), &f.io),
-            Locate::Inode(_)  => 0,
-        };
-        ReadDone { ret, pick: f.read, ptrs_io_error, poisoned: f.poisoned }
-    }
+/// @f's read of its stripe, its own task joined: in a box, made when it's
+/// awaited, so that a fragment's future isn't the size of one.
+#[in_place(EcReadFut)]
+async fn ec_read<'f, 'r: 'f>(f: &'f mut Fragment<'r>, fs: &'f Fs, msg: &'f mut Printbuf,
+                             target: Resume<'f>) -> Result<(), BchError>
+{
+    let waiter = waiter::Async::current().await;
+    let (bio, p) = (f.kind.bio_mut(), &f.plan);
+    let mut join = Join::new();
+    let wait = {
+        let _noio = MemallocFlags::noio();
+        join.spawn(Queue::system_dfl(), fs.tasks(),
+                   move || ec::io::read_extent(fs, p.data_btree, p.data_pos, bio, &p.pick, p.flags, msg), waiter)
+    }.map_err(|_| fs.err(err::ENOMEM_ec_read_extent))?;
+    wait.resume_on(target).await.expect("a joined task's output, handed back")
 }
-use boxed::{ec_read, retry_owned, RetryOwnedFut};
+
+/// A retry, its state and its future together in an element of the
+/// filesystem's retry pool: a fragment's future holds neither. Its
+/// failures stay in it: what they come to is what the awaiter gets.
+#[in_place(RetryOwnedFut)]
+async fn retry_owned<'a>(fs: &'a Fs, read: &'a Rbio, mut s: RetryState<'a>, at: Locate<'a>)
+    -> ReadDone
+{
+    let ret = retry(fs, read, &mut s, at).await;
+    let f = s.failures;
+    let ptrs_io_error = match at {
+        Locate::Key(k, _) => ptrs_io_error(fs, BkeySC::from(k), &f.io),
+        Locate::Inode(_)  => 0,
+    };
+    ReadDone { ret, pick: f.read, ptrs_io_error, poisoned: f.poisoned }
+}
 
 fn device_read_start(f: &mut Fragment<'_>) -> Result<u64, BchError> {
     let Some(ca) = f.ca.as_deref() else { return Err(f.fs.err(err::data_read_retry_device_offline)) };
