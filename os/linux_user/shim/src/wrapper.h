@@ -1,3 +1,12 @@
+/*
+ * How the libraries' headers are configured: liburcu's memb flavour, its
+ * functions inlined (see below), and zstd's static-linking API - the
+ * ZSTD_initStatic*Ctx() compress.rs runs in memory of its own.
+ */
+#define RCU_MEMBARRIER			1
+#define _LGPL_SOURCE			1
+#define ZSTD_STATIC_LINKING_ONLY	1
+
 #include <urcu.h>
 
 #include "include/linux/kernel.h"

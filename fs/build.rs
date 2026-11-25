@@ -40,8 +40,7 @@ fn main() {
 
     let src = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"); // = fs/
     let root = std::path::Path::new(&src).parent().expect("fs crate has a parent dir");
-    rerun_if_userspace_config_changed(root);
-    emit_userspace_config_cfgs(root);
+    emit_userspace_config_cfgs();
 
     println!("cargo:rerun-if-changed=../build-link.rs");
     link_bcachefs(

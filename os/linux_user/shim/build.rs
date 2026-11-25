@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 include!("../../../clang_target.rs");
-include!("../../../fs/build_config.rs");
 
 /// Every struct and union is Zeroable when all its fields are, as the kernel's
 /// bindgen_parameters has it (os/linux_kernel/vendor): a C struct embedded in a
@@ -33,7 +32,6 @@ fn main() {
         .nth(3)
         .expect("bcachefs-shim should be at os/linux_user/shim")
         .to_path_buf();
-    let fs_dir = root.join("fs");
     let include_dir = root.join("include");
     let wrapper = top_dir
         .join("src")
@@ -41,8 +39,6 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
     println!("cargo:rerun-if-changed=../../../clang_target.rs");
-    println!("cargo:rerun-if-changed=../../../fs/build_config.rs");
-    rerun_if_userspace_config_changed(&root);
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
     // What os/linux_user/compress.rs calls: linked after this
@@ -65,14 +61,7 @@ fn main() {
                 .map(|p| format!("-I{}", p.display())),
         )
         .clang_arg(format!("-I{}", root.display()))
-        .clang_arg(format!("-I{}", fs_dir.display()))
-        .clang_arg(format!("-I{}", root.join("c_src").display()))
         .clang_arg(format!("-I{}", include_dir.display()))
-        .clang_args(userspace_config_args(&root))
-        .clang_arg("-DRUST_BINDGEN")
-        // as the kernel's bindgen: wrapper.h's consts are for it alone, not
-        // extern.c's compile
-        .clang_arg("-D__BINDGEN__")
         .clang_arg("-fkeep-inline-functions")
         .derive_debug(true)
         .derive_default(true)
@@ -139,15 +128,9 @@ fn main() {
     wrappers
         .file(out_dir.join("extern.c"))
         .include(&root)
-        .include(&fs_dir)
-        .include(root.join("c_src"))
         .include(&include_dir)
-        .define("RUST_BINDGEN", None)
         .flag("-fkeep-inline-functions")
         .warnings(false);
-    for f in userspace_config_args(&root) {
-        wrappers.flag(f);
-    }
     for p in &urcu.include_paths {
         wrappers.include(p);
     }

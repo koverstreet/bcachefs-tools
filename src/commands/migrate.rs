@@ -2,8 +2,6 @@
 //
 // bcachefs migrate — convert an existing filesystem to bcachefs in place.
 //
-// Reimplements c_src/cmd_migrate.c in Rust.
-//
 // The reservation file is what makes this safe: everything bcachefs writes
 // lands in blocks the old filesystem has allocated to /bcachefs, so the old
 // filesystem stays consistent and mountable throughout. That also fixes where

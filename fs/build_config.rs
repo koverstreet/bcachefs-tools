@@ -1,29 +1,10 @@
-// The userspace build's configuration, for build scripts: c_src/autoconf.h,
-// and the -D/-U in EXTRA_CFLAGS that make adds to it (make debug's
-// CONFIG_BCACHEFS_DEBUG, or the user's). include!d by every build script that
-// runs bindgen or compiles C against the fs/ headers, so they all see what the
-// Makefile's C compiles see. See c_src/autoconf.h.
-//
-// Not every includer needs every function - codegen_main.rs, a standalone
-// tool, wants only the args - hence the dead_code allows.
+// The userspace build's configuration, as Rust cfgs - what the kernel's
+// rustc_cfg makes of a kernel build's .config: USERSPACE_CONFIG, and the -D/-U
+// in EXTRA_CFLAGS that make adds to it (make debug's CONFIG_BCACHEFS_DEBUG, or
+// the user's). fs/build.rs's.
 
-/// The clang args that configure a compile like the Makefile's: the header,
-/// force-included, then EXTRA_CFLAGS's defines.
-#[allow(dead_code)]
-fn userspace_config_args(root: &std::path::Path) -> Vec<String> {
-    let header = root.join("c_src/autoconf.h");
-    let mut args = vec!["-include".to_string(), header.display().to_string()];
-    args.extend(extra_cflags_defines());
-    args
-}
-
-/// For a build script using userspace_config_args(): rerun when the
-/// configuration changes.
-#[allow(dead_code)]
-fn rerun_if_userspace_config_changed(root: &std::path::Path) {
-    println!("cargo:rerun-if-changed={}", root.join("c_src/autoconf.h").display());
-    println!("cargo:rerun-if-env-changed=EXTRA_CFLAGS");
-}
+/// What the userspace build sets.
+const USERSPACE_CONFIG: &[&str] = &["CONFIG_DEBUG_FS", "CONFIG_STACKTRACE", "CONFIG_UNICODE"];
 
 /// The -DFOO[=val] and -UFOO in EXTRA_CFLAGS, which make exports - not set
 /// when cargo is run directly, which builds the plain configuration.
@@ -39,7 +20,7 @@ fn extra_cflags_defines() -> Vec<String> {
 /// The CONFIG_* names a build can add through EXTRA_CFLAGS - make debug's -
 /// declared as cfgs whether or not this one does, so code conditional on
 /// them builds without them.
-const PER_BUILD_CONFIG: &[&str] = &["CONFIG_BCACHEFS_DEBUG", "CONFIG_VALGRIND"];
+const PER_BUILD_CONFIG: &[&str] = &["CONFIG_BCACHEFS_DEBUG"];
 
 /// The kernel's options the types and the kernel-only code test, which no
 /// userspace build sets: declared too, as the kernel build has them.
@@ -58,31 +39,19 @@ const KERNEL_CONFIG: &[&str] = &[
     "CONFIG_LOCKDEP",
     "CONFIG_POWER_SUPPLY",
     "CONFIG_PROVE_LOCKING",
-    "CONFIG_SCHED_ALT",
-    "CONFIG_SCHED_MUQSS",
     "CONFIG_SMP",
     "CONFIG_TRACEPOINTS",
     "CONFIG_TRANSPARENT_HUGEPAGE",
     "MODULE",
 ];
 
-/// Make the configuration's CONFIG_* defines Rust cfgs, as the kernel's
-/// rustc_cfg does for a kernel build: cfg(CONFIG_UNICODE) where C has
-/// CONFIG_UNICODE. Every name autoconf.h or EXTRA_CFLAGS mentions is
-/// declared, set or not, and so are PER_BUILD_CONFIG and KERNEL_CONFIG.
-#[allow(dead_code)]
-fn emit_userspace_config_cfgs(root: &std::path::Path) {
-    let header = root.join("c_src/autoconf.h");
-    let text = std::fs::read_to_string(&header)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", header.display()));
+/// The configuration's cfgs: every name USERSPACE_CONFIG or EXTRA_CFLAGS
+/// mentions is declared, set or not, and so are PER_BUILD_CONFIG and
+/// KERNEL_CONFIG.
+fn emit_userspace_config_cfgs() {
+    println!("cargo:rerun-if-env-changed=EXTRA_CFLAGS");
 
-    let mut set: Vec<String> = text
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("#define"))
-        .filter_map(|l| l.split_whitespace().next())
-        .filter(|n| n.starts_with("CONFIG_"))
-        .map(String::from)
-        .collect();
+    let mut set: Vec<String> = USERSPACE_CONFIG.iter().map(|n| n.to_string()).collect();
     let mut names = set.clone();
     names.extend(PER_BUILD_CONFIG.iter().chain(KERNEL_CONFIG).map(|n| n.to_string()));
 

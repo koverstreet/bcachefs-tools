@@ -5,8 +5,6 @@
 // Two modes:
 //   - Copy (format --source): data is written to the new filesystem
 //   - Migrate (bcachefs migrate): data extents point at existing on-disk locations
-//
-// Converted from c_src/posix_to_bcachefs.c.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};

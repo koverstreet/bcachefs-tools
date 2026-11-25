@@ -74,7 +74,7 @@ bch-build-vars = ( :; $(foreach v,$(1),$(if $($(v)),printf '%s := %s\n' '$(v)' '
 
 # `make debug` is a convenience alias that sets:
 #   MAKE_DEBUG:        userspace `bcachefs` binary built with
-#                      -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+#                      -DCONFIG_BCACHEFS_DEBUG=y
 #   BCACHEFS_DEBUG:    DKMS kernel-module debug build (forwarded via
 #                      $(DKMSDIR)/build.vars and fs/Makefile's ifdef)
 #   BCACHEFS_TESTS:    in-kernel unit tests in the DKMS module
@@ -96,7 +96,7 @@ ifeq ($(filter debug,$(MAKECMDGOALS)),debug)
 endif
 
 ifdef MAKE_DEBUG
-    EXTRA_CFLAGS += -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+    EXTRA_CFLAGS += -DCONFIG_BCACHEFS_DEBUG=y
 endif
 
 # Prevent recursive expansions of $(CFLAGS) to avoid repeatedly performing
@@ -108,13 +108,10 @@ CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
 	-Wno-deprecated-declarations				\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
-	-I. -Ic_src -Ifs -Iinclude -Iraid		\
-	-include c_src/autoconf.h				\
+	-Iinclude						\
 	$(EXTRA_CFLAGS)
 
-# The build configuration is c_src/autoconf.h, plus any -D/-U here - which the
-# cargo build scripts read too, so the Rust bindings see what C sees: see
-# fs/build_config.rs.
+# Its -D/-U of CONFIG_* are the Rust's cfgs too: fs/build_config.rs.
 export EXTRA_CFLAGS
 
 # Intenionally not doing the above to $(LDFLAGS) because we rely on
@@ -499,7 +496,7 @@ dkms-reload-interactive: version.h
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
+	$(Q)$(RM) libbcachefs.a .version dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
 	$(Q)$(RM) -r build
 	$(Q)$(CARGO_CLEAN)
 	$(Q)$(RM) -f $(built_scripts)

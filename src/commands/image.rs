@@ -1,4 +1,4 @@
-// Image create/update commands — converted from c_src/cmd_image.c.
+// Image create/update commands.
 //
 // Uses a temporary second device for metadata, writes data sequentially to the
 // primary device, then migrates metadata to the primary and drops the temp device.

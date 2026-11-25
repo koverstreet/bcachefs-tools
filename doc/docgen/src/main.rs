@@ -867,7 +867,6 @@ fn main() {
 
     // --- DOC() blocks from C and Rust sources ---
     let mut doc_blocks = extract_doc_blocks(&root.join("fs"));
-    doc_blocks.append(&mut extract_doc_blocks(&root.join("c_src")));
     doc_blocks.append(&mut extract_doc_blocks(&root.join("src")));
 
     for block in &doc_blocks {
