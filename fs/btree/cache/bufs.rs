@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::OwnedNode;
+use super::state::state_hashed;
 use crate::btree::node::bset::BSET_CACHELINE;
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
@@ -66,7 +67,7 @@ impl<'f> Bounce<'f> {
                 self.bytes, b.buf_bytes());
 
         let old = core::mem::replace(&mut contents.bufs.data, self.p.as_ptr().cast());
-        btree_node_buf_swap_account(self.fs, old.cast(), contents.bufs.data.cast());
+        btree_node_buf_swap_account(self.fs, b, old.cast(), contents.bufs.data.cast());
         self.p = NonNull::new(old.cast()).expect("a node's buffer");
     }
 }
@@ -298,12 +299,16 @@ pub unsafe fn node_mem_free(fs: &Fs, b: NonNull<BtreeNode>) {
     }
 }
 
-/// A node's buffer swapped, @old for @new: the cache counts the vmalloc'd.
-fn btree_node_buf_swap_account(fs: &Fs, old: *const c_void, new: *const c_void) {
+/// @b's buffer swapped, @old for @new: the cache counts the vmalloc'd of its
+/// hashed nodes - an unhashed node's is counted when it's hashed.
+fn btree_node_buf_swap_account(fs: &Fs, b: &BtreeNode, old: *const c_void, new: *const c_void) {
     let delta = is_vmalloc_addr(new) as isize - is_vmalloc_addr(old) as isize;
 
     if delta != 0 {
         let mut lists = fs.btree.cache.lock.lock();
-        lists.nr_vmalloc = lists.nr_vmalloc.wrapping_add_signed(delta);
+        if state_hashed(b.cache_state(&lists)) {
+            lists.nr_vmalloc = lists.nr_vmalloc.checked_add_signed(delta)
+                .expect("the hashed nodes' vmalloc count, past them");
+        }
     }
 }
