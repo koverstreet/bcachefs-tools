@@ -228,12 +228,12 @@ $(vr-arch-gen-rs): $(VRD)/rust/kernel/%.rs: $(VENDOR)/kernel/%.rs.S FORCE
 	$(Q)mkdir -p $(@D)
 	$(call if_changed,bch_rscpp)
 
-$(VRD)/kernel.o: private rs-flags := $(vr-kernel-deps) $(bch-linux-version-cfgs) \
+$(VRD)/kernel.o: private rs-flags := $(vr-kernel-deps) @$(bch-linux-version-cfgs) \
 	--extern build_error=$(VRD)/libbuild_error.rmeta --extern macros=$(VRD)/libmacros.so \
 	--extern bindings=$(VRD)/libbindings.rmeta --extern uapi=$(VRD)/libuapi.rmeta \
 	--extern zerocopy=$(VRD)/libzerocopy.rmeta --extern zerocopy_derive=$(VRD)/libzerocopy_derive.so
 $(VRD)/kernel.o: $(VENDOR)/kernel/lib.rs $(VRD)/build_error.o $(VRD)/bindings.o \
-	$(VRD)/uapi.o $(VRD)/zerocopy.o $(vr-arch-gen-rs) FORCE
+	$(VRD)/uapi.o $(VRD)/zerocopy.o $(vr-arch-gen-rs) $(bch-linux-version-cfgs) FORCE
 	$(call if_changed_dep,bch_rlib)
 
 # The rust_helper_* C the kernel crate calls; helpers.c #includes helpers/*.c.

@@ -199,14 +199,26 @@ $(obj)/mod.o: private rust_common_cmd += -Zallow-features=$(rust_allowed_feature
 # exists on one side only.
 RUSTFLAGS_mod.o += $(foreach f,$(bcachefs-config-cppflags),--cfg $(firstword $(subst =, ,$(patsubst -D%,%,$(f)))))
 
-# The kernel version checks, cfg(linux_ge = "7.3"): see the script. Ours, and
-# the vendored kernel crate's (Makefile.rust.vendor), which vendor-patches add.
-bch-linux-version-cfgs := $(shell $(CONFIG_SHELL) $(src)/scripts/linux-version-cfgs.sh '$(KERNELVERSION)' \
-	$(src) $(src)/../os $(src)/../os/linux_kernel/vendor/kernel)
-ifneq ($(.SHELLSTATUS),0)
-$(error linux-version-cfgs.sh failed, for kernel $(KERNELVERSION))
-endif
-RUSTFLAGS_mod.o += $(bch-linux-version-cfgs)
+# The kernel version checks, cfg(linux_ge = "7.3"): scripts/linux_version_cfgs.rs,
+# rescanning the sources every build and rewriting the argfile only when the
+# cfgs change. Ours, and the vendored kernel crate's (Makefile.rust.vendor),
+# which vendor-patches add.
+bch-linux-version-cfgs := $(obj)/linux-version-cfgs
+
+quiet_cmd_bch_version_cfgs = GEN     $@
+      cmd_bch_version_cfgs = $(obj)/linux_version_cfgs '$(KERNELVERSION)' $@ \
+	$(src) $(src)/../os $(src)/../os/linux_kernel/vendor/kernel
+
+$(bch-linux-version-cfgs): $(obj)/linux_version_cfgs FORCE
+	$(call cmd,bch_version_cfgs)
+
+$(obj)/linux_version_cfgs: $(src)/scripts/linux_version_cfgs.rs FORCE
+	$(call if_changed,bch_codegen_host)
+
+targets += linux_version_cfgs
+
+RUSTFLAGS_mod.o += @$(bch-linux-version-cfgs)
+$(obj)/mod.o: $(bch-linux-version-cfgs)
 
 # ---- crates kbuild doesn't build for us -------------------------------------
 # These, and Makefile.rust.vendor's. The crate name comes from the target -
@@ -389,7 +401,7 @@ bcachefs-y += rust.o rust/extern.o
 # And what those rules write besides their targets: the rest of the codegen's
 # output, the rlibs' metadata, and the vendored stack's directory - here, as
 # clean doesn't always read Makefile.rust.vendor.
-clean-files += rust rust-host vrust lib*.rmeta
+clean-files += rust rust-host vrust lib*.rmeta linux-version-cfgs
 
 # Makefile.rust.vendor builds mod.o against the vendored stack; otherwise kbuild
 # builds it.
