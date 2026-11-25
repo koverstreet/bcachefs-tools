@@ -83,7 +83,9 @@ fn copy(src: &Path, dst: &Path) -> Result<()> {
     }
     ctx(fs::copy(src, dst), what)?;
     let mtime = ctx(fs::metadata(src).and_then(|m| m.modified()), what)?;
-    ctx(fs::File::options().write(true).open(dst).and_then(|f| f.set_modified(mtime)), what)
+    // Opened to read: the copy has @src's mode, which from the nix store is
+    // read-only - and its owner sets its times without writing it.
+    ctx(fs::File::open(dst).and_then(|f| f.set_modified(mtime)), what)
 }
 
 /// The files of @top's @dir, relative to @top: see the top of the file.
