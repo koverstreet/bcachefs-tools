@@ -32,7 +32,6 @@ use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists,
 use crate::sb::version::prep_for_start;
 use crate::util::Printbuf;
 use crate::util::alloc::{Arc, KVVec};
-use crate::util::backref::BackRef;
 use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
 use crate::os::kernel::READ;
@@ -1123,23 +1122,18 @@ impl Fs {
         &self.write_ref_wq
     }
 
-    /// Holds a write ref until @make's future is done; EROFS if going read-only
+    /// @make's future, given a write ref - the filesystem, while it holds it;
+    /// EROFS if going read-only
     pub fn spawn_write<M, F>(&self, make: M) -> Result<(), BchError>
     where
-        M: FnOnce(BackRef<Fs>) -> F + Send + 'static,
+        M: FnOnce(WriteRef) -> F + Send + 'static,
         F: Future<Output = ()> + Send + 'static,
     {
         let w: WriteRef = RefGuard::tryget_live(&self.writes).ok_or(BchError::from(c::EROFS))?;
-        // SAFETY: going read-only waits for the task's write ref: the
-        // filesystem and its write_ref_wq outlive it
-        let (fs, wq) = unsafe { (BackRef::new(self), self.write_ref_wq()) };
-        // SAFETY: what the future has is 'static, or the BackRef above's
-        unsafe {
-            crate::util::task::spawn_detached(wq, self.tasks(), move || async move {
-                let _w = w;
-                make(fs).await
-            })
-        }
+        // SAFETY: what the future has of the filesystem, it has by the write
+        // ref; the queue and task list are drained in teardown(), before the
+        // filesystem's freed
+        unsafe { crate::util::task::spawn_detached(self.write_ref_wq(), self.tasks(), move || make(w)) }
     }
 }
 

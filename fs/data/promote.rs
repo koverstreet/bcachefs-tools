@@ -30,7 +30,6 @@ use crate::fs::{Fs, WriteRef};
 use crate::prt;
 use crate::debug::trace::events;
 use crate::util::atomic::try_update;
-use crate::util::backref::BackRef;
 use crate::os::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
 use crate::util::task::{Resume, Spawn};
@@ -63,11 +62,7 @@ impl Fs {
 
 /// What a promote holds while in flight: a write ref, so the filesystem
 /// doesn't go read-only under it, and its place under the limit.
-struct InFlight {
-    /// Valid while @_write is held, and it's dropped after drop() runs
-    fs:     BackRef<Fs>,
-    _write: WriteRef,
-}
+struct InFlight(WriteRef);
 
 impl InFlight {
     fn tryget(fs: &Fs) -> Result<Self, BchError> {
@@ -75,15 +70,13 @@ impl InFlight {
         if !fs.promote_limit_tryget() {
             return fs.throw(Errcode::nopromote_ratelimited);
         }
-        // SAFETY: the filesystem outlives the write ref, which going read-only
-        // waits for
-        Ok(InFlight { fs: unsafe { BackRef::new(fs) }, _write: write })
+        Ok(InFlight(write))
     }
 }
 
 impl Drop for InFlight {
     fn drop(&mut self) {
-        self.fs.promote_limit_put();
+        self.0.promote_limit_put();
     }
 }
 
