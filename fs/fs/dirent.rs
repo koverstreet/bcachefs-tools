@@ -168,7 +168,7 @@ pub fn init_name(
     let cf_name = cf_name.map(OsStrExt::as_bytes);
 
     if name.len() > c::BCH_NAME_MAX as usize {
-        return Err(BchError::from(c::ENAMETOOLONG));
+        return Err(Errcode::ENAMETOOLONG_dirent_name.into());
     }
 
     let casefold = hash_info.cf_encoding.is_some();
@@ -385,7 +385,7 @@ pub fn lookup_target(
     k:   BkeySC<'_, c::Dirent>,
 ) -> Result<c::subvol_inum, BchError> {
     read_target(t, dir, Dirent::from(k))?
-        .ok_or(BchError::from(c::ENOENT))
+        .ok_or_else(|| t.fs().err(Errcode::ENOENT_dirent_target))
 }
 
 /// What @name in directory @dir points at, as seen in @snapshot: as

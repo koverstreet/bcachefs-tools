@@ -557,7 +557,7 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
 
         if did_second_pass {
             bch_err!(fs, "dirents not repairing");
-            return Err(c::EINVAL.into());
+            return fs.throw(Errcode::EINVAL_dirents_not_repairing);
         }
 
         bch_info!(fs, "check_dirents requires second pass");

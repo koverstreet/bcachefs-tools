@@ -760,7 +760,7 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
 /// isn't an inode.
 pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
     let Some(k) = BkeySC::from(k).arm::<Inodes>() else {
-        return Err(BchError::from(c::ENOENT));
+        return t.fs().throw(Errcode::ENOENT_inode_to_v3_not_inode);
     };
     pack_trans(t, &unpack(t.fs(), k))
 }

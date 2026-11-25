@@ -955,7 +955,7 @@ pub mod ioctl {
         }
 
         if !capable(Capability::SysAdmin) {
-            return Err(c::EPERM.into());
+            return Err(Errcode::EPERM_fsck_offline_not_admin.into());
         }
 
         let mut opts = user_opts(arg.opts)?;
@@ -978,9 +978,9 @@ pub mod ioctl {
         let fs = registry::devs(devs.iter().map(UserStr::as_cstr))
             .and_then(|d| FsHandle::get(&d, Opener::Fsck))
             .and_then(|handle| {
-                let FsHandle::Opening(opening) = handle else { return Err(c::EBUSY.into()) };
+                let FsHandle::Opening(opening) = handle else { return Err(Errcode::EBUSY_fsck_offline_opening.into()) };
                 let Claim::Ours(_opening, claimed) = opening.claim(devs.iter().map(UserStr::as_cstr), &mut opts)? else {
-                    return Err(c::EBUSY.into());
+                    return Err(Errcode::EBUSY_fsck_offline_claim.into());
                 };
                 claimed.open(&mut opts, None)
             });
@@ -1035,7 +1035,7 @@ pub mod ioctl {
 
         let opts = user_opts(arg.opts)?;
 
-        let fs_ref = fs.ro_ref.tryget().ok_or(BchError::from(c::EROFS))?;
+        let fs_ref = fs.require(fs.ro_ref.tryget(), Errcode::erofs_fsck_online_no_ro_ref)?;
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
         crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
@@ -1060,7 +1060,7 @@ pub mod ioctl {
             }
         }
 
-        let mut ret = Err(BchError::from(c::EAGAIN));
+        let mut ret = Err(BchError::from(Errcode::EAGAIN_fsck_online_recovery_running));
         if let Some(_run) = fs.recovery.run_lock.try_lock() {
             fs.stdio_filter.store(crate::os::sched::current(), Relaxed);
             fs.stdio.store(stdio.as_ptr(), Release);

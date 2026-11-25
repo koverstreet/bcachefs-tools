@@ -130,7 +130,7 @@ pub fn create_trans(
     *new_subvol = subvolume::get(t, dir.subvol as u32, true)?;
     if new_subvol.ro() ||
        new_subvol.state_decoded() == Some(c::SubvolumeState::unlinked) {
-        return Err(BchError::from(c::EROFS));
+        return fs.throw(Errcode::erofs_create_subvol_ro);
     }
 
     let mut dir_snapshot = new_subvol.snapshot();
@@ -281,7 +281,7 @@ pub fn link_trans(
     let mut dir_offset = 0;
 
     if dir.subvol != inum.subvol {
-        return Err(BchError::from(c::EXDEV));
+        return fs.throw(Errcode::EXDEV_link_cross_subvol);
     }
 
     *inode_u = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
@@ -292,7 +292,7 @@ pub fn link_trans(
     *dir_u = inode::peek(t, &mut dir_iter, dir, BtreeIterFlags::INTENT)?;
 
     if reinherit_attrs(inode_u, dir_u) {
-        return Err(BchError::from(c::EXDEV));
+        return fs.throw(Errcode::EXDEV_link_reinherit_attrs);
     }
 
     dir_u.bi_mtime = now;
@@ -515,7 +515,7 @@ pub fn rename_trans(
     if src_dir.subvol != dst_dir.subvol &&
        (src_inode_u.bi_subvol == 0 ||
         (dst_inum.inum != 0 && dst_inode_u.bi_subvol == 0)) {
-        return Err(BchError::from(c::EXDEV));
+        return t.fs().throw(Errcode::EXDEV_rename_cross_subvol);
     }
 
     if src_inode_u.bi_parent_subvol != 0 {
@@ -542,7 +542,7 @@ pub fn rename_trans(
 
     if mode == BCH_RENAME_OVERWRITE {
         if src_inode_u.is_dir() != dst_inode_u.is_dir() {
-            return Err(BchError::from(c::ENOTDIR));
+            return t.fs().throw(Errcode::ENOTDIR_rename_overwrite_type);
         }
 
         if dst_inode_u.is_dir() {
@@ -552,12 +552,12 @@ pub fn rename_trans(
 
     if !same_dir {
         if reinherit_attrs(src_inode_u, dst_dir_u!()) && src_inode_u.is_dir() {
-            return Err(BchError::from(c::EXDEV));
+            return t.fs().throw(Errcode::EXDEV_rename_reinherit_src);
         }
 
         if mode == BCH_RENAME_EXCHANGE &&
            reinherit_attrs(dst_inode_u, src_dir_u) && dst_inode_u.is_dir() {
-            return Err(BchError::from(c::EXDEV));
+            return t.fs().throw(Errcode::EXDEV_rename_reinherit_dst);
         }
 
         // Reinherited options have to reach existing data too

@@ -467,7 +467,7 @@ mod vfs {
 
             if over(qc.hardlimit, n) && !ignore_hardlimit() {
                 msgs.prepare_warning(qc, qtype, idx, counter, QuotaMsg::HardWarn);
-                return Err(c::EDQUOT.into());
+                return Err(Errcode::EDQUOT_hardlimit.into());
             }
 
             if over(qc.softlimit, n) {
@@ -478,7 +478,7 @@ mod vfs {
                     msgs.prepare_warning(qc, qtype, idx, counter, QuotaMsg::SoftWarn);
                 } else if now >= qc.timer && !ignore_hardlimit() {
                     msgs.prepare_warning(qc, qtype, idx, counter, QuotaMsg::SoftLongWarn);
-                    return Err(c::EDQUOT.into());
+                    return Err(Errcode::EDQUOT_softlimit_expired.into());
                 }
             }
 
@@ -754,7 +754,7 @@ mod vfs {
 
     fn enable(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
         if rdonly {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_quota_enable);
         }
 
         /* Accounting must be enabled at mount time: */
@@ -785,7 +785,7 @@ mod vfs {
 
     fn disable(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
         if rdonly {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_quota_disable);
         }
 
         let mut sb = fs.sb_lock();
@@ -796,7 +796,7 @@ mod vfs {
 
     fn remove(fs: &Fs, rdonly: bool, uflags: u32) -> Result<(), BchError> {
         if rdonly {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_quota_remove);
         }
 
         let types = [
@@ -853,7 +853,7 @@ mod vfs {
         }
 
         if rdonly {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_quota_set_info);
         }
 
         let ty = ty as usize;
@@ -862,7 +862,7 @@ mod vfs {
         }
 
         if (1 << ty) & enabled_qtypes(fs) == 0 {
-            return Err(c::ESRCH.into());
+            return fs.throw(Errcode::ESRCH_quota_set_info_not_enabled);
         }
 
         let mask = info.i_fieldmask as u32;
@@ -930,7 +930,7 @@ mod vfs {
 
         let l = Locked::new(fs, ty as usize);
         let Some((pos, mq)) = l.iter_from(qid as usize).find(|(_, mq)| **mq != c::Memquota::default()) else {
-            return Err(c::ENOENT.into());
+            return Err(Errcode::ENOENT_quota_get_next.into());
         };
 
         *qdq = dqblk(mq);
@@ -975,7 +975,7 @@ mod vfs {
         }
 
         if rdonly {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_quota_set_quota);
         }
 
         let mut new_quota = BkeyI::<c::Quota>::at(pos(kqid.type_ as u64, kqid.id() as u64));

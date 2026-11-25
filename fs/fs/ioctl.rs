@@ -104,7 +104,7 @@ impl Entries {
 
     /// ERANGE if the next entry wouldn't fit even an empty buffer.
     fn check_room(&self) -> Result<(), BchError> {
-        if self.full && self.used == 0 { Err(c::ERANGE.into()) } else { Ok(()) }
+        if self.full && self.used == 0 { Err(Errcode::ERANGE_readdir_flags_buf.into()) } else { Ok(()) }
     }
 }
 
@@ -117,7 +117,7 @@ pub fn get_damage(fs: &Fs, inum: c::subvol_inum, user: UserVstruct<c::bch_ioctl_
 {
     let mut arg = user.head()?;
     if arg.pad != 0 {
-        return Err(c::EINVAL.into());
+        return fs.throw(Errcode::EINVAL_get_damage_pad);
     }
 
     let errors = {
@@ -172,7 +172,7 @@ fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: c::subvol_inum, vie
             damage::inode_has_damage(t, target.inum, snapshot)
         }
         c::BCH_READDIR_subvolumes_only => Ok(u32::from(d.d_type()) == c::DT_SUBVOL),
-        _ => Err(c::EINVAL.into()),
+        _ => t.fs().throw(Errcode::EINVAL_readdir_filter_flags),
     }
 }
 
@@ -337,10 +337,10 @@ where
 {
     let arg = user.read()?;
     if arg.pad != 0 || arg.used != 0 || arg.flags & !READDIR_FLAGS_ALL != 0 {
-        return Err(c::EINVAL.into());
+        return fs.throw(Errcode::EINVAL_readdir_flags_args);
     }
     if !is_dir {
-        return Err(c::ENOTDIR.into());
+        return fs.throw(Errcode::ENOTDIR_readdir_flags);
     }
 
     type Q = c::bch_ioctl_readdir_flags;
@@ -359,7 +359,7 @@ where
         c::BCH_READDIR_damaged         => r.damaged(fs, arg.pos)?,
         c::BCH_READDIR_subvolumes_only => [r.subvols(fs, arg.pos[0])?, 0],
         // unfiltered: an honest tree walk, not yet
-        _ => return Err(c::EOPNOTSUPP.into()),
+        _ => return fs.throw(Errcode::EOPNOTSUPP_readdir_flags_unfiltered),
     };
     r.out.check_room()?;
     user.write_at(offset_of!(Q, pos), &pos)?;
@@ -461,7 +461,7 @@ pub fn subvolume_to_path(fs: &Fs, user: UserArg<c::bch_ioctl_subvol_to_path>) ->
 
     let p = relative(path.as_bytes());
     if p.len() + 1 > arg.buf_size as usize {
-        return Err(c::ERANGE.into());
+        return fs.throw(Errcode::ERANGE_subvol_to_path_buf);
     }
     let mut w = UserSlice::new(UserPtr::from_addr(arg.buf as usize), p.len() + 1).writer();
     w.write_slice(p)?;
@@ -500,7 +500,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
                 tree_id
             } else {
                 match fs.snapshots.tree(subvolume::get(t, subvol, false)?.snapshot.get()) {
-                    0  => return Err(c::ENOENT.into()),
+                    0  => return fs.throw(Errcode::ENOENT_snapshot_tree_of_subvol),
                     id => id,
                 }
             };
@@ -547,7 +547,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
 
     put(&r)?;
     if size != 0 && size < r.total {
-        return Err(c::ERANGE.into());
+        return fs.throw(Errcode::ERANGE_snapshot_tree_buf);
     }
     Ok(())
 }
@@ -730,7 +730,7 @@ pub fn unpoison(fs: &Fs, inum: c::subvol_inum, owner: impl FnOnce() -> bool, arg
     -> Result<(), BchError>
 {
     if arg.flags != 0 || arg.pad != 0 {
-        return Err(c::EINVAL.into());
+        return fs.throw(Errcode::EINVAL_unpoison_args);
     }
     if arg.len == 0 {
         return Ok(());

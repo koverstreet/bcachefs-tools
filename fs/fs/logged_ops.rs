@@ -88,7 +88,7 @@ impl Fs {
         let ty = match s.split([' ', '\t', '\n']).next().unwrap_or_default() {
             ""   => 0,
             name => LOGGED_OPS.iter().find(|op| op.name == name)
-                .ok_or(BchError::from(c::EINVAL))?
+                .ok_or_else(|| self.err(Errcode::EINVAL_logged_op_fail_next_name))?
                 .ty.0,
         };
 

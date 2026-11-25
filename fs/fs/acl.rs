@@ -193,7 +193,7 @@ mod vfs {
         fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<Self>, BchError> {
             let entries = entries(value).map_err(|err| {
                 bch_err!(t.fs(), "invalid acl: {err}");
-                BchError::from(c::EINVAL)
+                t.fs().err(c::Errcode::EINVAL_acl_from_disk)
             })?;
             let nr = entries.clone().count();
             if nr == 0 {
@@ -229,7 +229,7 @@ mod vfs {
 
             // A tag ACLs don't have: EINVAL
             if entries().any(|e| e.is_err()) {
-                return Err(BchError::from(c::EINVAL));
+                return t.fs().throw(c::Errcode::EINVAL_acl_bad_tag);
             }
             let entries = || entries().map(|e| e.expect("checked above"));
 
@@ -277,7 +277,7 @@ mod vfs {
         let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
 
         if ty == AclType::Default && inode.bi_mode as u32 & c::S_IFMT != c::S_IFDIR {
-            return if acl.is_none() { Ok(()) } else { Err(BchError::from(c::EACCES)) };
+            return if acl.is_none() { Ok(()) } else { t.fs().throw(c::Errcode::EACCES_default_acl_not_dir) };
         }
 
         if let Some(acl) = acl {

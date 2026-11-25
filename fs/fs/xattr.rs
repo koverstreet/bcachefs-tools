@@ -269,7 +269,7 @@ pub fn lookup<'i, 'a>(
 /// @buffer is too small.
 fn copy_out(buffer: Option<&mut [u8]>, v: &[u8]) -> Result<usize, BchError> {
     if let Some(buffer) = buffer {
-        buffer.get_mut(..v.len()).ok_or(BchError::from(c::ERANGE))?.copy_from_slice(v);
+        buffer.get_mut(..v.len()).ok_or(BchError::from(c::Errcode::ERANGE_xattr_get_buf))?.copy_from_slice(v);
     }
     Ok(v.len())
 }
@@ -287,7 +287,7 @@ pub fn set_key(
     flags:     i32,
 ) -> Result<(), BchError> {
     let mut k = new_key(t, ty, name.as_bytes(), value.len())?
-        .ok_or(BchError::from(c::ERANGE))?;
+        .ok_or_else(|| t.fs().err(c::Errcode::ERANGE_xattr_set_too_big))?;
     value_mut(&mut k).copy_from_slice(value);
 
     let mut set_flags = str_hash::SetFlags::empty();
@@ -335,7 +335,7 @@ pub fn set_trans(
 
     match ret {
         Err(e) if e.matches(c::ENOENT) && flags & XATTR_REPLACE != 0 =>
-            Err(BchError::from(c::ENODATA)),
+            Err(c::Errcode::ENODATA_xattr_replace_missing.into()),
         Err(e) if e.matches(c::ENOENT) => Ok(()),
         r => r,
     }
@@ -400,7 +400,7 @@ mod vfs {
 
             if let Some(buf) = self.buf.as_deref_mut() {
                 let out = buf.get_mut(self.used..self.used + total)
-                    .ok_or(BchError::from(c::ERANGE))?;
+                    .ok_or(BchError::from(Errcode::ERANGE_xattr_list_buf))?;
                 out[..prefix.len()].copy_from_slice(prefix);
                 out[prefix.len()..][..name.len()].copy_from_slice(name);
                 out[total - 1] = 0;
@@ -464,7 +464,7 @@ mod vfs {
         let name = OsStr::from_bytes(name.to_bytes());
         let trans = crate::btree_trans!(v.fs());
         lockrestart_do(&trans, |t| get_trans(t, &v.inode(), v.inum(), ty, name, buffer.as_deref_mut()))
-            .map_err(|e| if e.matches(c::ENOENT) { BchError::from(c::ENODATA) } else { e })
+            .map_err(|e| if e.matches(c::ENOENT) { Errcode::ENODATA_xattr_get.into() } else { e })
     }
 
     /// Xattr @name of @ty on @v set to @value, or with None removed: the user,
@@ -508,14 +508,14 @@ mod vfs {
         };
 
         if !inode_opts.defined(id) || !(all || inode_opt.is_own(inode)) {
-            return Err(BchError::from(c::ENODATA));
+            return Err(Errcode::ENODATA_xattr_bcachefs_get_undefined.into());
         }
 
         let mut out = Printbuf::new();
         opts::opt_to_text(&mut out, Some(fs), None, opt, inode_opts.get(id), 0);
 
         if out.allocation_failure() {
-            return Err(BchError::from(c::ENOMEM));
+            return Err(fs.err(Errcode::ENOMEM_xattr_bcachefs_get_opt_text));
         }
 
         copy_out(buffer, out.as_bytes())
@@ -600,7 +600,7 @@ mod vfs {
             // and must not reach inode_opt_set(), which would enable what
             // the option needs
             if !defined && !inode_opt.is_own(&v.inode()) {
-                return Err(BchError::from(c::ENODATA));
+                return Err(Errcode::ENODATA_xattr_bcachefs_set_undefined.into());
             }
 
             // inode fields accessible via the xattr interface are stored
