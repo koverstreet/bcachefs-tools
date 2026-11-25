@@ -51,7 +51,7 @@ use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Kmalloc;
-use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool, Data, HasBio};
+use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
@@ -125,22 +125,6 @@ struct NodeReadBio {
 }
 crate::has_bio!(NodeReadBio, bio);
 
-struct NodeReadIo<'h>(Pin<&'h mut NodeReadBio>);
-
-impl BioSubmit for NodeReadIo<'_> {
-    fn bio(&self) -> &Bio {
-        &self.0.bio
-    }
-
-    fn bio_mut(&mut self) -> &mut Bio {
-        self.0.as_mut().bio_mut()
-    }
-}
-
-unsafe impl BioOwner for NodeReadIo<'_> {
-    type Owns = Data;
-}
-
 /// The module's, not the filesystem's: a box is freed a grace period after its
 /// read, when the filesystem may be gone. A mempool: node reads must make
 /// progress under memory pressure.
@@ -181,7 +165,7 @@ fn maybe_corrupt(buf: &mut [u8], dev: i32) {
 
 struct NodeRead<'r> {
     fs:         &'r Fs,
-    io:         NodeReadIo<'r>,
+    io:         Pin<&'r mut NodeReadBio>,
     ca:         Option<DevIoRef<c::DevReadRefKind>>,
     pick:       c::extent_ptr_decoded,
     failed:     c::bch_io_failures,
@@ -879,7 +863,7 @@ async fn read_task<'h>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, node: Re
     let fs = &*fs;
     let mut r = NodeRead {
         fs,
-        io: NodeReadIo(home),
+        io: home,
         ca,
         pick,
         failed: Default::default(),

@@ -805,6 +805,22 @@ unsafe impl<T: HasBio, A: Alloc> BioOwner for BioBox<'_, T, A> {
     type Owns = T::Owns;
 }
 
+/// A T with a bio, wherever it's held: a task's home, a node's.
+impl<T: HasBio> BioSubmit for Pin<&mut T> {
+    fn bio(&self) -> &Bio {
+        HasBio::bio(&**self)
+    }
+
+    fn bio_mut(&mut self) -> &mut Bio {
+        HasBio::bio_mut(self.as_mut())
+    }
+}
+
+// SAFETY: has_bio!() checks T's Owns is its bio's
+unsafe impl<T: HasBio> BioOwner for Pin<&mut T> {
+    type Owns = T::Owns;
+}
+
 impl<T: HasBio, A: Alloc> Drop for BioBox<'_, T, A> {
     fn drop(&mut self) {
         let t = self.t.as_ptr();
