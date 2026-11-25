@@ -280,7 +280,7 @@ BCACHEFS_DEPS=libbcachefs.a
 # and the shim's generates the bindings. Leaving one out meant editing it
 # changed nothing until something else happened to make cargo run - a stale
 # binary that looks like a rebuilt one.
-RUST_SRCS:=$(shell find src fs os/linux_user os/bio -type f -iname '*.rs') build.rs
+RUST_SRCS:=$(shell find src fs os -path os/linux_kernel -prune -o -type f -iname '*.rs' -print) build.rs
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
