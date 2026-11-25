@@ -335,7 +335,7 @@ fn opts_table() -> String {
 
 /*
  * Fatal-signal handler: print signal name and a unified backtrace via
- * dump_stack() (libunwind + util/demangle.rs + libdw line info), then
+ * dump_stack() (the backtrace crate, from the debug info), then
  * re-raise. SA_RESETHAND means our handler ran once and the default
  * disposition is restored, so re-raising terminates with the kernel's
  * default action (core dump if ulimit -c permits).

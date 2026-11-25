@@ -5,7 +5,7 @@
 //!
 //! What resolves an address differs by where we run, and nothing else does.
 //! In the kernel it's kallsyms - "name+0xoff/0xsize [module]", as %pB prints it;
-//! in userspace, the shim's bch2_prt_symbol(), libunwind and libdw - "name+0xoff
+//! in userspace, the backtrace crate's, from the debug info - "name+0xoff
 //! file:line". Either way the name comes first and has no '+' in it, and it's
 //! mangled where it's Rust's: kallsyms keeps symbols as the compiler emitted
 //! them (v0, -Csymbol-mangling-version=v0), and the kernel has no demangler -

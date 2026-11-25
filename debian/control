@@ -9,24 +9,18 @@ Build-Depends: debhelper-compat (= 13),
                dh-dkms,
                gcc:native,
                jq,
-               libaio-dev (>= 0.3.111),
                libblkid-dev,
                libclang-dev:native,
-#              libfuse3-dev,
                liblz4-dev,
                libstd-rust-dev,
                libstd-rust-dev:native,
                libudev-dev,
-               libunwind-dev,
                liburcu-dev (>= 0.15),
                libzstd-dev,
                linux-libc-dev (>= 6.12),
                pkgconf,
-               python3-docutils,
-               python3:native,
-               rustc:native (>= 1.77),
+               rustc:native (>= 1.85),
                systemd-dev,
-               uuid-dev,
                zlib1g-dev,
 Homepage: https://bcachefs.org/
 Vcs-Git: git://evilpiepirate.org/bcachefs-tools.git
@@ -36,7 +30,7 @@ Testsuite: autopkgtest-pkg-dkms
 
 Package: bcachefs-tools
 Architecture: linux-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, python3:any
+Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: bcachefs-kernel-dkms (= ${binary:Version}),
             initramfs-tools | linux-initramfs-tool,
             mokutil,

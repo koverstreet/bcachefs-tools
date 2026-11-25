@@ -86,16 +86,13 @@ BuildRequires:  rustc >= %{MSRV}
 %endif
 
 BuildRequires:  kernel-headers >= %{MINIMAL_KERNEL_VERSION_FOR_TOOLS}
-BuildRequires:  libaio-devel >= 0.3.111
 BuildRequires:  libattr-devel
 BuildRequires:  pkgconfig(blkid)
 BuildRequires:  pkgconfig(liblz4)
 BuildRequires:  pkgconfig(libudev)
-BuildRequires:  pkgconfig(libunwind)
 BuildRequires:  pkgconfig(liburcu) >= 0.15
 BuildRequires:  pkgconfig(libzstd)
 BuildRequires:  pkgconfig(udev)
-BuildRequires:  pkgconfig(uuid)
 BuildRequires:  pkgconfig(zlib)
 
 BuildRequires:  clang-devel

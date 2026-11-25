@@ -11,12 +11,10 @@
   versionCheckHook,
 
   # run time
-  libaio,
-  libunwind,
   liburcu,
-  libuuid,
   lz4,
   udev,
+  util-linuxMinimal,
   zlib,
   zstd,
 
@@ -83,12 +81,10 @@ let
     ];
 
     buildInputs = [
-      libaio
-      libunwind
       liburcu
-      libuuid
       lz4
       udev
+      util-linuxMinimal # libblkid
       zlib
       zstd
     ];
