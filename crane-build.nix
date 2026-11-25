@@ -83,7 +83,7 @@ let
     buildInputs = [
       liburcu
       lz4
-      udev
+      udev # udev.pc: where the rules go
       util-linuxMinimal # libblkid
       zlib
       zstd

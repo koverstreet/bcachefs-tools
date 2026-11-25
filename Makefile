@@ -157,7 +157,7 @@ CFLAGS+=$(call cc-disable-warning, gnu-variable-sized-type-not-at-end)
 # Cold paths out of line, as the module's are: fs/Makefile.rust
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries -C llvm-args=-hot-cold-split=true
 
-PKGCONFIG_LIBS="blkid liburcu zlib liblz4 libzstd libudev"
+PKGCONFIG_LIBS="blkid liburcu zlib liblz4 libzstd"
 
 # Only query pkg-config for targets that compile or do a full install.
 # Targets like install_dkms and clean don't need build dependencies.

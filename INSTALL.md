@@ -6,7 +6,6 @@ Build dependencies:
  * libblkid
  * libclang
  * liblz4
- * libudev
  * liburcu
  * libzstd
  * pkg-config
@@ -40,7 +39,7 @@ sufficient to build current master.
 ``` shell
 apt install -y pkg-config libblkid-dev \
     liblz4-dev liburcu-dev libzstd-dev \
-    zlib1g-dev libudev-dev udev git build-essential \
+    zlib1g-dev udev git build-essential \
     libclang-dev debhelper systemd-dev
 ```
 

@@ -89,7 +89,6 @@ BuildRequires:  kernel-headers >= %{MINIMAL_KERNEL_VERSION_FOR_TOOLS}
 BuildRequires:  libattr-devel
 BuildRequires:  pkgconfig(blkid)
 BuildRequires:  pkgconfig(liblz4)
-BuildRequires:  pkgconfig(libudev)
 BuildRequires:  pkgconfig(liburcu) >= 0.15
 BuildRequires:  pkgconfig(libzstd)
 BuildRequires:  pkgconfig(udev)

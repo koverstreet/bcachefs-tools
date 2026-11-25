@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::{OsString, OsStr},
     fs,
-    os::fd::{AsRawFd, BorrowedFd},
+    os::fd::{AsFd, AsRawFd},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     thread::sleep,
@@ -35,6 +35,7 @@ use c::bch_opts;
 use uuid::Uuid;
 use log::{debug, info, warn};
 
+use crate::udev::{self, BlockDevice, BlockMonitor};
 use crate::device_multipath::{
     find_multipath_holder, preferred_multipath_devnode, warn_multipath_component,
 };
@@ -47,75 +48,53 @@ pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<b
     bcachefs_kernel::sb::io::read_super_silent(&bcachefs_kernel::path_to_cstr(path), &mut opts)
 }
 
-pub fn should_skip_multipath_component(dev: &udev::Device) -> bool {
+pub fn should_skip_multipath_component(dev: &BlockDevice) -> bool {
     // Set by multipath's udev rule; fall back to sysfs if not present.
-    if dev
-        .property_value("DM_MULTIPATH_DEVICE_PATH")
-        .is_some_and(|v| v == "1")
-    {
-        if let Some(devnode) = dev.devnode() {
-            debug!("Skipping multipath component device: {}", devnode.display());
-        }
+    if dev.property("DM_MULTIPATH_DEVICE_PATH") == Some("1") {
+        debug!("Skipping multipath component device: {}", dev.devnode.display());
         return true;
     }
 
-    if let Some(devnode) = dev.devnode() {
-        if find_multipath_holder(devnode).is_some() {
-            debug!(
-                "Skipping multipath component device via sysfs holders: {}",
-                devnode.display()
-            );
-            return true;
-        }
+    if find_multipath_holder(&dev.devnode).is_some() {
+        debug!(
+            "Skipping multipath component device via sysfs holders: {}",
+            dev.devnode.display()
+        );
+        return true;
     }
 
     false
 }
 
+fn bcachefs_block_devices() -> anyhow::Result<impl Iterator<Item = BlockDevice>> {
+    Ok(udev::block_devices()?
+        .into_iter()
+        .filter(|dev| dev.property("ID_FS_TYPE") == Some("bcachefs")))
+}
+
 fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<PathBuf>> {
     debug!("Walking udev db!");
 
-    let mut enumerator = udev::Enumerator::new()?;
-    enumerator.match_is_initialized()?;
-    enumerator.match_subsystem("block")?;
-    enumerator.match_property("ID_FS_TYPE", "bcachefs")?;
-
-    Ok(enumerator
-        .scan_devices()?
+    Ok(bcachefs_block_devices()?
         .filter(|dev| {
-            dev.property_value("ID_FS_UUID")
-                .and_then(OsStr::to_str)
+            dev.property("ID_FS_UUID")
                 .and_then(|s| Uuid::parse_str(s).ok())
                 .is_some_and(|dev_uuid| dev_uuid == uuid)
                 && !should_skip_multipath_component(dev)
         })
-        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
-        .collect::<Vec<_>>())
+        .map(|dev| dev.devnode)
+        .collect())
 }
 
 fn get_bcachefs_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
-    let mut enumerator = udev::Enumerator::new()?;
-    enumerator.match_is_initialized()?;
-    enumerator.match_subsystem("block")?;
-    enumerator.match_property("ID_FS_TYPE", "bcachefs")?;
-
-    Ok(enumerator
-        .scan_devices()?
+    Ok(bcachefs_block_devices()?
         .filter(|dev| !should_skip_multipath_component(dev))
-        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
-        .collect::<Vec<_>>())
+        .map(|dev| dev.devnode)
+        .collect())
 }
 
 fn get_all_block_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
-    let mut udev = udev::Enumerator::new()?;
-    udev.match_is_initialized()?;
-    udev.match_subsystem("block")?;
-
-    let devices = udev
-        .scan_devices()?
-        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
-        .collect::<Vec<_>>();
-    Ok(devices)
+    Ok(udev::block_devices()?.into_iter().map(|dev| dev.devnode).collect())
 }
 
 /// Scan /proc/partitions for block devices. Works without udev.
@@ -402,31 +381,6 @@ fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) ->
     }
 }
 
-/// udevd's own test for whether it is running - libudev checks this same
-/// socket in udev_queue_get_udev_is_active().
-fn udevd_running() -> bool {
-    Path::new("/run/udev/control").exists()
-}
-
-/// The two netlink groups are not interchangeable: `new()` subscribes to the
-/// one udevd writes after processing an event, `new_kernel()` to the one the
-/// kernel writes (kobject_uevent). In an initramfs - the case this whole wait
-/// exists for - a `new()` monitor is a socket nobody writes to.
-///
-/// Prefer udevd's when it is running: its events arrive after device-mapper
-/// and md names are set up, where a kernel event for those can land before
-/// there is anything to find. Callers rescan rather than trust the devnode in
-/// the event, so either source carries all they need.
-fn block_device_monitor() -> Option<udev::MonitorSocket> {
-    let builder = if udevd_running() {
-        udev::MonitorBuilder::new()
-    } else {
-        udev::MonitorBuilder::new_kernel()
-    };
-
-    builder.ok()?.match_subsystem("block").ok()?.listen().ok()
-}
-
 /// Event-driven rather than polled: a rescan reads the superblock of every
 /// block device on the machine, so polling one would keep every spun-down disk
 /// awake for the length of a boot to learn nothing.
@@ -443,7 +397,7 @@ fn scan_waiting_for_devices<F>(cli_opts: &bch_opts, scan: F)
 where
     F: Fn() -> Result<Vec<(PathBuf, bch_sb_handle)>>,
 {
-    let socket = block_device_monitor();
+    let socket = BlockMonitor::new().ok();
 
     let start = Instant::now();
     let mut sbs = scan()?;
@@ -476,8 +430,7 @@ where
 
         match &socket {
             Some(socket) => {
-                let fd = unsafe { BorrowedFd::borrow_raw(socket.as_raw_fd()) };
-                let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+                let mut fds = [PollFd::new(socket, PollFlags::IN)];
 
                 // Bounded until we have spoken, or a wait long enough to need
                 // explaining would sit here silently for all of it: nothing
@@ -498,7 +451,7 @@ where
                 }
 
                 // Nothing drained means the poll timed out.
-                if socket.iter().count() != 0 {
+                if socket.drain()? {
                     sbs = scan()?;
                 }
             }
@@ -743,7 +696,7 @@ pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<OpenFs, BchError
 /// as hardware rather than as a keystroke. Someone who is asked whether to
 /// mount without a disk, and responds by plugging the disk in, has answered.
 pub struct DeviceWatch {
-	socket:	udev::MonitorSocket,
+	socket:	BlockMonitor,
 	uuid:	Uuid,
 	opts:	bch_opts,
 	use_udev: bool,
@@ -754,7 +707,7 @@ impl DeviceWatch {
 	/// arrivals. Polling for a disk on a timer while a question is on screen
 	/// is not worth the code.
 	pub fn new(uuid: Uuid, opts: &bch_opts, use_udev: bool) -> Option<Self> {
-		let socket = block_device_monitor()?;
+		let socket = BlockMonitor::new().ok()?;
 
 		Some(DeviceWatch { socket, uuid, opts: *opts, use_udev })
 	}
@@ -766,7 +719,7 @@ impl DeviceWatch {
 	/// means look again, and the scan knows how - including the fallback for
 	/// members udev has not tagged yet.
 	pub fn every_member_present(&mut self) -> bool {
-		if self.socket.iter().count() == 0 {
+		if !self.socket.drain().unwrap_or(true) {
 			return false;
 		}
 
@@ -778,7 +731,7 @@ impl DeviceWatch {
 
 impl bcachefs_kernel::util::prompt::Watch for DeviceWatch {
 	fn raw_fd(&self) -> std::os::fd::RawFd {
-		self.socket.as_raw_fd()
+		self.socket.as_fd().as_raw_fd()
 	}
 
 	/// A device arriving never *answers* "mount without it?" - it withdraws the

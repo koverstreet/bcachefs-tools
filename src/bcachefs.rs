@@ -12,6 +12,7 @@ mod recovery_display;
 mod splines;
 mod splitbrain;
 mod thread_with_file;
+mod udev;
 mod util;
 mod wrappers;
 pub mod http;
