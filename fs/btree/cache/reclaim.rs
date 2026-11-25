@@ -15,7 +15,6 @@ use crate::locking::six::SixHold;
 use crate::prt;
 use crate::os::kernel::local_clock;
 use bitflags::bitflags;
-use c::BtreeNodeCacheState as State;
 use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 
 /*
@@ -157,8 +156,7 @@ impl Fs {
                 }
 
                 if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
-                    let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
-                    OwnedNode::new(b, held).release_locked(self, lists);
+                    OwnedNode::take(self, lists, b, held).free(self, lists);
                     freed += 1;
                 }
             }
@@ -178,8 +176,7 @@ impl Fs {
                 } else if let Ok(held) = self.btree_node_reclaim(lists, b, ReclaimFlags::SHRINKER) {
                     self.btree.evicted_size.record(b.hash_val(),
                                                    LockedNode::of_hold(b, &held).contents().nr.live_u64s);
-                    let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
-                    OwnedNode::new(b, held).release_locked(self, lists);
+                    OwnedNode::take(self, lists, b, held).free(self, lists);
                     freed += 1;
                 }
 

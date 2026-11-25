@@ -73,7 +73,7 @@ impl Fs {
             let Some(n) = node_mem_alloc(self) else {
                 return self.throw(Errcode::ENOMEM_fs_btree_cache_init);
             };
-            n.free(self);
+            n.to_freelist(self);
         }
 
         bc.shrinkers_register(self)
@@ -104,8 +104,7 @@ impl Fs {
             b.flags.set_dirty(false);
         }
 
-        let _ = self.btree_node_transition_state_locked(lists, b, State::NONE);
-        OwnedNode::new(b, held).release_locked(self, lists);
+        OwnedNode::take(self, lists, b, held).free(self, lists);
         cond_resched();
     }
 }

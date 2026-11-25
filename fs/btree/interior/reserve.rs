@@ -269,7 +269,7 @@ impl<'t> InteriorUpdate<'t> {
          * Consumers can use them without any lock-take at pop time.
          */
         if let Err(e) = ret {
-            b.free(fs);
+            b.to_freelist(fs);
             return Err(e);
         }
         Ok(Reserved { node: b, ob })
@@ -458,6 +458,6 @@ impl BtreeUpdate {
 
         node.flags.set_need_write(false);
         node_free(fs, &node);
-        node.free(fs);
+        node.to_freelist(fs);
     }
 }

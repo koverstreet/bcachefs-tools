@@ -59,10 +59,9 @@
  *      b->hash_val is reset and b ends up in FREEABLE. Internal callers
  *      already holding bc->lock use the static _locked variant.
  *
- * The data-buffer swap inside bch2_btree_node_mem_alloc requires splitting
- * the transition: transition_state(b2, NONE) captures b2's old-state
- * bookkeeping while data is still attached, then swap(data), then
- * transition_state(b2, FREED) lists b2 with its (now-NULL) data.
+ * Freeing a node's buffers splits the transition: OwnedNode::take() goes to
+ * NONE, undoing the old state's bookkeeping while data is still attached, then
+ * OwnedNode::free() frees data and lists the node FREED.
  *
  * One non-state-machine transition: any live state → same state +
  * BTREE_NODE_permanent (bch2_btree_set_root_inmem just sets the flag; the
@@ -93,11 +92,11 @@ mod pins;
 mod reclaim;
 mod state;
 
-use bufs::{cache_node_struct_alloc, new_node_lock, node_mem_alloc};
+use bufs::{cache_node_struct_alloc, node_mem_alloc};
 pub(crate) use bufs::cached_node;
 pub(crate) use alloc::OwnedNode;
 pub use bufs::NodeBufs;
-pub use bufs::{bounce_bufs, bufs_free, node_mem_free, node_scratch_alloc, node_struct_free, Bounce, BounceBufs};
+pub use bufs::{bounce_bufs, node_mem_free, node_scratch_alloc, node_struct_free, Bounce, BounceBufs};
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::reclaim::ReclaimFlags;
-use super::{bufs_free, cache_node_struct_alloc, cached_node, new_node_lock, NodeBufs};
+use super::{cache_node_struct_alloc, cached_node, NodeBufs};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::util::alloc::{flags, Flags};
 use crate::btree::iter::BtreeTrans;
@@ -22,7 +22,7 @@ use crate::os::kernel::{cond_resched, local_clock, unlikely};
 use crate::util::log::LogMsg;
 use crate::os::sched::current;
 use c::BtreeNodeCacheState as State;
-use c::SixLockType::{self, SIX_LOCK_read, SIX_LOCK_write};
+use c::SixLockType::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
@@ -52,13 +52,12 @@ impl Fs {
     }
 
     fn btree_node_grab(&self, list: impl for<'l, 'g> Fn(&'l mut BtreeCacheGuard<'g>) -> &'l mut BtreeNodeList,
-                       pcpu_read_locks: bool) -> Option<(&BtreeNode, SixHold<'_>)> {
+                       pcpu_read_locks: bool) -> Option<OwnedNode> {
         let mut lists = self.btree.cache.lock.lock();
         let (b, held) = self.btree_node_reclaim_first(&mut lists, list, pcpu_read_locks, ReclaimFlags::empty())?;
 
         self.btree.evicted_size.record(b.hash_val(), LockedNode::of_hold(b, &held).contents().nr.live_u64s);
-        let _ = self.btree_node_transition_state_locked(&mut lists, b, State::NONE);
-        Some((b, held))
+        Some(OwnedNode::take(self, &mut lists, b, held))
     }
 
     fn system_memory_usage_high(&self) -> bool {
@@ -79,7 +78,7 @@ impl Fs {
 /// nor a list, NONE, no one else can find it until hash() puts it in the cache,
 /// still the owner's. Owned outside any borrow - an interior update's reserve
 /// has its nodes across calls - it's put back before the cache exits, by
-/// unlock(), free() or into_held(): dropped, it panics.
+/// unlock(), to_freelist(), free() or into_held(): dropped, it panics.
 pub(crate) struct OwnedNode<M = Write> {
     b:     NonNull<BtreeNode>,
     _mode: PhantomData<M>,
@@ -94,11 +93,30 @@ impl Deref for OwnedNode<Write> {
 }
 
 impl OwnedNode<Write> {
-    pub(super) fn new(b: &BtreeNode, held: SixHold<'_>) -> Self {
+    fn new(b: &BtreeNode, held: SixHold<'_>) -> Self {
         assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &b.c.lock),
                 "an owned node without its write lock");
+        assert!(!BtreeNodeList::linked(b), "an owned node on a list");
+        assert!(b.hash_val() == 0, "an owned node hashed");
         held.into_raw();
         OwnedNode { b: NonNull::from(b), _mode: PhantomData }
+    }
+
+    /// A new struct of the cache's, with @gfp: no one else has it to hold its
+    /// locks.
+    pub(super) fn alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<Self> {
+        let b = cache_node_struct_alloc(fs, pcpu_read_locks, gfp)?;
+        let held = b.c.lock.try_lock_as(SIX_LOCK_intent)
+            .and_then(|intent| intent.try_write().ok())
+            .expect("a new node locked by someone else");
+        Some(Self::new(b, held))
+    }
+
+    /// @b, write locked by @held, taken out of the cache: unhashed, off its
+    /// list.
+    pub(super) fn take(fs: &Fs, lists: &mut BtreeCacheGuard<'_>, b: &BtreeNode, held: SixHold<'_>) -> Self {
+        let _ = fs.btree_node_transition_state_locked(lists, b, State::NONE);
+        Self::new(b, held)
     }
 
     pub(crate) fn locked(&mut self) -> LockedNode<'_, BtreeNode, Write> {
@@ -116,7 +134,7 @@ impl OwnedNode<Write> {
         match fs.btree_node_transition_state(&self, state) {
             Ok(()) => Ok(self),
             Err(e) => {
-                self.free(fs);
+                self.to_freelist(fs);
                 Err(e)
             }
         }
@@ -153,22 +171,18 @@ impl OwnedNode<Write> {
         drop(ManuallyDrop::into_inner(this.hold()));
     }
 
-    /// Put back FREEABLE, its locks released.
-    pub(crate) fn free(self, fs: &Fs) {
+    /// Put back FREEABLE, with its buffers, its locks released.
+    pub(crate) fn to_freelist(self, fs: &Fs) {
         let _ = fs.btree_node_transition_state(&self, State::FREEABLE);
         self.unlock();
     }
 
     /// Its buffers freed, and put back FREED - a struct for the next
     /// allocation - its locks released.
-    pub(super) fn release(self, fs: &Fs) {
-        self.release_locked(fs, &mut fs.btree.cache.lock.lock())
-    }
-
-    pub(super) fn release_locked(mut self, fs: &Fs, lists: &mut BtreeCacheGuard<'_>) {
-        let mut v = self.locked();
-        let b = v.node();
-        bufs_free(b, v.contents_mut());
+    pub(super) fn free(mut self, fs: &Fs, lists: &mut BtreeCacheGuard<'_>) {
+        ebug_assert!(!self.flags.write_in_flight(), "freeing the buffers of a node with a write in flight");
+        self.flags.set_just_written(false);
+        self.locked().contents_mut().bufs.free_accounted();
         let _ = fs.btree_node_transition_state_locked(lists, &self, State::FREED);
         self.unlock();
     }
@@ -181,7 +195,7 @@ impl<M> Drop for OwnedNode<M> {
 }
 
 impl BtreeTrans<'_> {
-    fn btree_node_cannibalize(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool) -> (&BtreeNode, SixHold<'_>) {
+    fn btree_node_cannibalize(&self, paths: &mut Paths<'_>, pcpu_read_locks: bool) -> OwnedNode {
         let fs = self.fs();
 
         loop {
@@ -231,9 +245,9 @@ impl BtreeTrans<'_> {
         let bc = &fs.btree.cache;
         let start_time = local_clock();
 
-        let (b, held, new_bufs) = 'got_mem: {
-            if let Some((b, held)) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks) {
-                break 'got_mem (b, held, None);
+        let (mut n, new_bufs) = 'got_mem: {
+            if let Some(n) = fs.btree_node_grab(|l| &mut l.freeable, pcpu_read_locks) {
+                break 'got_mem (n, None);
             }
 
             /*
@@ -245,8 +259,8 @@ impl BtreeTrans<'_> {
             if unlikely(fs.system_memory_usage_high()) {
                 bc.nr_self_reclaim.fetch_add(1, Relaxed);
                 let live = pcpu_read_locks as usize;
-                if let Some((b, held)) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks) {
-                    break 'got_mem (b, held, None);
+                if let Some(n) = fs.btree_node_grab(|l| &mut l.live[live].clean, pcpu_read_locks) {
+                    break 'got_mem (n, None);
                 }
             }
 
@@ -265,53 +279,41 @@ impl BtreeTrans<'_> {
 
                 let freed = fs.btree_node_grab(|l| if pcpu_read_locks { &mut l.freed_pcpu } else { &mut l.freed_nonpcpu },
                                                pcpu_read_locks);
-                let (b, held) = match freed {
-                    Some(got) => got,
-                    None => {
-                        let b = match cache_node_struct_alloc(fs, pcpu_read_locks, flags::NOWAIT) {
-                            Some(b) => b,
-                            None => {
-                                self.unlock_keep_cannibalize(paths, crate::ret_ip!());
-                                match cache_node_struct_alloc(fs, pcpu_read_locks, Flags::empty()) {
-                                    Some(b) => b,
-                                    None => {
-                                        bufs.free();
-                                        break 'err;
-                                    }
-                                }
-                            }
-                        };
-                        (b, new_node_lock(b))
-                    }
+                let n = freed
+                    .or_else(|| OwnedNode::alloc(fs, pcpu_read_locks, flags::NOWAIT))
+                    .or_else(|| {
+                        self.unlock_keep_cannibalize(paths, crate::ret_ip!());
+                        OwnedNode::alloc(fs, pcpu_read_locks, Flags::empty())
+                    });
+                let Some(n) = n else {
+                    bufs.free();
+                    break 'err;
                 };
 
-                break 'got_mem (b, held, Some(bufs));
+                break 'got_mem (n, Some(bufs));
             }
 
             /* Try to cannibalize another cached btree node: */
             if bc.alloc_lock.load(Relaxed) == current() {
-                let (b, held) = self.btree_node_cannibalize(paths, pcpu_read_locks);
+                let n = self.btree_node_cannibalize(paths, pcpu_read_locks);
                 fs.event_inc_trace(events::btree_cache_cannibalize, |out| prt!(out, "{}", self.fn_name()));
-                break 'got_mem (b, held, None);
+                break 'got_mem (n, None);
             }
 
             fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
             return Err(Errcode::ENOMEM_btree_node_mem_alloc.into());
         };
 
-        assert!(!BtreeNodeList::linked(b), "a node allocated off a list");
-        assert!(b.hash_val() == 0, "a hashed node allocated");
-        assert!(!b.flags.dirty(), "a dirty node allocated");
-        assert!(!b.flags.write_in_flight(), "a node allocated with a write in flight");
+        assert!(!n.flags.dirty(), "a dirty node allocated");
+        assert!(!n.flags.write_in_flight(), "a node allocated with a write in flight");
 
-        /* @b may have been a node our paths still have cached: */
-        self.node_forget(paths, b);
+        /* it may have been a node our paths still have cached: */
+        self.node_forget(paths, &*n);
 
-        let mut n = OwnedNode::new(b, held);
-
+        let mut locked = n.locked();
+        let b = locked.node();
         b.flags.store(Default::default());
         b.written.set(0);
-        let mut locked = n.locked();
         let contents = locked.contents_mut();
         if let Some(bufs) = new_bufs {
             contents.bufs = bufs;
@@ -333,7 +335,7 @@ impl BtreeTrans<'_> {
         let _ = self.allocate_dropping_locks_norelock(paths, || bc.table.make_room().ok());
 
         if let Err(e) = self.relock_from(paths) {
-            n.free(fs);
+            n.to_freelist(fs);
             return Err(e);
         }
         Ok(n)

@@ -6,7 +6,7 @@ use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_exit, SixHold};
+use crate::locking::six::six_lock_exit;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc, WithFlags};
 use crate::os::kernel::is_vmalloc_addr;
@@ -223,6 +223,25 @@ impl NodeBufs {
         self.data = core::ptr::null_mut();
         self.aux_data = core::ptr::null_mut();
     }
+
+    /// A node's, freed as it's freed: counted as reclaimed.
+    pub fn free_accounted(&mut self) {
+        if self.data.is_null() {
+            return;
+        }
+
+        /*
+         * This should really be done in slub/vmalloc, but we're using the
+         * kmalloc_large() path, so we're working around a slub bug by doing
+         * this here:
+         */
+        crate::os::kernel::account_reclaimed(self.data_bytes());
+        if !self.aux_data.is_null() {
+            crate::os::kernel::account_reclaimed(self.aux_data_bytes());
+        }
+
+        self.free();
+    }
 }
 
 /// A struct btree, made by its init(), with @gfp. Freed by node_struct_free().
@@ -261,13 +280,6 @@ pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags
     }
 }
 
-/// A new node's locks, intent and write: no one else has it to hold them.
-pub(super) fn new_node_lock(b: &BtreeNode) -> SixHold<'_> {
-    b.c.lock.try_lock_as(c::SixLockType::SIX_LOCK_intent)
-        .and_then(|intent| intent.try_write().ok())
-        .expect("a new node locked by someone else")
-}
-
 /// Buffers for a new node, GFP_KERNEL.
 fn node_bufs_alloc(fs: &Fs) -> Option<NodeBufs> {
     let mut bufs = NodeBufs::new(fs);
@@ -279,21 +291,20 @@ fn node_bufs_alloc(fs: &Fs) -> Option<NodeBufs> {
 }
 
 /// A node for the cache, with its buffers, GFP_KERNEL. Freed by
-/// OwnedNode::release() then node_mem_free().
+/// OwnedNode::free() then node_mem_free().
 pub(super) fn node_mem_alloc(fs: &Fs) -> Option<OwnedNode> {
     let mut bufs = node_bufs_alloc(fs)?;
-    let Some(b) = cache_node_struct_alloc(fs, false, Flags::empty()) else {
+    let Some(mut n) = OwnedNode::alloc(fs, false, Flags::empty()) else {
         bufs.free();
         return None;
     };
-    let mut n = OwnedNode::new(b, new_node_lock(b));
     n.locked().contents_mut().bufs = bufs;
     Some(n)
 }
 
 /// A node with its buffers for node scan to read into: not the cache's, so
 /// not on bc->nodes, which walks the cache's nodes while they're live and
-/// can't find one freed under it. Freed by bufs_free() then
+/// can't find one freed under it. Freed by NodeBufs::free_accounted() then
 /// node_struct_free().
 pub fn node_scratch_alloc(fs: &Fs) -> Option<NonNull<BtreeNode>> {
     let mut bufs = node_bufs_alloc(fs)?;
@@ -303,28 +314,6 @@ pub fn node_scratch_alloc(fs: &Fs) -> Option<NonNull<BtreeNode>> {
     };
     unsafe { (*b.as_ptr()).contents.get_mut().bufs = bufs };
     Some(b)
-}
-
-/// @b's buffers freed, its write done: its owner's, in no list.
-pub fn bufs_free(b: &BtreeNode, contents: &mut NodeContents) {
-    ebug_assert!(!b.flags.write_in_flight(), "freeing the buffers of a node with a write in flight");
-
-    if contents.bufs.data.is_null() {
-        return;
-    }
-
-    /*
-     * This should really be done in slub/vmalloc, but we're using the
-     * kmalloc_large() path, so we're working around a slub bug by doing
-     * this here:
-     */
-    crate::os::kernel::account_reclaimed(b.buf_bytes());
-    if !contents.bufs.aux_data.is_null() {
-        crate::os::kernel::account_reclaimed(b.aux_data_bytes());
-    }
-
-    b.flags.set_just_written(false);
-    contents.bufs.free();
 }
 
 /// @b, a struct btree node_struct_alloc() made, freed: its buffers already
