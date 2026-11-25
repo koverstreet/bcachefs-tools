@@ -67,6 +67,8 @@ crate::init_fn! {
         crate::btree::bkey::pack_test();
 
         crate::util::futex::bch2_futex_init();
+        #[cfg(kernel)]
+        crate::os::simd::init();
 
         BCACHEFS_KOBJ.init();
 

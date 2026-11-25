@@ -167,6 +167,7 @@ vr-base := $(vr-core) --extern compiler_builtins=$(VRD)/libcompiler_builtins.rme
 vr-base-deps := $(VRD)/compiler_builtins.o FORCE
 $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o \
 	$(obj)/stable_deref_trait.o $(obj)/yoke.o \
+	$(obj)/g2poly.o $(obj)/g2p_kernels.o $(obj)/g2p.o \
 	$(obj)/bch_builtins.o: $(VRD)/compiler_builtins.o
 
 $(VRD)/ffi.o $(VRD)/build_error.o: private rs-flags := $(vr-base)

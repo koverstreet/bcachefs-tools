@@ -152,6 +152,7 @@ dependencies = [
  "bitflags",
  "chacha20",
  "crc32c",
+ "g2p",
  "getrandom",
  "io-uring",
  "libc",
@@ -635,6 +636,37 @@ dependencies = [
  "smallvec",
  "zerocopy",
 ]
+
+[[package]]
+name = "g2gen"
+version = "1.2.2"
+source = "git+https://github.com/koverstreet/g2p.git?branch=bcachefs#822e816429736c209a24f6b376c2672f4625a671"
+dependencies = [
+ "g2poly",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "g2p"
+version = "1.2.2"
+source = "git+https://github.com/koverstreet/g2p.git?branch=bcachefs#822e816429736c209a24f6b376c2672f4625a671"
+dependencies = [
+ "g2gen",
+ "g2p-kernels",
+ "g2poly",
+]
+
+[[package]]
+name = "g2p-kernels"
+version = "0.1.0"
+source = "git+https://github.com/koverstreet/g2p.git?branch=bcachefs#822e816429736c209a24f6b376c2672f4625a671"
+
+[[package]]
+name = "g2poly"
+version = "1.2.2"
+source = "git+https://github.com/koverstreet/g2p.git?branch=bcachefs#822e816429736c209a24f6b376c2672f4625a671"
 
 [[package]]
 name = "getrandom"

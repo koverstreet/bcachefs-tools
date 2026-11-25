@@ -25,7 +25,7 @@ std = ["dep:zeroize", "dep:linux-keyutils"]
 # The dependencies the module builds too (Makefile.rust), from the sources
 # cargo has: install_dkms copies them (dkms/install.rs).
 [package.metadata.dkms]
-crates = ["bitfield-struct", "bitflags", "nestify", "num-traits", "paste", "stable_deref_trait", "uuid", "yoke"]
+crates = ["bitfield-struct", "bitflags", "g2gen", "g2p", "g2p-kernels", "g2poly", "nestify", "num-traits", "paste", "stable_deref_trait", "uuid", "yoke"]
 
 [dependencies]
 bcachefs-shim = { path = "../os/linux_user/shim" }
@@ -55,6 +55,8 @@ zerocopy-derive = "0.8"
 # yoke's stable_deref_trait is ours.
 yoke = { version = "0.8.4", default-features = false }
 stable_deref_trait = { version = "1.2.1", default-features = false }
+# GF(2^8), and buffers multiplied by matrices of it: a stripe's parity.
+g2p = { git = "https://github.com/koverstreet/g2p.git", branch = "bcachefs" }
 # Userspace only: os/linux_user/kernel.rs's random_bytes(), the OS's CSPRNG.
 getrandom = "0.4"
 # Userspace only, util/prompt's: asking on the terminal - polled, echo off

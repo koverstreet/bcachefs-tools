@@ -139,9 +139,14 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/trace_seq.h",		// trace_events.h's struct trace_iterator holds them
     "linux/seq_buf.h",
     "linux/ring_buffer.h",		// and its structs point to these
+    // os/linux_kernel/simd.rs: the CPU's features - x86's numbers, arm64's
+    // system_supports_fpsimd()
+    "asm/cpufeatures.h",
+    "asm/cpufeature.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
+    "system_supports_fpsimd",
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
     "mnt_want_write_file", "mnt_drop_write_file",
     "rust_page_folio", "rust_folio_page_idx", "folio_size",
@@ -287,6 +292,9 @@ const OPAQUE_TYPE: &[&str] = &["fid"];
 const ALLOWLIST_VAR: &[&str] = &["nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*", "FALLOC_FL_.*",
                                  "RUST_CONST_HELPER_.*", "key_type_user", "NUMA_NO_NODE",
+                                 // os/linux_kernel/simd.rs's: what g2p's kernels need
+                                 "X86_FEATURE_SSSE3", "X86_FEATURE_AVX2", "X86_FEATURE_AVX512F",
+                                 "X86_FEATURE_AVX512BW", "X86_FEATURE_GFNI",
                                  "PERCPU_REF_INIT_DEAD", "TRACE_EVENT_FL_TRACEPOINT", "FILTER_OTHER",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",

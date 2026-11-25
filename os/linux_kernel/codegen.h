@@ -48,6 +48,10 @@
 #ifdef CONFIG_PARAVIRT_XXL
 #include <asm/paravirt_types.h>
 #endif
+/* the CPU's vector registers: os/linux_kernel/simd.rs */
+#if defined(CONFIG_X86) || defined(CONFIG_ARM64)
+#include <asm/cpufeature.h>
+#endif
 #include <keys/user-type.h>
 
 #include "pf_memalloc.h"
@@ -303,6 +307,14 @@ static inline void rust_srcu_read_unlock_fast_notrace(struct srcu_struct *ssp, u
 static inline void rust_perf_fetch_caller_regs(struct pt_regs *regs)
 {
 	perf_fetch_caller_regs(regs);
+}
+#endif
+
+#ifdef CONFIG_X86
+/* a macro: the CPU's features, os/linux_kernel/simd.rs's */
+static inline bool rust_boot_cpu_has(unsigned int bit)
+{
+	return boot_cpu_has(bit);
 }
 #endif
 

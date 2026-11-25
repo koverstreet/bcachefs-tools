@@ -338,6 +338,39 @@ $(obj)/yoke.o: private rs-flags += --extern stable_deref_trait=$(obj)/libstable_
 $(obj)/yoke.o: $(src)/vendor/yoke/src/lib.rs $(obj)/stable_deref_trait.o FORCE
 	$(call if_changed_dep,bch_rlib)
 
+# g2p: GF(2^8), and buffers multiplied by matrices of it - a stripe's parity.
+# g2gen, its macro, small-tables: without a table of every product, 64K
+# nothing here multiplies by. g2poly is g2gen's too, built for the host.
+#
+# On x86 and arm64, g2p-kernels' kernels use vector registers, which nothing
+# built for the kernel's target has: there it's built twice (its lib.rs) -
+# here what calls the kernels, and the kernels in a compilation of their own,
+# hard-float (below).
+bch-g2pk-hf := $(filter x86 arm64,$(SRCARCH))
+bch-g2pk-flags := --cap-lints=allow $(if $(call bch-rustc-min,108900),--cfg g2p_avx512)
+
+$(bch-host)/libg2poly.rmeta: private rs-edition := 2018
+$(bch-host)/libg2poly.rmeta: $(src)/vendor/g2poly/src/lib.rs FORCE
+	$(call if_changed_dep,bch_host)
+$(obj)/libg2gen.so: private rs-edition := 2018
+$(obj)/libg2gen.so: private rs-flags := $(bch-pmac) --cfg 'feature="small-tables"' \
+	--extern g2poly=$(bch-host)/libg2poly.rlib
+$(obj)/libg2gen.so: $(src)/vendor/g2gen/src/lib.rs $(bch-host)/libg2poly.rmeta $(bch-pmac-deps)
+	$(call if_changed_dep,bch_procmacro)
+
+$(obj)/g2poly.o: private rs-edition := 2018
+$(obj)/g2poly.o: private rs-flags := --cap-lints=allow
+$(obj)/g2poly.o: $(src)/vendor/g2poly/src/lib.rs FORCE
+	$(call if_changed_dep,bch_rlib)
+$(obj)/g2p_kernels.o: private rs-flags := $(bch-g2pk-flags) $(if $(bch-g2pk-hf),--cfg g2p_extern)
+$(obj)/g2p_kernels.o: $(src)/vendor/g2p-kernels/src/lib.rs FORCE
+	$(call if_changed_dep,bch_rlib)
+$(obj)/g2p.o: private rs-flags := --cap-lints=allow --extern g2gen=$(obj)/libg2gen.so \
+	--extern g2poly=$(obj)/libg2poly.rmeta --extern g2p_kernels=$(obj)/libg2p_kernels.rmeta
+$(obj)/g2p.o: $(src)/vendor/g2p/src/lib.rs $(obj)/libg2gen.so $(obj)/g2poly.o \
+	$(obj)/g2p_kernels.o FORCE
+	$(call if_changed_dep,bch_rlib)
+
 # Rust's library source - rust-src, which either path needs: RUST_LIB_SRC if
 # given, else rustc's - as the kernel's rust/Makefile, since some packagings
 # (nixpkgs) keep it outside the sysroot and pass it this way.
@@ -379,32 +412,88 @@ bch-externs := paste:libpaste.so \
 	nestify:libnestify.so \
 	bitflags:libbitflags.rmeta \
 	num_traits:libnum_traits.rmeta uuid:libuuid.rmeta \
-	stable_deref_trait:libstable_deref_trait.rmeta yoke:libyoke.rmeta
+	stable_deref_trait:libstable_deref_trait.rmeta yoke:libyoke.rmeta \
+	g2p:libg2p.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
-# and where what they depend on is: yoke's stable_deref_trait
+# and where what they depend on is: yoke's stable_deref_trait, g2p's crates
 RUSTFLAGS_mod.o += -Ldependency=$(obj)
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: $(obj)/rust/bindings.rs $(addprefix $(obj)/,$(bch-arch-asm-rs)) $(obj)/libpaste.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
-	$(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o $(obj)/yoke.o
+	$(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o $(obj)/yoke.o $(obj)/g2p.o
 
 targets += codegen rust/bindings.rs libpaste.so \
-	libcstruct_macros.so libbitfield_struct.so libnestify.so \
-	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
+	libcstruct_macros.so libbitfield_struct.so libnestify.so libg2gen.so \
+	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta libg2poly.rmeta)
 
 # The Rust objects, linked into the module as one: rust.o, below.
-bch-rust-gc-in := mod.o bitflags.o num_traits.o uuid.o stable_deref_trait.o yoke.o bch_builtins.o
+bch-rust-gc-in := mod.o bitflags.o num_traits.o uuid.o stable_deref_trait.o yoke.o \
+	g2poly.o g2p_kernels.o g2p.o bch_builtins.o
 bcachefs-y += rust.o rust/extern.o
 
 # And what those rules write besides their targets: the rest of the codegen's
 # output, the rlibs' metadata, and the vendored stack's directory - here, as
 # clean doesn't always read Makefile.rust.vendor.
-clean-files += rust rust-host vrust lib*.rmeta linux-version-cfgs
+clean-files += rust rust-host rust-hf vrust lib*.rmeta linux-version-cfgs
 
 # Makefile.rust.vendor builds mod.o against the vendored stack; otherwise kbuild
 # builds it.
 ifeq ($(bcachefs-vendor-rust),y)
 include $(src)/Makefile.rust.vendor
+endif
+
+# ---- g2p-kernels' kernels: hard-float --------------------------------------
+# The kernel's target is soft-float: nothing built for it has vector
+# registers, whatever its target features. The kernels are built for the
+# kernel's target less soft-float, on a core of their own - its metadata only:
+# what they use of it is inlined into them, else they'd call Rust built
+# without their ISA, which the check fails on. They run between
+# kernel_fpu_begin() and kernel_fpu_end() (os/linux_kernel/simd.rs).
+#
+# After Makefile.rust.vendor: its target.json is the kernel's target then.
+ifneq ($(bch-g2pk-hf),)
+bch-hf := $(obj)/rust-hf
+bch-kernel-target := $(patsubst --target=%,%,$(filter --target=%,$(KBUILD_RUSTFLAGS)))
+bch-hf-target := $(if $(filter x86,$(SRCARCH)),$(bch-hf)/target.json,$(patsubst %-softfloat,%,$(bch-kernel-target)))
+bch-hf-metas := $(bch-hf)/libcore.rmeta $(bch-hf)/libcompiler_builtins.rmeta
+
+quiet_cmd_bch_hf_target = GEN     $@
+      cmd_bch_hf_target = sed -e '/"rustc-abi"/d' -e 's/,\?+soft-float//' $< >$@; \
+	if grep -q soft-float $@; then echo >&2 "bcachefs: $@ still soft-float"; rm $@; false; fi
+$(bch-hf)/target.json: $(bch-kernel-target) FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed,bch_hf_target)
+
+# kbuild's flags, less what turns vector registers off, and overflow checks:
+# the kernels mustn't panic.
+bch-hf-flags = $(filter-out --target=% -Ctarget-feature=-sse% -Ctarget-feature=-neon \
+	-Ctarget-feature="-neon" -Coverflow-checks=% --edition=%,$(_rust_flags)) \
+	--target=$(bch-hf-target) -Coverflow-checks=n -Cmetadata=bcachefs-hf $(bch-rust-gc-flags) \
+	-Zunstable-options --sysroot=/dev/null -L$(bch-hf)
+
+quiet_cmd_bch_hf = RUSTC HF $@
+      cmd_bch_hf = $(RUSTC) $(bch-hf-flags) $(bch-edition) $(rs-flags) --crate-type rlib \
+	--crate-name $(bch-crate) --emit=dep-info=$(depfile) --emit=$(rs-emit) $<$(rs-post)
+
+$(bch-hf-metas): private rs-emit = metadata=$@
+$(bch-hf)/libcore.rmeta: private rs-edition := $(shell sed -n 's/^edition *= *"\(.*\)"/\1/p' $(RUST_LIB_SRC)/core/Cargo.toml)
+$(bch-hf)/libcore.rmeta: private rs-flags := --cap-lints=allow --cfg no_fp_fmt_parse -Zalways-encode-mir
+$(bch-hf)/libcore.rmeta: $(RUST_LIB_SRC)/core/src/lib.rs $(filter $(bch-hf)/%,$(bch-hf-target)) FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed_dep,bch_hf)
+$(bch-hf)/libcompiler_builtins.rmeta: private rs-flags := --cap-lints=allow -Zalways-encode-mir
+$(bch-hf)/libcompiler_builtins.rmeta: $(bch-host-src)/compiler_builtins.rs $(bch-hf)/libcore.rmeta FORCE
+	$(call if_changed_dep,bch_hf)
+
+$(obj)/g2p_kernels_hf.o: private rs-emit = obj=$@
+$(obj)/g2p_kernels_hf.o: private rs-flags := $(bch-g2pk-flags) --cfg g2p_export
+$(obj)/g2p_kernels_hf.o: private rs-post = ; if $(NM) -u $@ | grep -E ' (_R|_ZN)'; then \
+	echo >&2 "bcachefs: $@ calls the Rust above, built without its kernels' ISA"; rm $@; false; fi
+$(obj)/g2p_kernels_hf.o: $(src)/vendor/g2p-kernels/src/lib.rs $(bch-hf-metas) FORCE
+	$(call if_changed_dep,bch_hf)
+
+bch-rust-gc-in += g2p_kernels_hf.o
+targets += $(patsubst $(obj)/%,%,$(bch-hf-metas) $(filter $(bch-hf)/%,$(bch-hf-target)))
 endif
 
 # Line tables, not the kernel's full (or reduced) debuginfo: our crate is one
@@ -436,10 +525,12 @@ rustflags-y += $(if $(filter -Cdebuginfo=1 -Cdebuginfo=2,$(KBUILD_RUSTFLAGS)),-C
 # bcachefs.o - IBT, LTO_CLANG, KLP_BUILD - when objtool doesn't run on rust.o
 # at all; without those, rust.o's run needs its own.
 bch-rust-gc-objs := $(addprefix $(obj)/,$(bch-rust-gc-in))
+# And the hard-float core's metadata: sanitizers are part of the ABI, and it
+# has to have the kernels'.
 ifeq ($(CONFIG_BCACHEFS_FS),m)
-$(bch-rust-gc-objs): private part-of-module := y
+$(bch-rust-gc-objs) $(bch-hf-metas): private part-of-module := y
 else
-$(bch-rust-gc-objs): private part-of-builtin := y
+$(bch-rust-gc-objs) $(bch-hf-metas): private part-of-builtin := y
 endif
 OBJECT_FILES_NON_STANDARD_mod.o := y
 $(obj)/rust.o: private objtool-args += --link

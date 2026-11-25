@@ -50,6 +50,7 @@ pub mod sched;
 pub mod security;
 pub mod seq_file;
 pub mod shrinker;
+pub mod simd;
 pub mod slab;
 pub mod spinlock;
 pub mod stacktrace;
