@@ -10,8 +10,8 @@
 //! ERRCODES, generated from BCH_ERRCODES(), holds each errcode's name and
 //! parent. Parents are written as an errno or an errcode, and `class`
 //! resolves both to numbers - the errnos from the kernel's bindings, or
-//! linux-raw-sys's in userspace. An errno's name is errname()'s, strerror()'s
-//! in userspace.
+//! linux-raw-sys's in userspace. An errno's name is errname()'s: "ENOENT", in
+//! both builds.
 //!
 //! A number with no entry has no parent and stands for itself. That includes
 //! codes past Errcode::MAX: the tools and the DKMS module are versioned
