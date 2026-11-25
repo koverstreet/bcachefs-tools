@@ -154,6 +154,14 @@ pub fn derive_init(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand_syn("#[derive(Init)]", || init::derive(syn::parse(input)?))
 }
 
+/// `#[derive(Fields)]`: util/place.rs's Field<N> for each field, as
+/// #[derive(Init)] makes them - for a struct made some other way. A private
+/// field marked `#[field]` is read by path too, as a visible one is.
+#[proc_macro_derive(Fields, attributes(field))]
+pub fn derive_fields(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand_syn("#[derive(Fields)]", || place::derive_fields(&syn::parse(input)?))
+}
+
 /// `#[derive(Late)]`: `init_late()` and `stop_late()`, for the fields with
 /// `#[late]` - see late.rs.
 #[proc_macro_derive(Late, attributes(late))]

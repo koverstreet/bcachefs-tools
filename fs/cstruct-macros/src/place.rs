@@ -277,8 +277,9 @@ pub(crate) fn is_empty_at_field(f: &FieldDef) -> bool {
     f.placed_at && (f.ident == AT_FIELD || f.ident.to_string().starts_with(INNER_AT_FIELD))
 }
 
-/// Field<N> for each field of @input, under its #[cfg]s, and PathField<N>
-/// for one visible outside its module, or marked #[field].
+/// Field<N> for each field of @input, under its #[cfg]s - #[derive(Init)]'s
+/// and #[derive(Fields)]'s - and PathField<N> for one visible outside its
+/// module, or marked #[field].
 pub(crate) fn field_impls(input: &DeriveInput) -> syn::Result<TokenStream> {
     let Data::Struct(DataStruct { fields: Fields::Named(fields), .. }) = &input.data else {
         return Err(Error::new_spanned(input, "a Field is a named field of a struct"));
@@ -306,6 +307,22 @@ pub(crate) fn field_impls(input: &DeriveInput) -> syn::Result<TokenStream> {
             #path_field
         }
     }).collect())
+}
+
+/// #[derive(Fields)]: its Fields, and that what's placed in it has it for
+/// its parent - #[derive(Init)]'s Enclosing, for a struct with no Inner.
+pub(crate) fn derive_fields(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let fields = field_impls(input)?;
+    let inst = &input.ident;
+    let (impl_g, ty_g, where_c) = input.generics.split_for_impl();
+    Ok(quote! {
+        #fields
+        #[automatically_derived]
+        impl #impl_g crate::util::place::Enclosing for #inst #ty_g #where_c {
+            type Visible = Self;
+            const VISIBLE_OFFSET: usize = 0;
+        }
+    })
 }
 
 /// The initializer for field @name, without #[init]: InitAt's, if a placed

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::os::lockdep::LockClass;
-use crate::util::place::{Contained, Field, FieldOf, Here, Path, PathField, Place, Placed, RefValue};
+use crate::util::place::{name, Contained, Field, FieldOf, Here, Path, PathField, Place, Placed, RefValue};
 use crate::util::refcount::AtomicRef;
 use crate::util::projections::Publish;
 use crate::util::sharing::{self, Sharing};
@@ -682,7 +682,9 @@ where
     P: GuardPath<G, To = Placed<AtomicRef<T>, A>>,
 {
     type To = T;
-    const OFFSET: usize = P::OFFSET + Placed::<AtomicRef<T>, A>::VALUE_OFFSET + AtomicRef::<T>::VALUE_OFFSET;
+    const OFFSET: usize = P::OFFSET
+        + <Placed<AtomicRef<T>, A> as Field<{ name("value") }>>::OFFSET
+        + <AtomicRef<T> as Field<{ name("value") }>>::OFFSET;
     fn get(g: &G) -> &T {
         unsafe { P::get(g).value_held() }
     }

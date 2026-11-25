@@ -170,7 +170,7 @@ fn reserve_bvecs<V>(vecs: &mut InlineVec<V, BIO_INLINE_VECS, u16, BvecAlloc>, ad
 /// they were when the bio last went out to C: raw_mut() writes it, and
 /// nothing reads it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum VecsAt {
+pub(crate) enum VecsAt {
     Own,
     /// A clone's: the bio whose bvecs they are, which outlives it
     Borrowed(NonNull<Bio>),
@@ -181,6 +181,7 @@ enum VecsAt {
 // bios and a clone outlives its source.
 #[pin_data(PinnedDrop)]
 #[repr(C)]
+#[derive(cstruct_macros::Fields)]
 pub struct Bio<B: BioOwns = Data> {
     bio:     c::bio,
     vecs:    BioVecs<B>,
@@ -303,19 +304,6 @@ mod data {
     pub(crate) struct BioData {}
 }
 use data::BioData;
-
-// BioData's place in the plain Bio, which is what a BioRange's bio is: what
-// #[derive(Init)] would make, by hand - a Bio<B> is made in place by
-// bio_init(), and the derive's init() would be generic over B.
-impl crate::util::place::Field<{ crate::util::place::name("data") }> for Bio {
-    type Type = BioData;
-    const OFFSET: usize = core::mem::offset_of!(Bio, data);
-}
-
-impl crate::util::place::Enclosing for Bio {
-    type Visible = Self;
-    const VISIBLE_OFFSET: usize = 0;
-}
 
 impl Bio {
     /// # Safety

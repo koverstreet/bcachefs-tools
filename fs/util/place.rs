@@ -16,7 +16,10 @@
 //!   - with its type and offset: a field as a type, which the language doesn't
 //!   have yet. It's field representing types' Field (field_of!(), nightly),
 //!   faked as util/projections.rs's fakes are, to go when they arrive.
-//!   #[derive(Init)] makes one for each field of the structs it's on.
+//!   #[derive(Init)] makes one for each field of the structs it's on, and
+//!   #[derive(Fields)] for a struct made some other way. It says where a
+//!   field is; a path - field!() - reads one only with its PathField: a
+//!   field visible outside its module, or marked #[field].
 //!
 //! - At<B, N> is the proof: a field the placed type holds, zero bytes, that
 //!   only at() makes. Nothing else can - its fields are private, and it's
@@ -476,6 +479,7 @@ pub(crate) unsafe fn container_of_raw<T: Contained>(p: *mut T) -> *mut T::Parent
 /// with at(), around the field's #[init]: so A is the place it's at.
 #[pin_data]
 #[repr(C)]
+#[derive(cstruct_macros::Fields)]
 pub struct Placed<C, A> {
     #[pin]
     value:      C,
@@ -489,9 +493,6 @@ impl<C, A: Place<Type = Self, Base: Enclosing>> Contained for Placed<C, A> {
 }
 
 impl<C, A> Placed<C, A> {
-    /// Where the C is in a Placed.
-    pub(crate) const VALUE_OFFSET: usize = core::mem::offset_of!(Self, value);
-
     #[doc(hidden)]
     pub fn new<E: From<F>, F>(at: A, value: impl PinInit<C, F>) -> impl PinInit<Self, E> {
         pin_init!(Self { value <- value, _placed_at: at }? E)

@@ -22,6 +22,7 @@ use crate::util::sleep::Sleep;
 /// the address - so wait() returning, and the owner freeing it, can't race a
 /// put still touching it.
 #[repr(C)]
+#[derive(cstruct_macros::Fields)]
 pub struct AtomicRef<T> {
     count: AtomicU32,
     value: UnsafeCell<ManuallyDrop<T>>,
@@ -34,9 +35,6 @@ unsafe impl<T: Send + Sync> Send for AtomicRef<T> {}
 unsafe impl<T: Send + Sync> Sync for AtomicRef<T> {}
 
 impl<T> AtomicRef<T> {
-    /// Where the value is in an AtomicRef.
-    pub(crate) const VALUE_OFFSET: usize = core::mem::offset_of!(Self, value);
-
     pub const fn new(value: T) -> Self {
         AtomicRef { count: AtomicU32::new(1), value: UnsafeCell::new(ManuallyDrop::new(value)) }
     }
