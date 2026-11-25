@@ -137,7 +137,7 @@ pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchErro
     let s = get(t, subvol, true)?;
 
     if s.ro() || s.state_decoded() == Some(c::SubvolumeState::unlinked) {
-        return Err(BchError::from(c::EROFS));
+        return t.fs().throw(Errcode::erofs_subvol_ro);
     }
     Ok(s.snapshot())
 }
@@ -803,7 +803,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
         }
 
         if !fs.snapshots.wait_for_pagecache_and_delete_work.queue(fs.write_ref_wq()) {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_subvol_unlink_work);
         }
         Ok(())
     })?;

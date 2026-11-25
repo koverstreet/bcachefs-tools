@@ -68,7 +68,7 @@ pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<c::dev_t>, 
         devs.push(dev)?;
     }
     if devs.is_empty() {
-        return Err(c::EINVAL.into());
+        return Err(Errcode::EINVAL_registry_no_devices.into());
     }
     Ok(devs)
 }
@@ -142,7 +142,7 @@ impl Registry {
             if !(by.shares() && other.by.shares()) {
                 log_no_fs(LogLevel::ERR, crate::message!("filesystem {key} is being opened by {}",
                                                          other.by.name()));
-                return Err(c::EBUSY.into());
+                return Err(Errcode::EBUSY_fs_opening_by_other.into());
             }
             return Ok(Found::Busy);
         }
@@ -150,7 +150,7 @@ impl Registry {
         if let Some(fs) = self.find(key) {
             if !by.shares() {
                 log_no_fs(LogLevel::ERR, crate::message!("filesystem {key} already open: mounted?"));
-                return Err(c::EBUSY.into());
+                return Err(Errcode::EBUSY_fs_already_open.into());
             }
             return Ok(Found::Open(fs));
         }
@@ -159,7 +159,7 @@ impl Registry {
 }
 
 fn wait_opening(seen: u32) -> Result<(), BchError> {
-    OPENING_DONE.wait(seen, Sleep::KILLABLE).map_err(|_| c::EINTR.into())
+    OPENING_DONE.wait(seen, Sleep::KILLABLE).map_err(|_| Errcode::EINTR_wait_opening.into())
 }
 
 pub enum FsHandle {

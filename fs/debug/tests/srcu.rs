@@ -35,7 +35,7 @@ use bcachefs_shim as kernel;
 
 fn failed(what: core::fmt::Arguments<'_>) -> TestRet {
     kernel::pr_err!("test_srcu: {what}\n");
-    Err(BchError::from(c::EINVAL))
+    Err(BchError::from(c::Errcode::EINVAL_test_srcu_failed))
 }
 
 /// Waits up to @secs for @cond, a grace period to end: whether it did.

@@ -148,7 +148,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
         <c::BCH_IOCTL_QUERY_BTREE_KEYS as Ioctl>::OPCODE =>
             inout::<c::BCH_IOCTL_QUERY_BTREE_KEYS, _>(user, |a| query_btree_keys(fs, a)),
 
-        _ => Err(c::ENOTTY.into()),
+        _ => Err(Errcode::ENOTTY_fs_ioctl.into()),
     }
 }
 
@@ -158,7 +158,7 @@ fn global_ioctl(cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
     match cmd {
         <c::BCH_IOCTL_FSCK_OFFLINE as Ioctl>::OPCODE =>
             vstruct::<c::BCH_IOCTL_FSCK_OFFLINE, _, _>(user, fsck_offline),
-        _ => Err(c::ENOTTY.into()),
+        _ => Err(Errcode::ENOTTY_global_ioctl.into()),
     }
 }
 
@@ -187,7 +187,7 @@ fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchErro
 
     let replicas = accounting_mem::replicas_usage_read(fs)?;
     if (entries_bytes as usize) < replicas.len() {
-        return Err(c::ERANGE.into());
+        return Err(Errcode::ERANGE_fs_usage_buf.into());
     }
     user.bytes_at(offset_of!(c::bch_ioctl_fs_usage, replicas), replicas.len()).writer().write_slice(&replicas)?;
 
@@ -244,7 +244,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
 
     let keys = accounting_mem::to_keys(fs, arg.accounting_types_mask)?;
     if (arg.accounting_u64s as usize) * size_of::<u64>() < keys.len() {
-        return Err(c::ERANGE.into());
+        return Err(Errcode::ERANGE_query_accounting_buf.into());
     }
     dst(keys.len()).writer().write_slice(&keys)?;
 
@@ -354,7 +354,7 @@ fn read_super(fs: &Fs, arg: c::bch_ioctl_read_super) -> Result<(), BchError> {
 
     let bytes = sb.sb_bytes();
     if bytes.len() as u64 > arg.size {
-        return Err(c::ERANGE.into());
+        return Err(Errcode::ERANGE_read_super_buf.into());
     }
     UserSlice::new(UserPtr::from_addr(arg.sb as usize), bytes.len()).writer().write_slice(bytes)?;
     Ok(())
@@ -432,7 +432,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
             let bytes = k.k.u64s as usize * size_of::<u64>();
             if out.len() + bytes > buf_size {
                 /* buffer full - or, if empty, can't fit even one key: */
-                return if out.is_empty() { Err(c::ERANGE.into()) } else { Ok(ControlFlow::Break(true)) };
+                return if out.is_empty() { Err(Errcode::ERANGE_query_btree_keys_buf.into()) } else { Ok(ControlFlow::Break(true)) };
             }
             out.extend_from_slice(plain_bytes(k.k))?;
             out.extend_from_slice(k.val_bytes())?;
@@ -527,9 +527,9 @@ const FORCE_FLAGS: u32 = c::BCH_FORCE_IF_DATA_LOST | c::BCH_FORCE_IF_METADATA_LO
 fn dev_lookup(fs: &Fs, dev: u64, flags: u32) -> Result<DevRef, BchError> {
     if flags & c::BCH_BY_INDEX != 0 {
         if dev >= u64::from(fs.nr_devices()) {
-            return Err(c::EINVAL.into());
+            return fs.throw(Errcode::EINVAL_dev_lookup_idx);
         }
-        fs.dev_get(dev as u32).ok_or(BchError::from(c::EINVAL))
+        fs.require(fs.dev_get(dev as u32), Errcode::EINVAL_dev_lookup_no_dev)
     } else {
         let path = UserStr::read(dev, c::PATH_MAX as usize)?;
         fs.dev_lookup(path.as_cstr())
@@ -734,15 +734,14 @@ impl FileOps for DataJob {
 
         let bytes = plain_bytes(&e);
         if buf.copy_to(bytes) != bytes.len() {
-            return Err(c::EFAULT.into());
+            return Err(Errcode::EFAULT_data_job_read.into());
         }
         Ok(())
     }
 }
 
 fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
-    let write_ref = fs.writes.tryget()
-        .ok_or(BchError::from(c::EROFS))?;
+    let write_ref = fs.require(fs.writes.tryget(), Errcode::erofs_no_writes_ioctl_data)?;
 
     if !capable(Capability::SysAdmin) {
         return fs.throw(Errcode::EPERM_non_admin);

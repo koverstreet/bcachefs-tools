@@ -708,7 +708,7 @@ impl OpenFs {
     fn claim_to<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts,
                     holder: &Arc<Holder>, out: &mut Printbuf) -> Result<Vec<c::bch_sb_handle>, BchError> {
         if devs.len() == 0 {
-            return Err(c::EINVAL.into());
+            return Err(Errcode::EINVAL_open_no_devices.into());
         }
 
         let mut sbs = Vec::with_capacity(devs.len())?;
@@ -1128,7 +1128,7 @@ impl Fs {
         M: for<'w> AsyncFnOnce<(&'w WriteRef,), Output = ()> + 'static,
         for<'w> <M as AsyncFnOnce<(&'w WriteRef,)>>::CallOnceFuture: Send,
     {
-        let w: WriteRef = RefGuard::tryget(&self.writes).ok_or(BchError::from(c::EROFS))?;
+        let w: WriteRef = self.require(RefGuard::tryget(&self.writes), Errcode::erofs_no_writes_spawn_write)?;
         crate::util::task::spawn(w, |w| (w.write_ref_wq(), w.tasks()), make)
     }
 }

@@ -1391,7 +1391,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     let io = sb.io_mut();
     io.mode = c::BLK_OPEN_READ;
 
-    let enomem = |_| BchError::from(c::ENOMEM);
+    let enomem = |_| BchError::from(Errcode::ENOMEM_read_super);
     io.holder = holder.map_or(core::ptr::null(), |h| Arc::into_raw(h.clone()));
     let mut name = Vec::new();
     name.extend_from_slice(path.to_bytes_with_nul()).map_err(enomem)?;
@@ -1483,7 +1483,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, holder: Option<&A
     let dev_block = crate::os::blkdev::logical_block_size(io.bdev().expect("the device it was read from"));
     if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
-            return Err(c::EINTR.into());
+            return Err(Errcode::EINTR_sb_read_buffered_instead.into());
         }
         prt!(err, "block size ({block_bytes}) smaller than device block size ({dev_block})");
         return Err(Errcode::block_size_too_small.into());
@@ -1507,7 +1507,7 @@ fn read_super_err(path: &CStr, opts: &mut c::bch_opts, holder: Option<&Arc<Holde
                   err: &mut Printbuf) -> Result<bch_sb_handle, BchError> {
     loop {
         match read_super_and_backups(path, opts, holder, err) {
-            Err(e) if e.raw() == c::EINTR as i32 => err.reset(),
+            Err(e) if e == BchError::from(Errcode::EINTR_sb_read_buffered_instead) => err.reset(),
             r => return r,
         }
     }
@@ -2271,7 +2271,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         }
         if cas.push(ca).is_err() {
             crate::fs_fatal_error!(fs, "error allocating online devices");
-            return Err(c::ENOMEM.into());
+            return fs.throw(Errcode::ENOMEM_write_super_devs);
         }
     }
 
@@ -2363,7 +2363,7 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
 
 /// @cas's superblocks, for SbIos to borrow: those with one.
 fn dev_sbs<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, cas: &'a WriteDevs) -> Result<Vec<DevSbMut<'a>>, BchError> {
-    let mut sbs = Vec::with_capacity(cas.len()).map_err(|_| BchError::from(c::ENOMEM))?;
+    let mut sbs = Vec::with_capacity(cas.len()).map_err(|_| fs.err(Errcode::ENOMEM_write_super_dev_sbs))?;
     for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
         sbs.push_nofail(dev_sb);
     }

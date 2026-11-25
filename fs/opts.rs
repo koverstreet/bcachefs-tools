@@ -873,7 +873,7 @@ pub(crate) const FIX_ERRORS: OptFn = OptFn {
             if let Some(err) = err {
                 write!(err, "fix_errors: invalid selection");
             }
-            c::EINVAL.into()
+            Errcode::EINVAL_fix_errors_selection.into()
         })
     },
     to_text: |out, _, _, v| names::prt_name(out, c::FsckErrOpt::ENTRIES, v),
@@ -1090,7 +1090,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
                 fail!(Errcode::option_negative, "must be a non-negative number");
             }
             let v = core::str::from_utf8(val)
-                .map_err(|_| BchError::from(c::EINVAL))
+                .map_err(|_| BchError::from(Errcode::EINVAL_opt_parse_utf8))
                 .and_then(|s| if opt.has(c::OptFlags::human_readable) {
                     parse_human_u64(s)
                 } else {
@@ -1185,7 +1185,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
                 later.write_bytes(val.unwrap_or_default());
                 write!(later, ",");
                 if later.allocation_failure() {
-                    return Err(c::ENOMEM.into());
+                    return Err(Errcode::ENOMEM_mount_opt_parse_later.into());
                 }
             }
             return Ok(());

@@ -833,8 +833,8 @@ impl ToText for DateTime {
 /// and KiB MiB ... are powers of 1024, kB MB ... powers of 1000. One trailing
 /// newline, as sysfs stores have.
 pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
-    let einval = || BchError::from(c::EINVAL);
-    let erange = || BchError::from(c::ERANGE);
+    let einval = || BchError::from(c::Errcode::EINVAL_parse_human_u64);
+    let erange = || BchError::from(c::Errcode::ERANGE_parse_human_u64);
 
     let digits = |s: &[u8]| -> Result<(u64, usize), BchError> {
         let n = s.iter().take_while(|c| c.is_ascii_digit()).count();

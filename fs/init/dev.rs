@@ -472,7 +472,7 @@ impl Dev {
             let mut name = Printbuf::new();
             prt!(&mut name, "dev-{}", self.dev_idx);
             if name.allocation_failure() {
-                return Err(c::ENOMEM.into());
+                return Err(Errcode::ENOMEM_dev_sysfs_name.into());
             }
             self.kobj.add(Some(&fs.kobj), name.as_c_str())?;
         }
@@ -1045,7 +1045,7 @@ impl StateLockWrite<'_> {
                 if !t.is_empty() && !t.is_hidden() && usage.buckets[i as usize] != 0 {
                     if ret.is_ok() {
                         prt!(err, "Remove failed: still has data\n");
-                        ret = Err(BchError::from(c::EBUSY));
+                        ret = fs.throw(Errcode::EBUSY_dev_remove_has_data);
                     }
                     prt!(err, "  {}: {} buckets\n", t, usage.buckets[i as usize]);
                 }
@@ -1094,7 +1094,7 @@ impl StateLockWrite<'_> {
             let data = ca.has_data();
             if !data.is_empty() {
                 prt!(err, "Remove failed, still has data ({data})\n");
-                return Err(BchError::from(c::EBUSY));
+                return fs.throw(Errcode::EBUSY_dev_remove_still_has_data);
             }
 
             let slot = {
@@ -1249,13 +1249,13 @@ impl Fs {
         if dev_mi.group() != 0 {
             disk_path_to_text_sb(&mut label, sb.sb(), dev_mi.group() as u32 - 1);
             if label.allocation_failure() {
-                return Err(c::ENOMEM.into());
+                return self.throw(Errcode::ENOMEM_dev_add_label);
             }
         }
 
         may_add(self, sb.sb())?;
 
-        let ca = dev_alloc(self, &dev_mi).ok_or(BchError::from(c::ENOMEM))?;
+        let ca = self.require(dev_alloc(self, &dev_mi), Errcode::ENOMEM_dev_add_alloc)?;
         let started = self.flags.get(c::FsFlag::started);
         let s = c::ReconcileScan::pending;
 

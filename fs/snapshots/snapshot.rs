@@ -1565,7 +1565,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
 
     // Room for the next line now, while dropping locks to get it is cheap.
     // Without it the next line's cut short; a restart redoes this one
-    match t.allocate_dropping_locks(|| out.make_room(1024).then_some(()).ok_or(c::ENOMEM.into())) {
+    match t.allocate_dropping_locks(|| out.make_room(1024).then_some(()).ok_or(Errcode::ENOMEM_snapshot_node_to_text.into())) {
         Err(e) if is_restart(&e) => Err(e),
         _ => Ok(()),
     }

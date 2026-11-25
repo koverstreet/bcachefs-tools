@@ -198,7 +198,7 @@ impl sysfs::Bin for TransStatsJson {
             out.reset();
             trans_stats_json(c, out);
             if out.allocation_failure() {
-                return Err(c::ENOMEM.into());
+                return c.throw(Errcode::ENOMEM_sysfs_trans_stats_json);
             }
         }
 
@@ -517,13 +517,12 @@ fn started(c: &Fs) -> Result<(), BchError> {
     if c.flags.get(c::FsFlag::started) {
         Ok(())
     } else {
-        Err(c::EPERM.into())
+        c.throw(Errcode::EPERM_sysfs_not_started)
     }
 }
 
 fn write_ref(c: &Fs) -> Result<WriteRef, BchError> {
-    c.writes.tryget()
-        .ok_or(c::EROFS.into())
+    c.require(c.writes.tryget(), Errcode::erofs_no_writes_sysfs)
 }
 
 /// @f under a write ref - EROFS if the filesystem is read-only.
@@ -571,7 +570,7 @@ fn perf_test(c: &Fs, s: &str) -> Result<(), BchError> {
     let mut words = s.split([' ', '\t', '\n']);
     let test = words.next().unwrap_or_default();
     let (Some(nr), Some(threads)) = (words.next(), words.next()) else {
-        return Err(c::EINVAL.into());
+        return c.throw(Errcode::EINVAL_sysfs_perf_test_args);
     };
     let threads = parse_int(threads)?;
     let nr = parse_human_u64(nr)?;
