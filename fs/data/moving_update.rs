@@ -23,13 +23,12 @@ use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
 use crate::c::Errcode;
-use crate::data::moving::{Moving, MovingIo};
+use crate::data::moving::{BucketMove, BucketMoves, Moving, MovingIo};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
 use crate::data::update_task::{self, Body};
-use crate::util::refcount::RefGuard;
 use crate::util::task::{requeue, Resume, Spawn};
 use crate::data::read::{read_update, ReadDone};
 use core::sync::atomic::Ordering::Relaxed;
@@ -58,11 +57,11 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 
 /// The body, @seq in its context's updates: reads, counted in the context as
 /// @read_io; then waits for its turn, then writes - nothing, if the read
-/// failed. @bucket counts the update against the bucket it's moving data off,
-/// until it's done. A journal scrub's update puts what it finds bad to @found.
-/// @runq is the context's run queue.
+/// failed. @bucket is the update's ref on the moves off the bucket it's
+/// moving data off, until it's done. A journal scrub's update puts what it
+/// finds bad to @found. @runq is the context's run queue.
 #[args_stored_once]
-async fn run(mut u: Body<'_>, seq: u64, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>,
+async fn run(mut u: Body<'_>, seq: u64, read_io: MovingIo, bucket: Option<BucketMove>,
              found: Option<BadRef>, runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
@@ -117,7 +116,7 @@ async fn run(mut u: Body<'_>, seq: u64, read_io: MovingIo, bucket: Option<RefGua
 
 /// Starts moving extent @k: its task, which issues the read - or nothing, if
 /// there's nothing to read.
-pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_in_flight: Option<&c::move_bucket>,
+pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket: Option<&BucketMoves>,
                           iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &c::bch_inode_opts,
                           data_opts: &c::data_update_opts, found: Option<BadRef>) -> Result<(), BchError> {
     let btree = iter.btree();
@@ -140,7 +139,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
 
     let size = BkeySC::from(u.index.k.as_ref()).k.size;
     let read_io = moving.io_start(false, size);
-    let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
+    let bucket = bucket.map(BucketMoves::get_pinned);
     let runq = Resume::run_queue(moving.runq());
 
     u.start(|b| run(b, seq, read_io, bucket, found, runq));

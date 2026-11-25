@@ -531,6 +531,12 @@ impl From<AllocError> for RegisterError {
     }
 }
 
+impl From<core::convert::Infallible> for RegisterError {
+    fn from(e: core::convert::Infallible) -> Self {
+        match e {}
+    }
+}
+
 impl<K, E, S, const W: usize, M: Mode> Registration<K, E, S, W, M>
 where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
 {

@@ -289,6 +289,14 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
         assert!(state & Self::WAITED == 0, "Gather::get() after its owner waited: get from a ref");
     }
 
+    /// Whether every ref's been put, its owner's aside - without waiting: for
+    /// an owner whose waits poll, as a mover's run its tasks while they do.
+    pub fn drained(&self) -> bool {
+        let state = W::load(&self.state, Ordering::Acquire);
+        Self::assert_owner(state);
+        state & Self::COUNT == 1
+    }
+
     /// A ref, from someone holding one.
     fn get_ref<'b>(&self) -> GatherRef<'b, T, Wt, W> {
         // checked before it's changed: a panic leaves the word as it was
@@ -345,8 +353,7 @@ impl<T: Fold, Wt: Waiter, W: Width> Gather<T, Wt, W> {
     /// Going: not waited on, its owner's ref the only one - no ref's out to
     /// put into it once it's gone.
     fn assert_drained(&self) {
-        assert!(self.waited() || W::load(&self.state, Ordering::Acquire) & Self::COUNT == 1,
-                "a Gather dropped with refs out, unwaited: wait on it, or await it, first");
+        assert!(self.waited() || self.drained(), "a Gather dropped with refs out, unwaited: wait on it, or await it, first");
     }
 
     /// Waited on before: that wait is over, as a Completion's drop asserts.

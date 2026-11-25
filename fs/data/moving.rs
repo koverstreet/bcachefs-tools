@@ -32,7 +32,6 @@ use crate::fs::Fs;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::refcount::Refcount;
 use crate::os::kthread::Kthread;
 use crate::util::task::{waiter, RunQueue, WaitSync};
 use crate::util::sleep::Sleep;
@@ -190,23 +189,12 @@ pub struct MovingIo {
 // wait queue: any thread's. Its ref keeps the context.
 unsafe impl Send for MovingIo {}
 
-// SAFETY: evacuate_bucket()'s callers keep a bucket in flight until its count
-// is back to zero - copygc's InFlight, until done()
-unsafe impl Refcount for c::move_bucket {
-    type Target = Self;
+/// A bucket's moves, as copygc evacuates it: each holds a ref till its update's
+/// done, and copygc doesn't pick the bucket again till they're all put.
+pub(crate) type BucketMoves = Gather<(), waiter::Sync>;
 
-    fn target(&self) -> &Self {
-        self
-    }
-
-    unsafe fn inc(&self) {
-        self.count.fetch_add(1, Relaxed);
-    }
-
-    unsafe fn dec(&self) {
-        self.count.fetch_sub(1, core::sync::atomic::Ordering::Release);
-    }
-}
+/// A move's ref on its bucket's BucketMoves.
+pub(crate) type BucketMove = GatherRef<'static, (), waiter::Sync>;
 
 fn io_counts(io: &IoCounts, write: bool) -> (&AtomicI32, &AtomicI32) {
     if write { (&io.write_sectors, &io.write_ios) } else { (&io.read_sectors, &io.read_ios) }

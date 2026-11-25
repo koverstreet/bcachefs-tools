@@ -36,8 +36,8 @@
 //! or a kick: the allocator's, when it's blocked on space we can free.
 //!
 //! Buckets in flight. An evacuation returns once its reads are issued; each
-//! move holds a count on the bucket's move_bucket - all C sees of its InFlight
-//! - until its update is done. Until then the bucket isn't picked again, and
+//! move holds a ref on its InFlight's moves, a Gather, until its update is
+//! done. Until then the bucket isn't picked again, and
 //! counts in its device's copygc_in_flight, which the allocator reads
 //! (can_make_progress()). An InFlight holds its place in the in-flight set - a
 //! cuckoo Registration - and its device's count: dropping it ends both, so a
@@ -66,7 +66,8 @@ use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::c::Errcode;
 use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
-use crate::data::moving::{MoveStats, MovingCtxt};
+use crate::data::moving::{BucketMoves, MoveStats, MovingCtxt};
+use crate::util::gather::Gather;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::debug::trace::events;
@@ -88,8 +89,7 @@ use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
 use core::pin::Pin;
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
+use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::util::futex::EventCount;
@@ -174,8 +174,9 @@ struct InFlight<'f> {
     #[pin]
     reg:  Registration<c::move_bucket_key, InFlight<'f>, SipHash13Key, 2, Private>,
     _dev: DevInFlight<'f>,
-    /// What the moves count on
-    b:    c::move_bucket,
+    /// The moves off it, each with a ref
+    #[pin]
+    moves: BucketMoves,
 }
 
 /// Out of the set before the rest goes
@@ -195,7 +196,7 @@ impl<'f> InFlight<'f> {
     {
         pin_init!(&this in InFlight::<'f> {
             _dev: DevInFlight::new(fs, key.bucket.inode as u32),
-            b:    c::move_bucket { count: AtomicI32::new(0) },
+            moves <- Gather::new(),
             // SAFETY: the set's the thread's: only it reads the set, so
             // Entry::new()'s grace period is none, and it drops every
             // InFlight before the set goes. Initialized last, so the rest's
@@ -209,7 +210,7 @@ impl<'f> InFlight<'f> {
     }
 
     fn done(&self) -> bool {
-        self.b.count.load(Acquire) == 0
+        self.moves.drained()
     }
 }
 
@@ -332,6 +333,8 @@ fn batch_full(batch: &Batch<'_>, in_flight: usize) -> bool {
 struct Copygc<'f, 'w> {
     fs:        &'f Fs,
     me:        &'w KthreadSelf<'w>,
+    // dropped before in_flight: its drop waits out every move, which an
+    // InFlight's moves, dropped, assert are done
     ctxt:      MovingCtxt<'w>,
     set:       &'w InFlightSet<'f>,
     in_flight: Fifo<Pin<KBox<InFlight<'f>>>>,
@@ -662,15 +665,13 @@ impl<'f, 'w> Copygc<'f, 'w> {
                 break;
             }
 
-            let b = batch.pop().expect("not empty");
-            let (key, count) = (*b.key(), NonNull::from(&b.b));
-            if self.in_flight.push_back(b).is_err() {
+            // in flight before its moves are issued: an error partway leaves
+            // it there, till they're done
+            if self.in_flight.push_back(batch.pop().expect("not empty")).is_err() {
                 unreachable!("reserved");
             }
-
-            // SAFETY: @count is the InFlight's, pinned, and the FIFO drops
-            // it only once the count's back to 0 (wait_done())
-            unsafe { self.ctxt.evacuate_bucket(count, key, data_opts) }?;
+            let b = self.in_flight.peek_back().expect("just pushed");
+            self.ctxt.evacuate_bucket(&b.moves, *b.key(), data_opts)?;
         }
         Ok(())
     }

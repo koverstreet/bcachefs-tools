@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::util::projections::Volatile;
 use core::ffi::c_uint;
-use core::sync::atomic::{AtomicI32, AtomicI64};
+use core::sync::atomic::AtomicI64;
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, DataType};
@@ -43,15 +43,4 @@ nest! {
 pub struct move_bucket_key {
     pub bucket: Bpos,
     pub generation: c_uint,
-}
-
-/*
- * A bucket copygc's evacuating, as the moves see it: each holds a count until
- * its update is done. The rest of what copygc keeps of it is Rust's,
- * data/copygc.rs.
- */
-#[repr(C)]
-#[derive(MaybeZeroable)]
-pub struct move_bucket {
-    pub count: AtomicI32,
 }

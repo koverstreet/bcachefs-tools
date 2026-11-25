@@ -45,7 +45,7 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::c::Errcode as err;
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
-use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
+use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
@@ -59,7 +59,6 @@ use crate::os::kernel::current_id;
 use crate::util::Printbuf;
 use crate::{bch_err_msg, warn_once};
 use core::ops::Range;
-use core::ptr::NonNull;
 use crate::format::{Bpos, Btree, DataType, BkeyType};
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
@@ -99,12 +98,12 @@ impl<'a> Moving<'a> {
     /// its read, @k copied first. The read retries itself - restarts in its
     /// erasure coded fallback - which aren't the attempt's.
     ///
-    /// The move holds a count on @bucket until it's done. A journal scrub's
+    /// The move holds a ref on @bucket until it's done. A journal scrub's
     /// extent puts what's bad to @found.
     pub fn move_extent(
         &self,
         t:         &TransAttempt<'_, 'a>,
-        bucket:    Option<&c::move_bucket>,
+        bucket:    Option<&BucketMoves>,
         opts:      &c::bch_inode_opts,
         data_opts: &c::data_update_opts,
         iter:      &BtreeIter<'_>,
@@ -175,11 +174,11 @@ impl<'a> Moving<'a> {
     }
 }
 
-/// What a walk moves with: the context, the bucket each move holds a count on,
+/// What a walk moves with: the context, the bucket each move holds a ref on,
 /// and the predicate, named for the data_update_pred trace.
 struct Mover<'a, 'p> {
     moving: &'a Moving<'a>,
-    bucket: Option<&'a c::move_bucket>,
+    bucket: Option<&'a BucketMoves>,
     name:   &'a str,
     pred:   &'a mut Pred<'p>,
 }
@@ -400,7 +399,7 @@ fn evacuate_ptrs(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, io_opts: &c::bch_inode
 }
 
 impl Moving<'_> {
-    fn move_data_phys(&self, bucket: Option<&c::move_bucket>, w: &PhysWalk, name: &str, pred: &mut Pred<'_>)
+    fn move_data_phys(&self, bucket: Option<&BucketMoves>, w: &PhysWalk, name: &str, pred: &mut Pred<'_>)
         -> Result<(), BchError>
     {
         let trans = self.trans();
@@ -482,14 +481,11 @@ impl Moving<'_> {
 
     /// Start moving everything off @key's bucket, while it's that
     /// generation, as @data_opts say: its backpointers walked, each extent's
-    /// move issued - returning once the reads are. Each move holds a count on
-    /// @bucket_in_flight until its update is done.
-    ///
-    /// # Safety
-    /// @bucket_in_flight stays valid, where it is, until its count is back
-    /// to what it was.
-    pub unsafe fn evacuate_bucket(&self, bucket_in_flight: NonNull<c::move_bucket>, key: c::move_bucket_key,
-                                  data_opts: c::data_update_opts) -> Result<(), BchError> {
+    /// move issued - returning once the reads are. Each move holds a ref on
+    /// @moves until its update is done.
+    pub fn evacuate_bucket(&self, moves: &BucketMoves, key: c::move_bucket_key, data_opts: c::data_update_opts)
+        -> Result<(), BchError>
+    {
         let fs = self.trans().fs();
         let bucket = key.bucket;
         let generation = key.generation as i32;
@@ -505,8 +501,7 @@ impl Moving<'_> {
         let mut name = Printbuf::new();
         write!(name, "evacuate_bucket_pred gen={generation}");
         let mut sectors = 0u32;
-        // SAFETY: the caller's
-        let ret = self.move_data_phys(Some(unsafe { bucket_in_flight.as_ref() }), &w, name.as_str(),
+        let ret = self.move_data_phys(Some(moves), &w, name.as_str(),
                                       &mut |t, _, k, io_opts, d| {
             *d = data_opts;
             d.read_dev = u32::MAX;
