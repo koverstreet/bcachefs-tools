@@ -38,8 +38,7 @@
 //!   name: I)] - its index, which C sees as the field it replaces, as C named
 //!   it, and at_index() writes for each element as the array's InitAt makes
 //!   them. Its container() is the array's offset, plus that many elements.
-//!   The field's an Array: an array, or a type wrapping one whose elements
-//!   stay where they're made.
+//!   The field's an Array: an array, whose elements stay where they're made.
 //!
 //! - Contained is the child's side - its Parent, and its At, which ties the two
 //!   - and container() the field's address back to its parent's.
@@ -195,20 +194,20 @@ macro_rules! index {
 }
 index!(u8, u16, u32, u64, usize);
 
-/// An array, or a type wrapping one: what an element placed at a field is an
-/// element of - its elements in a row from ELEMS_OFFSET, each made in place
-/// by init_each(), element i with what @make gives it for i, and staying
-/// where it's made, never moved out or remade, until Self drops.
-pub(crate) trait Array: Sized {
+/// An array: what an element placed at a field is an element of - each made
+/// in place by init_each(), element i with what @make gives it for i, and
+/// staying where it's made, never moved out or remade, until Self drops.
+/// Sealed: an element's place is its index's stride from Self's start.
+pub(crate) trait Array: Sized + sealed::Sealed {
     type Elem;
-    const ELEMS_OFFSET: usize;
 
     fn init_each<I: PinInit<Self::Elem, E>, E>(make: impl FnMut(usize) -> I) -> impl PinInit<Self, E>;
 }
 
+impl<T, const L: usize> sealed::Sealed for [T; L] {}
+
 impl<T, const L: usize> Array for [T; L] {
     type Elem = T;
-    const ELEMS_OFFSET: usize = 0;
 
     fn init_each<I: PinInit<T, E>, E>(make: impl FnMut(usize) -> I) -> impl PinInit<Self, E> {
         pin_init::pin_init_array_from_fn(make)
@@ -242,7 +241,7 @@ where
     type Base = B;
     type Type = <B::Type as Array>::Elem;
     fn offset(&self) -> usize {
-        B::OFFSET + <B::Type as Array>::ELEMS_OFFSET + self.index.to_usize() * size_of::<Self::Type>()
+        B::OFFSET + self.index.to_usize() * size_of::<Self::Type>()
     }
 }
 
