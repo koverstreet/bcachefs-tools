@@ -181,7 +181,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let enclosing = match at {
         Some(ty) if is_at_inner(ty) => quote! {
             #[automatically_derived]
-            impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
+            unsafe impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
                 type Visible = <Self as crate::util::place::Contained>::Parent;
                 const VISIBLE_OFFSET: usize = <#ty>::OFFSET
                     + <<#ty as crate::util::place::Place>::Base as crate::util::place::Enclosing>::VISIBLE_OFFSET;
@@ -189,7 +189,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         },
         _ => quote! {
             #[automatically_derived]
-            impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
+            unsafe impl #impl_g crate::util::place::Enclosing for #inst_ty #where_c {
                 type Visible = Self;
                 const VISIBLE_OFFSET: usize = 0;
             }

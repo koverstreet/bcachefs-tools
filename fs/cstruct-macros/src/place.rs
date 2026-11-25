@@ -299,7 +299,7 @@ pub(crate) fn field_impls(input: &DeriveInput) -> syn::Result<TokenStream> {
         quote! {
             #(#cfg)*
             #[automatically_derived]
-            impl #impl_g crate::util::place::Field<#n> for #inst #ty_g #where_c {
+            unsafe impl #impl_g crate::util::place::Field<#n> for #inst #ty_g #where_c {
                 type Type = #ty;
                 const OFFSET: usize = ::core::mem::offset_of!(#inst #ty_g, #name);
             }
@@ -317,7 +317,7 @@ pub(crate) fn derive_fields(input: &DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         #fields
         #[automatically_derived]
-        impl #impl_g crate::util::place::Enclosing for #inst #ty_g #where_c {
+        unsafe impl #impl_g crate::util::place::Enclosing for #inst #ty_g #where_c {
             type Visible = Self;
             const VISIBLE_OFFSET: usize = 0;
         }

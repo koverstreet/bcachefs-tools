@@ -122,7 +122,7 @@ pub struct Locked<R: RawLockBase, G = (), P = ()> {
     _pin:      PhantomData<PhantomPinned>,
 }
 
-impl<R: RawLockBase, G, P> crate::util::place::Wrapper for Locked<R, G, P> {
+unsafe impl<R: RawLockBase, G, P> crate::util::place::Wrapper for Locked<R, G, P> {
     type Inner = G;
     const INNER_OFFSET: usize = core::mem::offset_of!(Self, protected);
 }

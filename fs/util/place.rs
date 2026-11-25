@@ -128,7 +128,11 @@ pub const fn name(s: &str) -> u64 {
 
 
 /// Self's field N, named N: its type, Type, and where it is, OFFSET.
-pub(crate) trait Field<const N: u64> {
+/// #[derive(Init)] and #[derive(Fields)] make them.
+///
+/// # Safety
+/// A Type is at OFFSET in every Self.
+pub(crate) unsafe trait Field<const N: u64> {
     type Type;
     const OFFSET: usize;
 }
@@ -248,7 +252,10 @@ where
 /// A type holding one value, an Inner at INNER_OFFSET, for as long as it is -
 /// a Locked's protected data - for a type placed in it:
 /// #[placed(Base.field.*)].
-pub(crate) trait Wrapper {
+///
+/// # Safety
+/// An Inner is at INNER_OFFSET in every Self.
+pub(crate) unsafe trait Wrapper {
     type Inner;
     const INNER_OFFSET: usize;
 }
@@ -286,7 +293,11 @@ where
 /// a Wrapper, the struct holding that, as a Locked's data is had only with
 /// its lock held, and what's placed in it is had without. #[derive(Init)]
 /// implements it, on every struct, as its At says.
-pub(crate) trait Enclosing {
+///
+/// # Safety
+/// A Self is at VISIBLE_OFFSET in its Visible, wherever a value is placed
+/// in it.
+pub(crate) unsafe trait Enclosing {
     type Visible;
 
     /// Where Self is in its Visible.
@@ -498,7 +509,7 @@ impl<C, A> Placed<C, A> {
 }
 
 // A placed Locked's data is placed as a Locked's is: C is at its start.
-impl<C: Wrapper, A> Wrapper for Placed<C, A> {
+unsafe impl<C: Wrapper, A> Wrapper for Placed<C, A> {
     type Inner = C::Inner;
     const INNER_OFFSET: usize = core::mem::offset_of!(Self, value) + C::INNER_OFFSET;
 }
