@@ -153,8 +153,7 @@ use crate::util::gather::{Gather, GatherRef};
 use crate::util::refcount::{RefGuard, RefSlot, Refcount};
 use crate::os::kernel::local_clock;
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Spawn, TaskBox, TaskRef, TaskSlot};
-use crate::os::workqueue::Queue;
+use crate::util::task::{waiter, TaskBox, TaskRef, TaskSlot};
 use crate::util::projections::Volatile;
 use crate::util::{HumanReadable, Nsecs, Printbuf};
 use crate::{new_lock, published, prt};
@@ -426,12 +425,9 @@ impl StripeNew {
             internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),
         }? BchError);
 
-        // SAFETY: stripe_create_wq is destroyed as the filesystem's freed,
-        // which drains the task's done
-        let wq = unsafe { Queue::from_raw(fs.ec.stripe_create_wq.as_ptr()) };
-        let tasks = unsafe { BackRef::new(fs).get() }.tasks();
         let b = TaskSlot::alloc(init)?
-            .init(Spawn::Queue(wq), tasks, async |s: &StripeNew| stripe_task(s.fs_ref(), s).await, Some(stripe_done))?;
+            .init_held(|s| (&s.fs.ec.stripe_create_wq, s.fs.tasks()),
+                       async |s: &StripeNew| stripe_task(s.fs_ref(), s).await, Some(stripe_done))?;
         {
             let mut s = b.lock();
             new_stripe_key(fs, &mut s.new_stripe, algorithm as u8, nr_data as u8, nr_parity as u8,
