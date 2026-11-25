@@ -20,11 +20,11 @@ use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::path_to_cstr;
-use errno::Errno;
+use rustix::io::Errno;
 use uuid::Uuid;
 
 fn io_errno(e: std::io::Error) -> Errno {
-    Errno(e.raw_os_error().unwrap_or(rustix::io::Errno::IO.raw_os_error()))
+    Errno::from_io_error(&e).unwrap_or(Errno::IO)
 }
 
 /// Try a v2 ioctl (with error message buffer), falling back to v1 on ENOTTY.
@@ -37,7 +37,7 @@ macro_rules! v2_v1_ioctl {
 
         match ioctl_w::<$V2>($fd, &arg) {
             Ok(_) => Ok(()),
-            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::NOTTY.raw_os_error()) =>
+            Err(e) if e.raw_os_error() == Some(Errno::NOTTY.raw_os_error()) =>
                 ioctl_w::<$V1>($fd, &$v1_arg).map(|_| ()).map_err(io_errno),
             Err(e) => {
                 print_errmsg(&err_buf);
@@ -97,8 +97,7 @@ impl BcachefsHandle {
         // Try as UUID string first (normalized: the sysfs dir is canonical
         // lowercase-with-dashes, the user's spelling may not be)
         if let Ok(uuid) = Uuid::try_parse(&path_str).map(Uuid::into_bytes) {
-            return Self::open_by_name(&Uuid::from_bytes(uuid).to_string(), Some(uuid))
-                .map_err(|e| BchError::from(e.0));
+            return Self::open_by_name(&Uuid::from_bytes(uuid).to_string(), Some(uuid));
         }
 
         if let Some(handle) = Self::open_if_mounted(path)? {
@@ -131,8 +130,8 @@ impl BcachefsHandle {
             // with dashes, the user's spelling may not be:
             return match Self::open_by_name(&Uuid::from_bytes(uuid).to_string(), Some(uuid)) {
                 Ok(h) => Ok(Some(h)),
-                Err(e) if e.0 == rustix::io::Errno::NOENT.raw_os_error() => Ok(None),
-                Err(e) => Err(BchError::from(e.0)),
+                Err(e) if e.matches(c::ENOENT) => Ok(None),
+                Err(e) => Err(e),
             };
         }
 
@@ -173,8 +172,7 @@ impl BcachefsHandle {
                 // We need to extract uuid and dev_idx
                 if let Some((uuid_str, dev_idx)) = parse_sysfs_link(&target) {
                     let uuid = Uuid::try_parse(uuid_str).ok().map(Uuid::into_bytes);
-                    let mut handle = Self::open_by_name(uuid_str, uuid)
-                        .map_err(|e| BchError::from(e.0))?;
+                    let mut handle = Self::open_by_name(uuid_str, uuid)?;
                     handle.dev_idx = dev_idx;
                     return Ok(Some(handle));
                 }
@@ -250,23 +248,22 @@ impl BcachefsHandle {
     }
 
     /// Open by sysfs name (UUID string). Reads minor number, opens /dev/bcachefsN-ctl.
-    fn open_by_name(name: &str, uuid: Option<[u8; 16]>) -> Result<Self, Errno> {
+    fn open_by_name(name: &str, uuid: Option<[u8; 16]>) -> Result<Self, BchError> {
         let sysfs_path = format!("{}{}", SYSFS_BASE, name);
         let sysfs_fd = rustix::fs::open(
             sysfs_path.as_str(),
             rustix::fs::OFlags::RDONLY,
             rustix::fs::Mode::empty(),
-        ).map_err(|e| Errno(e.raw_os_error()))?;
+        ).map_err(|e| BchError::from(e.raw_os_error()))?;
 
-        let minor = sysfs::read_sysfs_fd_str(sysfs_fd.as_fd(), "minor")
-            .map_err(|e| Errno(e.raw_os_error().unwrap_or(rustix::io::Errno::IO.raw_os_error())))?;
+        let minor = sysfs::read_sysfs_fd_str(sysfs_fd.as_fd(), "minor")?;
 
         let ctl_path = format!("/dev/bcachefs{}-ctl", minor);
         let ioctl_fd = rustix::fs::open(
             ctl_path.as_str(),
             rustix::fs::OFlags::RDWR,
             rustix::fs::Mode::empty(),
-        ).map_err(|e| Errno(e.raw_os_error()))?;
+        ).map_err(|e| BchError::from(e.raw_os_error()))?;
 
         Ok(BcachefsHandle {
             ioctl_fd,
@@ -293,15 +290,14 @@ impl BcachefsHandle {
         drop(sb);
 
         let mut handle = Self::open_by_name(&uuid_str, Some(uuid))
-            .map_err(|e| {
-                if e.0 == rustix::io::Errno::NOENT.raw_os_error() {
+            .inspect_err(|e| {
+                if e.matches(c::ENOENT) {
                     if !Path::new("/sys/fs/bcachefs").exists() {
                         eprintln!("bcachefs kernel module not loaded");
                     } else {
                         eprintln!("filesystem {} not mounted", uuid_str);
                     }
                 }
-                BchError::from(e.0)
             })?;
         handle.dev_idx = dev_idx;
         Ok(handle)
@@ -471,7 +467,7 @@ impl BcachefsHandle {
     pub(crate) fn sb_version(&self) -> Result<MetadataVersion, Errno> {
         let buf = self.read_super()?;
         if buf.len() < mem::size_of::<Head<bch_sb>>() {
-            return Err(Errno(rustix::io::Errno::IO.raw_os_error()));
+            return Err(Errno::IO);
         }
         Ok(read_past::<Head<bch_sb>>(&buf, 0).version.get())
     }
@@ -497,14 +493,14 @@ impl BcachefsHandle {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types: buf.get().map_err(|_| Errno(rustix::io::Errno::IO.raw_os_error()))?.d.iter()
+                data_types: buf.get().map_err(|_| Errno::IO)?.d.iter()
                     .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
                     .collect(),
             });
         }
 
         let err = ret.unwrap_err();
-        if err.raw_os_error() != Some(rustix::io::Errno::NOTTY.raw_os_error()) {
+        if err.raw_os_error() != Some(Errno::NOTTY.raw_os_error()) {
             return Err(io_errno(err));
         }
 

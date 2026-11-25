@@ -28,16 +28,6 @@ mod workqueue_test;
 use std::process::ExitCode;
 use bcachefs_kernel::c;
 
-#[derive(Debug)]
-pub struct ErrnoError(pub errno::Errno);
-impl std::fmt::Display for ErrnoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        self.0.fmt(f)
-    }
-}
-
-impl std::error::Error for ErrnoError {}
-
 /// Read the running kernel's .config from /boot or /proc/config.gz.
 fn read_kernel_config() -> Option<String> {
     // Try /boot/config-$(uname -r) first (most distros)

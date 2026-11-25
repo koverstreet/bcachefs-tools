@@ -200,7 +200,6 @@ dependencies = [
  "crossterm",
  "either",
  "env_logger",
- "errno",
  "fiemap",
  "fuser",
  "libc",
