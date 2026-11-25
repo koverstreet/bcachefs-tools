@@ -308,7 +308,7 @@ pub mod c {
     // The kernel's types and functions (bio, __u64, locks, …). Userspace
     // builds take them from bcachefs-shim; the in-kernel build (`--cfg
     // kernel`) from the kernel crate's raw bindings, and what those don't
-    // cover - the CRCs, the vendored closures - from codegen.rs's.
+    // cover - the CRCs, the C shim's - from codegen.rs's.
     #[cfg(not(kernel))]
     pub use bcachefs_shim::c::*;
     // and what the shim's headers had, which the userspace port defines now
@@ -333,9 +333,8 @@ pub mod c {
         _unused: [u8; 0],
     }
 
-    // A union bindgen can't make a Rust union - a member isn't Copy: the
-    // closure's, holding a work_struct - is a struct of these markers over
-    // its storage. Zeroed storage is each member zeroed: Zeroable if they
+    // A union bindgen can't make a Rust union - a member isn't Copy - is a
+    // struct of these markers over its storage. Zeroed storage is each member zeroed: Zeroable if they
     // all are, which this leaves the derive to check. (The storage, from
     // bindgen 0.73 an __BindgenOpaqueArrayN, codegen.rs makes Zeroable.)
     //

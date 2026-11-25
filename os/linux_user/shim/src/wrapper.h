@@ -6,12 +6,12 @@
 #include "include/linux/rcupdate.h"
 #include "include/linux/sched.h"
 #include "include/linux/unicode.h"
+#include "include/linux/workqueue.h"
 #include <lz4.h>
 #include <lz4hc.h>
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
-#include "fs/vendor/closure.h"
 #include "raid/raid.h"		/* raid_gen(), raid_rec(): the kernel's raid6/xor, in userspace */
 
 #include <errno.h>

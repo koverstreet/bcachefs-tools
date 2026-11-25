@@ -67,9 +67,6 @@ pub mod c {
     #[cfg(kernel)]
     pub use crate::c::rcu_head;
 
-    // vendor/'s C, not converted.
-    pub use crate::c::{closure, closure_waitlist};
-
     // C's limits, which the constants use.
     pub const U8_MAX:  u8  = u8::MAX;
     pub const U16_MAX: u16 = u16::MAX;

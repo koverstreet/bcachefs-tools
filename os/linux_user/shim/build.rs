@@ -44,10 +44,6 @@ fn main() {
         .join("wrapper.h");
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
-    // what it includes of fs/: the vendored C and the shims' headers
-    for h in ["vendor/closure.h"] {
-        println!("cargo:rerun-if-changed={}", fs_dir.join(h).display());
-    }
     println!("cargo:rerun-if-changed=../../../clang_target.rs");
     println!("cargo:rerun-if-changed=../../../fs/build_config.rs");
     rerun_if_userspace_config_changed(&root);
@@ -96,8 +92,6 @@ fn main() {
         // than these bindings would be no value of a Rust enum. Its parameter
         // names and strategies the same, though only passed to it.
         .constified_enum("ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective|ZSTD_strategy")
-        // closure_state_CLOSURE_RUNNING, as in-kernel
-        .constified_enum("closure_state")
         // Own only what's defined under include/ — the kernel-compat surface.
         // allowlist_recursively (default) pulls in the system primitives these
         // reference (__u64 etc.), so they're emitted here too.
@@ -121,9 +115,6 @@ fn main() {
         // bindings have them in-kernel; add as needed:
         .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES|EBUSY")
         .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT|ENOKEY|EAGAIN")
-        // The vendored C fs/ uses - closures - is the shim's too: not
-        // bcachefs's, so not the fs crate's to define.
-        .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
         .allowlist_function("snprintf")
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.

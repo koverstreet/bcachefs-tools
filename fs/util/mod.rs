@@ -3,7 +3,6 @@ pub mod atomic;
 pub mod backref;
 pub mod backtrace;
 pub mod clock;
-pub mod closure;
 pub mod demangle;
 pub mod ffi;
 pub mod futex;

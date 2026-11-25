@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The shim's workqueues: workqueue.rs's, and queue_work() for closure.c.
+//! The shim's workqueues: workqueue.rs's.
 //!
 //! One thread per queue meant a work item that blocks stopped every other item
 //! on that queue. For an executor whose tasks are work items (see
@@ -319,8 +319,12 @@ fn __queue_work(st: &mut State, wq: *mut Workqueue, work: *mut c::work_struct) {
     wake_idle_workers(wq);
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool {
+/// queue_work(): @work run on @wq, unless it's queued already.
+///
+/// # Safety
+/// @wq is a queue, there until @work's run, and @work an initialized
+/// work_struct's place.
+pub(super) unsafe fn queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool {
     let mut st = lock();
     let ret = set_work_pending(work);
     if ret {

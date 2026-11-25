@@ -55,7 +55,6 @@ subdir-ccflags-y += $(call cc-disable-warning, psabi)
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
-	vendor/closure.o			\
 	../os/linux_kernel/shim.o
 
 ifdef KBUILD_EXTMOD

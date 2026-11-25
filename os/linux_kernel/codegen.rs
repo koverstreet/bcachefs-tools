@@ -2,8 +2,7 @@
 // The kernel build's bindgen: what fs/'s Rust uses of the kernel that
 // kernel::bindings doesn't bind - the kernel-side counterpart of bcachefs-shim.
 // What's bound is kernel headers, carved out of the include trees' blocklist
-// one by one, vendored library code (the closures), and the headers of fs/'s
-// C shims.
+// one by one, and the headers of fs/'s C shims.
 //
 // codegen_main.rs, which the kernel/DKMS Makefile builds and runs, include!s
 // this file - so plain // comments. It drives the bindgen CLI: no crates to
@@ -59,9 +58,8 @@ const KERNEL_HEADERS: &[&str] = &[
 ];
 
 /// Headers bound by path from fs/ - which the clang args have as an -I:
-/// vendored library code, and codegen.h's wrappers of kernel macros.
-const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "../os/linux_kernel/codegen.h",
-                                    "../os/linux_kernel/shim.h"];
+/// codegen.h's wrappers of kernel macros, and the C shim's.
+const VENDORED_HEADERS: &[&str] = &["../os/linux_kernel/codegen.h", "../os/linux_kernel/shim.h"];
 
 /// Under the kernel include trees, what isn't blocklisted: uapi/ (see
 /// blocklist_dir()), and KERNEL_HEADERS.
@@ -146,12 +144,6 @@ const UNBLOCKLISTED: &[&str] = &[
 const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
     "mnt_want_write_file", "mnt_drop_write_file",
-    "closure_get", "closure_get_not_zero", "closure_put", "closure_init", "closure_init_stack", "closure_sync", "closure_call",
-    "closure_init_stack_release", "bch2_closure_return_sync",
-    "closure_sync_timeout",
-    "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
-    "set_closure_fn", "closure_queue", "bch2_closure_sub", "closure_debug_destroy",
-    "closure_set_waiting", "closure_val_checks",
     "rust_page_folio", "rust_folio_page_idx", "folio_size",
     // vfs/folio.rs: folios, mappings and readahead
     "folio_get_private", "rust_filemap_alloc_folio", "folio_pos", "folio_nr_pages",
@@ -262,8 +254,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // the C shim: os/linux_kernel's shim.c
     "rust_.*", "bch2_.*",
 ];
-const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "closure_state",
-                                  "xattr_handler", "kstatfs", "export_operations", "fid_type",
+const ALLOWLIST_TYPE: &[&str] = &["xattr_handler", "kstatfs", "export_operations", "fid_type",
                                   "xxh64_state", "chacha_state", "poly1305_desc_ctx",
                                   // the kernel crate's fs_context and fs_parameter are opaque
                                   "fs_context", "fs_parameter", "fs_context_operations",
@@ -334,8 +325,8 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     a.push("--formatter".into()); a.push("prettyplease".into());
     a.push("--with-derive-default".into());
     // Zeroable when every field is, as the kernel's own bindgen_parameters
-    // and the shim's have it: a struct holding these - bch_fs, holding
-    // closures - can start zeroed in a Rust initializer
+    // and the shim's have it: a struct holding these can start zeroed in a
+    // Rust initializer
     flag!("--with-derive-custom-struct", ".*=::pin_init::MaybeZeroable");
     flag!("--with-derive-custom-union", ".*=::pin_init::MaybeZeroable");
     a.push("--use-core".into());
@@ -384,10 +375,9 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
 }
 
 /// bindgen 0.73 stores an opaque blob - the storage of a union it can't make a
-/// Rust union, the closure's - as __BindgenOpaqueArrayN<T>, aligned as the C,
-/// where 0.72 had a [u64; N]. It's bindgen's own helper, so --with-derive-custom
-/// doesn't reach it, and without Zeroable neither is a closure, nor bch_fs
-/// holding one. The impls, for the ones this bindgen defined: 0.72 defines
+/// Rust union - as __BindgenOpaqueArrayN<T>, aligned as the C, where 0.72 had
+/// a [u64; N]. It's bindgen's own helper, so --with-derive-custom doesn't
+/// reach it, and without Zeroable neither is the union, nor what holds it. The impls, for the ones this bindgen defined: 0.72 defines
 /// none, and an impl of a type that isn't there doesn't compile. The union's
 /// members are __BindgenUnionField, made Zeroable in mod.rs.
 fn opaque_arrays_zeroable(bindings: &str) -> String {
