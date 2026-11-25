@@ -1996,14 +1996,6 @@ impl<'t> BtreeIter<'t> {
         Ok(this.key_of(Some(v)).map(|k| (this, k)))
     }
 
-    /// Whether the iterator's path holds a node at its level - a btree node,
-    /// or a cached path's key cache entry: btree_path_node().
-    pub(crate) fn has_node_at_iter_level(&self, t: &TransAttempt<'_, 't>) -> bool {
-        let paths = t.trans().paths();
-        let path = &paths[self.path];
-        matches!(path.l[path.level() as usize].b.get(), Ok(Some(_)))
-    }
-
     /// The key of the node the iterator's path holds at its level, as a key a
     /// peek returns: the iterator's key, good until it moves.
     pub(crate) fn node_key_at_iter_level(&mut self, t: &TransAttempt<'_, 't>) -> Option<BkeySC<'_>> {
