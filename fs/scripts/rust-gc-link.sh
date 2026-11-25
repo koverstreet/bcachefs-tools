@@ -35,9 +35,10 @@
 # those no relocation names, which objcopy enforces, refusing the rest.
 #
 # And no symbol may be KSYM_NAME_LEN bytes or more - kallsyms writes before
-# its buffer printing one: ksym_len renames them, and checks.
+# its buffer printing one - nor be one of LLVM's foo.cold.N, which objtool
+# takes for a GCC cold subfunction: ksym_names renames them, and checks.
 #
-# Takes LD (with its flags), NM, OBJCOPY, READELF and KSYM_LEN from the
+# Takes LD (with its flags), NM, OBJCOPY, READELF and KSYM_NAMES from the
 # environment.
 
 set -e
@@ -78,8 +79,8 @@ if [ -s "$work/gc.unneeded" ]; then
 	$OBJCOPY --strip-symbols="$work/gc.unneeded" "$out"
 fi
 
-$NM --defined-only "$out" | $KSYM_LEN > "$work/gc.redefine"
+$NM --defined-only "$out" | $KSYM_NAMES > "$work/gc.redefine"
 if [ -s "$work/gc.redefine" ]; then
 	$OBJCOPY --redefine-syms="$work/gc.redefine" "$out"
 fi
-$NM --defined-only "$out" | $KSYM_LEN --check
+$NM --defined-only "$out" | $KSYM_NAMES --check
