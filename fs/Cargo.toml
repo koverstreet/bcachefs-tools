@@ -18,6 +18,11 @@ default = ["std"]
 # wipes key material with a hand-rolled volatile memset instead (see mod.rs).
 std = ["dep:zeroize", "dep:linux-keyutils"]
 
+# The dependencies the module builds too (Makefile.rust), from the sources
+# cargo has: install_dkms copies them (dkms/install.rs).
+[package.metadata.dkms]
+crates = ["bitfield-struct", "bitflags", "nestify", "num-traits", "paste", "stable_deref_trait", "uuid", "yoke"]
+
 [dependencies]
 bcachefs-shim = { path = "../os/linux_user/shim" }
 # The kernel build has pin_init as a crate too - --extern pin_init, the
@@ -25,18 +30,17 @@ bcachefs-shim = { path = "../os/linux_user/shim" }
 # ::pin_init paths.
 pin-init = { path = "../os/linux_user/shim/pin-init" }
 bcachefs-cstruct-macros = { path = "cstruct-macros" }
-bitfield-struct = { path = "vendor/bitfield-struct" }
-nestify = { path = "vendor/nestify" }
-bitflags = { path = "vendor/bitflags" }
-num-traits = { path = "vendor/num-traits", default-features = false }
-paste    = { path = "vendor/paste" }
+bitfield-struct = "0.13"
+nestify = { git = "https://github.com/koverstreet/nestify.git", rev = "49f93fbf42c10d7bffe502f0e51287a0a4e767ad" }
+bitflags = "2.11"
+num-traits = { version = "0.2.19", default-features = false }
+paste    = "1.0.15"
 # Userspace only: std's legacy-mangled names, in backtraces. v0 names are
 # util/demangle.rs's, and in the kernel every Rust name is v0
 rustc-demangle = "0.1.27"
 uuid     = "1.2.2"
 # The target's ioctl number layout (util/ioctl.rs) and errnos (errcode.rs):
-# bindgen output of each architecture's own headers. Userspace only - the
-# kernel build has no crates.io.
+# bindgen output of each architecture's own headers. Userspace only.
 linux-raw-sys = { version = "0.12", default-features = false, features = ["errno", "general", "no_std"] }
 # Endian-typed integers for the on-disk format: byteorder::{little,big}_endian.
 zerocopy = "0.8"
@@ -44,10 +48,9 @@ zerocopy = "0.8"
 # and FromBytes for an RcuArray's elements.
 zerocopy-derive = "0.8"
 # An owner and a value borrowed from it, together - no alloc: carts of our own.
-# Exactly fs/vendor's, which the kernel builds: from crates.io here, so yoke's
-# stable_deref_trait is ours.
-yoke = { version = "=0.8.4", default-features = false }
-stable_deref_trait = { version = "=1.2.1", default-features = false }
+# yoke's stable_deref_trait is ours.
+yoke = { version = "0.8.4", default-features = false }
+stable_deref_trait = { version = "1.2.1", default-features = false }
 # Userspace only: os/linux_user/kernel.rs's random_bytes(), the OS's CSPRNG.
 getrandom = "0.4"
 # Userspace only, util/prompt's: asking on the terminal - polled, echo off

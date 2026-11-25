@@ -301,7 +301,10 @@ bch-pmac-externs := -L$(bch-host) --extern proc_macro2=$(bch-host)/libproc_macro
 bch-pmac := --cap-lints=allow $(bch-pmac-externs)
 bch-pmac-deps := $(bch-host)/libsyn.rmeta FORCE
 
-# Vendored crates get --cap-lints=allow: the kernel's lints are about how our
+# The crates.io and git crates are cargo's own sources, which install_dkms
+# stages as vendor/NAME (dkms/install.rs), at the versions Cargo.lock has.
+#
+# They get --cap-lints=allow: the kernel's lints are about how our
 # own code is written, not whether someone else's is correct (as cargo does for
 # dependencies) - and a rustc bump would otherwise break the build (#830).
 # cstruct-macros is ours, and gets the lints.
@@ -317,8 +320,8 @@ $(obj)/libcstruct_macros.so: $(src)/cstruct-macros/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
 $(obj)/libbitfield_struct.so: $(src)/vendor/bitfield-struct/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
-# nestify: tagged_union! hands it the arm types defined in its block.
-# fs/vendor/nestify is a commit of our fork, exactly: scripts/vendor.sh.
+# nestify: tagged_union! hands it the arm types defined in its block - our
+# fork's.
 $(obj)/libnestify.so: $(src)/vendor/nestify/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
 

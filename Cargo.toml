@@ -67,5 +67,5 @@ platforms = ["*-linux-*"]
 # branch (from v0.17.0); sent upstream - drop this once a release has it.
 [patch.crates-io]
 fuser = { git = "https://github.com/koverstreet/fuser", branch = "destroy-before-reply" }
-# fs/'s, vendored for the kernel build: one copy, chrono's too.
-num-traits = { path = "fs/vendor/num-traits" }
+# fs/'s fork: one copy, chrono's too.
+num-traits = { git = "https://github.com/koverstreet/num-traits.git", rev = "34eeca40d5e25d564244cb43c0d32753422d3520" }

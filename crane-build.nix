@@ -106,25 +106,7 @@ let
     '';
   };
 
-  # buildDepsOnly stubs every in-tree crate's sources, path dependencies
-  # included - so a crates.io dependency [patch]ed onto one of our vendored
-  # crates (chrono on fs/vendor/num-traits) would build against an empty crate.
-  # Those keep their real sources; the rest of fs/vendor (fiemap) stays stubbed
-  # with the workspace.
-  patchedPaths = lib.mapAttrsToList (_: p: p.path) (
-    lib.filterAttrs (_: p: p ? path)
-      ((builtins.fromTOML (builtins.readFile ./Cargo.toml)).patch.crates-io or { })
-  );
-
-  cargoArtifacts = craneLib.buildDepsOnly (builtins.removeAttrs args [ "src" ] // {
-    dummySrc = craneLib.mkDummySrc {
-      inherit src;
-      extraDummyScript = lib.concatMapStrings (p: ''
-        rm -rf $out/${p}
-        cp -r --no-preserve=mode ${src}/${p} $out/${p}
-      '') patchedPaths;
-    };
-  });
+  cargoArtifacts = craneLib.buildDepsOnly args;
 
   package = craneLib.buildPackage (
     args
