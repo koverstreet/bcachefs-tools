@@ -141,7 +141,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
             let name = UserStr::read(user.as_mut_ptr() as u64, c::BCH_NAME_MAX as usize + 1)?;
             reinherit_attrs(file, inode, OsStr::from_bytes(name.as_cstr().to_bytes()))
         }
-        c::FS_IOC_SETVERSION => Err(c::ENOTTY.into()),
+        c::FS_IOC_SETVERSION => Err(Errcode::ENOTTY_setversion.into()),
         <c::BCH_IOCTL_SUBVOLUME_CREATE as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_SUBVOLUME_CREATE, _>(user, |a| subvolume_create(fs, file, a, ErrMsg::Log)),
         <c::BCH_IOCTL_SUBVOLUME_CREATE_v2 as Ioctl>::OPCODE =>
@@ -159,7 +159,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
         <c::BCHFS_IOC_PREAD_RAW as Ioctl>::OPCODE =>
             arg::<c::BCHFS_IOC_PREAD_RAW, _>(user, |a| match regular {
                 Some(file) => pread_raw(file, inode, a),
-                None       => Err(c::EINVAL.into()),
+                None       => Err(Errcode::EINVAL_pread_raw_not_regular.into()),
             }),
         _ => fs_ioctl(fs, cmd, user),
     }
@@ -260,7 +260,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
     if let Some(src) = &src {
         let Some(inode) = src.on(fs) else {
             prt!(err, "src_path not on dst filesystem");
-            return Err(c::EXDEV.into());
+            return fs.throw(Errcode::EXDEV_create_subvol_src);
         };
         snapshot_src = inode.inum();
     }
@@ -268,7 +268,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
     let dst = Creating::start(a.dirfd as c_int, a.dst_ptr)?;
     let Some((dentry, dir)) = dst.on(fs) else {
         prt!(err, "dst_path not on dst filesystem");
-        return Err(c::EXDEV.into());
+        return fs.throw(Errcode::EXDEV_create_subvol_dst);
     };
     if dentry.inode_opt().is_some() {
         return fs.throw(E::EEXIST_subvolume_create);
@@ -280,7 +280,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
     let sb = dir.sb();
     if !sb.maps_ids(current_fsuid(), current_fsgid()) {
         prt!(err, "current uid/gid not mapped into fs namespace");
-        return Err(c::EOVERFLOW.into());
+        return fs.throw(Errcode::EOVERFLOW_create_subvol_ids);
     }
 
     let idmap = MntIdmap::of(file);
@@ -322,7 +322,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
 
         let r = Removing::start(a.dirfd as c_int, a.dst_ptr)?;
         let Some((victim, dir)) = r.on(fs) else {
-            return Err(c::EXDEV.into());
+            return fs.throw(Errcode::EXDEV_destroy_subvol);
         };
 
         MntIdmap::of(file).permission(victim.inode().vfs(), c::MAY_WRITE)?;
@@ -344,13 +344,13 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<c::bch_ioc
     let fs = inode.fs();
     let a = user.read()?;
     if a.flags & !c::BCH_PREAD_RAW_no_poison_check != 0 || a.err.pad != 0 {
-        return Err(c::EINVAL.into());
+        return fs.throw(Errcode::EINVAL_pread_raw_args);
     }
     if a.len == 0 {
         return Ok(0);
     }
     if file.flags() & c::O_DIRECT == 0 {
-        return Err(c::EINVAL.into());
+        return fs.throw(Errcode::EINVAL_pread_raw_not_direct);
     }
     if !MntIdmap::of(file).owner_or_capable(inode.vfs()) {
         return fs.throw(Errcode::EPERM_non_admin_or_owner);
@@ -377,7 +377,7 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<c::bch_ioc
 
     let mut errs = report.errs.lock();
     if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &errs.errors).is_err() {
-        ret = Err(c::EFAULT.into());
+        ret = Err(Errcode::EFAULT_pread_raw_errors.into());
     }
     let msg = &mut errs.msg;
     // The message's copy fails the call only if the read succeeded but read
@@ -445,7 +445,7 @@ fn goingdown(sb: &SuperBlock, user: UserArg<u32>) -> Result<(), BchError> {
 fn clear_damage(file: &File, inode: &InodeInfo) -> Result<(), BchError> {
     // forensic metadata: erasing it takes ownership, as chattr does
     if !MntIdmap::of(file).owner_or_capable(inode.vfs()) {
-        return Err(c::EPERM.into());
+        return Err(Errcode::EPERM_clear_damage.into());
     }
 
     let _write = WriteAccess::get(file)?;
@@ -498,7 +498,7 @@ fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
 
     let (_, parent_sv, mut dir) = up(&InodeInfo::get_trans(t, root)?);
     if parent_sv == 0 {
-        return Err(c::EIO.into());
+        return t.fs().throw(Errcode::EIO_subvol_accessible_no_parent);
     }
 
     /*

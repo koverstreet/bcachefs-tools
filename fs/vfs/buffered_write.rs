@@ -270,12 +270,12 @@ fn buffered_write_chunk(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter<
             bytes = iter.count().min(PAGE_SIZE - offset);
 
             if unlikely(iter.fault_in_readable(bytes) != 0) {
-                return Err(c::EFAULT.into());
+                return Err(c::Errcode::EFAULT_buffered_write_fault_in.into());
             }
         }
 
         if unlikely(fatal_signal_pending()) {
-            return Err(c::EINTR.into());
+            return Err(c::Errcode::EINTR_buffered_write_fatal_signal.into());
         }
 
         let copied = buffered_write_folios(inode, mapping, iter, pos, bytes)?;

@@ -412,9 +412,10 @@ fn mount_legacy(
         // mount(2) has nowhere to put an explanation, so an errno is all there
         // is to report - which is the reason mount_fs_context() exists. EBUSY
         // is worth translating: what it means here isn't obvious from the word.
+        let code = BchError::from_raw(e.raw_os_error());
         Err(MountError {
-            code: BchError::from_raw(e.raw_os_error()),
-            text: if e == rustix::io::Errno::BUSY {
+            code,
+            text: if code.matches(c::EBUSY) {
                 format!("{}: {src:?} already mounted or mount point busy",
                         target.to_string_lossy())
             } else {

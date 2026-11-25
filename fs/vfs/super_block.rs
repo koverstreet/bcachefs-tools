@@ -131,7 +131,7 @@ impl SuperOps for Fs {
                                   c::OptFlags::mount.bits(), c::OptFlags::hidden.bits(),
                                   c::OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {
-            return Err(BchError::from(c::ENOMEM));
+            return Err(c::Errcode::ENOMEM_show_options.into());
         }
         m.write(b",");
         m.write(out.as_bytes());

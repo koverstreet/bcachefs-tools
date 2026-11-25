@@ -252,7 +252,7 @@ impl InodeInfo {
 
         for f in folios.iter().map(folio) {
             if f.create_private().is_none() {
-                return Err(c::ENOMEM.into());
+                return Err(c::Errcode::ENOMEM_read_folio_state_private.into());
             }
 
             if f.pos()     >= self.ei_reserved.ei_reserved_start.get() &&

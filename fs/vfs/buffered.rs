@@ -78,7 +78,7 @@ impl ReadaheadIter {
     /// A single folio's: @folio, for the read to extend past.
     fn new(mapping: Mapping, folio: ReadPart) -> Result<Self, BchError> {
         let mut folios = Fifo::new();
-        folios.reserve(1).map_err(|_| BchError::from(c::ENOMEM))?;
+        folios.reserve(1).map_err(|_| BchError::from(err::ENOMEM_readahead_folios_reserve))?;
         let pushed = folios.push_back(folio);
         assert!(pushed.is_ok(), "a readahead window's folio, pushed into room reserved for it");
         Ok(Self::of(mapping, folios).expect("a window of a folio"))
@@ -94,7 +94,7 @@ impl ReadaheadIter {
             let pushed = folios.push_back(folio.start_read());
             assert!(pushed.is_ok(), "a readahead window's folio, pushed into room reserved for it");
         }
-        Self::of(ra.mapping(), folios).ok_or_else(|| BchError::from(c::ENOMEM))
+        Self::of(ra.mapping(), folios).ok_or_else(|| BchError::from(err::ENOMEM_readahead_take))
     }
 
     /// The window extended by a new folio at its end, of up to @sectors: if
@@ -127,7 +127,7 @@ impl ReadaheadIter {
             return None;
         }
 
-        let enomem = || BchError::from(c::ENOMEM);
+        let enomem = || BchError::from(err::ENOMEM_readahead_extend);
         let gfp = mapping.readahead_gfp();
         t.allocate_dropping_locks_norelock(|| self.folios.reserve(1).map_err(|_| enomem())).ok()?;
         let mut folio = t.allocate_dropping_locks_norelock(|| mapping.alloc_folio(gfp, order).ok_or_else(enomem)).ok()?;

@@ -186,7 +186,7 @@ impl FileOps for Dir {
 
     /// generic_read_dir()'s: read(2) of a directory is EISDIR.
     fn read(&self, _file: &File<Self>, _buf: &mut UserBuf) -> Result<(), BchError> {
-        Err(BchError::from(c::EISDIR))
+        Err(c::Errcode::EISDIR_read_dir.into())
     }
 
     /// A 32-bit reader's positions are cookies, up to READDIR_32_EOF.

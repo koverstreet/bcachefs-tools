@@ -242,7 +242,7 @@ fn dio_write_pin<P: UserPage>(d: &mut Dio<P>, in_caller: bool) -> Result<(), Bch
              * bio_iov_iter_get_pages was only able to get <
              * blocksize worth of pages:
              */
-            return Err(c::EFAULT.into());
+            return Err(Errcode::EFAULT_dio_write_pin_short.into());
         }
         return Ok(());
     }

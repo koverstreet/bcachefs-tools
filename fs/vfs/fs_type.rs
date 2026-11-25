@@ -120,12 +120,12 @@ impl Bcachefs {
         }
         let Some(sb) = sb else {
             fc.errorfc(format_args!("filesystem {key} open but not mounted - by an offline fsck?"));
-            return Err(c::EBUSY.into());
+            return Err(Errcode::EBUSY_mount_open_not_mounted.into());
         };
 
         // Don't summarily change the RO/RW state
         if fc.rdonly() != sb.sb().rdonly() {
-            return Err(c::EBUSY.into());
+            return Err(Errcode::EBUSY_mount_rdonly_mismatch.into());
         }
         Ok(Some(sb.into_root()))
     }
@@ -413,7 +413,7 @@ impl FsType for Bcachefs {
             // an inconsistency - would have util-linux retry the mount
             // read-only, which is confusing
             if e.matches(c::EROFS) && e.raw() != c::EROFS as i32 {
-                c::EIO.into()
+                Errcode::EIO_mount_erofs_derived.into()
             } else {
                 e
             }
@@ -489,7 +489,7 @@ fn source_append(fc: &mut FsContext<Bcachefs>, s: &[u8]) -> Result<(), BchError>
     }
     new.write_bytes(s);
     if new.allocation_failure() {
-        return Err(c::ENOMEM.into());
+        return Err(Errcode::ENOMEM_mount_source_append.into());
     }
     Ok(fc.set_source(new.as_c_str())?)
 }

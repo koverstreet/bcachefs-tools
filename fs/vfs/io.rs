@@ -85,7 +85,7 @@ impl InodeInfo {
         }
 
         let Some(_write) = fs.writes.tryget() else {
-            return Err(c::EROFS.into());
+            return fs.throw(Errcode::erofs_no_writes_inode_flush);
         };
 
         trans_commit_do(fs, None, CommitFlags::empty(), |t| {
@@ -125,7 +125,7 @@ pub(super) fn fsync(inode: &InodeInfo, file: &File, start: c::loff_t, end: c::lo
     let ret = file.write_and_wait_range(start as u64, end as u64)
         .and_then(|()| inode.vfs().sync_metadata())
         .and_then(|()| inode.flush(&mut flushed_seq))
-        .map_err(|e| if e.matches(c::EROFS) { c::EIO.into() } else { e });
+        .map_err(|e| if e.matches(c::EROFS) { Errcode::EIO_fsync_erofs.into() } else { e });
 
     let wb_err = file.check_and_advance_wb_err();
     let ret = ret.and(wb_err);
@@ -197,7 +197,7 @@ impl InodeInfo {
                 }
 
                 mapping.get_folio(index, c::FGP_LOCK | c::FGP_CREAT, c::GFP_KERNEL)
-                    .map_err(|_| BchError::from(c::ENOMEM))?
+                    .map_err(|_| BchError::from(Errcode::ENOMEM_truncate_get_folio))?
             }
         };
 
@@ -213,7 +213,7 @@ impl InodeInfo {
         }
 
         if folio.create_private().is_none() {
-            return Err(c::ENOMEM.into());
+            return Err(Errcode::ENOMEM_truncate_folio_private.into());
         }
 
         if !folio.uptodate() {
@@ -451,7 +451,7 @@ impl InodeInfo {
 
         if insert {
             if MAX_FILE_SIZE - v.size() < len {
-                return Err(c::EFBIG.into());
+                return fs.throw(Errcode::EFBIG_finsert);
             }
 
             if offset >= v.size() {
@@ -630,7 +630,7 @@ pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64
     let (mode, offset, len) = (mode as u32, offset as u64, len as u64);
 
     let Some(_write) = fs.writes.tryget() else {
-        return Err(c::EROFS.into());
+        return fs.throw(Errcode::erofs_no_writes_fallocate);
     };
 
     let _i_rwsem = inode.vfs().lock();
@@ -663,7 +663,7 @@ fn seek_data(inode: &InodeInfo, file: &File, offset: u64) -> Result<u64, BchErro
 
     let isize = inode.vfs().size();
     if offset >= isize {
-        return Err(c::ENXIO.into());
+        return Err(Errcode::ENXIO_seek_data_past_eof.into());
     }
 
     let trans = crate::btree_trans!(inode.fs());
@@ -685,7 +685,7 @@ fn seek_data(inode: &InodeInfo, file: &File, offset: u64) -> Result<u64, BchErro
     }
 
     if next_data >= isize {
-        return Err(c::ENXIO.into());
+        return Err(Errcode::ENXIO_seek_data_none.into());
     }
 
     file.setpos(next_data, MAX_FILE_SIZE)
@@ -697,7 +697,7 @@ fn seek_hole(inode: &InodeInfo, file: &File, mut offset: u64) -> Result<u64, Bch
 
     let isize = inode.vfs().size();
     if offset >= isize {
-        return Err(c::ENXIO.into());
+        return Err(Errcode::ENXIO_seek_hole_past_eof.into());
     }
 
     let flags = BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM;
@@ -735,7 +735,7 @@ pub(super) fn llseek(inode: &InodeInfo, file: &File, offset: i64, whence: c_int)
         c::SEEK_SET | c::SEEK_CUR | c::SEEK_END => file.generic_llseek(offset, whence),
         c::SEEK_DATA => seek_data(inode, file, offset as u64),
         c::SEEK_HOLE => seek_hole(inode, file, offset as u64),
-        _            => Err(c::EINVAL.into()),
+        _            => Err(Errcode::EINVAL_llseek_whence.into()),
     }
 }
 

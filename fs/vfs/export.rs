@@ -72,7 +72,7 @@ impl Fs {
     fn nfs_get_inode(&self, fid: Fid) -> Result<InodeRef, BchError> {
         let inode = InodeInfo::get(self, c::subvol_inum { subvol: fid.subvol as u64, inum: fid.inum })?;
         if inode.vfs().generation() != fid.generation {
-            return Err(c::ESTALE.into());
+            return Err(Errcode::ESTALE_nfs_get_inode_generation.into());
         }
         Ok(inode)
     }
@@ -121,7 +121,7 @@ impl ExportOps for Fs {
                 }
             }
 
-            Err(c::ENOENT.into())
+            Err(Errcode::ENOENT_nfs_get_name.into())
         })
     }
 
