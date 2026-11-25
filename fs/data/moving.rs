@@ -452,8 +452,7 @@ impl<'a> Moving<'a> {
     }
 
     pub(crate) fn runq(&self) -> core::pin::Pin<&RunQueue> {
-        // SAFETY: the context's, pinned, and live while borrowed
-        unsafe { core::pin::Pin::new_unchecked(&*self.0.runq) }
+        self.0.runq.as_pin()
     }
 
     pub fn io_mark(&self) -> IoMark {

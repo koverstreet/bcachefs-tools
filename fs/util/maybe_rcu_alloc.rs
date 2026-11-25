@@ -89,6 +89,10 @@ impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
         Ok(Self { p: <T as RcuFreeing>::alloc::<A, E>(init, gfp)?, _p: PhantomData })
     }
 
+    pub fn as_pin(&self) -> Pin<&T> {
+        unsafe { Pin::new_unchecked(self.p.as_ref()) }
+    }
+
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
         unsafe { Pin::new_unchecked(self.p.as_mut()) }
     }
