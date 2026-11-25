@@ -129,6 +129,10 @@ impl OwnedNode<Write> {
         LockedNode::of_owned(self)
     }
 
+    pub(crate) fn held(&self) -> LockedNode<'_, BtreeNode> {
+        LockedNode::of_owned_held(self)
+    }
+
     pub(crate) fn set_id(&mut self, btree: Btree, level: usize) {
         self.c.level.set(level as u8);
         self.c.btree_id.set(btree.0 as u8);
@@ -158,10 +162,6 @@ impl OwnedNode<Write> {
 
     fn hold(&self) -> ManuallyDrop<SixHold<'_>> {
         ManuallyDrop::new(unsafe { SixHold::from_raw(&self.c.lock, SIX_LOCK_write) })
-    }
-
-    pub(crate) fn as_ptr(&self) -> NonNull<BtreeNode> {
-        self.b
     }
 
     /// Its locks released, no path's lock seq moved: for a node no path has.

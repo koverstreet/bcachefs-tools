@@ -342,7 +342,8 @@ impl<'t> InteriorUpdate<'t> {
             format = b_contents.format;
         }
 
-        let (node, contents) = (n.node(), n.contents_mut());
+        let mut v = n.locked();
+        let (node, contents) = (v.node(), v.contents_mut());
         // a 32 bit counter, which wraps
         contents.data_mut().set_seq(b_contents.data().seq().wrapping_add(1));
 
@@ -351,9 +352,9 @@ impl<'t> InteriorUpdate<'t> {
         contents.data_mut().format = format;
         contents.set_format(format);
 
-        btree_sort_into(fs, &mut n, b);
+        btree_sort_into(fs, &mut v, b);
 
-        n.reset_sib_u64s(n.contents());
+        v.reset_sib_u64s(v.contents());
         n
     }
 
@@ -361,17 +362,18 @@ impl<'t> InteriorUpdate<'t> {
     /// gives it to the path it's the root of.
     pub(crate) fn alloc_root(&self, level: usize) -> NewNode<'_> {
         let mut n = self.alloc_node(level);
+        let mut v = n.locked();
 
-        let (node, contents) = (n.node(), n.contents_mut());
+        let (node, contents) = (v.node(), v.contents_mut());
         set_range(node, contents, POS_MIN, SPOS_MAX);
-        let format = n.calc_format(n.contents());
+        let format = v.calc_format(v.contents());
 
-        let contents = n.contents_mut();
+        let contents = v.contents_mut();
         contents.data_mut().format = format;
         contents.set_format(format);
-        build_aux_trees(n.node(), n.contents_mut());
+        build_aux_trees(v.node(), v.contents_mut());
 
-        for sib in &n.contents().sib_u64s {
+        for sib in &v.contents().sib_u64s {
             sib.set(u16::MAX);
         }
         n
@@ -388,7 +390,7 @@ impl<'t> InteriorUpdate<'t> {
 
     /// @n, given to a path of its own: the update puts the path.
     pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: NewNode<'_>) -> TakenNode {
-        let pos = n.key().k().p;
+        let pos = n.held().key().k().p;
         let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.get().into()),
                                                      n.c.level.get().into(), pos, false, crate::ret_ip!());
         self.owned.borrow_mut().paths.push(idx);

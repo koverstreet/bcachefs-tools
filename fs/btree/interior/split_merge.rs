@@ -474,7 +474,8 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, srcs: &[Node<'_>],
     // a 32 bit counter, which wraps
     let seq = srcs.iter().map(|s| s.contents().data().seq()).max().unwrap_or(0).wrapping_add(1);
     let mut n = update.alloc_node(usize::from(srcs[0].c.level.get()));
-    let (node, contents) = (n.node(), n.contents_mut());
+    let mut v = n.locked();
+    let (node, contents) = (v.node(), v.contents_mut());
     assert!(contents.nsets == 1, "packing into a node with {} bsets", contents.nsets);
 
     super::reserve::set_range(node, contents, min_key, max_key);
@@ -492,7 +493,8 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, srcs: &[Node<'_>],
  * appropriate dst, partitioning by key.p vs dsts[0]'s max_key.
  */
 fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNode<'_>; 2]) {
-    let pivot = dsts[0].contents().data().max_key;
+    let pivot = dsts[0].held().contents().data().max_key;
+    let mut dsts = dsts.each_mut().map(|n| n.locked());
     let mut out = dsts.each_mut().map(|n| n.keys_mut());
     let mut at = out.each_ref().map(|keys| keys.contents.sets()[0].first_offset() as usize);
 
@@ -536,7 +538,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
         n.reset_sib_u64s(n.contents());
         n.keys_mut().verify_btree_nr_keys();
 
-        assert!(check_topology(t, n.held()).is_ok(), "a packed node's topology bad:\n{}", n.to_text(t.fs()));
+        assert!(check_topology(t, n.held()).is_ok(), "a packed node's topology bad:\n{}", n.held().to_text(t.fs()));
     }
 }
 
@@ -654,7 +656,8 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
     }
 
     for n in nodes.iter_mut().rev() {
-        build_aux_trees(n.node(), n.contents_mut());
+        let mut v = n.locked();
+        build_aux_trees(v.node(), v.contents_mut());
     }
 
     /*
@@ -1405,12 +1408,14 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
     let mut dsts: ArrayVec<NewNode<'_>, 2> = layouts.iter().map(|&l| alloc_dst(update, &nodes, l)).collect();
 
     if let [n] = &mut dsts[..] {
+        let mut v = n.locked();
         for &s in &nodes {
-            btree_sort_into(fs, n, s);
+            btree_sort_into(fs, &mut v, s);
         }
 
-        assert!(check_topology(update.t(), n.held()).is_ok(), "a merged node's topology bad:\n{}", n.to_text(fs));
-        n.reset_sib_u64s(n.contents());
+        assert!(check_topology(update.t(), v.held()).is_ok(), "a merged node's topology bad:\n{}",
+                v.held().to_text(fs));
+        v.reset_sib_u64s(v.contents());
     } else {
         let dsts: &mut [NewNode<'_>; 2] = dsts.as_mut_slice().try_into().expect("a merge into two nodes");
         pack_into_dsts(update.t(), &nodes, dsts);
@@ -1422,6 +1427,7 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
      * bch2_btree_node_format_fits()'s strict-less-than check.
      */
     for n in &dsts {
+        let n = n.held();
         let u64s = n.contents().data().keys.u64s();
         assert!(n.fits_u64s(u64s), "a merged node of {u64s} u64s past its buffer:\n{}", n.to_text(fs));
     }
@@ -1430,7 +1436,8 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
     drop(nodes);
 
     for n in &mut dsts {
-        build_aux_trees(n.node(), n.contents_mut());
+        let mut v = n.locked();
+        build_aux_trees(v.node(), v.contents_mut());
     }
 
     /*
@@ -1578,7 +1585,8 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
     ebug_assert!(ptr::eq(b.node(), node.as_ptr()), "rewriting a node its path doesn't hold");
 
     let mut n = update.alloc_replacement(b);
-    build_aux_trees(n.node(), n.contents_mut());
+    let mut v = n.locked();
+    build_aux_trees(v.node(), v.contents_mut());
 
     let has_parent = paths[iter.path].locked_btree_node(level + 1).is_some();
     if has_parent {

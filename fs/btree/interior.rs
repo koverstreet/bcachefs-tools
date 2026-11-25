@@ -20,7 +20,7 @@ use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeNodeRef, BtreeTrans, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
-use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, Write};
+use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
 use crate::data::keylist::Keylist;
 use crate::data_structures::dst_room::DstRoom;
@@ -561,15 +561,13 @@ impl Deref for InteriorUpdate<'_> {
 /// it's freed.
 pub(crate) struct NewNode<'u> {
     update: &'u BtreeUpdate,
-    view:   LockedNode<'u, BtreeNode, Write>,
     node:   Option<OwnedNode>,
     ob:     c::open_buckets,
 }
 
 impl<'u> NewNode<'u> {
     fn new(update: &'u BtreeUpdate, Reserved { node, ob }: Reserved) -> Self {
-        let view = unsafe { LockedNode::new_write(node.as_ptr().as_ref()) };
-        NewNode { update, view, node: Some(node), ob }
+        NewNode { update, node: Some(node), ob }
     }
 
     fn into_reserved(mut self) -> Reserved {
@@ -592,17 +590,17 @@ struct Taken {
     ob: c::open_buckets,
 }
 
-impl<'u> Deref for NewNode<'u> {
-    type Target = LockedNode<'u, BtreeNode, Write>;
+impl Deref for NewNode<'_> {
+    type Target = OwnedNode;
 
-    fn deref(&self) -> &Self::Target {
-        &self.view
+    fn deref(&self) -> &OwnedNode {
+        self.node.as_ref().expect("a new node, until it's dropped")
     }
 }
 
 impl DerefMut for NewNode<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.view
+    fn deref_mut(&mut self) -> &mut OwnedNode {
+        self.node.as_mut().expect("a new node, until it's dropped")
     }
 }
 
@@ -845,7 +843,7 @@ impl<'t> InteriorUpdate<'t> {
     /// gets.
     pub(crate) fn link(&self, n: &mut NewNode<'_>) {
         self.emit_new_node_key(n);
-        self.push_parent_key(n.key());
+        self.push_parent_key(n.held().key());
     }
 
     /// The pointer at @pos to a node at @level deleted from the parent, and
@@ -863,7 +861,8 @@ impl<'t> InteriorUpdate<'t> {
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
     fn insert_parent_keys(&self, paths: &Paths<'_>, path: PathIdx, n: &mut NewNode<'_>) -> Result<(), BchError> {
-        split_merge::split_insert_keys(self.t, &paths[path].pos, n, &mut self.owned.borrow_mut().parent_keys)
+        split_merge::split_insert_keys(self.t, &paths[path].pos, &mut n.locked(),
+                                       &mut self.owned.borrow_mut().parent_keys)
     }
 
     /// The parent keys that go in the node path @path holds at @level inserted

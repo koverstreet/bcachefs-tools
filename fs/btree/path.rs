@@ -1812,6 +1812,12 @@ impl<'p> LockedNode<'p, BtreeNode, Write> {
 }
 
 impl<'p> LockedNode<'p, BtreeNode> {
+    pub(crate) fn of_owned_held(n: &'p OwnedNode) -> Self {
+        LockedNode { node: n, _mode: PhantomData }
+    }
+}
+
+impl<'p> LockedNode<'p, BtreeNode> {
     pub fn key(&self) -> &'p BkeyI {
         self.node.key(self.contents())
     }

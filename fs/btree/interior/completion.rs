@@ -60,6 +60,7 @@ impl InteriorUpdate<'_> {
      */
     pub(super) fn emit_new_node_key(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
+        let mut n = n.locked();
         let bytes = size_of::<Head<c::btree_node>>() + n.contents().data().keys.u64s() * size_of::<u64>();
         let sectors = (bytes.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
