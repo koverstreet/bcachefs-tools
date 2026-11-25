@@ -44,7 +44,7 @@ apt install -y pkg-config libblkid-dev \
 ```
 
 The kernel module and DKMS build also require the kernel's headers, and Rust:
-rustc (>= 1.88), rust-src and bindgen. If the kernel was built with Rust and
+rustc (>= 1.89), rust-src and bindgen. If the kernel was built with Rust and
 your rustc matches the one it was built with, the module uses the kernel's own
 Rust support; otherwise it builds bcachefs's vendored copy, which is what needs
 rust-src. Installing the userspace dependencies does not by itself establish

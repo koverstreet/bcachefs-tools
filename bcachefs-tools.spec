@@ -16,7 +16,7 @@
 
 %global make_opts VERSION="%{version}" BUILD_VERBOSE=1 PREFIX=%{_prefix} ROOT_SBINDIR=%{_sbindir}
 
-%global MSRV 1.88
+%global MSRV 1.89
 %global MINIMAL_KERNEL_VERSION_FOR_TOOLS 6.11.3
 %global MINIMAL_KERNEL_VERSION_FOR_MODULE 6.16
 

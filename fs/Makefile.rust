@@ -15,7 +15,7 @@ bch-rust-available = $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)'	\
 	BINDGEN='$(BINDGEN)' CC='$(CC)' KERNEL_SRC='$(srctree)'		\
 	KERNEL_OBJ='$(objtree)' CONFIG_RUSTC_VERSION='$(CONFIG_RUSTC_VERSION)' \
 	RUST_LIB_SRC='$(RUST_LIB_SRC)'						\
-	RUSTC_MIN=1.88.0 $(CONFIG_SHELL) $(src)/scripts/rust-available.sh $(1))
+	RUSTC_MIN=1.89.0 $(CONFIG_SHELL) $(src)/scripts/rust-available.sh $(1))
 
 # Why the kernel's Rust can't be used, or empty.
 ifndef CONFIG_RUST

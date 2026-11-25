@@ -8,7 +8,7 @@ name = "bcachefs-tools"
 version = "1.39.7"
 authors = ["Yuxuan Shui <yshuiv7@gmail.com>", "Kayla Firestack <dev@kaylafire.me>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.89.0"
 
 [[bin]]
 name = "bcachefs"
@@ -39,7 +39,7 @@ crossterm = { version = "0.29", default-features = false, features = ["events"] 
 tiny_http = "0.12.0"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
 fuser = "0.17"
-rustyline = "17.0.2"
+rustyline = "18"
 
 [dependencies.env_logger]
 version = "0.10"

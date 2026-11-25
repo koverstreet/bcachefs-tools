@@ -132,10 +132,10 @@ if need_cache_build; then
         rm -rf /build
     "
 
-    # If distro Rust is too old (needs 1.88+), install via rustup
+    # If distro Rust is too old (needs 1.89+), install via rustup
     # and replace the distro cargo/rustc with symlinks to the rustup-managed versions.
     crun "
-        if ! rustc --version 2>/dev/null | grep -qE '1\\.(8[8-9]|9[0-9])'; then
+        if ! rustc --version 2>/dev/null | grep -qE '1\\.(89|9[0-9])'; then
             curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | \
                 sh -s -- --default-toolchain ${RUST_VERSION} --profile minimal -y
 
