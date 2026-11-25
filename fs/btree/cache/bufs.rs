@@ -244,16 +244,6 @@ impl NodeBufs {
     }
 }
 
-/// A struct btree, made by its init(), with @gfp. Freed by node_struct_free().
-fn node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<NonNull<BtreeNode>> {
-    let flags = if pcpu_read_locks {
-        c::SixLockInitFlags::pcpu
-    } else {
-        c::SixLockInitFlags::empty()
-    };
-    alloc_at::<_, Kmalloc, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()
-}
-
 /// A node of the cache's, borrowed for as long as the filesystem: the cache
 /// never frees one while it runs, only reuses it - so whoever finds one
 /// unlocked checks it's still the node it wants once it's locked.
@@ -265,36 +255,28 @@ pub(crate) unsafe fn cached_node<'f>(_fs: &'f Fs, b: *const BtreeNode) -> &'f Bt
     unsafe { &*b }
 }
 
-/// node_struct_alloc(), on bc->nodes, as every node the cache has is. Freed by
-/// node_mem_free().
+/// A struct btree, made by its init(), with @gfp, on bc->nodes: every btree
+/// node is the cache's. Freed by node_mem_free().
 pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags) -> Option<&BtreeNode> {
     let slot = {
         let _gfp = MemallocFlags::for_gfp(gfp);
         fs.btree.cache.nodes.get_slot().ok()?
     };
 
-    let b = node_struct_alloc(fs, pcpu_read_locks, gfp)?;
+    let flags = if pcpu_read_locks { c::SixLockInitFlags::pcpu } else { c::SixLockInitFlags::empty() };
+    let b = alloc_at::<_, Kmalloc, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()?;
     unsafe {
         (*b.as_ptr()).nodes_idx = slot.set(b.cast());
         Some(cached_node(fs, b.as_ptr()))
     }
 }
 
-/// Buffers for a new node, GFP_KERNEL.
-fn node_bufs_alloc(fs: &Fs) -> Option<NodeBufs> {
-    let mut bufs = NodeBufs::new(fs);
-    if bufs.alloc(fs, Flags::empty(), false).is_err() {
-        bufs.free();
-        return None;
-    }
-    Some(bufs)
-}
-
 /// A node for the cache, with its buffers, GFP_KERNEL. Freed by
 /// OwnedNode::free() then node_mem_free().
-pub(super) fn node_mem_alloc(fs: &Fs) -> Option<OwnedNode> {
-    let mut bufs = node_bufs_alloc(fs)?;
-    let Some(mut n) = OwnedNode::alloc(fs, false, Flags::empty()) else {
+pub(crate) fn node_mem_alloc(fs: &Fs) -> Option<OwnedNode> {
+    let mut bufs = NodeBufs::new(fs);
+    let n = bufs.alloc(fs, Flags::empty(), false).ok().and_then(|()| OwnedNode::alloc(fs, false, Flags::empty()));
+    let Some(mut n) = n else {
         bufs.free();
         return None;
     };
@@ -302,41 +284,17 @@ pub(super) fn node_mem_alloc(fs: &Fs) -> Option<OwnedNode> {
     Some(n)
 }
 
-/// A node with its buffers for node scan to read into: not the cache's, so
-/// not on bc->nodes, which walks the cache's nodes while they're live and
-/// can't find one freed under it. Freed by NodeBufs::free_accounted() then
-/// node_struct_free().
-pub fn node_scratch_alloc(fs: &Fs) -> Option<NonNull<BtreeNode>> {
-    let mut bufs = node_bufs_alloc(fs)?;
-    let Some(b) = node_struct_alloc(fs, false, Flags::empty()) else {
-        bufs.free();
-        return None;
-    };
-    unsafe { (*b.as_ptr()).contents.get_mut().bufs = bufs };
-    Some(b)
-}
-
-/// @b, a struct btree node_struct_alloc() made, freed: its buffers already
-/// are.
-///
-/// # Safety
-/// @b is ours alone, nothing uses it after, and it's on no list.
-pub unsafe fn node_struct_free(b: NonNull<BtreeNode>) {
-    unsafe {
-        six_lock_exit((&raw mut (*b.as_ptr()).c.lock).cast());
-        kfree(b.cast(), Layout::new::<BtreeNode>());
-    }
-}
-
 /// A node of the cache's freed, off bc->nodes: its buffers already are.
 ///
 /// # Safety
-/// As node_struct_free() - and nothing walks bc->nodes, which could still
-/// find it: the cache's are only freed at exit.
+/// @b is ours alone, nothing uses it after, and it's on no list - and nothing
+/// walks bc->nodes, which could still find it: the cache's are only freed at
+/// exit.
 pub unsafe fn node_mem_free(fs: &Fs, b: NonNull<BtreeNode>) {
     unsafe {
         fs.btree.cache.nodes.remove((*b.as_ptr()).nodes_idx);
-        node_struct_free(b);
+        six_lock_exit((&raw mut (*b.as_ptr()).c.lock).cast());
+        kfree(b.cast(), Layout::new::<BtreeNode>());
     }
 }
 

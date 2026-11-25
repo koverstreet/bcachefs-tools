@@ -2,14 +2,13 @@
 
 use core::cmp::{Ordering, Reverse};
 use core::mem::{offset_of, replace, size_of};
-use core::ptr::NonNull;
 
 use crate::init::passes::RecoveryPass;
 use crate::data_structures::array_vec::ArrayVec;
 
 use crate::btree::bkey::{BkeyV, BkeyVMut, POS_MIN, SPOS_MAX};
 use crate::init::error::BkeyValidate;
-use crate::btree::cache::{node_scratch_alloc, node_struct_free};
+use crate::btree::cache::{node_mem_alloc, OwnedNode};
 use crate::btree::journal_overlay;
 use crate::btree::node::{BtreeNode, NodeKey};
 use crate::btree::path::LockedNode;
@@ -134,35 +133,39 @@ fn dump_nodes(fs: &Fs, what: &str, nodes: &[FoundBtreeNode]) -> bool {
     true
 }
 
-struct NodeBuf {
-    b: NonNull<BtreeNode>,
+/// A node of the cache's to read into: put back when the scan's done.
+struct NodeBuf<'f> {
+    fs:   &'f Fs,
+    node: Option<OwnedNode>,
 }
 
-impl NodeBuf {
-    fn alloc(fs: &Fs) -> Option<Self> {
-        Some(NodeBuf { b: node_scratch_alloc(fs)? })
+impl<'f> NodeBuf<'f> {
+    fn alloc(fs: &'f Fs) -> Option<Self> {
+        Some(NodeBuf { fs, node: Some(node_mem_alloc(fs)?) })
     }
 
-    fn node(&mut self) -> &mut BtreeNode {
-        unsafe { self.b.as_mut() }
+    fn node(&mut self) -> &mut OwnedNode {
+        self.node.as_mut().expect("a scan's node, until it's put back")
     }
 
     fn bytes(&mut self, bytes: usize) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.node().contents.get_mut().bufs.data.cast::<u8>(), bytes) }
+        let data = self.node().locked().contents_mut().bufs.data;
+        unsafe { core::slice::from_raw_parts_mut(data.cast::<u8>(), bytes) }
     }
 }
 
-impl Drop for NodeBuf {
+impl Drop for NodeBuf<'_> {
     fn drop(&mut self) {
-        self.node().contents.get_mut().bufs.free_accounted();
-        unsafe { node_struct_free(self.b) }
+        if let Some(n) = self.node.take() {
+            n.to_freelist(self.fs);
+        }
     }
 }
 
 struct DevScan<'f> {
     fs:  &'f Fs,
     ca:  &'f DevIoRef<c::DevReadRefKind>,
-    buf: NodeBuf,
+    buf: NodeBuf<'f>,
     bio: BioBox<'static, Bio>,
 }
 
@@ -206,7 +209,7 @@ impl<'f> DevScan<'f> {
             return Ok(());
         }
 
-        let bn = self.buf.node().contents.get_mut().data();
+        let bn = self.buf.node().held().contents().data();
         if bn.magic.get() != fs.bset_magic() {
             return Ok(());
         }
@@ -222,7 +225,7 @@ impl<'f> DevScan<'f> {
             let _ = fs.encrypt(csum_type, nonce, &mut self.buf.bytes(keys)[flags..]);
         }
 
-        let bn = self.buf.node().contents.get_mut().data();
+        let bn = self.buf.node().held().contents().data();
         let id = bn.btree_id();
         if btree_id_can_reconstruct(id.0) ||
            u32::from(bn.level()) >= c::BTREE_MAX_DEPTH ||
@@ -253,9 +256,7 @@ impl<'f> DevScan<'f> {
         }
 
         let b = self.buf.node();
-        let mut k = b.key_peek();
-        k.set_key(&*n.to_key());
-        b.contents.published_writer_mut().store(&k);
+        b.locked().set_key(&*n.to_key());
 
         let mut err = Printbuf::new();
         if read_done(fs, ca, &mut unsafe { ReadInFlightNode::new(b) }, None, &mut err).is_err() {
@@ -263,7 +264,7 @@ impl<'f> DevScan<'f> {
         }
 
         /* read_done will swap out b->data for another buffer */
-        let bn = b.contents.get_mut().data();
+        let bn = b.held().contents().data();
         /*
          * Grab journal_seq here because we want the max journal_seq of
          * any bset; read_done sorts down to a single set and picks the

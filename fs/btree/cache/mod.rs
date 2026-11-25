@@ -92,11 +92,12 @@ mod pins;
 mod reclaim;
 mod state;
 
-use bufs::{cache_node_struct_alloc, node_mem_alloc};
+use bufs::cache_node_struct_alloc;
+pub(crate) use bufs::node_mem_alloc;
 pub(crate) use bufs::cached_node;
 pub(crate) use alloc::OwnedNode;
 pub use bufs::NodeBufs;
-pub use bufs::{bounce_bufs, node_mem_free, node_scratch_alloc, node_struct_free, Bounce, BounceBufs};
+pub use bufs::{bounce_bufs, node_mem_free, Bounce, BounceBufs};
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 
