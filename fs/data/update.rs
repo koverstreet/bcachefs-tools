@@ -35,7 +35,7 @@ use crate::data::moving::Moving;
 use crate::data::scrub_journal::{self, Bad, BadRef};
 use crate::data::nocow_locking::{self, NocowKind};
 use crate::data::ptrs::{brand, BkeyVPtrs, Ptrs, PtrsMut};
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::{init_at, Flags};
 use crate::util::backref::BackRef;
@@ -462,10 +462,10 @@ impl c::data_update {
         unsafe { core::ptr::drop_in_place(&raw mut self.pages) };
     }
 
-    fn trace(&self, ret: c_int) {
+    fn trace(&self, ret: Result<(), BchError>) {
         let fs = self.fs();
         let size = u64::from(self.key().k.size);
-        match ret_to_result_void(ret) {
+        match ret {
             Ok(()) => fs.event_add_trace(events::data_update, size, |out| self.to_text(out)),
             Err(e) if e.matches(Errcode::data_update_done) =>
                 fs.event_add_trace(events::data_update_no_io, size, |out| {
@@ -580,7 +580,7 @@ impl c::data_update {
 
         if let Err(e) = &ret {
             if !is_restart(e) {
-                self.trace(ret_to_c(Err::<(), _>(*e)));
+                self.trace(Err(*e));
             }
             self.op.res.put();
         }
@@ -792,10 +792,10 @@ impl c::data_update {
 
     /// The pointers ptrs_io_error names, that failed to read, killed - their
     /// durability made up by the write. False if that leaves nothing to
-    /// write: the index update done without one, its result in op.error.
+    /// write: the index update done without one.
     #[cold]
     #[inline(never)]
-    fn ptrs_io_error_kill(&mut self) -> bool {
+    fn ptrs_io_error_kill(&mut self) -> Result<bool, BchError> {
         let fs = self.fs();
         let trans = crate::btree_trans!(fs);
         let k = BkeySC::from(self.index.k.as_ref());
@@ -816,26 +816,25 @@ impl c::data_update {
         }
 
         if self.op.bits.nr_replicas() == 0 {
-            self.op.error = ret_to_c(crate::data::update_index::index_update_nowrite(&trans, self)) as i16;
-            return false;
+            return crate::data::update_index::index_update_nowrite(&trans, self).map(|()| false);
         }
-        true
+        Ok(true)
     }
 
     /// Takes @read into the update - the pointers that failed, the extent if
     /// it was poisoned - and says whether there's a write for write() to
     /// issue, of what it read, by its replica's crc. There isn't for a failed
     /// read, a scrub with nothing to repair, or IO errors that leave nothing
-    /// to write: then op.error is the update's result. The read's clone of the
-    /// pages' bio ends here: the write has them after, by &mut. A journal
-    /// scrub's update puts what it finds bad to @found.
-    pub fn read_done(&mut self, read: ReadDone, found: Option<&BadRef>) -> bool {
+    /// to write: then what's returned is the update's result. The read's clone
+    /// of the pages' bio ends here: the write has them after, by &mut. A
+    /// journal scrub's update puts what it finds bad to @found.
+    pub fn read_done(&mut self, read: ReadDone, found: Option<&BadRef>) -> Result<bool, BchError> {
         let write = self.read_result(read, found);
         self.rbio.bio.get_mut().end_clone();
         write
     }
 
-    fn read_result(&mut self, read: ReadDone, found: Option<&BadRef>) -> bool {
+    fn read_result(&mut self, read: ReadDone, found: Option<&BadRef>) -> Result<bool, BchError> {
         let fs = self.fs();
         let ReadDone { mut ret, pick, ptrs_io_error, poisoned } = read;
         let mut crc = pick.map(|p| p.crc);
@@ -866,10 +865,7 @@ impl c::data_update {
             }
         }
 
-        if let Err(e) = ret {
-            self.op.error = ret_to_c(Err(e)) as i16;
-            return false;
-        }
+        ret?;
         let crc = crc.expect("a data update's read that succeeded, of no replica");
 
         if type_ == Type::scrub_no_repair {
@@ -877,28 +873,28 @@ impl c::data_update {
                 put_found(found, scrub_journal::queue(fs, self.index.btree_id, 0, self.key(),
                                                       self.index.opts.ptrs_io_error.into(), 0));
             }
-            return false;
+            return Ok(false);
         }
 
         if type_ == Type::scrub && self.index.opts.ptrs_io_error == 0 {
-            return false;
+            return Ok(false);
         }
 
-        if unlikely(self.index.opts.ptrs_io_error != 0) && !self.ptrs_io_error_kill() {
-            return false;
+        if unlikely(self.index.opts.ptrs_io_error != 0) && !self.ptrs_io_error_kill()? {
+            return Ok(false);
         }
 
         assert!(self.pages.nr_vecs() != 0, "a data update's write without its pages");
 
         self.op.crc = crc;
         self.pages.shrink(crc.compressed_size << 9);
-        true
+        Ok(true)
     }
 
     /// Gives back what init() took: @held, the reservation, its place in its
     /// moving context's counts - whose waiters are woken after the nocow locks
     /// go - and the bios' memory.
-    pub(crate) fn exit(&mut self, held: Held, ret: c_int) {
+    pub(crate) fn exit(&mut self, held: Held, ret: Result<(), BchError>) {
         self.trace(ret);
         drop(held);
         self.op.res.put();

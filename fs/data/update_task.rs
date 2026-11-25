@@ -37,7 +37,7 @@ use crate::data::read::{Rbio, ReadDone};
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::Held;
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
-use crate::errcode::BchError;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::gather::Gather;
 use crate::util::task::{waiter, Resume, Spawn};
@@ -266,18 +266,22 @@ impl Body {
     }
 
     /// The write of what @read read, if read_done() says there is one,
-    /// resumed @resume once it's done. A journal scrub's update puts what it
-    /// finds bad to @found.
-    pub async fn write(&mut self, read: ReadDone, found: Option<&BadRef>, resume: Resume<'_>) {
-        if self.read_done(read, found) {
+    /// resumed @resume once it's done: the update's result. A journal scrub's
+    /// update puts what it finds bad to @found.
+    pub async fn write(&mut self, read: ReadDone, found: Option<&BadRef>, resume: Resume<'_>)
+        -> Result<(), BchError>
+    {
+        if self.read_done(read, found)? {
             let u = &mut **self;
             use crate::data::write::{write, WriteBio, WriteFor};
-            write(&mut u.op, WriteBio::Update(&mut u.pages), WriteFor::Update(&u.index), resume).await
+            write(&mut u.op, WriteBio::Update(&mut u.pages), WriteFor::Update(&u.index), resume).await;
+            ret_to_result_void(c_int::from(u.op.error))?;
         }
+        Ok(())
     }
 
     /// Takes the update off its async object list, and exit()s it.
-    pub fn exit(mut self, ret: c_int) {
+    pub fn exit(mut self, ret: Result<(), BchError>) {
         // SAFETY: only we touch these - the walk reads the list, not the slot
         let held = unsafe {
             let up = self.up.as_ptr();

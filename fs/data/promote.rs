@@ -34,7 +34,6 @@ use crate::os::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
 use crate::util::task::{Resume, Spawn};
 use crate::os::workqueue::Queue;
-use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::args_stored_once;
 use crate::format::{Btree, BkeyType};
@@ -93,17 +92,17 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     u.read_done.store(true, Relaxed);
     if read.ret.is_err() {
         drop(listed);
-        return u.exit(-(c::EIO as c_int));
+        return u.exit(Err(BchError::from(c::EIO)));
     }
     {
         let k = BkeySC::from(u.index.k.as_ref());
         fs.event_add_trace(events::data_read_promote, k.k.size.into(), |out| prt!(out, "{}", k.to_text(fs)));
     }
 
-    u.write(read, None, Resume::queue(fs.promote_wq())).await;
+    let _ = u.write(read, None, Resume::queue(fs.promote_wq())).await;
     fs.times.get(c::TimeStat::data_promote as usize).update(start_time);
     drop(listed);
-    u.exit(0);
+    u.exit(Ok(()));
     drop(in_flight);
 }
 

@@ -32,7 +32,6 @@ use crate::data::update_task::{self, Body, Update};
 use crate::util::refcount::RefGuard;
 use crate::util::task::{requeue, Resume, Spawn};
 use crate::data::read::{read_update, ReadDone};
-use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::args_stored_once;
 
@@ -92,7 +91,7 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // error, which a retry may get past, and whose device needn't change.
     let unreadable = u.index.opts.type_ == c::DataUpdateType::reconcile &&
         read.ret.is_err_and(|e| e.matches(Errcode::no_device_to_read_from));
-    u.write(read, found.as_ref(), runq).await;
+    let ret = u.write(read, found.as_ref(), runq).await;
     drop(write_io);
 
     if unreadable {
@@ -103,14 +102,13 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // needs erasure coding, so mark it pending for reconcile to retry. Not for
     // the transient failures: nothing retries the pending list on its own, so
     // parking work a retry would have done abandons it
-    let err = c_int::from(u.op.error);
-    if let Err(e) = crate::errcode::ret_to_result_void(err) {
+    if let Err(e) = ret {
         if e.matches(Errcode::ec_alloc_failed) &&
            !e.matches(Errcode::ec_alloc_failed_transient) {
             crate::data::update_index::ec_alloc_failed(&mut u);
         }
     }
-    u.exit(err);
+    u.exit(ret);
     drop(bucket);
 }
 
