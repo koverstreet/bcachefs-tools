@@ -863,7 +863,7 @@ pub fn remap_range(
         MetadataVersion::reflink_p_may_update_opts).is_ok();
 
     let Some(_write_ref) = fs.writes.tryget() else {
-        return fs.throw(Errcode::erofs_no_writes);
+        return fs.throw(Errcode::erofs_no_writes_remap_range);
     };
 
     fs.check_set_feature(SbFeature::reflink);

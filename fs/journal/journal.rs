@@ -1451,7 +1451,7 @@ impl c::journal {
         let fs = self.fs();
 
         let Some(_write) = fs.writes.tryget() else {
-            return fs.throw(Errcode::erofs_no_writes);
+            return fs.throw(Errcode::erofs_no_writes_journal_meta);
         };
 
         self.__meta()

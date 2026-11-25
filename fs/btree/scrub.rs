@@ -239,7 +239,7 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
 
     let fs = m.trans().fs();
     // the task's filesystem: going read-only waits for it
-    let write = fs.writes.tryget().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes))?;
+    let write = fs.writes.tryget().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes_btree_node_scrub))?;
     let key = BtreeKeyBuf::new(btree, level, k);
     let io = m.io_start(false, fs.btree_sectors());
 

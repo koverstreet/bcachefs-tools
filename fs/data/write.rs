@@ -1480,11 +1480,11 @@ pub async fn write(op: &mut Op, mut wbio: WriteBio<'_>, of: WriteFor<'_>, at: Re
         }
 
         if fs.opts().nochanges.get() != 0 {
-            return Err(fs.err(Errcode::erofs_no_writes));
+            return Err(fs.err(Errcode::erofs_no_writes_data_write_nochanges));
         }
 
         if !op.has(w::update) {
-            op.write_ref = Some(fs.writes.tryget().ok_or_else(|| fs.err(Errcode::erofs_no_writes))?);
+            op.write_ref = Some(fs.writes.tryget().ok_or_else(|| fs.err(Errcode::erofs_no_writes_data_write))?);
         }
         Ok(())
     })();

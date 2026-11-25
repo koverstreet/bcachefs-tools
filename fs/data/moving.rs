@@ -372,7 +372,7 @@ impl<'a> Moving<'a> {
             return fs.throw(Errcode::kthread_cancelled);
         }
         if fs.flags.get(c::FsFlag::going_ro) {
-            return fs.throw(Errcode::erofs_no_writes);
+            return fs.throw(Errcode::erofs_no_writes_moving_ratelimit);
         }
         if Kthread::freezing() {
             self.trans().unlock_long();

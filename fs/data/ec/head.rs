@@ -227,7 +227,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
 
     let mut heads = fs.ec.stripe_heads.lock_trans(t)?;
     if fs.flags.get(c::FsFlag::going_ro) {
-        return fs.throw(Errcode::erofs_no_writes);
+        return fs.throw(Errcode::erofs_no_writes_stripe_head_get);
     }
 
     let found = heads.iter()
@@ -245,7 +245,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
             // waited: it sets going_ro before it starts, so anything we
             // started now would be missed
             if fs.flags.get(c::FsFlag::going_ro) {
-                return fs.throw(Errcode::erofs_no_writes);
+                return fs.throw(Errcode::erofs_no_writes_stripe_head_get_waited);
             }
             (h, g)
         }
@@ -316,7 +316,7 @@ pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&Dev>) {
     for h in heads.iter() {
         let mut g = h.lock.lock();
         if head_stripe(&g).is_some_and(|s| stripe_on_dev(&s.lock(), ca)) {
-            stripe_head_detach(fs, &mut g, Some(BchError::from(Errcode::erofs_no_writes)));
+            stripe_head_detach(fs, &mut g, Some(BchError::from(Errcode::erofs_no_writes_stripe_heads_stop)));
         }
     }
 }

@@ -863,6 +863,16 @@ xmacro! {
         (EIO, EIO_handle_fs_get_devices, 835),
         (ENOENT, ENOENT_handle_no_member_devices, 836),
         (EINVAL, EINVAL_fs_sysfs_path_utf8, 837),
+        (erofs_no_writes, erofs_no_writes_btree_node_scrub, 838),
+        (erofs_no_writes, erofs_no_writes_wb_tryflush, 839),
+        (erofs_no_writes, erofs_no_writes_stripe_head_get, 840),
+        (erofs_no_writes, erofs_no_writes_stripe_head_get_waited, 841),
+        (erofs_no_writes, erofs_no_writes_stripe_heads_stop, 842),
+        (erofs_no_writes, erofs_no_writes_moving_ratelimit, 843),
+        (erofs_no_writes, erofs_no_writes_remap_range, 844),
+        (erofs_no_writes, erofs_no_writes_data_write_nochanges, 845),
+        (erofs_no_writes, erofs_no_writes_data_write, 846),
+        (erofs_no_writes, erofs_no_writes_journal_meta, 847),
     }
 }
 

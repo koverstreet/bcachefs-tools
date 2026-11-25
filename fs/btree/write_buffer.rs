@@ -460,7 +460,7 @@ impl BtreeTrans<'_> {
         }
 
         let Some(_write) = fs.writes.tryget() else {
-            return fs.throw(Errcode::erofs_no_writes);
+            return fs.throw(Errcode::erofs_no_writes_wb_tryflush);
         };
 
         self.write_buffer_flush_nocheck_rw()
