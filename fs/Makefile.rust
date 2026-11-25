@@ -412,7 +412,7 @@ rustflags-y += $(if $(filter -Cdebuginfo=1 -Cdebuginfo=2,$(KBUILD_RUSTFLAGS)),-C
 # crate's dependents could call - core's and the vendored crates' included:
 # unless it's collected here, it's all in the module, with what it references
 # (a crate's float impls, say: soft-float intrinsics the kernel doesn't have).
-# scripts/rust-gc-link.sh has the roots and what's kept.
+# scripts/rust_gc_link.rs has the roots and what's kept.
 #
 # Its inputs aren't bcachefs.o's members to kbuild, only rust.o is: they're
 # made members - of the module, or built in, as bcachefs.o is - as
@@ -435,21 +435,18 @@ OBJECT_FILES_NON_STANDARD_mod.o := y
 $(obj)/rust.o: private objtool-args += --link
 
 quiet_cmd_bch_rust_gc = LD $(quiet_modtag)  $@
-      cmd_bch_rust_gc = LD='$(LD) $(ld_flags)' NM='$(NM)' OBJCOPY='$(OBJCOPY)' \
-	READELF='$(READELF)' KSYM_NAMES='$(obj)/ksym_names' \
-	$(CONFIG_SHELL) $(src)/scripts/rust-gc-link.sh \
-	$@ $(obj)/rust $(bch-rust-gc-objs) $(cmd_objtool)
+      cmd_bch_rust_gc = LD='$(LD) $(ld_flags)' NM='$(NM)' OBJCOPY='$(OBJCOPY)' READELF='$(READELF)' \
+	$(obj)/rust_gc_link $@ $(obj)/rust $(bch-rust-gc-objs) $(cmd_objtool)
 
 define rule_bch_rust_gc
 	$(call cmd_and_savecmd,bch_rust_gc)
 	$(call cmd,gen_objtooldep)
 endef
 
-$(obj)/rust.o: $(bch-rust-gc-objs) $(src)/scripts/rust-gc-link.sh $(obj)/ksym_names FORCE
+$(obj)/rust.o: $(bch-rust-gc-objs) $(obj)/rust_gc_link FORCE
 	$(call if_changed_rule,bch_rust_gc)
 
-# rust.o's symbols named as kallsyms and objtool can take them: scripts/ksym_names.rs.
-$(obj)/ksym_names: $(src)/scripts/ksym_names.rs FORCE
+$(obj)/rust_gc_link: $(src)/scripts/rust_gc_link.rs FORCE
 	$(call if_changed,bch_codegen_host)
 
-targets += $(bch-rust-gc-in) ksym_names
+targets += $(bch-rust-gc-in) rust_gc_link
