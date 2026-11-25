@@ -46,7 +46,7 @@ crate::has_bio!(Io, wbio, owns Holds<Writeback>);
 
 type Pool = &'static Mempool<Kmalloc>;
 /// An io, being filled: its task not started.
-type IoSlot = TaskSlot<'static, Io, fn(Pin<&'static mut Io>) -> WritepageFut<'static>, Pool, Exclusive>;
+type IoSlot = TaskSlot<'static, Io, WritepageFut<'static>, Pool, Exclusive>;
 
 static WRITEPAGES: Mempool<Kmalloc> = ::pin_init::zeroed();
 static WRITEPAGE_BVECS: BvecMempool = ::pin_init::zeroed();

@@ -767,12 +767,11 @@ where
     }
 }
 
-impl<'q, T, M, A> TaskSlot<'q, T, M, A, Exclusive>
+impl<'q, T, F, A> TaskSlot<'q, T, F, A, Exclusive>
 where
     T: HasBio + Send + 'q,
     A: Alloc + Copy,
-    M: FnOnce<(Pin<&'q mut T>,)>,
-    <M as FnOnce<(Pin<&'q mut T>,)>>::Output: Future + Send,
+    F: Future + Send,
 {
     /// An Exclusive task's TaskSlot from @alloc, its home a T made around its
     /// bio, as BioBox::new_in()'s is - which may borrow for 'q, as long as the

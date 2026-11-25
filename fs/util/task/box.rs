@@ -38,11 +38,6 @@ use pin_init::PinInit;
 /// the box keeps it.
 type FutureOf<M, H> = <M as AsyncFnOnce<(&'static H,)>>::CallOnceFuture;
 
-/// An Exclusive task's future: what @M returns, given the home as its own for
-/// 'q - a type with a name, if M calls an #[in_place] fn, so a pool can be
-/// sized for it.
-type FutureOfMut<'q, M, H> = <M as FnOnce<(Pin<&'q mut H>,)>>::Output;
-
 /// A TaskSlot whose task shares its home: the future has &H, and so may the
 /// box's owner, who keeps the box while the task runs.
 pub struct Shared;
@@ -79,10 +74,11 @@ impl<H, F: Future, A: Alloc + Copy> WithTask<'_, H, F, A> {
 
 /// A TaskBox's memory, its home made and its task not yet: allocated apart
 /// from making the future, a failed allocation consumes none of what the
-/// future would. @K is how the task has its home, Shared or Exclusive. Not
-/// bounded by @M's AsyncFnOnce: a bound naming its future type would be what
-/// rustc infers the closure's signature from, and that's for one lifetime,
-/// not every one.
+/// future would. @K is how the task has its home, Shared or Exclusive. @M is
+/// a Shared slot's async closure, which makes the future from &H for every
+/// lifetime - not bounded by its AsyncFnOnce: a bound naming its future type
+/// would be what rustc infers the closure's signature from, and that's for
+/// one lifetime, not every one - or an Exclusive slot's future itself.
 pub struct TaskSlot<'q, H, M, A: Alloc + Copy = Kmalloc, K = Shared> {
     home: NonNull<H>,
     /// The home dropped, and the memory freed
@@ -139,19 +135,22 @@ where
     }
 }
 
-impl<'q, H, M, A: Alloc + Copy> TaskSlot<'q, H, M, A, Exclusive>
+/// An Exclusive slot is of the future its task will be, @F - made by a closure
+/// handed the home as its own for 'q, at the start: so a slot has a type with
+/// a name, if F is an #[in_place] fn's, before what makes its future exists -
+/// and a pool can be sized for it.
+impl<'q, H, F, A: Alloc + Copy> TaskSlot<'q, H, F, A, Exclusive>
 where
     H: Send + 'q,
-    M: FnOnce<(Pin<&'q mut H>,)>,
-    FutureOfMut<'q, M, H>: Future + Send,
+    F: Future + Send,
 {
     /// An Exclusive task's TaskSlot, from @alloc.
     pub fn exclusive_in<E>(alloc: A, home: impl PinInit<H, E>) -> Result<Self, BchError>
     where
         BchError: From<E>,
     {
-        let home = unsafe { alloc_mem::<H, FutureOfMut<'q, M, H>, A, E>(alloc, home)? };
-        Ok(Self { home, free: free_slot::<H, FutureOfMut<'q, M, H>, A>, _p: PhantomData })
+        let home = unsafe { alloc_mem::<H, F, A, E>(alloc, home)? };
+        Ok(Self { home, free: free_slot::<H, F, A>, _p: PhantomData })
     }
 
     /// The task of the future @make makes from the home, started @at: the
@@ -163,9 +162,9 @@ where
     /// @at's queue, and what the home and the future borrow, outlive the
     /// task; the home, handed @make for 'q, is borrowed by nothing but the
     /// future it makes.
-    pub unsafe fn start_unchecked(self, at: Spawn<'_, '_>, list: &TaskList, make: M)
+    pub unsafe fn start_unchecked(self, at: Spawn<'_, '_>, list: &TaskList, make: impl FnOnce(Pin<&'q mut H>) -> F)
     where
-        FutureOfMut<'q, M, H>: Future<Output = ()>,
+        F: Future<Output = ()>,
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
@@ -181,22 +180,22 @@ where
     /// the home - so they may borrow for 'q, @s's, and the home's lent for
     /// it, which what's returned, 'static, can't hold. Its memory's given
     /// back a grace period on, to @A, which outlives that.
-    pub fn start_in<T, Wt, W>(self, s: &Scope<'q, T, Wt, W>, at: Spawn<'q, '_>, list: &'q TaskList, make: M)
+    pub fn start_in<T, Wt, W>(self, s: &Scope<'q, T, Wt, W>, at: Spawn<'q, '_>, list: &'q TaskList,
+                              make: impl FnOnce(Pin<&'q mut H>) -> F + 'q)
     where
         T: Fold<Item: 'static>,
         Wt: Waiter,
         W: Width,
         H: DropAtomic + DropAnytime,
         A: 'static,
-        M: 'q,
-        FutureOfMut<'q, M, H>: Future<Output = T::Item> + 'q,
+        F: Future<Output = T::Item> + 'q,
     {
         let home = ManuallyDrop::new(self).home;
         unsafe {
             let task = init_task::<H, _, A>(home, at, list, move || make(Pin::new_unchecked(&mut *home.as_ptr())),
                                             None, scoped_done::<H, _, A, T, Wt, W>)
                 .expect("a task: only a thread's fails to start");
-            let w = WithTask::<H, FutureOfMut<'q, M, H>, A>::of_home(home).as_ptr();
+            let w = WithTask::<H, F, A>::of_home(home).as_ptr();
             (&raw mut (*w).scope).write(s.get().into_raw().cast());
             task.start()
         }
