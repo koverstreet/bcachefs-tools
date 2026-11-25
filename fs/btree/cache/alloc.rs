@@ -94,12 +94,9 @@ impl Deref for OwnedNode<Write> {
 
 impl OwnedNode<Write> {
     fn new(b: &BtreeNode, held: SixHold<'_>) -> Self {
-        assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &b.c.lock),
-                "an owned node without its write lock");
         assert!(!BtreeNodeList::linked(b), "an owned node on a list");
         assert!(b.hash_val() == 0, "an owned node hashed");
-        held.into_raw();
-        OwnedNode { b: NonNull::from(b), _mode: PhantomData }
+        Self::from_path(b, held)
     }
 
     /// A new struct of the cache's, with @gfp: no one else has it to hold its
@@ -117,6 +114,15 @@ impl OwnedNode<Write> {
     pub(super) fn take(fs: &Fs, lists: &mut BtreeCacheGuard<'_>, b: &BtreeNode, held: SixHold<'_>) -> Self {
         let _ = fs.btree_node_transition_state_locked(lists, b, State::NONE);
         Self::new(b, held)
+    }
+
+    /// @b, an owner's that a path held since, back from it by @held - its
+    /// hold, write: in the cache still, if hash() put it there.
+    pub(crate) fn from_path(b: &BtreeNode, held: SixHold<'_>) -> Self {
+        assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &b.c.lock),
+                "an owned node without its write lock");
+        held.into_raw();
+        OwnedNode { b: NonNull::from(b), _mode: PhantomData }
     }
 
     pub(crate) fn locked(&mut self) -> LockedNode<'_, BtreeNode, Write> {
@@ -150,22 +156,15 @@ impl OwnedNode<Write> {
         }
     }
 
-    pub(crate) fn hold(&self) -> ManuallyDrop<SixHold<'_>> {
+    fn hold(&self) -> ManuallyDrop<SixHold<'_>> {
         ManuallyDrop::new(unsafe { SixHold::from_raw(&self.c.lock, SIX_LOCK_write) })
-    }
-
-    /// A hold of its own, for a path the owner puts the node in: the write
-    /// lock and the intent under it, recursed.
-    pub(crate) fn path_hold(&self) -> SixHold<'_> {
-        self.hold().increment(SIX_LOCK_write)
     }
 
     pub(crate) fn as_ptr(&self) -> NonNull<BtreeNode> {
         self.b
     }
 
-    /// Its locks released, no path's lock seq moved: for a node no path holds
-    /// - one that's in paths is released by node_unlock_owned().
+    /// Its locks released, no path's lock seq moved: for a node no path has.
     pub(crate) fn unlock(self) {
         let this = ManuallyDrop::new(self);
         drop(ManuallyDrop::into_inner(this.hold()));

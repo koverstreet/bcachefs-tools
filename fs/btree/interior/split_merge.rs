@@ -38,7 +38,7 @@ use crate::util::log::LogMsg;
 use crate::os::sched;
 use crate::util::vstructs::Head;
 
-use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts};
+use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts, TakenNode};
 
 /// A btree node held locked: by a path, or new from the update's reserve.
 type Node<'n> = LockedNode<'n, BtreeNode>;
@@ -554,15 +554,20 @@ fn btree_node_op_log_one(out: &mut Printbuf, fs: &Fs, b: Node<'_>) {
     out.indent_sub(2);
 }
 
-fn btree_node_op_log(out: &mut Printbuf, fs: &Fs, srcs: &[Node<'_>], dsts: &[NewNode<'_>]) {
+fn btree_node_op_log(out: &mut Printbuf, fs: &Fs, srcs: &[Node<'_>], dsts: &[Node<'_>]) {
     for (i, s) in srcs.iter().enumerate() {
         prt!(out, "src {i}: ");
         btree_node_op_log_one(out, fs, *s);
     }
     for (i, d) in dsts.iter().enumerate() {
         prt!(out, "dst {i}: ");
-        btree_node_op_log_one(out, fs, d.held());
+        btree_node_op_log_one(out, fs, *d);
     }
+}
+
+/// The new nodes @new, as the paths they were given to hold them.
+fn taken_nodes<'p>(paths: &'p Paths<'_>, new: &[TakenNode]) -> ArrayVec<Node<'p>, 2> {
+    new.iter().map(|n| paths[n.path].locked_btree_node(n.level).expect("a new node, held by its path")).collect()
 }
 
 /// @b, @path's at its level, split in two - or compacted, if that leaves room
@@ -652,8 +657,6 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         build_aux_trees(n.node(), n.contents_mut());
     }
 
-    let new_paths: ArrayVec<PathIdx, 2> = nodes.iter().map(|n| update.take_path(paths, n)).collect();
-
     /*
      * Note that on recursive we're inserting parent_keys, so we
      * can't start adding new keys to parent_keys before emptying it
@@ -663,7 +666,12 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         for n in &mut nodes {
             update.link(n);
         }
+    } else {
+        /* Root filled up but didn't need to be split */
+        update.set_root(paths, path, &mut nodes[0]);
     }
+
+    let new_nodes: ArrayVec<TakenNode, 2> = nodes.into_iter().map(|n| update.take_path(paths, n)).collect();
 
     /* New nodes all written, now make them visible: */
 
@@ -673,26 +681,26 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         None
     } else if split {
         /* Depth increases, make a new root */
-        let mut n3 = update.alloc_root(paths, new_paths[1], level + 1);
+        let mut n3 = update.alloc_root(level + 1);
         update.insert_parent_keys(paths, path, &mut n3)?;
         update.set_root(paths, path, &mut n3);
-        Some(n3)
+        Some(update.install_root(paths, new_nodes[1].path, n3))
     } else {
-        /* Root filled up but didn't need to be split */
-        update.set_root(paths, path, &mut nodes[0]);
         None
     };
 
-    let b = paths[path].locked_btree_node(level).expect("a node to split, held by its path");
-    let log = |out: &mut Printbuf| btree_node_op_log(out, fs, &[b], &nodes);
-    if nodes.len() == 2 {
+    let log = |out: &mut Printbuf| {
+        let b = paths[path].locked_btree_node(level).expect("a node to split, held by its path");
+        btree_node_op_log(out, fs, &[b], &taken_nodes(paths, &new_nodes))
+    };
+    if new_nodes.len() == 2 {
         fs.event_inc_trace(events::btree_node_split, log);
     } else {
         fs.event_inc_trace(events::btree_node_compact, log);
     }
 
-    let mut new: ArrayVec<_, 3> = n3.into_iter().chain(nodes.into_iter().rev()).collect();
-    update.replace(paths, level, &[path], &mut new);
+    let new: ArrayVec<_, 3> = n3.into_iter().chain(new_nodes.into_iter().rev()).collect();
+    update.replace(paths, level, &[path], &new);
     Ok(())
 }
 
@@ -1423,7 +1431,6 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
 
     for n in &mut dsts {
         build_aux_trees(n.node(), n.contents_mut());
-        update.take_path(paths, n);
     }
 
     /*
@@ -1459,16 +1466,18 @@ fn merge_locked(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: PathId
         }
     }
 
+    let dsts: ArrayVec<TakenNode, 2> = dsts.into_iter().map(|n| update.take_path(paths, n)).collect();
+
     trans.verify_paths(paths);
 
     update.insert_into_parent(paths, path, level)?;
 
     fs.event_inc_trace(events::btree_node_merge, |out| {
-        btree_node_op_log(out, fs, &read_nodes(paths, level, srcs), &dsts)
+        btree_node_op_log(out, fs, &read_nodes(paths, level, srcs), &taken_nodes(paths, &dsts))
     });
 
     let old: ArrayVec<_, 3> = srcs.iter().map(|s| s.path).collect();
-    update.replace(paths, level, &old, &mut dsts);
+    update.replace(paths, level, &old, &dsts);
 
     trans.verify_paths(paths);
     Ok(())
@@ -1512,16 +1521,14 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
 
     trans.node_lock_write(paths, path, level)?;
 
-    let mut n = update.alloc_root(paths, path, level + 1);
+    let mut n = update.alloc_root(level + 1);
 
     update.push_parent_key(paths[path].locked_btree_node(level).expect("the old root, write locked").key());
-    if let Err(e) = update.insert_parent_keys(paths, path, &mut n) {
-        trans.node_unlock(paths, path, level + 1);
-        return Err(e);
-    }
+    update.insert_parent_keys(paths, path, &mut n)?;
 
     update.set_root(paths, path, &mut n);
-    update.replace(paths, level, &[], &mut [n]);
+    let n = update.install_root(paths, path, n);
+    update.replace(paths, level, &[], &[n]);
 
     trans.node_unlock_write(paths, path, level);
 
@@ -1572,13 +1579,18 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
 
     let mut n = update.alloc_replacement(b);
     build_aux_trees(n.node(), n.contents_mut());
-    update.take_path(paths, &n);
 
-    if paths[iter.path].locked_btree_node(level + 1).is_some() {
+    let has_parent = paths[iter.path].locked_btree_node(level + 1).is_some();
+    if has_parent {
         update.link(&mut n);
-        update.insert_into_parent(paths, iter.path, level)?;
     } else {
         update.set_root(paths, iter.path, &mut n);
+    }
+
+    let n = update.take_path(paths, n);
+
+    if has_parent {
+        update.insert_into_parent(paths, iter.path, level)?;
     }
 
     fs.event_inc_trace(events::btree_node_rewrite, |out| {
@@ -1586,7 +1598,7 @@ fn node_rewrite_in<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &m
         crate::prt!(out, "{}", b.pos_to_text(fs))
     });
 
-    update.replace(paths, level, &[iter.path], &mut [n]);
+    update.replace(paths, level, &[iter.path], &[n]);
     update.done(paths);
     Ok(())
 }

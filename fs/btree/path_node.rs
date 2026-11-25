@@ -119,17 +119,20 @@ impl BtreeTrans<'_> {
                 continue;
             }
 
-            let ty = if path.nodes_locked != 0 { path.lock_want(level) } else { BTREE_NODE_UNLOCKED };
+            /* the path the node was given to: its hold, the node's own, stays */
+            if !(path.l[level].b.is(&b.c) && path.locked(level)) {
+                let ty = if path.nodes_locked != 0 { path.lock_want(level) } else { BTREE_NODE_UNLOCKED };
 
-            self.node_unlock(paths, idx, level);
+                self.node_unlock(paths, idx, level);
 
-            if ty != BTREE_NODE_UNLOCKED {
-                let path = &mut paths[idx];
-                path.put_level(level, &b.c, hold.increment(ty.six()));
-                path.lock_taken(level);
+                if ty != BTREE_NODE_UNLOCKED {
+                    let path = &mut paths[idx];
+                    path.put_level(level, &b.c, hold.increment(ty.six()));
+                    path.lock_taken(level);
+                }
+
+                assert!(paths[idx].locked_type(level) == ty);
             }
-
-            assert!(paths[idx].locked_type(level) == ty);
             self.path_level_init(paths, idx, level, b);
         }
 

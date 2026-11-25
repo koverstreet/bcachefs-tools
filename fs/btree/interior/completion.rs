@@ -14,7 +14,7 @@ use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
                          TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::node::BtreeNode;
-use crate::btree::path::LockedNode;
+use crate::btree::path::{LockedNode, Paths};
 use crate::btree::trigger::{deleted_room, key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
 use crate::cstructs::c::BtreeWriteType;
@@ -29,7 +29,7 @@ use crate::fs_fatal_error;
 use crate::types::Le64;
 use crate::util::vstructs::Head;
 use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
-            UpdateBox, WriteBlocked, UPDATE_NODES_MAX};
+            TakenNode, UpdateBox, WriteBlocked, UPDATE_NODES_MAX};
 
 impl InteriorUpdate<'_> {
     /*
@@ -85,8 +85,9 @@ impl InteriorUpdate<'_> {
      * needs @b->key in its committed-to-disk form (parent_keys / set_root)
      * must instead pair with bch2_btree_update_emit_new_node_key earlier.
      */
-    pub(super) fn write_new_node(&self, n: &mut NewNode<'_>) {
+    pub(super) fn write_new_node(&self, paths: &mut Paths<'_>, at: TakenNode) {
         let fs = self.fs();
+        let mut n = paths[at.path].locked_btree_node_mut(at.level).expect("a new node, held by its path");
 
         unsafe { self.new_nodes() }.push(NewPointer::node(fs, n.held()));
 
@@ -98,12 +99,16 @@ impl InteriorUpdate<'_> {
             n.flags.set_will_make_reachable(true);
         }
 
-        fs.btree_node_set_dirty(n);
+        fs.btree_node_set_dirty(n.node());
         n.flags.set_need_write(true);
 
-        self.owned.borrow_mut().open_buckets.extend(n.ob.drain(fs));
+        {
+            let owned = &mut *self.owned.borrow_mut();
+            let taken = owned.taken.iter_mut().find(|t| t.at == at).expect("a new node the update gave a path");
+            owned.open_buckets.extend(taken.ob.drain(fs));
+        }
 
-        node_write_locked(self.trans(), n, BtreeWriteType::initial, BtreeWriteFlags::empty());
+        node_write_locked(self.trans(), &mut n, BtreeWriteType::initial, BtreeWriteFlags::empty());
     }
 
     /*

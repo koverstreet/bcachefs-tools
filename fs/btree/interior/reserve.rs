@@ -27,7 +27,7 @@ use crate::prt;
 use crate::os::kernel::WRITE;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
-use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, BTREE_RESERVE_MAX};
+use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, Taken, TakenNode, BTREE_RESERVE_MAX};
 
 /**
  * bch2_btree_node_format_fits - check if we could rewrite node with a new format
@@ -357,9 +357,9 @@ impl<'t> InteriorUpdate<'t> {
         n
     }
 
-    /// A new root at @level, @path holding it above what it held, with no
-    /// siblings to merge with.
-    pub(crate) fn alloc_root(&self, paths: &mut Paths<'_>, path: PathIdx, level: usize) -> NewNode<'_> {
+    /// A new root at @level, with no siblings to merge with: install_root()
+    /// gives it to the path it's the root of.
+    pub(crate) fn alloc_root(&self, level: usize) -> NewNode<'_> {
         let mut n = self.alloc_node(level);
 
         let (node, contents) = (n.node(), n.contents_mut());
@@ -371,48 +371,53 @@ impl<'t> InteriorUpdate<'t> {
         contents.set_format(format);
         build_aux_trees(n.node(), n.contents_mut());
 
-        let locks_want = paths[path].locks_want();
-        paths[path].bits.set_locks_want(locks_want + 1);
-        assert!(!paths[path].locked(level), "a new root's level already locked");
-        self.take_node(paths, path, &n);
-
         for sib in &n.contents().sib_u64s {
             sib.set(u16::MAX);
         }
         n
     }
 
-    /// A path to @n, holding it, for as long as the update has @n: the update
-    /// puts it.
-    pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: &NewNode<'_>) -> PathIdx {
+    /// New root @n, given to @path above what it held.
+    pub(crate) fn install_root(&self, paths: &mut Paths<'_>, path: PathIdx, n: NewNode<'_>) -> TakenNode {
+        let level = usize::from(n.c.level.get());
+        let locks_want = paths[path].locks_want();
+        paths[path].bits.set_locks_want(locks_want + 1);
+        assert!(!paths[path].locked(level), "a new root's level already locked");
+        self.take_node(paths, path, n)
+    }
+
+    /// @n, given to a path of its own: the update puts the path.
+    pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: NewNode<'_>) -> TakenNode {
         let pos = n.key().k().p;
         let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.get().into()),
                                                      n.c.level.get().into(), pos, false, crate::ret_ip!());
-        self.take_node(paths, idx, n);
         self.owned.borrow_mut().paths.push(idx);
-        idx
+        self.take_node(paths, idx, n)
     }
 
     /*
-     * Install a freshly-consumed prealloc node on @path at WRITE_LOCKED.
+     * Install a freshly-consumed prealloc node on @path at WRITE_LOCKED: the
+     * NewNode's own intent+write, from bch2_btree_node_mem_alloc, become the
+     * path's - its only hold - and the node is reached through it from now.
      *
-     * Path takes its own intent+write recurses on top of the as-owned primary
-     * refs from bch2_btree_node_mem_alloc — that keeps the path-state-vs-lock-
-     * count invariant true.  six_lock_increment(SIX_LOCK_write) bumps both
-     * write_lock_recurse and (via fallthrough) intent_lock_recurse — one call
-     * gives both recurses.
-     *
-     * When the path eventually unlocks (trans teardown or explicit
-     * bch2_path_put), btree_node_unlock for WRITE_LOCKED drops one intent +
-     * one write balanced against the recurses we take here; the as-owned
-     * refs are the NewNode's, dropped with it - written, under the path's;
-     * not, freed.
+     * When the path unlocks - put by the update, or for a root, its write
+     * dropped by done() - btree_node_unlock for WRITE_LOCKED drops that intent
+     * and write, its write unlock advancing the paths at it. Never written,
+     * it's taken back from the path and freed.
      */
-    fn take_node(&self, paths: &mut Paths<'_>, path: PathIdx, n: &NewNode<'_>) {
+    fn take_node(&self, paths: &mut Paths<'_>, path: PathIdx, n: NewNode<'_>) -> TakenNode {
+        let fs = self.fs();
         let level = usize::from(n.c.level.get());
-        paths[path].put_level(level, &n.c, n.node.as_ref().expect("a new node, until it's dropped").path_hold());
+        let Reserved { node, ob } = n.into_reserved();
+        let (b, held) = node.into_held(fs);
+
+        self.trans().path_level_init(paths, path, level, LockedNode::of_hold(b, &held));
+        paths[path].put_level(level, &b.c, held);
         paths[path].lock_taken(level);
-        self.trans().path_level_init(paths, path, level, n.held());
+
+        let at = TakenNode { path, level };
+        self.owned.borrow_mut().taken.push(Taken { at, ob });
+        at
     }
 
     /// @b, freed by the update, freed in memory: @path holds it write locked.

@@ -20,7 +20,7 @@ use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeNodeRef, BtreeTrans, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
-use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
+use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, Write};
 use crate::c;
 use crate::data::keylist::Keylist;
 use crate::data_structures::dst_room::DstRoom;
@@ -47,6 +47,7 @@ use crate::util::place::{Contained, Placed};
 use crate::os::workqueue::{OnQueue, Own, ReffedWork, Workqueue, WqFlags};
 use crate::util::{late::Late, mempool::Mempool};
 use crate::prt;
+use c::SixLockType::SIX_LOCK_intent;
 use pin_init::{init, init_zeroed, pin_data};
 use zerocopy::IntoBytes;
 
@@ -300,11 +301,11 @@ struct Owned {
      */
     reserve:      [ArrayVec<Reserved, UPDATE_NODES_MAX>; 2],
     /*
-     * The new nodes written, their NewNodes dropped: their holds released
-     * by done(), after the paths' - the last write hold goes where the paths
-     * at it are, to advance their lock seqs
+     * The new nodes given to paths, their holds the paths': with their open
+     * buckets, till they're written - or, never written, they're taken back
+     * and freed
      */
-    written:      ArrayVec<OwnedNode, UPDATE_NODES_MAX>,
+    taken:        ArrayVec<Taken, UPDATE_NODES_MAX>,
     /* take_path()'s, put before the update lets go of its nodes */
     paths:        ArrayVec<PathIdx, UPDATE_NODES_MAX>,
     old_nodes:    ArrayVec<OldNode, UPDATE_NODES_MAX>,
@@ -555,8 +556,9 @@ impl Deref for InteriorUpdate<'_> {
 }
 
 /// A node from an interior update's reserve, its caller's to build, not yet
-/// reachable. Dropped once written, its hold is the update's, till done();
-/// dropped before, as when an error rolls the update back, it's freed.
+/// reachable, and in no path: take_path() and install_root() consume it, and
+/// it's a path's from then. Dropped, as when an error rolls the update back,
+/// it's freed.
 pub(crate) struct NewNode<'u> {
     update: &'u BtreeUpdate,
     view:   LockedNode<'u, BtreeNode, Write>,
@@ -569,6 +571,25 @@ impl<'u> NewNode<'u> {
         let view = unsafe { LockedNode::new_write(node.as_ptr().as_ref()) };
         NewNode { update, view, node: Some(node), ob }
     }
+
+    fn into_reserved(mut self) -> Reserved {
+        Reserved {
+            node: self.node.take().expect("a new node, until it's dropped"),
+            ob:   core::mem::take(&mut self.ob),
+        }
+    }
+}
+
+/// A new node, given to path @path at @level: reached through it.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct TakenNode {
+    pub(crate) path:  PathIdx,
+    pub(crate) level: usize,
+}
+
+struct Taken {
+    at: TakenNode,
+    ob: c::open_buckets,
 }
 
 impl<'u> Deref for NewNode<'u> {
@@ -587,11 +608,7 @@ impl DerefMut for NewNode<'_> {
 
 impl Drop for NewNode<'_> {
     fn drop(&mut self) {
-        let node = self.node.take().expect("a new node, until it's dropped");
-        if self.view.flags.will_make_reachable() {
-            assert!(self.ob.nr == 0, "a written node's open buckets, not the update's");
-            self.update.owned.borrow_mut().written.push(node);
-        } else {
+        if let Some(node) = self.node.take() {
             self.update.reserve_free(Reserved { node, ob: core::mem::take(&mut self.ob) });
         }
     }
@@ -753,7 +770,7 @@ impl<'t> InteriorUpdate<'t> {
             disk_res:     DiskReservation::new(fs_ref),
             owned <- RefCell::init(init!(Owned {
                 reserve      <- init_zeroed(),
-                written      <- init_zeroed(),
+                taken        <- init_zeroed(),
                 paths        <- init_zeroed(),
                 old_nodes    <- init_zeroed(),
                 open_buckets <- init_zeroed(),
@@ -873,43 +890,58 @@ impl<'t> InteriorUpdate<'t> {
     /// nodes freed in memory before the new are visible to the transaction's
     /// other paths, so nothing relocks an old node and sees what the new one
     /// replaced. @new in the order they're written.
-    pub(crate) fn replace(&self, paths: &mut Paths<'_>, level: usize, old: &[PathIdx], new: &mut [NewNode<'_>]) {
+    pub(crate) fn replace(&self, paths: &mut Paths<'_>, level: usize, old: &[PathIdx], new: &[TakenNode]) {
+        let fs = self.fs();
         let mut freed: ArrayVec<*const BtreeNode, UPDATE_NODES_MAX> = ArrayVec::new();
         for &idx in old {
             let b = paths[idx].locked_btree_node(level).expect("a node to replace, held by its path");
             self.will_free_node(b);
             freed.push(ptr::from_ref(b.node()));
         }
-        for n in new.iter_mut() {
-            self.write_new_node(n);
+        for &n in new {
+            self.write_new_node(paths, n);
         }
         for &idx in old {
             self.node_free_inmem(paths, idx, level);
         }
-        for n in new {
-            let hold = n.node.as_ref().expect("a new node, until it's dropped").hold();
-            self.trans().node_add(self.t, &mut paths.paths_and_updates(), n.held(), &hold);
+        for &n in new {
+            let b = BtreeNodeRef::from(paths[n.path].locked_btree_node(n.level).expect("a new node, held by its path"))
+                .node(fs);
+            let (_, hold) = paths[n.path].hold(n.level).expect("a new node, held by its path");
+            let hold = hold.increment_on(&b.c.lock, SIX_LOCK_intent);
+            self.trans().node_add(self.t, &mut paths.paths_and_updates(), LockedNode::of_hold(b, &hold), &hold);
         }
         for &b in &freed {
             self.trans().node_verify_not_in_iters(paths, level, b);
         }
     }
 
-    /// The paths take_path() made, put: the last taken first.
+    /// The new nodes never written - the update rolled back - taken back from
+    /// their paths and freed; then the paths take_path() made, put: the last
+    /// taken first. A path's hold on a new node is its only one, so the paths
+    /// keep their locks till here: nothing between take_path() and here
+    /// unlocks them.
     fn put_paths(&self, paths: &mut Paths<'_>) {
+        let fs = self.fs();
+        let taken = core::mem::take(&mut self.owned.borrow_mut().taken);
+        for Taken { at, ob } in taken.into_iter().rev() {
+            let b = BtreeNodeRef::from(paths[at.path].locked_btree_node(at.level)
+                                       .expect("a new node, held by the path it was given to")).node(fs);
+            if b.flags.will_make_reachable() {
+                assert!(ob.nr == 0, "a written node's open buckets, not the update's");
+                continue;
+            }
+
+            let (_, held) = paths[at.path].take_level(at.level).expect("a new node, held by the path it was given to");
+            let node = OwnedNode::from_path(b, held);
+            paths[at.path].l[at.level].b = NodePtr::err(Errcode::no_btree_node_init.into());
+            self.reserve_free(Reserved { node, ob });
+        }
+
         let taken = core::mem::take(&mut self.owned.borrow_mut().paths);
         for idx in taken.into_iter().rev() {
             self.trans().path_unlock(paths, idx);
             self.trans().path_put(paths, idx, true);
-        }
-    }
-
-    /// The written new nodes' holds released, after the paths' - so theirs
-    /// are the last write holds, and the paths still at them advanced.
-    fn written_put(&self, paths: &mut Paths<'_>) {
-        let written = core::mem::take(&mut self.owned.borrow_mut().written);
-        for n in written {
-            self.trans().node_unlock_owned(paths, n);
         }
     }
 
@@ -922,7 +954,6 @@ impl<'t> InteriorUpdate<'t> {
 
         this.put_paths(paths);
         this.trans().unlock_write(paths);
-        this.written_put(paths);
 
         drop(this.owned.borrow_mut().gc_lock.take());
         this.reserve_put();
@@ -941,7 +972,6 @@ impl Drop for InteriorUpdate<'_> {
         let mut paths = unsafe { Paths::lent(self.trans()) };
         self.put_paths(&mut paths);
         self.trans().unlock_write(&mut paths);
-        self.written_put(&mut paths);
         update_free(self.t().fs(), owner)
     }
 }
