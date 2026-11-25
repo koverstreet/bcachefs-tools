@@ -152,9 +152,20 @@ fn crates(top: &Path) -> Result<Vec<(String, PathBuf)>> {
     let fs = m.packages.iter().find(|p| p.name == "bcachefs-kernel").ok_or("cargo metadata: no bcachefs-kernel")?;
     let wanted = fs.metadata.as_ref().and_then(|m| m.dkms.as_ref())
         .ok_or("fs/Cargo.toml: no package.metadata.dkms")?;
-    let deps: Vec<&Package> = m.resolve.nodes.iter()
-        .find(|n| n.id == fs.id).ok_or("cargo metadata: bcachefs-kernel not in the resolve graph")?
-        .deps.iter().filter_map(|d| pkg(&d.pkg)).collect();
+    // its dependencies, and theirs: g2p's g2gen
+    let node = |id: &str| m.resolve.nodes.iter().find(|n| n.id == id);
+    let mut deps = vec![fs.id.as_str()];
+    let mut i = 0;
+    while let Some(&id) = deps.get(i) {
+        let n = node(id).ok_or_else(|| format!("cargo metadata: {id} not in the resolve graph"))?;
+        for d in &n.deps {
+            if !deps.contains(&d.pkg.as_str()) {
+                deps.push(&d.pkg);
+            }
+        }
+        i += 1;
+    }
+    let deps: Vec<&Package> = deps[1..].iter().filter_map(|&id| pkg(id)).collect();
 
     wanted.crates.iter()
         .map(|name| deps.iter().find(|p| &p.name == name)
