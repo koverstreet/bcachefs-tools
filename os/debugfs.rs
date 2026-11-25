@@ -39,9 +39,6 @@ pub trait DebugFile: 'static {
     /// What the file is of: what Dir::file() was given.
     type Obj: 'static;
 
-    /// Whether the printbuf may grow with vmalloc(), past kmalloc()'s limit.
-    const MAY_VMALLOC: bool = true;
-
     fn show(obj: &Self::Obj, out: &mut DebugOut) -> impl Future<Output = Result<(), BchError>> + FreeAnytime;
 }
 
@@ -222,7 +219,6 @@ pub(super) type Reading = Option<KBox<ReadFuture<'static>>>;
 /// @obj's file, from its start: show(), then the rest of what it printed.
 pub(super) async fn read<F: DebugFile>(obj: &F::Obj) -> Result<(), BchError> {
     let mut out = DebugOut { buf: Printbuf::new(), u: ptr::null_mut() };
-    out.buf.set_may_vmalloc(F::MAY_VMALLOC);
     out.attach().await;
 
     F::show(obj, &mut out).await?;

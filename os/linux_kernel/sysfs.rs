@@ -54,19 +54,22 @@ unsafe extern "C" fn store<D: Dir>(kobj: *mut c::kobject, attr: *mut c::attribut
     }
 }
 
-/// A show: what @f writes - into sysfs's page @buf itself, cut off at its end -
-/// or @f's error, as an errno.
+/// A show: what @f writes, copied to sysfs's page @buf - cut off at its end,
+/// a nul's room left, as sysfs wants - or @f's error, as an errno.
 ///
 /// # Safety
 /// @buf is a PAGE_SIZE buffer.
 unsafe fn show_page(buf: *mut c_char, f: impl FnOnce(&mut Printbuf) -> Result<(), BchError>) -> isize {
-    // SAFETY: the caller's
-    let mut out = unsafe { Printbuf::new_extern(buf, crate::os::kernel::PAGE_SIZE) };
+    let mut out = Printbuf::new();
 
     match f(&mut out) {
         Ok(()) => {
             out.ensure_trailing_newline();
-            out.as_bytes().len() as isize
+            let text = out.as_bytes();
+            let n = text.len().min(crate::os::kernel::PAGE_SIZE - 1);
+            // SAFETY: the caller's
+            unsafe { core::ptr::copy_nonoverlapping(text.as_ptr(), buf.cast::<u8>(), n) };
+            n as isize
         }
         Err(e) => e.class() as isize,
     }

@@ -89,8 +89,6 @@ bool bch2_signal_pending_state(unsigned int state);
 void bch2_set_current_state(unsigned int state);
 void bch2_set_current_state_running(void);
 
-void rust_kfree(const void *p);
-void rust_kvfree(void *p);
 void rust_kvfree_rcu(void *p, struct rcu_head *head);
 void rust_kfree_rcu_mightsleep(void *p);
 void *rust_bio_pages_alloc(size_t size, gfp_t gfp);

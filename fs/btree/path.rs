@@ -1412,7 +1412,7 @@ impl BtreeTrans<'_> {
 
         self.paths_to_text(&mut buf, paths);
 
-        if !buf.bits.allocation_failure() {
+        if !buf.allocation_failure() {
             let mut locked = s.lock.lock();
             if nr as u32 > s.lock.nr_max_paths.get() {
                 locked.published().nr_max_paths.set(nr as u32);

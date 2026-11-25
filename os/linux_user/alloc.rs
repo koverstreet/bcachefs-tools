@@ -2,7 +2,7 @@
 
 //! Allocation, for userspace, for util/alloc.rs: Kmalloc, Vmalloc and KVmalloc
 //! over std's allocator, which takes no flags and no memalloc scope. What's
-//! of no size - kfree_unsized()'s - is malloc()'s.
+//! freed a grace period on, by an rcu_head of no size it knows, is malloc()'s.
 
 #[path = "../alloc.rs"]
 mod common;
@@ -160,15 +160,10 @@ fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
     core::ptr::null_mut()
 }
 
-/// @size bytes kzalloc()'d, NOFAIL: never null. kfree_unsized() takes it back.
-pub fn kzalloc_nofail(size: usize) -> *mut c_void {
-    kmalloc_noprof(size, flags::ZERO | flags::NOFAIL)
-}
-
-/// @size bytes kvzalloc()'d, NOFAIL: kzalloc_nofail()'s, here. kvfree_unsized()
-/// takes it back, or kvfree_rcu_head().
+/// @size bytes kvzalloc()'d, NOFAIL: kvfree_rcu_head() or
+/// kfree_rcu_mightsleep() takes it back.
 pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
-    NonNull::new(kzalloc_nofail(size).cast()).expect("a NOFAIL allocation failed")
+    NonNull::new(kmalloc_noprof(size, flags::ZERO | flags::NOFAIL).cast()).expect("a NOFAIL allocation failed")
 }
 
 /// A zeroed KBox that can't fail to allocate: std's allocator aborts rather
@@ -200,45 +195,6 @@ pub fn kzalloc(layout: Layout) -> Result<NonNull<u8>, AllocError> {
 pub unsafe fn kfree(p: NonNull<u8>, layout: Layout) {
     // SAFETY: the caller's
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
-}
-
-/// @p - kmalloc()'d, or null - as @new bytes, what was there kept: krealloc(),
-/// for a buffer C owns and kfree()s. Of no size the caller knows, as C's
-/// aren't. Tried ten times, the shrinkers run between.
-///
-/// # Safety
-/// @p is null, or kmalloc()'s and not used after unless this fails.
-pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
-    for _ in 0..10 {
-        // not 0: realloc() would free @p
-        if let Some(q) = NonNull::new(unsafe { libc::realloc(p.cast(), new.max(1)) }) {
-            return Ok(q.cast());
-        }
-
-        super::shrinker::run_shrinkers(Flags::empty(), true);
-    }
-    Err(AllocError)
-}
-
-/// krealloc()'s, kvmalloc()'d - which of no size is malloc()'s here, as
-/// kvfree_unsized() takes it back.
-///
-/// # Safety
-/// As krealloc()'s.
-pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
-    unsafe { krealloc(p, new) }
-}
-
-/// @size bytes kmalloc()'d, uninitialized: for a buffer of no size anyone
-/// keeps - kfree_unsized() takes it back.
-pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
-    // SAFETY: a new allocation
-    unsafe { krealloc(core::ptr::null_mut(), size) }
-}
-
-/// kzalloc(), with @gfp. kfree_unsized() takes it back.
-pub fn kzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
-    NonNull::new(kmalloc_noprof(size, gfp | flags::ZERO).cast()).ok_or(AllocError)
 }
 
 /// kvzalloc(), with @gfp, which takes nothing here. kvfree_sized() takes it
@@ -287,22 +243,6 @@ pub unsafe fn kvfree_sized(p: NonNull<u8>, size: usize) {
     let layout = kv_layout(size).expect("its allocation's");
     // SAFETY: the caller's
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
-}
-
-/// C's kfree(): @p, malloc()'d, of no size the caller knows - or null.
-///
-/// # Safety
-/// Nothing uses @p after.
-pub unsafe fn kfree_unsized(p: *const c_void) {
-    unsafe { libc::free(p.cast_mut()) }
-}
-
-/// C's kvfree(): kfree_unsized()'s, here.
-///
-/// # Safety
-/// Nothing uses @p after.
-pub unsafe fn kvfree_unsized(p: *mut c_void) {
-    unsafe { libc::free(p) }
 }
 
 /// C's kvfree_rcu(): @p freed a grace period on - by a callback of its own,

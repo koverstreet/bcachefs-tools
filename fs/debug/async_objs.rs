@@ -189,9 +189,6 @@ enum AsyncObjList {}
 impl DebugFile for AsyncObjList {
     type Obj = c::async_obj_list;
 
-    // bch2_async_obj_list_open() didn't set may_vmalloc
-    const MAY_VMALLOC: bool = false;
-
     async fn show(list: &c::async_obj_list, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = list.fs();
         let (_, to_text) = LISTS[list.idx.get() as usize];

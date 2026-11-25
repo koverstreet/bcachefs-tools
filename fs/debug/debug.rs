@@ -168,7 +168,7 @@ enum CachedBtreeNodes {}
 
 
 fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
-    if out.nr_tabstops == 0 {
+    if out.nr_tabstops() == 0 {
         out.tabstop_push(36);
     }
 
@@ -263,9 +263,6 @@ enum TransactionStats {}
 
 impl DebugFile for TransactionStats {
     type Obj = Fs;
-
-    // btree_transaction_stats_open() didn't set may_vmalloc
-    const MAY_VMALLOC: bool = false;
 
     async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
         let mut idx = 1;

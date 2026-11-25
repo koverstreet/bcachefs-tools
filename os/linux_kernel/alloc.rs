@@ -4,7 +4,7 @@
 //! are core's Allocator over C's krealloc(), vrealloc() and kvrealloc(), with
 //! our Flags as the task's memalloc scope says - and the kernel's Rust
 //! Allocator, for its Box and Arc, the same. What the kernel's Rust doesn't
-//! have - a kfree() of no size - is through shim.c.
+//! have - kvfree_rcu() - is through shim.c.
 
 #[path = "../alloc.rs"]
 mod common;
@@ -302,13 +302,8 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
     KBox::into_inner(b)
 }
 
-/// @size bytes kzalloc()'d, NOFAIL: never null. kfree_unsized() takes it back.
-pub fn kzalloc_nofail(size: usize) -> *mut c_void {
-    kzalloc_gfp(size, flags::NOFAIL).expect("a NOFAIL allocation failed").as_ptr().cast()
-}
-
-/// @size bytes kvzalloc()'d, NOFAIL. kvfree_unsized() takes it back, or
-/// kvfree_rcu_head().
+/// @size bytes kvzalloc()'d, NOFAIL: kvfree_rcu_head() or
+/// kfree_rcu_mightsleep() takes it back.
 pub fn kvzalloc_nofail(size: usize) -> NonNull<u8> {
     kvzalloc_gfp(size, flags::NOFAIL).expect("a NOFAIL allocation failed")
 }
@@ -333,45 +328,6 @@ pub fn kzalloc(layout: Layout) -> Result<NonNull<u8>, AllocError> {
 pub unsafe fn kfree(p: NonNull<u8>, layout: Layout) {
     // SAFETY: the caller's
     unsafe { Kmalloc.deallocate(p, layout) };
-}
-
-/// @p - kmalloc()'d, or null - as @new bytes, what was there kept: krealloc(),
-/// for a buffer C owns and kfree()s. Of no size the caller knows, as C's
-/// aren't. GFP_KERNEL, the caller's memalloc scope saying the rest.
-///
-/// # Safety
-/// @p is null, or kmalloc()'s and not used after unless this fails.
-pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
-    // Kmalloc::realloc() wants the old allocation's layout, which nobody has
-    use kernel::bindings::{krealloc_node_align, NUMA_NO_NODE};
-
-    // SAFETY: the caller's
-    let gfp = current_gfp();
-    NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
-}
-
-/// krealloc()'s, kvmalloc()'d: what C's kvfree() takes back.
-///
-/// # Safety
-/// @p is null, or kvmalloc()'s and not used after unless this fails.
-pub unsafe fn kvrealloc_unsized(p: *mut u8, new: usize) -> Result<NonNull<u8>, AllocError> {
-    use kernel::bindings::{kvrealloc_node_align, NUMA_NO_NODE};
-
-    let gfp = current_gfp();
-    NonNull::new(unsafe { kvrealloc_node_align(p.cast(), new, 1, gfp, NUMA_NO_NODE) }.cast()).ok_or(AllocError)
-}
-
-/// @size bytes kmalloc()'d, uninitialized: for a buffer of no size anyone
-/// keeps - C's kfree(), or kfree_unsized(), takes it back.
-pub fn kmalloc(size: usize) -> Result<NonNull<u8>, AllocError> {
-    let layout = Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
-    Ok(Kmalloc.allocate(layout)?.cast())
-}
-
-/// kzalloc(), with @gfp. kfree_unsized() takes it back.
-pub fn kzalloc_gfp(size: usize, gfp: Flags) -> Result<NonNull<u8>, AllocError> {
-    let layout = Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
-    Ok(Kmalloc.allocate_zeroed_gfp(layout, gfp)?.cast())
 }
 
 /// kvzalloc(), with @gfp. kvfree_sized() takes it back.
@@ -402,22 +358,6 @@ pub unsafe fn kvfree_sized(p: NonNull<u8>, size: usize) {
     let layout = kv_layout(size).expect("its allocation's");
     // SAFETY: the caller's
     unsafe { KVmalloc.deallocate(p, layout) };
-}
-
-/// C's kfree(): @p, kmalloc()'d, of no size the caller knows - or null.
-///
-/// # Safety
-/// Nothing uses @p after.
-pub unsafe fn kfree_unsized(p: *const c_void) {
-    unsafe { c::rust_kfree(p) }
-}
-
-/// C's kvfree(): @p, kvmalloc()'d, of no size the caller knows - or null.
-///
-/// # Safety
-/// Nothing uses @p after.
-pub unsafe fn kvfree_unsized(p: *mut c_void) {
-    unsafe { c::rust_kvfree(p) }
 }
 
 /// C's kvfree_rcu(): @p, kvmalloc()'d, freed a grace period on, by @head in

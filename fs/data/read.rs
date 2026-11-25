@@ -769,7 +769,7 @@ fn retry_report(fs: &Fs, read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
     let ret = ret.err();
     let have_key = !k.k.key_type().is_deleted();
 
-    if !failed.is_empty() || failed.ec_msg.pos != 0 || ret.is_some() {
+    if !failed.is_empty() || !failed.ec_msg.as_bytes().is_empty() || ret.is_some() {
         let msg = |out: &mut Printbuf| {
             read_err_msg(trans, out, read, read_pos);
             out.newline();

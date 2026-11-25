@@ -1,74 +1,57 @@
-#![allow(non_camel_case_types)]
-
-use core::ffi::{CStr, c_uint};
+use core::ffi::CStr;
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
+use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::dst_array::DstArray;
 use crate::errcode::BchError;
-use crate::util::alloc::{krealloc, kvrealloc_unsized, Kmalloc, KVVec};
+use crate::util::alloc::{KVmalloc, KVVec};
 use crate::util::os_str::{OsStr, OsStrExt};
-use crate::util::ffi::c_char;
-use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
+use crate::util::thin::ThinBox;
+use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
 use crate::format::Bpos;
 
-#[bch_enum(closed)]
-#[repr(u32)]
-pub enum PrintbufSi {
-    PRINTBUF_UNITS_2,       /* use binary powers of 2^10 */
-    PRINTBUF_UNITS_10,      /* use powers of 10^3 (standard SI) */
-}
-
-pub const PRINTBUF_INLINE_TABSTOPS: u32 = 8;
+/// A printbuf's buffer: its capacity the array's count.
+type Buf = ThinBox<DstArray<(), u8, u32>, KVmalloc>;
 
 nest! {
     /// Through fmt::Write, `\t`, `\r` and `\n` are tabstops and indent.
-    #[repr(C)]
-    #[derive(MaybeZeroable, BitfieldMembers)]
+    #[derive(Default, MaybeZeroable, BitfieldMembers)]
     pub struct Printbuf {
-        pub buf: *mut c_char,
-        pub size: c_uint,
-        pub pos: c_uint,
-        pub last_newline: c_uint,
-        pub last_field: c_uint,
-        pub indent: c_uint,
-        /// Set by Probe::Job, until the job's write.
-        fmt_job: bool,
+        /// None until the first write
+        buf:          Option<Buf>,
+        pos:          u32,
+        last_newline: u32,
+        last_field:   u32,
+        indent:       u32,
         #[members]
         #>[bitfield(u8)]
-        pub bits: pub struct printbuf_bits {
+        bits: struct PrintbufBits {
+            /// A write was cut short: the buffer couldn't grow
             pub allocation_failure: bool,
-            heap_allocated:         bool,
-            overflow:               bool,
-            /* Ratelimited or already printed */
-            suppress:               bool,
-            #[bits(1)] pub si_units: c::PrintbufSi,
-            human_readable_units:   bool,
-            has_indent_or_tabstops: bool,
-            pub may_vmalloc:        bool,
+            /// Ratelimited or already printed
+            suppress:             bool,
+            human_readable_units: bool,
+            /// Set by Probe::Job, until the job's write
+            fmt_job:              bool,
+            __pad:                u4,
         },
-        pub nr_tabstops: u8,
-
-        /*
-         * Do not modify directly: use printbuf_tabstop_add(),
-         * printbuf_tabstop_get()
-         */
-        pub cur_tabstop: u8,
-        pub _tabstops: [u8; c::PRINTBUF_INLINE_TABSTOPS as usize],
+        /// Each tabstop's column
+        tabstops:     ArrayVec<u8, 8, u8>,
+        cur_tabstop:  u8,
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct printbuf_restore {
-    pub pos: c_uint,
-    pub last_newline: c_uint,
-    pub last_field: c_uint,
-    pub indent: c_uint,
-    pub cur_tabstop: u8,
+/// Where a printbuf's text stands: state_save()'s, for state_restore().
+#[derive(Clone, Copy)]
+pub struct PrintbufState {
+    pos:          u32,
+    last_newline: u32,
+    last_field:   u32,
+    indent:       u32,
+    cur_tabstop:  u8,
 }
-
-unsafe impl Send for Printbuf {}
 
 /// Undoes Printbuf::indent() on drop.
 pub struct PrintbufIndent<'a> {
@@ -92,46 +75,17 @@ impl DerefMut for PrintbufIndent<'_> {
 }
 
 impl Printbuf {
-    const fn empty() -> Self {
-        Printbuf {
-            buf: core::ptr::null_mut(), size: 0, pos: 0, last_newline: 0, last_field: 0, indent: 0, fmt_job: false,
-            bits: printbuf_bits::new(), nr_tabstops: 0, cur_tabstop: 0,
-            _tabstops: [0; c::PRINTBUF_INLINE_TABSTOPS as usize],
-        }
-    }
-
     pub fn new() -> Self {
-        let mut buf = Self::empty();
-        buf.set_heap_allocated(true);
-        buf
-    }
-
-    /// A printbuf over @size bytes at @buf that it doesn't own: it never
-    /// grows past them - what doesn't fit is cut off - or frees them.
-    ///
-    /// # Safety
-    /// @buf is @size writable bytes, for as long as this lives.
-    pub unsafe fn new_extern(buf: *mut crate::util::ffi::c_char, size: usize) -> Self {
-        Printbuf { buf, size: size as u32, ..Self::empty() }
+        Self::default()
     }
 
     pub fn as_str(&self) -> &str {
-        if self.buf.is_null() {
-            ""
-        } else {
-            unsafe { CStr::from_ptr(self.buf.cast()) }
-                .to_str()
-                .unwrap_or("")
-        }
+        core::str::from_utf8(self.as_bytes()).unwrap_or("")
     }
 
     /// What's been written, as a C string: to hand to C.
     pub fn as_c_str(&self) -> &CStr {
-        if self.buf.is_null() {
-            c""
-        } else {
-            unsafe { CStr::from_ptr(self.buf.cast()) }
-        }
+        self.buf.as_ref().and_then(|b| CStr::from_bytes_until_nul(&b.elems).ok()).unwrap_or(c"")
     }
 
     /// What's written, cut back to @len bytes.
@@ -145,11 +99,7 @@ impl Printbuf {
     /// What's been written, as bytes - which needn't be UTF-8, after
     /// write_bytes().
     pub fn as_bytes(&self) -> &[u8] {
-        if self.buf.is_null() {
-            &[]
-        } else {
-            unsafe { core::slice::from_raw_parts(self.buf as *const u8, self.pos as usize) }
-        }
+        self.buf.as_ref().map_or(&[], |b| &b.elems[..self.pos()])
     }
 
     /// What's been written, as a name: for building one.
@@ -158,28 +108,22 @@ impl Printbuf {
     }
 
     /*
-     * Add a tabstop, n spaces from the previous tabstop.
-     *
-     * In the future this function may allocate memory if setting more than
-     * PRINTBUF_INLINE_TABSTOPS or setting tabstops more than 255 spaces from start
-     * of line.
+     * Add a tabstop, n spaces from the previous tabstop: false, with a
+     * warning, past the eighth.
      */
     pub fn tabstop_push(&mut self, spaces: u32) -> bool {
-        let nr = self.nr_tabstops as usize;
-        let prev_tabstop = if nr != 0 { u32::from(self._tabstops[nr - 1]) } else { 0 };
+        let prev_tabstop = self.tabstops.last().copied().map_or(0, u32::from);
 
-        if crate::warn_on_once!(nr >= self._tabstops.len()) {
+        if crate::warn_on_once!(self.tabstops.is_full()) {
             return false;
         }
 
-        self._tabstops[nr] = prev_tabstop.wrapping_add(spaces) as u8;
-        self.nr_tabstops += 1;
-        self.set_has_indent_or_tabstops(true);
+        self.tabstops.push(prev_tabstop.wrapping_add(spaces) as u8);
         true
     }
 
     pub fn tabstops_reset(&mut self) {
-        self.nr_tabstops = 0;
+        self.tabstops.clear();
     }
 
     pub fn tabstops(&mut self, widths: &[u32]) {
@@ -211,10 +155,6 @@ impl Printbuf {
             self.nul_terminate_reserved();
         }
         self.indent -= spaces;
-
-        if self.indent == 0 && self.nr_tabstops == 0 {
-            self.set_has_indent_or_tabstops(false);
-        }
     }
 
     /// Indented until the guard drops.
@@ -231,7 +171,6 @@ impl Printbuf {
         let spaces = if crate::warn_on_once!(self.indent.checked_add(spaces).is_none()) { 0 } else { spaces };
 
         self.indent += spaces;
-        self.set_has_indent_or_tabstops(true);
     }
 
     /*
@@ -318,13 +257,9 @@ impl Printbuf {
             }
         }
 
-        // swapped: aligned's drop frees the old buffer, if it was ours
+        // swapped: aligned's drop frees the old buffer
         core::mem::swap(&mut self.buf, &mut aligned.buf);
-        core::mem::swap(&mut self.size, &mut aligned.size);
         core::mem::swap(&mut self.pos, &mut aligned.pos);
-        let heap_allocated = self.heap_allocated();
-        self.set_heap_allocated(aligned.heap_allocated());
-        aligned.set_heap_allocated(heap_allocated);
 
         // the rebuilt text ends with a newline
         self.last_newline = self.pos;
@@ -342,8 +277,8 @@ impl Printbuf {
     }
 
     /// Where the text stands, for state_restore() to go back to.
-    pub fn state_save(&self) -> c::printbuf_restore {
-        c::printbuf_restore {
+    pub fn state_save(&self) -> PrintbufState {
+        PrintbufState {
             pos:          self.pos,
             last_newline: self.last_newline,
             last_field:   self.last_field,
@@ -353,7 +288,7 @@ impl Printbuf {
     }
 
     /// Undo what's been written since @s.
-    pub fn state_restore(&mut self, s: c::printbuf_restore) {
+    pub fn state_restore(&mut self, s: PrintbufState) {
         self.pos          = s.pos;
         self.last_newline = s.last_newline;
         self.last_field   = s.last_field;
@@ -362,57 +297,39 @@ impl Printbuf {
     }
 
     pub fn nr_tabstops(&self) -> u32 {
-        self.nr_tabstops.into()
+        self.tabstops.len() as u32
     }
 
     pub fn indent_level(&self) -> u32 {
         self.indent
     }
 
-    /// Room for @extra more bytes: false if it couldn't.
+    /// Room for @extra more bytes, and the nul: false, and allocation_failure
+    /// set, if it couldn't be had.
     pub fn make_room(&mut self, extra: usize) -> bool {
-        self.grow(extra).is_ok()
-    }
-
-    /// Room for @extra more bytes and the nul: ENOSPC if the buffer isn't ours
-    /// to grow, ENOMEM if it can't be.
-    fn grow(&mut self, extra: usize) -> Result<(), u32> {
-        /* Reserved space for terminating nul: */
         let need = self.pos() + extra + 1;
 
-        if need <= self.size as usize {
-            return Ok(());
+        if need <= self.capacity() {
+            return true;
         }
 
-        if !self.heap_allocated() {
-            self.set_overflow(true);
-            return Err(c::ENOSPC);
-        }
-
-        let new_size = (self.size as usize + extra + 1).next_power_of_two();
-
-        /* Sanity check... */
-        let max = if self.may_vmalloc() { i32::MAX as usize } else { Kmalloc::MAX_SIZE };
-
-        /*
-         * Note: output buffer must be freeable with kfree(), it's not required
-         * that the user use printbuf_exit().
-         */
-        let buf = if new_size <= max {
-            unsafe { realloc(self.buf, new_size, self.may_vmalloc()) }
-        } else {
-            core::ptr::null_mut()
+        let new_size = (self.capacity() + extra + 1).next_power_of_two();
+        let new = match &self.buf {
+            // what's written moved, the rest zeroed: the nul after it too
+            Some(old) => unsafe { DstArray::realloc_in(old, self.pos(), new_size, (), &KVmalloc) },
+            None      => DstArray::alloc_in(new_size, (), &KVmalloc),
         };
 
-        if buf.is_null() {
-            self.set_allocation_failure(true);
-            self.set_overflow(true);
-            return Err(c::ENOMEM);
+        match new {
+            Ok(new) => {
+                self.buf = Some(new);
+                true
+            }
+            Err(_) => {
+                self.set_allocation_failure(true);
+                false
+            }
         }
-
-        self.buf = buf;
-        self.size = new_size as u32;
-        Ok(())
     }
 
     /// `\n` in a format string.
@@ -456,7 +373,7 @@ impl Printbuf {
         b.last_field = 0;
         b.indent = 0;
         b.cur_tabstop = 0;
-        b.nr_tabstops = 0;
+        b.tabstops.clear();
         b.nul_terminate_reserved();
     }
 
@@ -470,7 +387,7 @@ impl Printbuf {
         }
 
         let b = self;
-        unsafe { core::ptr::copy(b.buf.add(n), b.buf, pos - n + 1) };
+        b.buffer().copy_within(n..pos + 1, 0);
 
         let n = n as u32;
         b.pos -= n;
@@ -500,11 +417,6 @@ impl Printbuf {
             }
             self.write_bytes_indented(name.as_bytes());
         }
-    }
-
-    /// For the C prt_*() functions.
-    pub fn as_raw(&mut self) -> *mut Printbuf {
-        self
     }
 
     /// Shadows fmt::Write's - an inherent method wins - so write!() has no
@@ -537,7 +449,7 @@ impl Printbuf {
         }
 
         let pos = self.pos();
-        let n = f(unsafe { self.buf.cast::<u8>().add(pos) });
+        let n = f(self.buffer()[pos..].as_mut_ptr());
         self.pos += n as u32;
 
         self.nul_terminate_reserved();
@@ -557,27 +469,13 @@ impl Printbuf {
     }
 
     /*
-     * Exit a printbuf, freeing memory it owns, and leave it empty: exiting it
-     * again does nothing - as when C's teardown exits one that Rust's Drop then
-     * exits too.
-     */
-    fn exit(&mut self) {
-        if self.heap_allocated() {
-            unsafe { crate::util::alloc::kvfree_unsized(self.buf.cast()) };
-            // not *self =: that would drop what's freed
-            unsafe { core::ptr::write(self, Printbuf::new()) };
-        }
-    }
-
-    /*
-     * Print out a u64 in human readable units: of 2^10 (default) or 10^3, as
-     * @out->si_units says.
+     * Print out a u64 in human readable units: of 2^10.
      */
     fn human_readable_u64(&mut self, mut v: u64) {
         self.make_room(10);
 
         const UNITS: &[u8] = b"\0kMGTPEZY";
-        let base: u64 = if matches!(self.si_units(), c::PrintbufSi::PRINTBUF_UNITS_10) { 1000 } else { 1024 };
+        let base: u64 = 1024;
         let (mut u, mut r) = (0, 0);
 
         while u + 1 < UNITS.len() && v >= base {
@@ -625,7 +523,7 @@ impl Printbuf {
      * human reabable units (@buf->human_readable_units)
      */
     fn units_u64(&mut self, v: u64) {
-        if self.human_readable_units() {
+        if self.is_human_readable() {
             self.human_readable_u64(v);
         } else {
             write!(self, "{v}");
@@ -638,11 +536,14 @@ impl Printbuf {
 impl Printbuf {
     /// All of it, written or not.
     fn buffer(&mut self) -> &mut [u8] {
-        if self.buf.is_null() {
-            &mut []
-        } else {
-            unsafe { core::slice::from_raw_parts_mut(self.buf.cast(), self.size as usize) }
+        match &mut self.buf {
+            Some(b) => &mut b.elems,
+            None    => &mut [],
         }
+    }
+
+    fn capacity(&self) -> usize {
+        self.buf.as_ref().map_or(0, |b| b.elems.len())
     }
 
     fn pos(&self) -> usize {
@@ -662,8 +563,9 @@ impl Printbuf {
 
     /// Back inside the buffer, a nul's room left, with a warning.
     fn clamp_pos(&mut self) {
-        if crate::warn_on!(self.size != 0 && self.pos >= self.size) {
-            self.pos = self.size - 1;
+        let size = self.capacity();
+        if crate::warn_on!(size != 0 && self.pos() >= size) {
+            self.pos = size as u32 - 1;
         }
     }
 
@@ -673,7 +575,7 @@ impl Printbuf {
      */
     fn remaining(&mut self) -> usize {
         self.clamp_pos();
-        (self.size as usize).saturating_sub(self.pos() + 1)
+        self.capacity().saturating_sub(self.pos() + 1)
     }
 
     fn nul_terminate_reserved(&mut self) {
@@ -706,7 +608,7 @@ impl Printbuf {
 
         self.make_room(nr);
 
-        let size = self.size as usize;
+        let size = self.capacity();
         if at + nr < size {
             self.buffer().copy_within(at..at + mv.min(size - 1 - at - nr), at + nr);
         }
@@ -733,11 +635,7 @@ impl Printbuf {
      * Returns spaces from start of line, if set, or 0 if unset:
      */
     fn cur_tabstop(&self) -> usize {
-        if self.cur_tabstop < self.nr_tabstops {
-            self._tabstops[self.cur_tabstop as usize].into()
-        } else {
-            0
-        }
+        self.tabstops.get(self.cur_tabstop as usize).map_or(0, |&t| t.into())
     }
 
     /// The field after the one ending at @at.
@@ -748,7 +646,7 @@ impl Printbuf {
 
     /// What's written since @pos: \n indented, \t and \r to tabstops.
     fn do_indent(&mut self, pos: usize) {
-        if self.has_indent_or_tabstops() {
+        if self.indent != 0 || !self.tabstops.is_empty() {
             self.do_indent_from(pos);
         }
     }
@@ -795,16 +693,6 @@ impl Printbuf {
     }
 }
 
-/// krealloc(), or kvrealloc() if @vmalloc: what C's kfree() or kvfree() takes
-/// back.
-///
-/// # Safety
-/// @p is null, or this's, and not used after unless this fails.
-unsafe fn realloc(p: *mut c_char, size: usize, vmalloc: bool) -> *mut c_char {
-    let q = unsafe { if vmalloc { kvrealloc_unsized(p.cast(), size) } else { krealloc(p.cast(), size) } };
-    q.map_or(core::ptr::null_mut(), |q| q.as_ptr().cast())
-}
-
 /// None is "(null)", as %pg printed it: a filesystem's superblock's device,
 /// which has none.
 impl ToText for Option<&crate::os::blkdev::BlockDevice> {
@@ -818,8 +706,8 @@ impl ToText for Option<&crate::os::blkdev::BlockDevice> {
 
 impl fmt::Write for Printbuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if self.fmt_job {
-            self.fmt_job = false;
+        if self.fmt_job() {
+            self.set_fmt_job(false);
             // after Probe::Job, pass_through()'s empty str: its address is
             // that of a job on pass_through()'s stack, exposed
             let job = unsafe {
@@ -832,7 +720,7 @@ impl fmt::Write for Printbuf {
         match Probe::of(s) {
             Some(Probe::IsPrintbuf) => return Err(fmt::Error),
             Some(Probe::Job) => {
-                self.fmt_job = true;
+                self.set_fmt_job(true);
                 return Ok(());
             }
             None => {}
@@ -843,21 +731,12 @@ impl fmt::Write for Printbuf {
     }
 }
 
-impl Default for Printbuf {
-    fn default() -> Self { Self::new() }
-}
-
 impl fmt::Display for Printbuf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl Drop for Printbuf {
-    fn drop(&mut self) {
-        self.exit()
-    }
-}
 
 impl ToText for Bpos {
     fn to_text(&self, out: &mut Printbuf) {

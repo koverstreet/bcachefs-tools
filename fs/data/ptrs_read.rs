@@ -202,7 +202,7 @@ impl<const N: usize> IoFailures<N> {
             }
         }
 
-        if self.ec_msg.pos != 0 {
+        if !self.ec_msg.as_bytes().is_empty() {
             write!(out, "ec reconstruct:\n");
             let mut out = out.indent(2);
             out.write_bytes(self.ec_msg.as_bytes());

@@ -475,17 +475,6 @@ void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
 	percpu_up_write(sem);
 }
 
-/* os/linux_kernel/alloc.rs: the kernel's Rust has no kfree() of a size it doesn't know */
-void rust_kfree(const void *p)
-{
-	kfree(p);
-}
-
-void rust_kvfree(void *p)
-{
-	kvfree(p);
-}
-
 /*
  * kvfree_rcu(p, field), for a head the macro can't name: anywhere in @p. As a
  * void *, as the macro casts it: newer kernels take a struct kvfree_rcu_head,
