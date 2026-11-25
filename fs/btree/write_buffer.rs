@@ -459,7 +459,7 @@ impl BtreeTrans<'_> {
             return Ok(());
         }
 
-        let Some(_write) = fs.writes.tryget_live() else {
+        let Some(_write) = fs.writes.tryget() else {
             return fs.throw(Errcode::erofs_no_writes);
         };
 

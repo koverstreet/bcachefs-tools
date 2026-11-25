@@ -84,7 +84,7 @@ impl InodeInfo {
             return Ok(());
         }
 
-        let Some(_write) = fs.writes.tryget_live() else {
+        let Some(_write) = fs.writes.tryget() else {
             return Err(c::EROFS.into());
         };
 
@@ -629,7 +629,7 @@ pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64
     let fs = inode.fs();
     let (mode, offset, len) = (mode as u32, offset as u64, len as u64);
 
-    let Some(_write) = fs.writes.tryget_live() else {
+    let Some(_write) = fs.writes.tryget() else {
         return Err(c::EROFS.into());
     };
 

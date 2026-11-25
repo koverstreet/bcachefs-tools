@@ -1450,7 +1450,7 @@ impl c::journal {
     pub fn meta(&self) -> Result<(), BchError> {
         let fs = self.fs();
 
-        let Some(_write) = fs.writes.tryget_live() else {
+        let Some(_write) = fs.writes.tryget() else {
             return fs.throw(Errcode::erofs_no_writes);
         };
 

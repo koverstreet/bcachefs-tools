@@ -336,7 +336,7 @@ fn direct_write_of<P: UserPage>(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'
     let inode = k.inode();
     let fs = inode.fs();
 
-    let Some(write_ref) = fs.writes.tryget_live() else {
+    let Some(write_ref) = fs.writes.tryget() else {
         return -(c::EROFS as isize);
     };
 

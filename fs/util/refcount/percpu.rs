@@ -121,12 +121,13 @@ unsafe impl Refcount for PercpuRef {
 }
 
 unsafe impl TryRefcount for PercpuRef {
+    // the kernel's names are the other way round
     fn try_inc(&self) -> bool {
-        unsafe { c::percpu_ref_tryget(self.r.get()) }
+        unsafe { c::percpu_ref_tryget_live(self.r.get()) }
     }
 
     fn try_inc_live(&self) -> bool {
-        unsafe { c::percpu_ref_tryget_live(self.r.get()) }
+        unsafe { c::percpu_ref_tryget(self.r.get()) }
     }
 }
 

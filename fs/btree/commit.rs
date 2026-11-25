@@ -618,7 +618,7 @@ impl BtreeTrans<'_> {
     fn commit_merge(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, flags: CommitOpts, i: &mut usize,
                     dst: &mut usize) -> Result<(), BchError>
     {
-        let Some(_write) = self.fs().writes.tryget_live() else {
+        let Some(_write) = self.fs().writes.tryget() else {
             return Ok(());
         };
 
@@ -1105,7 +1105,7 @@ impl BtreeTrans<'_> {
         }
 
         let _write = if !has(flags, CommitFlags::NO_CHECK_RW) {
-            match fs.writes.tryget_live() {
+            match fs.writes.tryget() {
                 Some(w) => Some(w),
                 None    => return paths.lend(|| self.commit_to_journal_replay(t, flags)),
             }

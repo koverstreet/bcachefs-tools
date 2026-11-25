@@ -198,7 +198,7 @@ impl Fs {
 
         let mut pending = r.pending.lock();
         let replay_done = self.recovery.runner.passes_complete.get() & 1 << RecoveryPass::journal_replay as u32 != 0;
-        if let Some(write) = replay_done.then(|| self.writes.tryget_live()).flatten() {
+        if let Some(write) = replay_done.then(|| self.writes.tryget()).flatten() {
             r.running.fetch_add(1, AcqRel);
             drop(pending);
             self.async_btree_op_start(write, a);
@@ -218,7 +218,7 @@ impl Fs {
                 r.running.fetch_add(1, AcqRel);
                 a
             };
-            let Some(write) = self.writes.tryget_live() else {
+            let Some(write) = self.writes.tryget() else {
                 drop(a);
                 r.op_done();
                 return;

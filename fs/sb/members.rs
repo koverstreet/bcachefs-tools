@@ -1098,7 +1098,7 @@ impl Fs {
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
     pub(crate) fn io_ref_tryget<R: IoRefIdx>(&self, ca: &Dev) -> Option<DevIoRef<R>> {
-        R::count(ca).tryget_live()
+        R::count(ca).tryget()
     }
 
     /// What @f makes of each device it doesn't skip: each step its own RCU

@@ -862,7 +862,7 @@ pub fn remap_range(
     let reflink_p_may_update_opts_field = fs.request_incompat_feature(
         MetadataVersion::reflink_p_may_update_opts).is_ok();
 
-    let Some(_write_ref) = fs.writes.tryget_live() else {
+    let Some(_write_ref) = fs.writes.tryget() else {
         return fs.throw(Errcode::erofs_no_writes);
     };
 

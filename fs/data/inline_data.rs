@@ -183,7 +183,7 @@ impl BkeyOps for c::InlineDataV2 {
 /// commit mustn't wait under. Nothing on a read-only filesystem, as a
 /// pointer extent's poisoning.
 pub(crate) fn poison(fs: &Fs, btree: Btree, k: BkeySC<'_>, read_pos: Bpos, record: bool) {
-    let Some(write) = fs.writes.tryget_live() else { return };
+    let Some(write) = fs.writes.tryget() else { return };
     // the task holds it, and its write ref: going read-only waits for that
     let fs_ref = unsafe { BackRef::new(fs) };
     let tasks = unsafe { fs_ref.get() }.tasks();

@@ -66,7 +66,7 @@ struct InFlight(WriteRef);
 
 impl InFlight {
     fn tryget(fs: &Fs) -> Result<Self, BchError> {
-        let write = fs.writes.tryget_live().ok_or_else(|| fs.err(Errcode::nopromote_no_writes))?;
+        let write = fs.writes.tryget().ok_or_else(|| fs.err(Errcode::nopromote_no_writes))?;
         if !fs.promote_limit_tryget() {
             return fs.throw(Errcode::nopromote_ratelimited);
         }

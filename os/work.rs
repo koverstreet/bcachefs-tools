@@ -105,7 +105,7 @@ where
 /// the parent for the run; a second's count need only outlive the parent -
 /// its path may go Through a BackRef. Taken in order; put in reverse, the
 /// parent's keeper last - Held's drop order. Held is guards on the refs
-/// tryget_live() takes, and adopt() makes. Or none: OnQueue.
+/// tryget() takes, and adopt() makes. Or none: OnQueue.
 pub(crate) trait WorkRefs<P> {
     /// The refs, held: put when it's dropped.
     type Held;
@@ -115,10 +115,10 @@ pub(crate) trait WorkRefs<P> {
 
     fn queue_of<'a>(p: &'a P, on: Self::On<'a>) -> &'a Queue;
 
-    fn tryget_live(p: &P) -> Option<Self::Held>;
+    fn tryget(p: &P) -> Option<Self::Held>;
 
     /// # Safety
-    /// The refs are held, from a tryget_live() whose Held was forgotten, and
+    /// The refs are held, from a tryget() whose Held was forgotten, and
     /// given up to this.
     unsafe fn adopt(p: &P) -> Self::Held;
 }
@@ -134,8 +134,8 @@ where
         on
     }
 
-    fn tryget_live(p: &P) -> Option<Self::Held> {
-        R::get(p).tryget_live()
+    fn tryget(p: &P) -> Option<Self::Held> {
+        R::get(p).tryget()
     }
 
     unsafe fn adopt(p: &P) -> Self::Held {
@@ -156,9 +156,9 @@ where
         on
     }
 
-    fn tryget_live(p: &P) -> Option<Self::Held> {
-        let a = A::get(p).tryget_live()?;
-        Some((B::get(p).tryget_live()?, a))
+    fn tryget(p: &P) -> Option<Self::Held> {
+        let a = A::get(p).tryget()?;
+        Some((B::get(p).tryget()?, a))
     }
 
     unsafe fn adopt(p: &P) -> Self::Held {
@@ -197,7 +197,7 @@ where
         Q::get(p).queue()
     }
 
-    fn tryget_live(_: &P) -> Option<()> {
+    fn tryget(_: &P) -> Option<()> {
         Some(())
     }
 
@@ -209,13 +209,13 @@ where
     F::At: Place<Type = Self>,
 {
     /// Run F on @on's queue, holding R's refs: false if they can't all be had
-    /// - tryget_live(). Queued already, the pending run's refs are the ones
+    /// - tryget(). Queued already, the pending run's refs are the ones
     /// there'll be.
     pub(crate) fn queue<'a>(&'a self, on: R::On<'a>) -> bool {
         let p = self.container();
         let wq = R::queue_of(p, on);
         // taken first: the run can start, and put them, as soon as it's queued
-        let Some(r) = R::tryget_live(p) else { return false };
+        let Some(r) = R::tryget(p) else { return false };
         if unsafe { self.work.queue(wq) } {
             // the run's, which adopts them
             core::mem::forget(r);
@@ -378,7 +378,7 @@ where
     pub(crate) fn queue<'a>(&'a self, on: Refs::On<'a>, delay: c_ulong) -> bool {
         let p = self.container();
         let wq = Refs::queue_of(p, on);
-        let Some(r) = Refs::tryget_live(p) else { return false };
+        let Some(r) = Refs::tryget(p) else { return false };
         if unsafe { self.work.queue(wq, delay) } {
             core::mem::forget(r);
         }
@@ -390,7 +390,7 @@ where
     pub(crate) fn modify<'a>(&'a self, on: Refs::On<'a>, delay: c_ulong) -> bool {
         let p = self.container();
         let wq = Refs::queue_of(p, on);
-        let Some(r) = Refs::tryget_live(p) else { return false };
+        let Some(r) = Refs::tryget(p) else { return false };
         if !unsafe { self.work.modify(wq, delay) } {
             // queued anew: the run's
             core::mem::forget(r);

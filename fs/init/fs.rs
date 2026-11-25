@@ -1128,7 +1128,7 @@ impl Fs {
         M: FnOnce(WriteRef) -> F + Send + 'static,
         F: Future<Output = ()> + Send + 'static,
     {
-        let w: WriteRef = RefGuard::tryget_live(&self.writes).ok_or(BchError::from(c::EROFS))?;
+        let w: WriteRef = RefGuard::tryget(&self.writes).ok_or(BchError::from(c::EROFS))?;
         // SAFETY: what the future has of the filesystem, it has by the write
         // ref; the queue and task list are drained in teardown(), before the
         // filesystem's freed

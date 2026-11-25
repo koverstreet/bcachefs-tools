@@ -232,7 +232,7 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     }
 
     let fs = m.trans().fs();
-    let write = fs.writes.tryget_live().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes))?;
+    let write = fs.writes.tryget().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes))?;
     // the task holds it, and its write ref: going read-only waits for that
     let fs_ref = unsafe { BackRef::new(fs) };
     let fs = unsafe { fs_ref.get() };

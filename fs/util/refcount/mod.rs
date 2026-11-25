@@ -13,12 +13,12 @@
 //! beside the box that owns what it counts.
 //!
 //! A TryRefcount can be tried for:
-//! tryget() fails once the count is dead - or has never started.
-//! tryget_live() is for a count that's killed in two steps, as a percpu_ref
-//! is: it fails as soon as killing begins, where tryget() still succeeds
-//! until the count is dead - for what must finish once it's begun. A count
-//! killed in one step has nothing to tell them apart: tryget_live() is
-//! tryget().
+//! tryget() fails once the count is shutting down - or before it's started:
+//! what's wanted almost always. tryget_live() is for a count that's killed in
+//! two steps, as a percpu_ref is: it still succeeds while killing's under
+//! way, and fails only once the count is dead - for what must finish once
+//! it's begun. A count killed in one step has nothing to tell them apart:
+//! tryget_live() is tryget().
 //!
 //! A count with nothing to try - an open bucket's pins, the first made with
 //! the bucket, the rest from one that's held - is a Refcount and not a
@@ -82,8 +82,12 @@ pub unsafe trait Refcount {
 /// # Safety
 /// A try_inc() or try_inc_live() that returns true takes a ref, as inc().
 pub unsafe trait TryRefcount: Refcount {
+    /// A ref, unless it's shutting down: what's wanted almost always.
     fn try_inc(&self) -> bool;
 
+    /// A ref, unless it's dead - its count at zero - so while it's shutting
+    /// down too: rarely what's wanted. Unless the count tells the two apart,
+    /// try_inc()'s.
     fn try_inc_live(&self) -> bool {
         self.try_inc()
     }

@@ -163,7 +163,7 @@ impl Fs {
             return;
         }
 
-        let Some(_write) = self.writes.tryget_live() else { return };
+        let Some(_write) = self.writes.tryget() else { return };
 
         let bits = 63 - shard_bits;
         let n_shards = 1u64 << shard_bits;
