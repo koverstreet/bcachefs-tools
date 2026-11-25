@@ -173,7 +173,7 @@ impl<'a> RecoveryDisplay<'a> {
                 Some(arg)
             }
             Err(e) => {
-                self.supported = e.raw_os_error() != Some(libc::ENOTTY);
+                self.supported = e.raw_os_error() != Some(rustix::io::Errno::NOTTY.raw_os_error());
                 None
             }
         }

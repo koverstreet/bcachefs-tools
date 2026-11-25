@@ -90,7 +90,7 @@ pub fn grow_on_erange<T>(mut bytes: usize, max: usize,
     assert!(bytes > 0, "grow_on_erange() from 0 bytes never grows");
     loop {
         match call(bytes) {
-            Err(e) if e.raw_os_error() == Some(libc::ERANGE) && bytes < max =>
+            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::RANGE.raw_os_error()) && bytes < max =>
                 bytes = (bytes * 2).min(max),
             r => return r,
         }

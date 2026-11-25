@@ -14,6 +14,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::{c, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
+use rustix::mount::MountFlags;
 use uuid::Uuid;
 use crate::degraded;
 use crate::device_scan;
@@ -138,7 +139,7 @@ fn mount_fs_context(
     src: &str,
     target: &CStr,
     fstype: &str,
-    mountflags: core::ffi::c_ulong,
+    mountflags: MountFlags,
     data: Option<&str>,
     devs: &[DevInfo],
     user_key: Option<&str>,
@@ -225,8 +226,8 @@ fn mount_fs_context(
         // Write-protected device: retry read-only, as mount(8) does. Say nothing
         // yet - the retry produces the real outcome, and this context's log dies
         // with it.
-        if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EROFS))
-            && mountflags & libc::MS_RDONLY == 0
+        if matches!(rustix::io::Errno::from_io_error(&e), Some(rustix::io::Errno::ACCESS | rustix::io::Errno::ROFS))
+            && !mountflags.contains(MountFlags::RDONLY)
         {
             return Ok(Mounted::WriteProtected);
         }
@@ -318,7 +319,8 @@ fn mount_inner(
     src: OsString,
     target: &std::path::Path,
     fstype: &str,
-    mountflags: core::ffi::c_ulong,
+    mountflags: MountFlags,
+    remount: bool,
     data: Option<String>,
     devs: Vec<DevInfo>,
     unlocked: Option<&Unlocked>,
@@ -332,7 +334,7 @@ fn mount_inner(
     // a parameter, so that one still goes through a keyring.
     let user_key = unlocked.and_then(|u| u.hex());
 
-    if mountflags & libc::MS_REMOUNT == 0 {
+    if !remount {
         if let Some(src_str) = src.to_str() {
             let c_target = path_to_cstr(target);
             let mut flags = mountflags;
@@ -345,7 +347,7 @@ fn mount_inner(
                     Mounted::UseLegacy => break,
                     Mounted::WriteProtected => {
                         println!("mount: device write-protected, mounting read-only");
-                        flags |= libc::MS_RDONLY;
+                        flags |= MountFlags::RDONLY;
                     }
                 }
             }
@@ -363,20 +365,21 @@ fn mount_inner(
         }
     }
 
-    mount_legacy(src, target, fstype, mountflags, data)
+    mount_legacy(src, target, fstype, mountflags, remount, data)
 }
 
 fn mount_legacy(
     src: OsString,
     target: &std::path::Path,
     fstype: &str,
-    mut mountflags: core::ffi::c_ulong,
+    mut mountflags: MountFlags,
+    remount: bool,
     data: Option<String>,
 ) -> Result<(), MountError> {
     // An interior NUL can't be expressed in a C string at all. Nothing has been
     // attempted at this point, so the errno is ours rather than the kernel's.
     let bad_arg = |what: &str| MountError {
-        code: libc::EINVAL.into(),
+        code: c::EINVAL.into(),
         text: format!("{what} contains a NUL byte"),
     };
 
@@ -388,15 +391,18 @@ fn mount_legacy(
     let ret = loop {
         info!("mounting filesystem");
         // REQUIRES: CAP_SYS_ADMIN
-        let ret = rustix::mount::mount(c_src.as_c_str(), c_target.as_c_str(), fstype.as_c_str(),
-                                       rustix::mount::MountFlags::from_bits_retain(mountflags as _),
-                                       data.as_deref());
+        let ret = if remount {
+            rustix::mount::mount_remount(c_target.as_c_str(), mountflags, data.as_deref().unwrap_or(c""))
+        } else {
+            rustix::mount::mount(c_src.as_c_str(), c_target.as_c_str(), fstype.as_c_str(), mountflags,
+                                 data.as_deref())
+        };
 
         match ret {
             Err(e) if (e == rustix::io::Errno::ACCESS || e == rustix::io::Errno::ROFS) &&
-                      mountflags & libc::MS_RDONLY == 0 => {
+                      !mountflags.contains(MountFlags::RDONLY) => {
                 println!("mount: device write-protected, mounting read-only");
-                mountflags |= libc::MS_RDONLY;
+                mountflags |= MountFlags::RDONLY;
             }
             ret => break ret,
         }
@@ -410,7 +416,7 @@ fn mount_legacy(
         // is worth translating: what it means here isn't obvious from the word.
         Err(MountError {
             code: BchError::from_raw(err.0),
-            text: if err.0 == libc::EBUSY {
+            text: if e == rustix::io::Errno::BUSY {
                 format!("{}: {src:?} already mounted or mount point busy",
                         target.to_string_lossy())
             } else {
@@ -428,15 +434,23 @@ fn mount_legacy(
 /// (`flags`), the FUSE mount (`fuse_options`), and the filesystem itself
 /// (`fs_opts`, handed to parse_mount_opts later) - so it's tabulated once in
 /// [`parse_mountflag_options`] rather than re-derived per caller.
-#[derive(Default)]
 pub(crate) struct ParsedMountOptions {
     /// Filesystem-specific options: everything not consumed as a kernel flag.
     pub fs_opts:      Option<String>,
     /// Kernel mount flags for mount(2).
-    pub flags:        core::ffi::c_ulong,
+    pub flags:        MountFlags,
+    /// mount(2)'s MS_REMOUNT: reconfigure the mount at the target, which
+    /// isn't a MountFlags - rustix's mount_remount() says it.
+    pub remount:      bool,
     /// `flags` expressed as fuser options, for the FUSE path. Flags with no
     /// fuser equivalent are omitted here but still apply via `flags`.
     pub fuse_options: Vec<fuser::MountOption>,
+}
+
+impl Default for ParsedMountOptions {
+    fn default() -> Self {
+        ParsedMountOptions { fs_opts: None, flags: MountFlags::empty(), remount: false, fuse_options: Vec::new() }
+    }
 }
 
 /// Parse a comma-separated mount option string, splitting kernel mount flags
@@ -458,20 +472,20 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
 
     for opt in options.as_ref().split(',') {
         match opt {
-            "dirsync"     => flag!(libc::MS_DIRSYNC, fuser::MountOption::DirSync),
-            "lazytime"    => flag!(fs_context::MS_LAZYTIME),
-            "mand"        => flag!(libc::MS_MANDLOCK),
-            "noatime"     => flag!(libc::MS_NOATIME, fuser::MountOption::NoAtime),
-            "nodev"       => flag!(libc::MS_NODEV, fuser::MountOption::NoDev),
-            "nodiratime"  => flag!(libc::MS_NODIRATIME),
-            "noexec"      => flag!(libc::MS_NOEXEC, fuser::MountOption::NoExec),
-            "nosuid"      => flag!(libc::MS_NOSUID, fuser::MountOption::NoSuid),
-            "relatime"    => flag!(libc::MS_RELATIME),
-            "remount"     => flag!(libc::MS_REMOUNT),
-            "ro"          => flag!(libc::MS_RDONLY, fuser::MountOption::RO),
+            "dirsync"     => flag!(MountFlags::DIRSYNC, fuser::MountOption::DirSync),
+            "lazytime"    => flag!(MountFlags::LAZYTIME),
+            "mand"        => flag!(MountFlags::PERMIT_MANDATORY_FILE_LOCKING),
+            "noatime"     => flag!(MountFlags::NOATIME, fuser::MountOption::NoAtime),
+            "nodev"       => flag!(MountFlags::NODEV, fuser::MountOption::NoDev),
+            "nodiratime"  => flag!(MountFlags::NODIRATIME),
+            "noexec"      => flag!(MountFlags::NOEXEC, fuser::MountOption::NoExec),
+            "nosuid"      => flag!(MountFlags::NOSUID, fuser::MountOption::NoSuid),
+            "relatime"    => flag!(MountFlags::RELATIME),
+            "remount"     => parsed.remount = true,
+            "ro"          => flag!(MountFlags::RDONLY, fuser::MountOption::RO),
             "rw" | ""     => {}
-            "strictatime" => flag!(libc::MS_STRICTATIME),
-            "sync"        => flag!(libc::MS_SYNCHRONOUS, fuser::MountOption::Sync),
+            "strictatime" => flag!(MountFlags::STRICTATIME),
+            "sync"        => flag!(MountFlags::SYNCHRONOUS, fuser::MountOption::Sync),
             // Userspace-only fstab options - not passed to the kernel:
             "auto" | "noauto" | "nofail" | "_netdev"
             | "user" | "nouser" | "users" | "group" | "owner" => {}
@@ -487,6 +501,7 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
 #[cfg(test)]
 mod tests {
     use super::{is_splitbrain, parse_mountflag_options, take_fuse_option};
+    use rustix::mount::MountFlags;
     use bcachefs_kernel::c;
     use bcachefs_kernel::errcode::BchError;
 
@@ -522,8 +537,7 @@ mod tests {
         let p = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery");
 
         assert_eq!(p.fs_opts.as_deref(), Some("metadata_replicas=2,norecovery"));
-        assert_ne!(p.flags & libc::MS_RDONLY, 0);
-        assert_ne!(p.flags & libc::MS_NOEXEC, 0);
+        assert!(p.flags.contains(MountFlags::RDONLY | MountFlags::NOEXEC));
     }
 
     #[test]
@@ -531,7 +545,7 @@ mod tests {
         let p = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5");
 
         assert_eq!(p.fs_opts, None);
-        assert_eq!(p.flags, 0);
+        assert!(p.flags.is_empty());
     }
 }
 
@@ -674,7 +688,7 @@ fn mount_asking_about_degraded(
         );
 
         let err = match mount_inner(a.devices.clone(), mountpoint, "bcachefs",
-                                    flags, fs_opts.clone(), a.devinfo.clone(),
+                                    flags, parsed.remount, fs_opts.clone(), a.devinfo.clone(),
                                     unlocked) {
             Ok(()) => {
                 // Mounted, but we left members behind: one of them may have
@@ -696,7 +710,7 @@ fn mount_asking_about_degraded(
                 // to be read-only to the VFS - or /proc/mounts says rw and the
                 // user has only our word for it.
                 if read_only {
-                    flags |= libc::MS_RDONLY;
+                    flags |= MountFlags::RDONLY;
                 }
                 a.ask = None;
             }

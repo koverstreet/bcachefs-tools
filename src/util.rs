@@ -45,7 +45,7 @@ pub fn open_dir(path: &Path) -> Result<OwnedFd> {
     use std::os::unix::fs::OpenOptionsExt;
     let f = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_DIRECTORY)
+        .custom_flags(rustix::fs::OFlags::DIRECTORY.bits() as i32)
         .open(path)
         .with_context(|| format!("Failed to open {}", path.display()))?;
     Ok(f.into())

@@ -62,7 +62,7 @@ use std::{
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd},
 };
 
-use rustix::mount;
+use rustix::mount::{self, MountAttrFlags, MountFlags};
 
 const FSCONFIG_SET_FLAG: core::ffi::c_uint = 0;
 
@@ -82,36 +82,25 @@ const FSCONFIG_SET_FLAG: core::ffi::c_uint = 0;
 /// everything else here reports failures through that log.
 pub const PARAM_VALUE_MAX: usize = 255;
 
-pub const MOUNT_ATTR_RDONLY:      core::ffi::c_uint = 0x0000_0001;
-pub const MOUNT_ATTR_NOSUID:      core::ffi::c_uint = 0x0000_0002;
-pub const MOUNT_ATTR_NODEV:       core::ffi::c_uint = 0x0000_0004;
-pub const MOUNT_ATTR_NOEXEC:      core::ffi::c_uint = 0x0000_0008;
-pub const MOUNT_ATTR_NOATIME:     core::ffi::c_uint = 0x0000_0010;
-pub const MOUNT_ATTR_STRICTATIME: core::ffi::c_uint = 0x0000_0020;
-pub const MOUNT_ATTR_NODIRATIME:  core::ffi::c_uint = 0x0000_0080;
-
-/// MS_LAZYTIME, which libc doesn't define.
-pub const MS_LAZYTIME: core::ffi::c_ulong = 1 << 25;
-
 /// Translate the per-mount MS_* flags to the MOUNT_ATTR_* fsmount() takes.
 ///
 /// Flags with no per-mount equivalent are dropped here on purpose; see
 /// [`sb_flag_params`] for where the superblock ones go instead. The two sets
 /// are not disjoint: MS_RDONLY is both, and has to be sent both ways.
-pub fn mount_attrs(mountflags: core::ffi::c_ulong) -> core::ffi::c_uint {
-    const MAP: &[(core::ffi::c_ulong, core::ffi::c_uint)] = &[
-        (libc::MS_RDONLY,      MOUNT_ATTR_RDONLY),
-        (libc::MS_NOSUID,      MOUNT_ATTR_NOSUID),
-        (libc::MS_NODEV,       MOUNT_ATTR_NODEV),
-        (libc::MS_NOEXEC,      MOUNT_ATTR_NOEXEC),
-        (libc::MS_NOATIME,     MOUNT_ATTR_NOATIME),
-        (libc::MS_STRICTATIME, MOUNT_ATTR_STRICTATIME),
-        (libc::MS_NODIRATIME,  MOUNT_ATTR_NODIRATIME),
+pub fn mount_attrs(mountflags: MountFlags) -> MountAttrFlags {
+    const MAP: &[(MountFlags, MountAttrFlags)] = &[
+        (MountFlags::RDONLY,      MountAttrFlags::MOUNT_ATTR_RDONLY),
+        (MountFlags::NOSUID,      MountAttrFlags::MOUNT_ATTR_NOSUID),
+        (MountFlags::NODEV,       MountAttrFlags::MOUNT_ATTR_NODEV),
+        (MountFlags::NOEXEC,      MountAttrFlags::MOUNT_ATTR_NOEXEC),
+        (MountFlags::NOATIME,     MountAttrFlags::MOUNT_ATTR_NOATIME),
+        (MountFlags::STRICTATIME, MountAttrFlags::MOUNT_ATTR_STRICTATIME),
+        (MountFlags::NODIRATIME,  MountAttrFlags::MOUNT_ATTR_NODIRATIME),
     ];
 
     MAP.iter()
-        .filter(|(ms, _)| mountflags & ms != 0)
-        .fold(0, |attrs, (_, attr)| attrs | attr)
+        .filter(|(ms, _)| mountflags.contains(*ms))
+        .fold(MountAttrFlags::empty(), |attrs, (_, attr)| attrs | *attr)
 }
 
 /// The MS_* flags that are superblock state, as the fsconfig() parameter names
@@ -123,17 +112,17 @@ pub fn mount_attrs(mountflags: core::ffi::c_ulong) -> core::ffi::c_uint {
 /// filesystem to open its devices read-only. Send only the former and a
 /// write-protected device fails the mount outright - the filesystem asks for
 /// O_RDWR and gets EACCES, and mount(8)'s read-only retry has nothing to change.
-pub fn sb_flag_params(mountflags: core::ffi::c_ulong) -> Vec<&'static str> {
-    const MAP: &[(core::ffi::c_ulong, &str)] = &[
-        (libc::MS_RDONLY,      "ro"),
-        (libc::MS_SYNCHRONOUS, "sync"),
-        (libc::MS_DIRSYNC,     "dirsync"),
-        (libc::MS_MANDLOCK,    "mand"),
-        (MS_LAZYTIME,          "lazytime"),
+pub fn sb_flag_params(mountflags: MountFlags) -> Vec<&'static str> {
+    const MAP: &[(MountFlags, &str)] = &[
+        (MountFlags::RDONLY,                        "ro"),
+        (MountFlags::SYNCHRONOUS,                   "sync"),
+        (MountFlags::DIRSYNC,                       "dirsync"),
+        (MountFlags::PERMIT_MANDATORY_FILE_LOCKING, "mand"),
+        (MountFlags::LAZYTIME,                      "lazytime"),
     ];
 
     MAP.iter()
-        .filter(|(ms, _)| mountflags & ms != 0)
+        .filter(|(ms, _)| mountflags.contains(*ms))
         .map(|(_, name)| *name)
         .collect()
 }
@@ -237,9 +226,8 @@ impl FsContext {
 
     /// fsmount(2): turn the created superblock into a detached mount. Attach it
     /// with [`move_mount`].
-    pub fn fsmount(&self, attrs: core::ffi::c_uint) -> io::Result<OwnedFd> {
-        Ok(mount::fsmount(self.fd.as_fd(), mount::FsMountFlags::FSMOUNT_CLOEXEC,
-                          mount::MountAttrFlags::from_bits_retain(attrs))?)
+    pub fn fsmount(&self, attrs: MountAttrFlags) -> io::Result<OwnedFd> {
+        Ok(mount::fsmount(self.fd.as_fd(), mount::FsMountFlags::FSMOUNT_CLOEXEC, attrs)?)
     }
 
     /// Read out everything the kernel has logged against this context.
@@ -293,19 +281,20 @@ mod tests {
 
     #[test]
     fn per_mount_flags_become_mount_attrs() {
-        let attrs = mount_attrs(libc::MS_RDONLY | libc::MS_NOEXEC | libc::MS_NODEV);
+        let attrs = mount_attrs(MountFlags::RDONLY | MountFlags::NOEXEC | MountFlags::NODEV);
 
-        assert_eq!(attrs, MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOEXEC | MOUNT_ATTR_NODEV);
-        assert_eq!(mount_attrs(0), 0);
+        assert_eq!(attrs, MountAttrFlags::MOUNT_ATTR_RDONLY | MountAttrFlags::MOUNT_ATTR_NOEXEC |
+                          MountAttrFlags::MOUNT_ATTR_NODEV);
+        assert_eq!(mount_attrs(MountFlags::empty()), MountAttrFlags::empty());
     }
 
     /// Superblock flags have no MOUNT_ATTR_* equivalent; if they were dropped
     /// here instead of becoming fsconfig parameters they'd vanish silently.
     #[test]
     fn superblock_flags_become_fsconfig_params() {
-        let flags = libc::MS_SYNCHRONOUS | libc::MS_DIRSYNC;
+        let flags = MountFlags::SYNCHRONOUS | MountFlags::DIRSYNC;
 
-        assert_eq!(mount_attrs(flags), 0);
+        assert_eq!(mount_attrs(flags), MountAttrFlags::empty());
         assert_eq!(sb_flag_params(flags), vec!["sync", "dirsync"]);
     }
 
@@ -313,7 +302,7 @@ mod tests {
     /// VFS would reject the name and fail the mount.
     #[test]
     fn per_mount_only_flags_are_not_fsconfig_params() {
-        assert!(sb_flag_params(libc::MS_NOEXEC | libc::MS_NODEV).is_empty());
+        assert!(sb_flag_params(MountFlags::NOEXEC | MountFlags::NODEV).is_empty());
     }
 
     /// MS_RDONLY is both, and the superblock half is the one that matters for a
@@ -321,8 +310,8 @@ mod tests {
     /// devices O_RDWR and the mount fails EACCES, which is generic/050.
     #[test]
     fn rdonly_is_both_a_mount_attr_and_an_sb_param() {
-        assert_eq!(mount_attrs(libc::MS_RDONLY), MOUNT_ATTR_RDONLY);
-        assert_eq!(sb_flag_params(libc::MS_RDONLY), vec!["ro"]);
+        assert_eq!(mount_attrs(MountFlags::RDONLY), MountAttrFlags::MOUNT_ATTR_RDONLY);
+        assert_eq!(sb_flag_params(MountFlags::RDONLY), vec!["ro"]);
     }
 
     #[test]

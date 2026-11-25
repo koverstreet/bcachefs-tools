@@ -129,7 +129,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
 
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_DIRECT)
+        .custom_flags(rustix::fs::OFlags::DIRECT.bits() as i32)
         .open(&cli.file)?;
 
     let mut buf = AlignedBox::<[u8], IO_ALIGN>::try_new_zeroed_slice_gfp(cli.len.min(CHUNK) as usize, Flags::empty())?;

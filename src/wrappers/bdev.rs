@@ -108,7 +108,7 @@ pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
 }
 
 mod blkid {
-    use libc::{c_char, c_int, c_void};
+    use core::ffi::{c_char, c_int, c_void};
 
     pub type Probe = *mut c_void;
 

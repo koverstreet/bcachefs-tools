@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};
 use std::os::unix::ffi::OsStrExt;
+use rustix::fs::FileType;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use crate::wrappers::fs::FsExt;
@@ -51,8 +52,7 @@ fn rustix_err(e: rustix::io::Errno) -> BchError {
 }
 
 /// Convert a rustix FileType to a DT_* constant.
-fn file_type_to_dtype(ft: rustix::fs::FileType) -> u8 {
-    use rustix::fs::FileType;
+fn file_type_to_dtype(ft: FileType) -> u8 {
     match ft {
         FileType::RegularFile     => DT_REG,
         FileType::Directory       => DT_DIR,
@@ -522,7 +522,7 @@ fn link_file_data(
     // First pass: check for unknown extents and fsync if found
     let fm = fiemap::Fiemap::new(&src_fd);
     for extent in fm {
-        let extent = extent.map_err(|_| BchError::from(libc::EIO))?;
+        let extent = extent.map_err(|_| BchError::from(c::EIO))?;
         if extent.fe_flags.contains(fiemap::FiemapExtentFlags::UNKNOWN) {
             rustix::fs::fsync(src_fd).map_err(rustix_err)?;
             break;
@@ -532,7 +532,7 @@ fn link_file_data(
     // Second pass: link or copy extents
     let fm = fiemap::Fiemap::new(&src_fd);
     for extent in fm {
-        let extent = extent.map_err(|_| BchError::from(libc::EIO))?;
+        let extent = extent.map_err(|_| BchError::from(c::EIO))?;
 
         s.total_input += extent.fe_length;
 
@@ -543,7 +543,7 @@ fn link_file_data(
         if (extent.fe_logical & (block_size - 1)) != 0 || (length & (block_size - 1)) != 0 {
             let msg = format!("Unaligned extent in {} - can't handle", src_path.to_string_lossy());
             eprintln!("{}", msg);
-            return Err(BchError::from(libc::EINVAL));
+            return Err(BchError::from(c::EINVAL));
         }
 
         let needs_copy = s.migrate_type == MigrateType::Copy
@@ -570,7 +570,7 @@ fn link_file_data(
         if (extent.fe_physical & (block_size - 1)) != 0 {
             let msg = format!("Unaligned extent in {} - can't handle", src_path.to_string_lossy());
             eprintln!("{}", msg);
-            return Err(BchError::from(libc::EINVAL));
+            return Err(BchError::from(c::EINVAL));
         }
 
         range_add(&mut s.extents, extent.fe_physical, length);
@@ -814,7 +814,7 @@ fn recursive_remove(
 
     let mut child = inode::find_by_inum(fs, child_inum)?;
 
-    if (child.bi_mode as u32 & libc::S_IFMT) == libc::S_IFDIR {
+    if FileType::from_raw_mode(child.bi_mode.into()) == FileType::Directory {
         let child_dirents = simple_readdir(fs, child_inum, &mut child)?;
         for entry in &child_dirents {
             recursive_remove(fs, child_inum, &mut child, entry)?;
@@ -951,11 +951,11 @@ fn copy_dir(
 
         if s.migrate_type == MigrateType::Migrate && d.stat.st_dev != s.dev {
             eprintln!("{} does not have correct st_dev!", child_path.to_string_lossy());
-            return Err(BchError::from(libc::EINVAL));
+            return Err(BchError::from(c::EINVAL));
         }
 
         // Hardlink handling
-        if (d.stat.st_mode & libc::S_IFMT) == libc::S_IFREG && d.stat.st_nlink > 1 {
+        if FileType::from_raw_mode(d.stat.st_mode) == FileType::RegularFile && d.stat.st_nlink > 1 {
             if let Some(&dst_ino) = s.hardlinks.get(&src_ino) {
                 create_or_update_link(
                     fs, dir_inum, dst, &d.name,
@@ -974,7 +974,7 @@ fn copy_dir(
         let dst_child_inum = subvol_inum(inode.bi_inum);
 
         // Record hardlink destination
-        if (d.stat.st_mode & libc::S_IFMT) == libc::S_IFREG && d.stat.st_nlink > 1 {
+        if FileType::from_raw_mode(d.stat.st_mode) == FileType::RegularFile && d.stat.st_nlink > 1 {
             s.hardlinks.insert(src_ino, inode.bi_inum);
         }
 
@@ -1033,7 +1033,7 @@ fn reserve_old_fs_space(
     let name = CString::new("old_migrated_filesystem").unwrap();
     let mut dst = create_or_update_file(
         fs, root_inum, root_inode,
-        &name, 0, 0, libc::S_IFREG | 0o400, 0,
+        &name, 0, 0, FileType::RegularFile.as_raw_mode() | 0o400, 0,
     )?;
     dst.bi_size = total_sectors << 9;
 
@@ -1060,9 +1060,9 @@ pub fn copy_fs(
     src_path: &CStr,
 ) -> Result<(), BchError> {
     let stat = rustix::fs::fstat(src_fd).map_err(rustix_err)?;
-    if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR {
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
         eprintln!("{} is not a directory", src_path.to_string_lossy());
-        return Err(BchError::from(libc::ENOTDIR));
+        return Err(BchError::from(c::ENOTDIR));
     }
 
     if s.migrate_type == MigrateType::Migrate {

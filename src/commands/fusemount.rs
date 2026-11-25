@@ -59,6 +59,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use rustix::mount::MountFlags;
 
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
@@ -398,7 +399,7 @@ fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &OsStr) -> Result<bool, Bch
 
     match lookup {
         Ok(_) => Ok(true),
-        Err(e) if e.matches(libc::ENOENT) => Ok(false),
+        Err(e) if e.matches(c::ENOENT) => Ok(false),
         Err(e) => Err(e),
     }
 }
@@ -618,21 +619,21 @@ struct AtimeOpts {
 
 impl AtimeOpts {
     /// relatime unless told otherwise, as for a kernel mount:
-    fn from_ms_flags(flags: core::ffi::c_ulong) -> Self {
-        let mode = if flags & (libc::MS_NOATIME | libc::MS_RDONLY) != 0 {
+    fn from_ms_flags(flags: MountFlags) -> Self {
+        let mode = if flags.intersects(MountFlags::NOATIME | MountFlags::RDONLY) {
             AtimeMode::Never
-        } else if flags & libc::MS_STRICTATIME != 0 {
+        } else if flags.contains(MountFlags::STRICTATIME) {
             AtimeMode::Strict
         } else {
             AtimeMode::Relative
         };
-        AtimeOpts { mode, nodiratime: flags & libc::MS_NODIRATIME != 0 }
+        AtimeOpts { mode, nodiratime: flags.contains(MountFlags::NODIRATIME) }
     }
 
     /// atime_needs_update() and relatime_need_update(): with relatime, only
     /// when atime isn't already after the last change, or is a day old.
     fn needs_update(&self, fs: &Fs, bi: &c::bch_inode_unpacked, now: u64) -> bool {
-        let is_dir = bi.bi_mode as u32 & libc::S_IFMT == libc::S_IFDIR;
+        let is_dir = rustix::fs::FileType::from_raw_mode(bi.bi_mode.into()) == rustix::fs::FileType::Directory;
         if is_dir && self.nodiratime {
             return false;
         }
@@ -1046,7 +1047,7 @@ impl Filesystem for BcachefsFs {
             Err(e) => {
                 eprintln!("  lookup -> err {}", e);
                 // Negative dentry caching: return empty entry for ENOENT
-                if e.matches(libc::ENOENT) {
+                if e.matches(c::ENOENT) {
                     let attr = FileAttr {
                         ino: INodeNo(0),
                         size: 0, blocks: 0,
@@ -1720,7 +1721,7 @@ impl Filesystem for BcachefsFs {
         ensure_thread_init();
         let inum = resolve!(self, ino, reply);
         // As the VFS does: XATTR_REPLACE, so that a missing xattr is ENODATA
-        match xattr_set(self.fs(), inum, name, None, libc::XATTR_REPLACE) {
+        match xattr_set(self.fs(), inum, name, None, rustix::fs::XattrFlags::REPLACE.bits() as i32) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(e),
         }
@@ -1815,7 +1816,7 @@ pub struct Cli {
 fn parse_fuse_mount_options(
     device: &str,
     options: Option<&str>,
-) -> anyhow::Result<(c::bch_opts, Vec<MountOption>, core::ffi::c_ulong)> {
+) -> anyhow::Result<(c::bch_opts, Vec<MountOption>, MountFlags)> {
     let mut mount_options = vec![
         MountOption::FSName(device.to_string()),
         // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
@@ -1833,13 +1834,21 @@ fn parse_fuse_mount_options(
     let parsed = options
         .map(super::mount::parse_mountflag_options)
         .unwrap_or_default();
+
+    // A remount has to reach the daemon already serving the mount; carrying
+    // on would start a second filesystem on the same device instead.
+    if parsed.remount {
+        anyhow::bail!("{device}: remounting a FUSE mount of bcachefs isn't supported yet; \
+                       unmount it and mount it again with the new options");
+    }
+
     let mut bch_opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)?;
 
     bch_opts.set_nostart(true);
 
     // read-only is both a fuser option (carried in parsed.fuse_options) and a
     // filesystem-open concern - the latter isn't a mount flag, so set it here:
-    if parsed.flags & libc::MS_RDONLY != 0 {
+    if parsed.flags.contains(MountFlags::RDONLY) {
         bch_opts.set_read_only(true);
     }
 
@@ -2003,7 +2012,7 @@ enum FuseMount {
     /// fuseblk, mounted by us, for block devices.
     Fuseblk {
         source:   PathBuf,
-        ms_flags: core::ffi::c_ulong,
+        ms_flags: MountFlags,
     },
 }
 
@@ -2016,11 +2025,11 @@ enum FuseMount {
 fn mount_fuseblk(
     source:     &Path,
     mountpoint: &str,
-    ms_flags:   core::ffi::c_ulong,
+    ms_flags:   MountFlags,
     blksize:    u32,
 ) -> std::io::Result<OwnedFd> {
     let dev_fuse = OpenOptions::new().read(true).write(true).open("/dev/fuse")?;
-    let rootmode = std::fs::metadata(mountpoint)?.mode() & libc::S_IFMT;
+    let rootmode = rustix::fs::FileType::from_raw_mode(std::fs::metadata(mountpoint)?.mode()).as_raw_mode();
     let data = format!(
         "fd={},rootmode={:o},user_id={},group_id={},blksize={},subtype=bcachefs,\
          allow_other,default_permissions",
@@ -2029,11 +2038,9 @@ fn mount_fuseblk(
         blksize,
     );
 
-    use rustix::mount::MountFlags;
-    let flags = MountFlags::from_bits_retain(ms_flags as _);
     let data = std::ffi::CString::new(data)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    rustix::mount::mount(source, mountpoint, "fuseblk", flags, Some(data.as_c_str()))?;
+    rustix::mount::mount(source, mountpoint, "fuseblk", ms_flags, Some(data.as_c_str()))?;
 
     Ok(dev_fuse.into())
 }
@@ -2094,7 +2101,7 @@ fn fuse_serve(
 fn claim_devices(devs: &[PathBuf]) -> anyhow::Result<Vec<File>> {
     devs.iter()
         .filter(|d| std::fs::metadata(d).map(|m| m.file_type().is_block_device()).unwrap_or(false))
-        .map(|d| OpenOptions::new().read(true).custom_flags(libc::O_EXCL).open(d)
+        .map(|d| OpenOptions::new().read(true).custom_flags(rustix::fs::OFlags::EXCL.bits() as i32).open(d)
              .map_err(|e| anyhow::anyhow!("{}: device in use: {}", d.display(), e)))
         .collect()
 }
@@ -2198,14 +2205,6 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     let (mut bch_opts, mount_options, ms_flags) =
         parse_fuse_mount_options(&cli.device, cli.options.as_deref())?;
-
-    // A remount has to reach the daemon already serving the mount; carrying
-    // on here would start a second filesystem on the same device instead.
-    if ms_flags & libc::MS_REMOUNT != 0 {
-        anyhow::bail!("{}: remounting a FUSE mount of bcachefs isn't supported yet; \
-                       unmount it and mount it again with the new options",
-                      cli.mountpoint);
-    }
 
     let sbs = crate::util::stderr_unless_error(|| scan_sbs(&cli.device, &bch_opts))?;
     let devs: Vec<PathBuf> = sbs.iter().map(|(p, _)| p.clone()).collect();
@@ -2427,7 +2426,7 @@ pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fu
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts};
+    use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts, MountFlags};
     use super::{NodeMap, ALT_NODE_BASE, BCACHEFS_ROOT_INO, BCACHEFS_ROOT_SUBVOL};
     use bcachefs_kernel::c;
     use fuser::MountOption;
@@ -2439,7 +2438,7 @@ mod tests {
             parse_fuse_mount_options("/dev/test", Some("ro,norecovery")).unwrap();
 
         assert!(opts.read_only_or_default());
-        assert!(ms_flags & libc::MS_RDONLY != 0);
+        assert!(ms_flags.contains(MountFlags::RDONLY));
         assert!(mount_options.contains(&MountOption::RO));
         assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));
         assert!(mount_options.contains(&MountOption::CUSTOM("subtype=bcachefs".to_string())));
@@ -2448,14 +2447,14 @@ mod tests {
     #[test]
     fn atime_opts_follow_mount_flags() {
         let mode = |f| AtimeOpts::from_ms_flags(f).mode;
-        assert_eq!(mode(0), AtimeMode::Relative);
-        assert_eq!(mode(libc::MS_RELATIME), AtimeMode::Relative);
-        assert_eq!(mode(libc::MS_STRICTATIME), AtimeMode::Strict);
-        assert_eq!(mode(libc::MS_NOATIME), AtimeMode::Never);
+        assert_eq!(mode(MountFlags::empty()), AtimeMode::Relative);
+        assert_eq!(mode(MountFlags::RELATIME), AtimeMode::Relative);
+        assert_eq!(mode(MountFlags::STRICTATIME), AtimeMode::Strict);
+        assert_eq!(mode(MountFlags::NOATIME), AtimeMode::Never);
         // read-only can't write an atime, whatever else was asked for:
-        assert_eq!(mode(libc::MS_RDONLY | libc::MS_STRICTATIME), AtimeMode::Never);
-        assert!(AtimeOpts::from_ms_flags(libc::MS_NODIRATIME).nodiratime);
-        assert!(!AtimeOpts::from_ms_flags(0).nodiratime);
+        assert_eq!(mode(MountFlags::RDONLY | MountFlags::STRICTATIME), AtimeMode::Never);
+        assert!(AtimeOpts::from_ms_flags(MountFlags::NODIRATIME).nodiratime);
+        assert!(!AtimeOpts::from_ms_flags(MountFlags::empty()).nodiratime);
     }
 
     #[test]
@@ -2569,7 +2568,7 @@ mod tests {
         // Forgotten, an alternate is stale - never another inode - and a new
         // reference gets a new one
         map.put(a, 2);
-        assert_eq!(map.resolve(a).unwrap_err().code(), libc::ESTALE);
+        assert_eq!(map.resolve(a).unwrap_err().code(), rustix::io::Errno::STALE.raw_os_error());
         let a2 = map.get(snap);
         assert!(a2 != a && a2 != b);
         resolves_to(&map, a2, snap);

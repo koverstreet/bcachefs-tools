@@ -365,7 +365,7 @@ mod tests {
             BchError::from(Errcode::EINVAL_opt_parse_str_required),
             // A flattened errno, which is what the mount(2) fallback gives us:
             // the same EINVAL a typo'd option produces.
-            BchError::from(libc::EINVAL),
+            BchError::from(c::EINVAL),
             BchError::from_raw(0),
             // A code from a kernel module newer than this binary - the normal
             // state of affairs for a filesystem that ships DKMS-only. The

@@ -155,7 +155,7 @@ impl TraceView {
 
         let pipe = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
             .open(instance_dir.join("trace_pipe"))
             .context("opening trace_pipe")?;
 

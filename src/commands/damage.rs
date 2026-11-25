@@ -23,9 +23,6 @@ use crate::util::open_dir;
 use crate::wrappers::ioctl::{ioctl_none, ioctl_ptr, ioctl_rw, IoctlBuf,
     BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_READDIR_FLAGS};
 
-/// DT_SUBVOL from dirent_format.h; not in the generated bindings.
-const DT_SUBVOL: u8 = 16;
-
 /// Show recorded damage
 #[derive(Parser, Debug)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -141,7 +138,7 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
         };
 
         match ioctl_rw::<BCHFS_IOC_READDIR_FLAGS>(fd, &mut arg) {
-            Err(e) if e.raw_os_error() == Some(libc::ERANGE) => buf.resize(buf.len() * 2, 0),
+            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::RANGE.raw_os_error()) => buf.resize(buf.len() * 2, 0),
             r => { r?; break arg; }
         }
     };
@@ -168,17 +165,17 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
 /// we can open and ioctl (a device node's fd would take the ioctl to
 /// the device driver). Recursive mode reports DT_UNKNOWN, so stat then.
 fn entry_errors(dir: &OwnedFd, e: &Entry) -> Option<Vec<DamageEntry>> {
-    let mut d_type = e.d_type;
-    if d_type == libc::DT_UNKNOWN {
+    let mut d_type = u32::from(e.d_type);
+    if d_type == c::DT_UNKNOWN {
         let st = rustix::fs::statat(dir, &*e.name,
                                     rustix::fs::AtFlags::SYMLINK_NOFOLLOW).ok()?;
-        d_type = match st.st_mode & libc::S_IFMT {
-            libc::S_IFREG => libc::DT_REG,
-            libc::S_IFDIR => libc::DT_DIR,
+        d_type = match rustix::fs::FileType::from_raw_mode(st.st_mode) {
+            rustix::fs::FileType::RegularFile => c::DT_REG,
+            rustix::fs::FileType::Directory   => c::DT_DIR,
             _ => return None,
         };
     }
-    if d_type != libc::DT_REG && d_type != libc::DT_DIR && d_type != DT_SUBVOL {
+    if d_type != c::DT_REG && d_type != c::DT_DIR && d_type != c::DT_SUBVOL {
         return None;
     }
 

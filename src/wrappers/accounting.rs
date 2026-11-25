@@ -54,7 +54,7 @@ impl BcachefsHandle {
     pub fn query_accounting(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         match self.query_accounting_v2(type_mask) {
             Err(e) if e.downcast_ref::<std::io::Error>().and_then(|e| e.raw_os_error())
-                == Some(libc::ENOTTY) => self.query_accounting_v1(type_mask),
+                == Some(rustix::io::Errno::NOTTY.raw_os_error()) => self.query_accounting_v1(type_mask),
             r => r,
         }
     }

@@ -285,7 +285,7 @@ fn do_reflink_propagate(path: &str, set_may_update: bool) -> Result<()> {
     }
 
     ioctl_none::<BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS>(&file).map_err(|e| {
-        if e.raw_os_error() == Some(libc::EPERM) {
+        if e.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error()) {
             anyhow!("reflink_p extents without may_update_options set;\n\
                      rerun as root with --set-may-update")
         } else {

@@ -351,7 +351,7 @@ fn migrate_fs(
     use std::os::unix::fs::OpenOptionsExt;
     let fs_file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOATIME)
+        .custom_flags(rustix::fs::OFlags::NOATIME.bits() as i32)
         .open(fs_path)
         .map_err(|e| anyhow!("Error opening {}: {}", fs_path, e))?;
 
@@ -532,7 +532,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     let dev_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .custom_flags(libc::O_EXCL)
+        .custom_flags(rustix::fs::OFlags::EXCL.bits() as i32)
         .open(dev_path)
         .map_err(|e| anyhow!("Error opening {}: {}", dev_path, e))?;
 

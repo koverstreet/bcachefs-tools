@@ -188,7 +188,7 @@ fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
 
         match unsafe { ioctl_ptr::<H::Ioc>(fd, buf.as_mut_ptr()) } {
             Ok(_) => {}
-            Err(e) if e.raw_os_error() == Some(libc::ERANGE) => {
+            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::RANGE.raw_os_error()) => {
                 capacity = buf.hdr().total();
                 continue;
             }
@@ -220,7 +220,7 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         };
 
         match ioctl_rw::<BCH_IOCTL_SUBVOLUME_LIST>(fd, &mut arg) {
-            Err(e) if e.raw_os_error() == Some(libc::ERANGE) => buf.resize(buf.len() * 2, 0),
+            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::RANGE.raw_os_error()) => buf.resize(buf.len() * 2, 0),
             r => { r.context("BCH_IOCTL_SUBVOLUME_LIST")?; break arg; }
         }
     };
@@ -295,7 +295,7 @@ fn query_snapshot_tree(fd: &OwnedFd, tree_id: u32) -> Result<SnapshotTreeResult>
         }),
         /* Kernel predates v2: fall back, without the key counters */
         Err(e) if e.downcast_ref::<std::io::Error>()
-            .and_then(|e| e.raw_os_error()) == Some(libc::ENOTTY) => {
+            .and_then(|e| e.raw_os_error()) == Some(rustix::io::Errno::NOTTY.raw_os_error()) => {
             let (hdr, v1) = bcachefs_flex_ioctl(fd, bch_ioctl_snapshot_tree_query {
                 tree_id,
                 ..Default::default()
@@ -671,7 +671,7 @@ fn print_snapshot_tree(dir: &Path) -> Result<()> {
         Ok(t) => t,
         Err(e) => {
             if let Some(inner) = e.downcast_ref::<std::io::Error>() {
-                if inner.raw_os_error() == Some(libc::ENOTTY) {
+                if inner.raw_os_error() == Some(rustix::io::Errno::NOTTY.raw_os_error()) {
                     eprintln!("snapshot tree ioctl not supported by this kernel");
                     return Ok(());
                 }

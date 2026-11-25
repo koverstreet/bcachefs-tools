@@ -1,6 +1,6 @@
 use std::ffi::CStr;
 use std::mem;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use bcachefs_kernel::c::{
@@ -15,7 +15,7 @@ use bcachefs_kernel::c::{
 };
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
-use bcachefs_kernel::c::bch_sb;
+use bcachefs_kernel::c::{self, bch_sb};
 use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::format::{DataType, MetadataVersion};
@@ -24,7 +24,7 @@ use errno::Errno;
 use uuid::Uuid;
 
 fn io_errno(e: std::io::Error) -> Errno {
-    Errno(e.raw_os_error().unwrap_or(libc::EIO))
+    Errno(e.raw_os_error().unwrap_or(rustix::io::Errno::IO.raw_os_error()))
 }
 
 /// Try a v2 ioctl (with error message buffer), falling back to v1 on ENOTTY.
@@ -37,7 +37,7 @@ macro_rules! v2_v1_ioctl {
 
         match ioctl_w::<$V2>($fd, &arg) {
             Ok(_) => Ok(()),
-            Err(e) if e.raw_os_error() == Some(libc::ENOTTY) =>
+            Err(e) if e.raw_os_error() == Some(rustix::io::Errno::NOTTY.raw_os_error()) =>
                 ioctl_w::<$V1>($fd, &$v1_arg).map(|_| ()).map_err(io_errno),
             Err(e) => {
                 print_errmsg(&err_buf);
@@ -131,7 +131,7 @@ impl BcachefsHandle {
             // with dashes, the user's spelling may not be:
             return match Self::open_by_name(&Uuid::from_bytes(uuid).to_string(), Some(uuid)) {
                 Ok(h) => Ok(Some(h)),
-                Err(e) if e.0 == libc::ENOENT => Ok(None),
+                Err(e) if e.0 == rustix::io::Errno::NOENT.raw_os_error() => Ok(None),
                 Err(e) => Err(BchError::from(e.0)),
             };
         }
@@ -201,18 +201,18 @@ impl BcachefsHandle {
     /// these are.
     pub(crate) fn member_devices(&self) -> Result<Vec<std::path::PathBuf>, BchError> {
         let sysfs_path = sysfs::sysfs_path_from_fd(self.sysfs_fd())
-            .map_err(|_| BchError::from(libc::EIO))?;
+            .map_err(|_| BchError::from(c::EIO))?;
 
         let mut devs = Vec::new();
         for d in sysfs::fs_get_devices(&sysfs_path, sysfs::DeviceNameMode::Raw)
-                .map_err(|_| BchError::from(libc::EIO))? {
+                .map_err(|_| BchError::from(c::EIO))? {
             if d.online {
                 devs.push(std::path::PathBuf::from(format!("/dev/{}", d.dev)));
             }
         }
 
         if devs.is_empty() {
-            return Err(BchError::from(libc::ENOENT));
+            return Err(BchError::from(c::ENOENT));
         }
         Ok(devs)
     }
@@ -223,7 +223,7 @@ impl BcachefsHandle {
         let sysfs_fd = if let Ok(fs_path) = unsafe { rustix::ioctl::ioctl(&ioctl_fd, GetFsSysfsPath::new()) } {
             let name_len = fs_path.len as usize;
             let name = std::str::from_utf8(&fs_path.name[..name_len])
-                .map_err(|_| BchError::from(libc::EINVAL))?;
+                .map_err(|_| BchError::from(c::EINVAL))?;
             let sysfs = format!("/sys/fs/{}", name);
             rustix::fs::open(
                 sysfs.as_str(),
@@ -259,7 +259,7 @@ impl BcachefsHandle {
         ).map_err(|e| Errno(e.raw_os_error()))?;
 
         let minor = sysfs::read_sysfs_fd_str(sysfs_fd.as_fd(), "minor")
-            .map_err(|e| Errno(e.raw_os_error().unwrap_or(libc::EIO)))?;
+            .map_err(|e| Errno(e.raw_os_error().unwrap_or(rustix::io::Errno::IO.raw_os_error())))?;
 
         let ctl_path = format!("/dev/bcachefs{}-ctl", minor);
         let ioctl_fd = rustix::fs::open(
@@ -294,7 +294,7 @@ impl BcachefsHandle {
 
         let mut handle = Self::open_by_name(&uuid_str, Some(uuid))
             .map_err(|e| {
-                if e.0 == libc::ENOENT {
+                if e.0 == rustix::io::Errno::NOENT.raw_os_error() {
                     if !Path::new("/sys/fs/bcachefs").exists() {
                         eprintln!("bcachefs kernel module not loaded");
                     } else {
@@ -336,7 +336,7 @@ impl BcachefsHandle {
         let dst = path_to_cstr(dst);
         self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_CREATE>(
             0,
-            libc::AT_FDCWD as u32,
+            rustix::fs::CWD.as_raw_fd() as u32,
             0o777,
             dst.as_ptr() as u64,
             0,
@@ -349,7 +349,7 @@ impl BcachefsHandle {
         let dst = path_to_cstr(dst);
         self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_DESTROY_v2, BCH_IOCTL_SUBVOLUME_DESTROY>(
             0,
-            libc::AT_FDCWD as u32,
+            rustix::fs::CWD.as_raw_fd() as u32,
             0o777,
             dst.as_ptr() as u64,
             0,
@@ -368,7 +368,7 @@ impl BcachefsHandle {
         let dst = path_to_cstr(dst);
         self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_CREATE>(
             BCH_SUBVOL_SNAPSHOT_CREATE | extra_flags,
-            libc::AT_FDCWD as u32,
+            rustix::fs::CWD.as_raw_fd() as u32,
             0o777,
             dst.as_ptr() as u64,
             src.as_ref().map_or(0, |x| x.as_ptr() as u64),
@@ -471,7 +471,7 @@ impl BcachefsHandle {
     pub(crate) fn sb_version(&self) -> Result<MetadataVersion, Errno> {
         let buf = self.read_super()?;
         if buf.len() < mem::size_of::<Head<bch_sb>>() {
-            return Err(Errno(libc::EIO));
+            return Err(Errno(rustix::io::Errno::IO.raw_os_error()));
         }
         Ok(read_past::<Head<bch_sb>>(&buf, 0).version.get())
     }
@@ -497,14 +497,14 @@ impl BcachefsHandle {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types: buf.get().map_err(|_| Errno(libc::EIO))?.d.iter()
+                data_types: buf.get().map_err(|_| Errno(rustix::io::Errno::IO.raw_os_error()))?.d.iter()
                     .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
                     .collect(),
             });
         }
 
         let err = ret.unwrap_err();
-        if err.raw_os_error() != Some(libc::ENOTTY) {
+        if err.raw_os_error() != Some(rustix::io::Errno::NOTTY.raw_os_error()) {
             return Err(io_errno(err));
         }
 
