@@ -527,12 +527,28 @@ impl<T: HasBio> BioSet<T> {
         I: PinInit<T, E>,
         E: From<BchError>,
     {
+        self.alloc_as(nr_vecs, opf, init)
+    }
+
+    /// alloc(), of a U laid out as T - T over a buffer of another lifetime, or
+    /// mutability: the set's memory is T's size and alignment, its bio at T's
+    /// offset, and nothing else of T's.
+    pub fn alloc_as<'a, U: HasBio, E, I>(&self, nr_vecs: u16, opf: u32, init: impl FnOnce(BioInPlace<'a>) -> I)
+        -> Result<BioBox<'a, U>, E>
+    where
+        I: PinInit<U, E>,
+        E: From<BchError>,
+    {
+        const {
+            assert!(size_of::<U>() == size_of::<T>() && align_of::<U>() == align_of::<T>() &&
+                    U::BIO_OFFSET == T::BIO_OFFSET, "a bio allocated from a set of another layout")
+        };
         let bio = self.alloc_raw(nr_vecs, opf, Flags::empty());
         if bio.is_null() {
             return Err(BchError::from(c::ENOMEM).into());
         }
-        // SAFETY: front_pad bytes before it, a T's
-        let t = unsafe { of_bio::<T>(bio) };
+        // SAFETY: front_pad bytes before it, a U's, laid out as a T
+        let t = unsafe { of_bio::<U>(bio) };
         // SAFETY: the T, its bio there, the rest for @init
         match unsafe { init_at(init(BioInPlace(bio, PhantomData)), t) } {
             // SAFETY: a bio's T
