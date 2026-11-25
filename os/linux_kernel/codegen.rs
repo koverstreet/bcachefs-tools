@@ -37,8 +37,6 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/fs_struct.h",		// current_umask(): subvolume create
     "linux/freezer.h",			// set_freezable(), freezing(), try_to_freeze(): a freezable kthread's
     "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
-    "linux/raid/pq.h",			// raid6_gen_syndrome(), a stripe's Q
-    "linux/raid/xor.h",			// xor_gen(), a stripe's P
     "linux/lz4.h",			// data/compress.rs's lz4
     "linux/zlib.h",			// its gzip
     "linux/zstd.h",			// its zstd
@@ -90,8 +88,6 @@ const UNBLOCKLISTED: &[&str] = &[
     "asm/compat.h",			// in_compat_syscall(), the arch's own
     "linux/freezer.h",
     "linux/power_supply.h",
-    "linux/raid/pq.h",
-    "linux/raid/xor.h",
     "linux/lz4.h",
     "linux/zlib.h",
     "linux/zconf.h",			// zlib.h's: MAX_WBITS, DEF_MEM_LEVEL
@@ -208,9 +204,6 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "kuid_has_mapping", "kgid_has_mapping", "init_sync_kiocb", "inode_lock", "inode_unlock",
     "rust_compat_ptr", "fiemap_prep", "fiemap_fill_next_extent",
     "power_supply_reg_notifier", "power_supply_unreg_notifier", "power_supply_is_system_supplied",
-    // the raid6 and xor APIs on both sides of 7.1's and 7.2's renames - each
-    // kernel has one set: data/ec/io.rs picks by cfg(linux_ge)
-    "raid6_gen_syndrome", "raid6_recov_2data", "raid6_recov_datap", "xor_gen", "xor_blocks",
     "LZ4_decompress_safe_partial", "LZ4_compress_destSize", "LZ4_compress_HC",
     "zlib_inflate_workspacesize", "zlib_inflateInit2", "zlib_inflate", "zlib_inflateEnd",
     "zlib_deflate_workspacesize", "zlib_deflateInit2", "zlib_deflate", "zlib_deflateEnd",
@@ -298,8 +291,6 @@ const ALLOWLIST_VAR: &[&str] = &["nop_posix_acl_access", "nop_posix_acl_default"
                                  "X86_FEATURE_SSSE3", "X86_FEATURE_AVX2", "X86_FEATURE_AVX512F",
                                  "X86_FEATURE_AVX512BW", "X86_FEATURE_GFNI",
                                  "PERCPU_REF_INIT_DEAD", "TRACE_EVENT_FL_TRACEPOINT", "FILTER_OTHER",
-                                 // before 7.1/7.2, as above
-                                 "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",
                                  "LZ4HC_MEM_COMPRESS", "LZ4HC_MIN_CLEVEL",
                                  "MAX_WBITS", "DEF_MEM_LEVEL", "Z_OK", "Z_STREAM_END", "Z_FINISH",
                                  "Z_DEFLATED", "Z_DEFAULT_STRATEGY", "Z_DEFAULT_COMPRESSION",

@@ -1,5 +1,5 @@
-// Bindgen for what userspace Rust calls in C: liburcu, the compression and
-// raid libraries, and include/'s unicode - wrapper.h's.
+// Bindgen for what userspace Rust calls in C: liburcu, the compression
+// libraries, and include/'s unicode - wrapper.h's.
 use std::path::PathBuf;
 
 include!("../../../clang_target.rs");
@@ -83,9 +83,6 @@ fn main() {
         .allowlist_file(format!("{}/.*", include_dir.display()))
         // wrapper.h's functions named by macros: liburcu's flavour's
         .allowlist_function("RUST_FN_HELPER_.*")
-        // The raid library: userspace's stand-in for the kernel's raid6 and
-        // xor, as fs/util/raid.rs uses it.
-        .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")
         // The compression libraries, what os/linux_user/compress.rs calls
         .allowlist_function("LZ4_compress_destSize|LZ4_compress_HC|LZ4_decompress_safe_partial")
         .allowlist_function("deflateInit2_|deflate|deflateEnd|inflateInit2_|inflate|inflateEnd")

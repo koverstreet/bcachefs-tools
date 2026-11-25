@@ -4,8 +4,8 @@
 //! one length: Reed-Solomon over GF(2^8), parity block r the sum of A[r][j]
 //! times data block j. A's first two rows are P and Q, raid5's xor and
 //! raid6's sum of 2^j times block j, as Linux's raid6 makes them; past them,
-//! snapraid's (raid/raid.c): with every square submatrix of A invertible, any
-//! as many blocks as there's parity can be rebuilt from the rest.
+//! snapraid's: with every square submatrix of A invertible, any as many
+//! blocks as there's parity can be rebuilt from the rest.
 //!
 //! fold() adds a data block to the parity made so far; recover() rebuilds
 //! the blocks it's told failed from the rest.
@@ -189,31 +189,6 @@ mod tests {
                 let a: Matrix<Gf, MAX_PARITY, MAX_PARITY> =
                     Matrix::from_fn(rows.len(), rows.len(), |i, k| coeff(rows[i], cols[k]));
                 assert!(a.inverse().is_some(), "A[{rows:?}][{cols:?}] singular");
-            }
-        }
-    }
-
-    /// The parity of raid/'s raid_gen(), snapraid's, for up to its 6.
-    #[test]
-    fn fold_is_raid_gen() {
-        use crate::os::bio::io_buf;
-        use crate::util::alloc::Flags;
-
-        unsafe { c::raid_init() };
-        for nd in 1..=8 {
-            for np in 1..=MAX_PARITY {
-                let ours = stripe(nd, np);
-                let mut theirs: Vec<_> = ours.iter().enumerate().map(|(i, b)| {
-                    let mut t = io_buf(4096, Flags::empty()).expect("a block");
-                    if i < nd {
-                        t.copy_from_slice(b);
-                    }
-                    t
-                }).collect();
-                let mut p: Vec<*mut core::ffi::c_void> = theirs.iter_mut().map(|b| b.as_mut_ptr().cast()).collect();
-                unsafe { c::raid_gen(nd as _, np as _, 4096, p.as_mut_ptr()) };
-                assert!(ours[nd..].iter().zip(&theirs[nd..]).all(|(o, t)| o[..] == t[..]),
-                        "{nd}+{np}: parity isn't raid_gen()'s");
             }
         }
     }
