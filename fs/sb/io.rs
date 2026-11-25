@@ -2113,79 +2113,50 @@ impl Fs {
 
 // ── Superblock IOs in flight together ────────────────────────────────────
 
-/// A device's superblock with an IO in flight on it - its bio, mapped to its
-/// buffer, or for a read to its scratch: nothing of either reachable until
-/// SbIos::wait() hands it back.
-struct Frozen<'a> {
-    sb:   DevSbMut<'a>,
-    read: bool,
-}
-
 /// Superblock IOs to devices, submitted together and waited on together:
 /// what C's c->sb_write closure was for, the superblock write's fan-outs -
-/// the read-backs, then each round of writes, a SbIos each. Submitting
-/// freezes the device's superblock; wait() hands each back, with its IO's
-/// result. Room for them all is reserve()d first, so once one's submitted,
-/// the rest are, and wait() is what's next.
+/// the read-backs, then each round of writes, a SbIos each. Each IO borrows
+/// its device's superblock, its bio and buffer or scratch, for 'g, as long
+/// as the SbIos: nothing reaches them till it's waited on and gone, and
+/// each IO's result is its bio's then - DevSbMut::io_result().
 #[pin_init::pin_data]
-pub struct SbIos<'a> {
+pub struct SbIos<'g> {
     #[pin]
-    gather: Gather<'static, (), waiter::Sync>,
-    frozen: KVVec<Frozen<'a>>,
+    gather: Gather<'g, (), waiter::Sync>,
 }
 
-impl<'a> SbIos<'a> {
+impl<'g> SbIos<'g> {
     pub fn new() -> impl PinInit<Self> {
-        pin_init::pin_init!(Self { gather <- Gather::new(), frozen: KVVec::new() })
-    }
-
-    /// Room for @n IOs, before the first is submitted: so none fails once
-    /// some are in flight, which only a wait could see out.
-    pub fn reserve(self: Pin<&mut Self>, n: usize) -> Result<(), BchError> {
-        self.project().frozen.reserve(n).map_err(|_| BchError::from(c::ENOMEM))
+        pin_init::pin_init!(Self { gather <- Gather::new() })
     }
 
     /// @sb's first @bytes written to @sector of its device, FUA: a copy of it.
-    pub fn write(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64, bytes: usize) {
+    pub fn write(self: Pin<&mut Self>, sb: &'g mut DevSbMut<'_>, sector: u64, bytes: usize) {
         // blk-wbt throttles all writes but those with REQ_SYNC and REQ_IDLE
         let opf = c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META | c::REQ_FUA;
-        self.submit(Frozen { sb, read: false }, opf, sector, bytes)
+        let r = self.gather.get();
+        let (bio, sb_buf, bdev) = sb.io.bio(opf);
+        bio.remap_write(&sb_buf[..bytes]).expect(SB_BIO_FITS).submit_gathered(bdev, sector, r)
     }
 
     /// @sb's scratch read from @sector of its device.
-    pub fn read(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64) {
+    pub fn read(self: Pin<&mut Self>, sb: &'g mut DevSbMut<'_>, sector: u64) {
         let opf = c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META;
-        let bytes = sb.scratch.len();
-        self.submit(Frozen { sb, read: true }, opf, sector, bytes)
+        let r = self.gather.get();
+        let (bio, _, bdev) = sb.io.bio(opf);
+        bio.remap_read(sb.scratch).expect(SB_BIO_FITS).submit_gathered(bdev, sector, r)
     }
 
-    fn submit(self: Pin<&mut Self>, f: Frozen<'a>, opf: u32, sector: u64, bytes: usize) {
-        let this = self.project();
-        assert!(this.frozen.len() < this.frozen.capacity(), "a superblock IO beyond what its SbIos reserved");
-        this.frozen.push(f).expect("within what's reserved");
-        let f = this.frozen.last_mut().expect("just pushed");
-        let r = this.gather.get();
-
-        let (bio, sb_buf, bdev) = f.sb.io.bio(opf);
-        // frozen: nothing reaches its bio, buffer or scratch until wait() has
-        // waited on the gather, nor closes its device
-        unsafe {
-            if f.read {
-                bio.remap_read(f.sb.scratch).expect(SB_BIO_FITS).submit_gathered(bdev, sector, r)
-            } else {
-                bio.remap_write(&sb_buf[..bytes]).expect(SB_BIO_FITS).submit_gathered(bdev, sector, r)
-            }
-        }
+    /// Every IO complete.
+    pub fn wait(self: Pin<&mut Self>) {
+        self.gather.wait_sync(Sleep::IDLE);
     }
+}
 
-    /// Every IO complete: each superblock back, with its IO's result.
-    pub fn wait(self: Pin<&mut Self>) -> impl Iterator<Item = (DevSbMut<'a>, Result<(), BchError>)> {
-        let this = self.project();
-        this.gather.wait_sync(Sleep::IDLE);
-        core::mem::take(this.frozen).into_iter().map(|f| {
-            let ret = f.sb.io.bio.as_ref().expect("an IO's bio").bio().status();
-            (f.sb, ret)
-        })
+impl DevSbMut<'_> {
+    /// Its last IO's result, an SbIos's.
+    fn io_result(&self) -> Result<(), BchError> {
+        self.io.bio.as_ref().expect("an IO's bio").bio().status()
     }
 }
 
@@ -2400,6 +2371,15 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
     Ok(())
 }
 
+/// @cas's superblocks, for SbIos to borrow: those with one.
+fn dev_sbs<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, cas: &'a WriteDevs) -> Result<KVVec<DevSbMut<'a>>, BchError> {
+    let mut sbs = KVVec::with_capacity(cas.len()).map_err(|_| BchError::from(c::ENOMEM))?;
+    for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
+        sbs.push_nofail(dev_sb);
+    }
+    Ok(sbs)
+}
+
 /// Each device's primary read back, its seq compared with what was last
 /// written there: a write silently dropped - unless errors=continue or
 /// fix_safe, which only say so - or another writer's, and the filesystem
@@ -2408,18 +2388,21 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
     use crate::util::log::LogMsg;
     const READ: c::MemberErrorType = c::MemberErrorType::read;
 
-    pin_init::stack_pin_init!(let ios = SbIos::new());
-    ios.as_mut().reserve(cas.len())?;
-    for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
-        let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
-        dev_sb.scratch.fill(0);
-        dev_sb.ca.io_done_add(crate::os::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
-        ios.as_mut().read(dev_sb, sector);
+    let mut sbs = dev_sbs(fs, sb, cas)?;
+    {
+        pin_init::stack_pin_init!(let ios = SbIos::new());
+        for dev_sb in sbs.iter_mut() {
+            let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
+            dev_sb.scratch.fill(0);
+            dev_sb.ca.io_done_add(crate::os::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
+            ios.as_mut().read(dev_sb, sector);
+        }
+        ios.as_mut().wait();
     }
 
-    for (dev_sb, ret) in ios.as_mut().wait() {
+    for dev_sb in sbs.iter() {
         let ca = dev_sb.ca;
-        if sb_io_result(fs, ca, READ, ret).is_err() {
+        if sb_io_result(fs, ca, READ, dev_sb.io_result()).is_err() {
             continue;
         }
 
@@ -2451,25 +2434,25 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
     const WRITE: c::MemberErrorType = c::MemberErrorType::write;
 
     let mut copies = Copies { written: Default::default(), failed: KVVec::new(), any_failed: false };
+    let mut sbs = dev_sbs(fs, sb, cas)?;
 
     for idx in 0.. {
-        pin_init::stack_pin_init!(let ios = SbIos::new());
-        ios.as_mut().reserve(cas.len())?;
+        let in_slot = |dev_sb: &DevSbMut<'_>| idx < usize::from(dev_sb.io.buf.sb().layout.nr_superblocks);
         let mut wrote = false;
-
-        for mut dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
-            if idx >= usize::from(dev_sb.io.buf.sb().layout.nr_superblocks) {
-                continue;
+        {
+            pin_init::stack_pin_init!(let ios = SbIos::new());
+            for dev_sb in sbs.iter_mut().filter(|s| in_slot(s)) {
+                let (sector, bytes) = dev_sb.copy_for(fs, idx);
+                dev_sb.ca.io_done_add(crate::os::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
+                ios.as_mut().write(dev_sb, sector, bytes);
+                wrote = true;
             }
-            let (sector, bytes) = dev_sb.copy_for(fs, idx);
-            dev_sb.ca.io_done_add(crate::os::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
-            ios.as_mut().write(dev_sb, sector, bytes);
-            wrote = true;
+            ios.as_mut().wait();
         }
 
-        for (dev_sb, ret) in ios.as_mut().wait() {
+        for dev_sb in sbs.iter_mut().filter(|s| in_slot(s)) {
             let ca = dev_sb.ca;
-            match sb_io_result(fs, ca, WRITE, ret) {
+            match sb_io_result(fs, ca, WRITE, dev_sb.io_result()) {
                 Ok(()) => {
                     copies.written.d.set(ca.dev_idx.into());
                     dev_sb.io.seq = dev_sb.io.buf.sb().seq.get();

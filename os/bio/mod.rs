@@ -23,10 +23,10 @@
 //! - In flight: submitted, until its endio. A gathered submit consumes the
 //!   box, and its endio drops it (BioBox::submit_gathered()); submit()
 //!   borrows it for its BioFuture, which yields the status; submit_owned()
-//!   consumes it for its Submitted, which gives it back. Either way nothing
-//!   reaches a bio in flight - but submit_gathered(), the superblock's, which
-//!   is why it's unsafe. Those states are what make reading a bio's fields
-//!   through &Bio safe.
+//!   consumes it for its Submitted, which gives it back; a remapped bio's
+//!   gathered submit borrows its owner for the Gather's lifetime. Either way
+//!   nothing reaches a bio in flight. Those states are what make reading a
+//!   bio's fields through &Bio safe.
 //! - A value: it moves as one, its bvecs with it, and is changed through
 //!   &mut Bio - its own methods, given one by its owner's bio_mut(). Its C
 //!   view, bi_io_vec, is pointed at its bvecs as it goes out to C.
@@ -728,22 +728,17 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
         self.owner.submit(bdev, sector, waiter)
     }
 
-    /// Submitted to @bdev at @sector, @r put when it completes. The mapping
-    /// stays until the bio's next one.
-    ///
-    /// sb/io's alone: the bio isn't given up, as an async submit's is, so
-    /// it's reachable in flight. It goes once the superblock's IO consumes
-    /// its bio.
-    ///
-    /// # Safety
-    /// Nothing touches the bio, or the buffer it's mapped to, until @r's
-    /// Gather has been waited on; nor walks or submits the bio until its next
-    /// reset(); @bdev stays open till then.
-    pub unsafe fn submit_gathered(self, bdev: &BlockDevice, sector: u64, r: GatherRef<'static, (), waiter::Sync>) {
+    /// Submitted to @bdev at @sector, @r put when it completes: the bio, its
+    /// buffer and the device borrowed for @r's Gather, 'g, which is gone only
+    /// once the IO is done. Its endio empties the bvecs, as a drop does.
+    pub fn submit_gathered<'g>(self, bdev: &'g BlockDevice, sector: u64, r: GatherRef<'g, (), waiter::Sync>)
+    where
+        Self: 'g,
+    {
         let mut this = core::mem::ManuallyDrop::new(self);
         let bio = this.owner.bio_mut().aim(bdev, sector);
-        // SAFETY: the owner's, built for this IO; the caller keeps it, and
-        // the buffer, from being touched until it's done
+        // SAFETY: the owner's, built for this IO, and borrowed by it till its
+        // Gather's gone
         unsafe {
             (*bio).bi_private = r.into_raw().cast_mut().cast();
             (*bio).bi_end_io = Some(mapped_gathered_endio);
@@ -803,8 +798,12 @@ unsafe extern "C" fn at_end_endio<T: AtEnd, W: Waiter>(bio: *mut c::bio) {
 }
 
 unsafe extern "C" fn mapped_gathered_endio(bio: *mut c::bio) {
-    // SAFETY: submit_gathered()'s, whose ref is bi_private
-    drop(unsafe { GatherRef::<(), waiter::Sync>::from_raw((*bio).bi_private.cast()) })
+    // SAFETY: submit_gathered()'s, whose ref is bi_private; the IO's, done
+    unsafe {
+        let r = GatherRef::<(), waiter::Sync>::from_raw((*bio).bi_private.cast());
+        Bio::from_raw_mut(bio).truncate_vecs(0);
+        drop(r)
+    }
 }
 
 impl<O: BioOwner, B> Drop for Remapped<'_, O, B> {
