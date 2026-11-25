@@ -30,7 +30,37 @@ use crate::os::file::Any;
 use crate::os::ops::{err_class_ptr, from_raw};
 use crate::os::super_block::{IsInode, SuperBlock, SuperOps};
 use crate::os::vfs_inode::VfsInode;
-use crate::util::os_str::{qstr_name, OsStr};
+use crate::util::os_str::{OsStr, OsStrExt};
+
+/*
+ * C's struct qstr is an OsStr with no lifetime: qstr() and qstr_name()
+ * convert at the boundary.
+ */
+
+/// @name as C's qstr, which points at it: for a C call, which mustn't keep
+/// it.
+pub fn qstr(name: &OsStr) -> c::qstr {
+    let name = name.as_bytes();
+    c::qstr {
+        __bindgen_anon_1: c::qstr__bindgen_ty_1 {
+            __bindgen_anon_1: c::qstr__bindgen_ty_1__bindgen_ty_1 {
+                hash: 0,
+                len:  name.len() as u32,
+            },
+        },
+        name: name.as_ptr(),
+    }
+}
+
+/// The name C's qstr @q points at.
+///
+/// # Safety
+/// @q points at its len bytes, and they outlive 'a.
+pub unsafe fn qstr_name<'a>(q: &c::qstr) -> &'a OsStr {
+    let len = unsafe { q.__bindgen_anon_1.__bindgen_anon_1.len } as usize;
+    let bytes = if len == 0 { &[] } else { unsafe { core::slice::from_raw_parts(q.name, len) } };
+    OsStr::from_bytes(bytes)
+}
 
 #[cfg(CONFIG_UNICODE)]
 // SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers

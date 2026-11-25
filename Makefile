@@ -108,7 +108,6 @@ CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
 	-Wno-deprecated-declarations				\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
-	-Iinclude						\
 	$(EXTRA_CFLAGS)
 
 # Its -D/-U of CONFIG_* are the Rust's cfgs too: fs/build_config.rs.

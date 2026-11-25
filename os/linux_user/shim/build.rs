@@ -1,5 +1,5 @@
-// Bindgen for what userspace Rust calls in C: liburcu, the compression
-// libraries, and include/'s unicode - wrapper.h's.
+// Bindgen for what userspace Rust calls in C: liburcu and the compression
+// libraries - wrapper.h's.
 use std::path::PathBuf;
 
 include!("../../../clang_target.rs");
@@ -32,14 +32,12 @@ fn main() {
         .nth(3)
         .expect("bcachefs-shim should be at os/linux_user/shim")
         .to_path_buf();
-    let include_dir = root.join("include");
     let wrapper = top_dir
         .join("src")
         .join("wrapper.h");
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
     println!("cargo:rerun-if-changed=../../../clang_target.rs");
-    println!("cargo:rerun-if-changed={}", include_dir.display());
 
     // What os/linux_user/compress.rs calls: linked after this
     // crate, as a link --as-needed only keeps a library that's needed by what
@@ -61,7 +59,6 @@ fn main() {
                 .map(|p| format!("-I{}", p.display())),
         )
         .clang_arg(format!("-I{}", root.display()))
-        .clang_arg(format!("-I{}", include_dir.display()))
         .clang_arg("-fkeep-inline-functions")
         .derive_debug(true)
         .derive_default(true)
@@ -77,10 +74,6 @@ fn main() {
         // than these bindings would be no value of a Rust enum. Its parameter
         // names and strategies the same, though only passed to it.
         .constified_enum("ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective|ZSTD_strategy")
-        // What's defined under include/: unicode's. allowlist_recursively
-        // (default) pulls in the system primitives these reference (__u64
-        // etc.), so they're emitted here too.
-        .allowlist_file(format!("{}/.*", include_dir.display()))
         // wrapper.h's functions named by macros: liburcu's flavour's
         .allowlist_function("RUST_FN_HELPER_.*")
         // The compression libraries, what os/linux_user/compress.rs calls
@@ -112,7 +105,6 @@ fn main() {
     wrappers
         .file(out_dir.join("extern.c"))
         .include(&root)
-        .include(&include_dir)
         .flag("-fkeep-inline-functions")
         .warnings(false);
     for p in &urcu.include_paths {

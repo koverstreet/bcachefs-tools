@@ -6,7 +6,8 @@
 mod map {
     use crate::c;
     use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
-    use crate::util::os_str::{qstr, OsStr};
+    use crate::os::dentry::qstr;
+    use crate::util::os_str::OsStr;
     use core::ptr::NonNull;
 
     pub struct UnicodeMap(NonNull<c::unicode_map>);
@@ -19,7 +20,6 @@ mod map {
         /// utf8_load(): unicode @version's map, the version packed as
         /// major << 16 | minor << 8 | revision. None if it can't be loaded.
         pub fn load(version: u32) -> Option<Self> {
-            // userspace's is NULL on failure, the kernel's an ERR_PTR()
             let p = NonNull::new(unsafe { c::utf8_load(version) })?;
             errptr_to_result(p).ok().map(Self)
         }

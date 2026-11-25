@@ -873,6 +873,8 @@ xmacro! {
         (erofs_no_writes, erofs_no_writes_data_write_nochanges, 845),
         (erofs_no_writes, erofs_no_writes_data_write, 846),
         (erofs_no_writes, erofs_no_writes_journal_meta, 847),
+        (EINVAL, EINVAL_casefold_invalid_utf8, 848),
+        (EINVAL, EINVAL_casefold_too_long, 849),
     }
 }
 

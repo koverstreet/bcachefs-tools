@@ -6,11 +6,6 @@
 //!
 //! Written against std's: `OsStr::from_bytes()` and `.as_bytes()` with
 //! OsStrExt in scope, the same in both builds.
-//!
-//! C's struct qstr is the same thing, with no lifetime: qstr() and
-//! qstr_name() convert at the boundary.
-
-use crate::c;
 
 #[cfg(feature = "std")]
 pub use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
@@ -62,35 +57,10 @@ mod no_std {
     }
 }
 
-/// @name as C's qstr, which points at it: for a C call, which mustn't keep
-/// it.
-pub fn qstr(name: &OsStr) -> c::qstr {
-    let name = name.as_bytes();
-    c::qstr {
-        __bindgen_anon_1: c::qstr__bindgen_ty_1 {
-            __bindgen_anon_1: c::qstr__bindgen_ty_1__bindgen_ty_1 {
-                hash: 0,
-                len:  name.len() as u32,
-            },
-        },
-        name: name.as_ptr(),
-    }
-}
-
 /// The NUL-terminated name at @p, without the NUL.
 ///
 /// # Safety
 /// @p is a NUL-terminated string, valid for 'a.
 pub unsafe fn cstr_name<'a>(p: *const crate::util::ffi::c_char) -> &'a OsStr {
     OsStr::from_bytes(unsafe { core::ffi::CStr::from_ptr(p.cast()) }.to_bytes())
-}
-
-/// The name C's qstr @q points at.
-///
-/// # Safety
-/// @q points at its len bytes, and they outlive 'a.
-pub unsafe fn qstr_name<'a>(q: &c::qstr) -> &'a OsStr {
-    let len = unsafe { q.__bindgen_anon_1.__bindgen_anon_1.len } as usize;
-    let bytes = if len == 0 { &[] } else { unsafe { core::slice::from_raw_parts(q.name, len) } };
-    OsStr::from_bytes(bytes)
 }

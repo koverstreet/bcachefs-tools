@@ -9,8 +9,6 @@
 
 #include <urcu.h>
 
-#include "include/linux/kernel.h"
-#include "include/linux/unicode.h"
 #include <lz4.h>
 #include <lz4hc.h>
 #include <zlib.h>
