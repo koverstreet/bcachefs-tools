@@ -2,7 +2,7 @@
 
 use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedNode};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
-use crate::btree::iter::{BtreeIterFlags, BtreeNodeRef, BtreeTrans};
+use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::BtreeNodeLockedType;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, LockedNode, NodePtr, PathIdx, Paths};
@@ -336,8 +336,7 @@ impl BtreeTrans<'_> {
         self.path_upgrade(paths, idx, level + 1, crate::ret_ip!())?;
 
         let b = loop {
-            let b = BtreeNodeRef::from(paths[idx].locked_btree_node(level).expect("an upgraded path holds its level"))
-                .node(fs);
+            let b = paths[idx].cached_btree_node(fs, level).expect("an upgraded path holds its level");
             let f = b.flags.load();
 
             assert!(!f.permanent(), "evicting a btree root");

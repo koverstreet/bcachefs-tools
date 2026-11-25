@@ -6,7 +6,7 @@
 
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::cache::{bch2_btree_id_level_to_text, OwnedNode};
-use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeRef, BtreeTrans};
 use crate::btree::key_cache::EntryContents;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
@@ -22,6 +22,7 @@ use crate::debug::trace::{events, TraceEvent};
 use crate::prt;
 use crate::errcode::{Errcode, err_ptr, errptr_or_null, BchError};
 use crate::format::{BkeyType, Bpos, Btree};
+use crate::fs::Fs;
 use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
 use crate::util::backtrace::prt_symbol;
@@ -1180,6 +1181,12 @@ impl BtreePath {
     #[inline(always)]
     pub(crate) fn locked_btree_node(&self, level: usize) -> Option<LockedNode<'_, BtreeNode>> {
         self.downcast::<BtreeNode>()?.locked_node(level)
+    }
+
+    /// locked_btree_node()'s node, for as long as its filesystem: a path's
+    /// nodes are the cache's, which it never frees while it runs.
+    pub(crate) fn cached_btree_node<'f>(&self, fs: &'f Fs, level: usize) -> Option<&'f BtreeNode> {
+        Some(BtreeNodeRef::from(self.locked_btree_node(level)?).node(fs))
     }
 
     /// Its key cache entry, if it's a cached path holding it locked.

@@ -109,7 +109,8 @@ impl BtreeTrans<'_> {
      * node:
      */
     pub(in crate::btree) fn node_add(&self, t: &TransAttempt<'_, '_>, pu: &mut PathsUpdates<'_, '_>,
-                                     b: LockedNode<'_, BtreeNode>, hold: &SixHold<'_>) {
+                                     b: &BtreeNode, hold: &SixHold<'_>) {
+        let b = LockedNode::of_hold(b, hold);
         let level = b.c.level.get() as usize;
         let paths = &mut pu.paths;
 

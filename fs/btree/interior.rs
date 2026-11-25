@@ -904,11 +904,10 @@ impl<'t> InteriorUpdate<'t> {
             self.node_free_inmem(paths, idx, level);
         }
         for &n in new {
-            let b = BtreeNodeRef::from(paths[n.path].locked_btree_node(n.level).expect("a new node, held by its path"))
-                .node(fs);
+            let b = paths[n.path].cached_btree_node(fs, n.level).expect("a new node, held by its path");
             let (_, hold) = paths[n.path].hold(n.level).expect("a new node, held by its path");
             let hold = hold.increment_on(&b.c.lock, SIX_LOCK_intent);
-            self.trans().node_add(self.t, &mut paths.paths_and_updates(), LockedNode::of_hold(b, &hold), &hold);
+            self.trans().node_add(self.t, &mut paths.paths_and_updates(), b, &hold);
         }
         for &b in &freed {
             self.trans().node_verify_not_in_iters(paths, level, b);
@@ -924,8 +923,7 @@ impl<'t> InteriorUpdate<'t> {
         let fs = self.fs();
         let taken = core::mem::take(&mut self.owned.borrow_mut().taken);
         for Taken { at, ob } in taken.into_iter().rev() {
-            let b = BtreeNodeRef::from(paths[at.path].locked_btree_node(at.level)
-                                       .expect("a new node, held by the path it was given to")).node(fs);
+            let b = paths[at.path].cached_btree_node(fs, at.level).expect("a new node, held by the path it was given to");
             if b.flags.will_make_reachable() {
                 assert!(ob.nr == 0, "a written node's open buckets, not the update's");
                 continue;
