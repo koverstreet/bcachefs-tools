@@ -646,7 +646,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             bch2_cut_front_s(fs, new.k.p, BkeyS::from(&mut update));
 
-            self.update_by_path(&mut self.trans().paths(), iter.path, QueuedKey::from(update),
+            self.update_by_path(&mut self.trans().paths(), iter.path, QueuedKey::from(&mut update),
                                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags, crate::ret_ip!());
         }
 
@@ -781,8 +781,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// Queue @key as an update at @iter's position. Takes the iterator
     /// shared: it doesn't move it - what it sets up there, the key cache
-    /// path, is the iterator's own business. @key is the update's from here:
-    /// what reads or edits it does so first.
+    /// path, is the iterator's own business. @key is the update's from here.
     pub fn update<V: ?Sized + ValidatedVal>(
         &self,
         iter:  &BtreeIter<'a>,
@@ -792,12 +791,30 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.update_ip(iter, key.into_any(), flags, crate::ret_ip!())
     }
 
-    fn update_ip(&self, iter: &BtreeIter<'a>, mut key: TransBkey<'a, 't>,
+    /// update(), and the key lent back: edits to it are the update's, till
+    /// the commit. Not for extents, whose updates cut their key to fit.
+    pub fn update_lent<V: ?Sized + ValidatedVal>(
+        &self,
+        iter:  &BtreeIter<'a>,
+        key:   TransBkey<'a, 't, V>,
+        flags: UpdateTriggerFlags,
+    ) -> Result<TransBkey<'a, 't, V>, BchError> {
+        assert!(!iter.is_extents(), "an extent update can't lend its key, at {}", iter.pos());
+        self.update_nonextent_ip(iter, key, flags, crate::ret_ip!())
+    }
+
+    fn update_ip(&self, iter: &BtreeIter<'a>, key: TransBkey<'a, 't>,
                  flags: UpdateTriggerFlags, ip: c_ulong) -> Result<(), BchError> {
         if iter.is_extents() {
             return self.update_extent(iter, key, flags);
         }
+        self.update_nonextent_ip(iter, key, flags, ip).map(drop)
+    }
 
+    fn update_nonextent_ip<V: ?Sized>(&self, iter: &BtreeIter<'a>, mut key: TransBkey<'a, 't, V>,
+                                      flags: UpdateTriggerFlags, ip: c_ulong)
+        -> Result<TransBkey<'a, 't, V>, BchError>
+    {
         if key.k().key_type().is_deleted() &&
             !flags.contains(UpdateTriggerFlags::KEY_CACHE_RECLAIM) &&
             iter.flags & BtreeIterFlags::FILTER_SNAPSHOTS.bits() != 0 &&
@@ -834,7 +851,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             path_idx = iter.key_cache_path.get();
         }
 
-        let i = self.update_by_path(&mut paths, path_idx, QueuedKey::from(key), flags, ip);
+        let i = self.update_by_path(&mut paths, path_idx, QueuedKey::from(&mut key), flags, ip);
 
         /*
          * If a key is present in the key cache, it must also exist in the
@@ -849,10 +866,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
                                paths[path_idx].locked_key_cached().expect("a cached update's key cache entry")
                                    .immediate_flush()) {
             drop(paths);
-            self.flush_new_cached_update(i, flags, ip)
-        } else {
-            Ok(())
+            self.flush_new_cached_update(i, flags, ip)?;
         }
+        Ok(key)
     }
 
     /// The update queued: its index in the transaction's updates.
@@ -1060,7 +1076,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let u = paths.update_mut(i);
         let old = u.key().as_bytes();
         new.as_mut_u64s().as_mut_bytes()[..old.len()].copy_from_slice(old);
-        let new = QueuedKey::from(new);
+        let new = QueuedKey::from(&mut new);
         u.set_key(new);
         Ok(new.as_ptr())
     }

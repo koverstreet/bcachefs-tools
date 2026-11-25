@@ -801,14 +801,12 @@ fn check_edge<'a, 't>(
 
     if let EdgeRepair::Retarget(new) = repair {
         set_ptr(n.v_mut(t)?, role, other_id, new);
-        n.queue(t)?;
         return edge_repair_commit(t);
     }
 
-    // @n's repairs before the edge's: that may edit @n's key too - an
-    // undelete relinks through the parent - and of two updates of a key, the
-    // later's the one committed
-    n.queue(t)?;
+    // @n's repairs are queued before the edge's: that may edit @n's key too -
+    // an undelete relinks through the parent - and of two updates of a key,
+    // the later's the one committed
     match repair {
         EdgeRepair::Undelete(id) =>
             edit_node(t, id, |u| undelete_owns_data(t, u))?,
@@ -1061,7 +1059,7 @@ fn check_snapshot<'a, 't>(
     check_has_data(t, &mut n)?;
 
     if check_deleted(t, &mut n)? {
-        return n.finish(t);
+        return Ok(());
     }
 
     let parent = n.v().parent();
@@ -1082,8 +1080,7 @@ fn check_snapshot<'a, 't>(
 
     check_depth(t, &mut n)?;
     check_skiplists(t, &mut n)?;
-    check_to_subvol(t, &mut n)?;
-    n.finish(t)
+    check_to_subvol(t, &mut n)
 }
 
 /// check_snapshots, in @trans: also for snapshot deletion, which runs it

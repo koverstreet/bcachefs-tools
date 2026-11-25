@@ -1004,11 +1004,10 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
         self.room.elems_mut().as_mut_ptr().cast()
     }
 
-    /// The key, given up: where it is, and its room, in u64s - for an update
-    /// to queue.
-    pub(crate) fn into_raw(self) -> (NonNull<c::bkey_i>, u32) {
+    /// Where the key is, and its room, in u64s - for an update to queue.
+    pub(crate) fn as_raw(&mut self) -> (NonNull<c::bkey_i>, u32) {
         let u64s = self.buf_u64s();
-        (NonNull::from(self.room).cast(), u64s)
+        (NonNull::from(&mut *self.room).cast(), u64s)
     }
 
     /// Its room, in u64s: what it may grow to.

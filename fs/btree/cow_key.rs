@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! CowKey: a key being checked and repaired - read as it is in the btree until
-//! the first repair, then a mutable copy, as std::borrow::Cow is borrowed
-//! until to_mut(); finish() queues the copy as the key's update.
+//! the first repair, then a mutable copy queued as its update, as
+//! std::borrow::Cow is borrowed until to_mut().
 //!
 //! One copy of the value, read by every check and written by every repair. The
 //! C kept a copy to read and a mutable key, synced by hand after each repair,
@@ -23,7 +23,8 @@ pub struct CowKey<'i, 'k, 'a, 't, K: BkeyWhole> {
     k:    BkeySC<'k, K::Validated>,
     /// The value as read, zero padded - until there's @u.
     v:    K,
-    /// The key as it will be written, once anything has been repaired.
+    /// The key as it will be written, once anything has been repaired: its
+    /// update's, lent back.
     u:    Option<TransBkey<'a, 't, K>>,
 }
 
@@ -49,31 +50,18 @@ where
         }
     }
 
-    /// Whether anything has been repaired: finish() queues the key.
+    /// Whether anything has been repaired: the key is queued as its update.
     pub fn has_update(&self) -> bool {
         self.u.is_some()
     }
 
-    /// The key, made mutable if it isn't yet.
+    /// The key, made mutable and queued as its update if it isn't yet.
     pub fn u(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut TransBkey<'a, 't, K>, BchError> {
         if self.u.is_none() {
-            self.u = Some(t.bkey_make_mut_noupdate(self.k)?);
+            let u = t.bkey_make_mut_noupdate(self.k)?;
+            self.u = Some(t.update_lent(self.iter, u, UpdateTriggerFlags::empty())?);
         }
         Ok(self.u.as_mut().expect("just made"))
-    }
-
-    /// The repairs, if there were any, queued as the key's update.
-    pub fn finish(mut self, t: &TransAttempt<'a, 't>) -> Result<(), BchError> {
-        self.queue(t)
-    }
-
-    /// The repairs so far queued, for a commit before the checks are done -
-    /// one that restarts them: a repair after it is of the key as read.
-    pub fn queue(&mut self, t: &TransAttempt<'a, 't>) -> Result<(), BchError> {
-        match self.u.take() {
-            Some(u) => t.update(self.iter, u, UpdateTriggerFlags::empty()),
-            None    => Ok(()),
-        }
     }
 
     /// The value, to repair.

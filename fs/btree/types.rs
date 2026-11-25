@@ -1115,9 +1115,8 @@ const fn node_type_in(bkey_type: u8, mask: u64) -> bool {
     bkey_type < 64 && mask & (1 << bkey_type) != 0
 }
 
-/// Where an update's key is, and its room: a TransBkey's, given up to the
-/// update - so the key is as good as one is, until the attempt's over - or an
-/// update's already queued.
+/// Where an update's key is, and its room: a TransBkey's - so the key is as
+/// good as one is, until the attempt's over - or an update's already queued.
 #[derive(Clone, Copy)]
 pub(crate) struct QueuedKey {
     k:        NonNull<cs::bkey_i>,
@@ -1130,9 +1129,9 @@ impl QueuedKey {
     }
 }
 
-impl<V: ?Sized> From<TransBkey<'_, '_, V>> for QueuedKey {
-    fn from(k: TransBkey<'_, '_, V>) -> Self {
-        let (k, buf_u64s) = k.into_raw();
+impl<V: ?Sized> From<&mut TransBkey<'_, '_, V>> for QueuedKey {
+    fn from(k: &mut TransBkey<'_, '_, V>) -> Self {
+        let (k, buf_u64s) = k.as_raw();
         QueuedKey { k, buf_u64s: buf_u64s.min(u8::MAX.into()) as u8 }
     }
 }
