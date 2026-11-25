@@ -422,16 +422,13 @@ fn btree_node_read_bkey_cmp(contents: &NodeContents, l: &BkeyP, r: &BkeyP) -> Or
         .then((deleted(r) - deleted(l)).cmp(&0))
 }
 
-fn bkey_compat(v: &NodeValidate<'_>, version: MetadataVersion, big_endian: bool,
-               k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
-    let b = v.b;
-
-    if version < c::MetadataVersion::CURRENT ||
-       big_endian != cfg!(target_endian = "big") ||
+fn bkey_compat(v: &NodeValidate<'_>, ks: &BsetKeys<'_>, k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
+    if ks.version < c::MetadataVersion::CURRENT ||
+       ks.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
-            compat::bkey_compat(Some(v.fs), Btree(b.c.btree_id.get().into()), version, big_endian, v.writing(),
-                                Some(&b.contents().format), k)
+            compat::bkey_compat(Some(v.fs), Btree(v.b.c.btree_id.get().into()), ks.version, ks.big_endian,
+                                v.writing(), Some(&ks.contents.format), k)
         }
     }
 }
@@ -480,7 +477,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
     let k = i.key_at_mut(at).expect("a key, its u64s checked against the bset's end");
 
     if !v.writing() {
-        bkey_compat(v, ks.version, ks.big_endian, k);
+        bkey_compat(v, ks, k);
     }
 
     let mut tmp = c::bkey::default();
@@ -492,7 +489,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
     }
 
     if v.writing() {
-        bkey_compat(v, ks.version, ks.big_endian, k);
+        bkey_compat(v, ks, k);
     }
 
     if let Some(p) = prev {

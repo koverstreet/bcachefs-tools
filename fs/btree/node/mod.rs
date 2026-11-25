@@ -291,19 +291,11 @@ impl<'b, 'f> BtreeNode {
 }
 
 impl BtreeNode {
-    /// The node's contents, on the caller's word that it holds the node lock,
-    /// until btree paths hand out its guards.
-    ///
-    /// # Safety
-    /// The node lock is held, any way, for as long as the reference lives, and
-    /// nothing has them mutably.
-    pub unsafe fn contents(&self) -> &NodeContents {
-        unsafe { self.contents.protected() }
-    }
-
     /// # Safety
     /// The node lock is held for write, for as long as the reference lives,
     /// and nothing else refers to them.
+    // XXX: node_write()'s sort_whiteouts() is the last caller, holding only the
+    // writer's claim, perhaps under a read lock: see written.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn contents_mut(&self) -> &mut NodeContents {
         unsafe { self.contents.protected_mut() }
