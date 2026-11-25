@@ -25,7 +25,7 @@ use bcachefs_shim as kernel;
 const BLOCKS: &[usize] = &[4 << 10, 256 << 10];
 
 /// The stripes: data blocks and parity blocks
-const SHAPES: &[(usize, usize)] = &[(4, 1), (4, 2), (8, 1), (8, 2)];
+const SHAPES: &[(usize, usize)] = &[(4, 1), (4, 2), (4, 3), (8, 1), (8, 2), (8, 3)];
 
 /// Picoseconds a call of @f takes: the best of five runs, each of enough
 /// calls to take a tenth of a second

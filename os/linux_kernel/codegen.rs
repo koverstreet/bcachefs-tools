@@ -140,13 +140,15 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/seq_buf.h",
     "linux/ring_buffer.h",		// and its structs point to these
     // os/linux_kernel/simd.rs: the CPU's features - x86's numbers, arm64's
-    // system_supports_fpsimd()
+    // system_supports_fpsimd() - and the vector registers' use
     "asm/cpufeatures.h",
     "asm/cpufeature.h",
+    "asm/fpu/api.h",
+    "asm/neon.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
-    "system_supports_fpsimd",
+    "system_supports_fpsimd", "kernel_fpu_begin", "kernel_fpu_end", "kernel_neon_begin", "kernel_neon_end",
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
     "mnt_want_write_file", "mnt_drop_write_file",
     "rust_page_folio", "rust_folio_page_idx", "folio_size",

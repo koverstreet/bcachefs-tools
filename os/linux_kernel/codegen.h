@@ -49,8 +49,13 @@
 #include <asm/paravirt_types.h>
 #endif
 /* the CPU's vector registers: os/linux_kernel/simd.rs */
-#if defined(CONFIG_X86) || defined(CONFIG_ARM64)
+#ifdef CONFIG_X86
 #include <asm/cpufeature.h>
+#include <asm/fpu/api.h>
+#endif
+#ifdef CONFIG_ARM64
+#include <asm/cpufeature.h>
+#include <asm/neon.h>
 #endif
 #include <keys/user-type.h>
 

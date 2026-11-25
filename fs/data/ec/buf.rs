@@ -13,8 +13,7 @@
 //! with an error is an erasure, whatever the error: a checksum mismatch
 //! counts as much as a failed read.
 //!
-//! Parity is raid5's P and raid6's Q, by util/raid.rs, over a buffer's
-//! blocks as slices: nr_redundant is at most 2.
+//! Parity is util/raid.rs's, over a buffer's blocks as slices.
 
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
@@ -491,10 +490,9 @@ fn do_recov(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, r
     }
     assert!(has_all(buf), "reconstructing from a stripe buffer without every block");
 
-    // The whole erasure list, parity included - reconstruction picks its
-    // method by it. A lost P or Q left out doesn't just pick a worse one, it
-    // drops the count: two erasures reported as one take the single erasure
-    // xor path, which reconstructs through the parity block known bad.
+    // The whole erasure list, parity included: a lost parity block left out
+    // is one reconstruction may read, rebuilding the data through a block
+    // known bad.
     let failed: ArrayVec<u8, MAX_BLOCKS> = (0..sh.nr_blocks as u8)
         .filter(|&i| buf.err[PRE][usize::from(i)].is_some())
         .collect();
