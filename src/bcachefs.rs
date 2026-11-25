@@ -392,14 +392,6 @@ fn main() -> ExitCode {
 
     let _ = bcachefs_kernel::os::debugfs::START_HTTP.set(http::start_lazy);
 
-    // glibc and Rust stdlib buffer stdout independently; when piped, both
-    // switch to block buffering which can reorder or lose output.
-    // Set both to line-buffered.
-    unsafe {
-        unsafe extern "C" { static stdout: *mut libc::FILE; }
-        libc::setvbuf(stdout, std::ptr::null_mut(), libc::_IOLBF, 0);
-    }
-
     let args: Vec<String> = std::env::args().collect();
 
     // Handle symlink invocations (mkfs.bcachefs, fsck.bcachefs, mount.bcachefs, etc.)

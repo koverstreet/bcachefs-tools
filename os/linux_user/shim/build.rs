@@ -81,20 +81,8 @@ fn main() {
         // (default) pulls in the system primitives these reference (__u64
         // etc.), so they're emitted here too.
         .allowlist_file(format!("{}/.*", include_dir.display()))
-        // fs/ references a few system / urcu types directly that aren't
-        // reachable from include/ alone; own them here too so the bcachefs-kernel
-        // crate can import them rather than redefine them.
-        .allowlist_type("uid_t")
-        .allowlist_type("gid_t")
-        .allowlist_type("dev_t")
-        .allowlist_type("cds_.*")
         // wrapper.h's functions named by macros: liburcu's flavour's
         .allowlist_function("RUST_FN_HELPER_.*")
-        // errnos, for bch2_err_matches() against a bare errno, or returning
-        // one as C does (darray_push()'s -ENOMEM) - the kernel crate's
-        // bindings have them in-kernel; add as needed:
-        .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES|EBUSY")
-        .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT|ENOKEY|EAGAIN")
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.
         .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")

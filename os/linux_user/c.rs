@@ -21,8 +21,13 @@ use core::sync::atomic::{fence, AtomicIsize, Ordering::{Acquire, Relaxed, Releas
 
 use super::blkdev::BlockDevice;
 
+pub use linux_raw_sys::errno::*;
+
 pub type umode_t = c_ushort;
 pub type gfp_t   = c_uint;
+pub type uid_t   = u32;
+pub type gid_t   = u32;
+pub type dev_t   = u64;
 
 pub const GFP_KERNEL: gfp_t = 2;
 pub const PAGE_ALLOC_COSTLY_ORDER: u32 = 6;
