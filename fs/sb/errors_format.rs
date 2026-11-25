@@ -261,6 +261,7 @@ pub enum SbErrorId {
     #[flags(AUTOFIX)] subvol_to_missing_root = 188,
     #[flags(AUTOFIX)] subvol_root_wrong_bi_subvol = 189,
     #[flags(AUTOFIX)] subvol_root_unlinked_flag_missing = 383,
+    #[flags(AUTOFIX)] subvol_creation_parent_missing = 444,
     bkey_in_missing_snapshot = 190,
     #[flags(AUTOFIX)] bkey_in_deleted_snapshot = 315,
     inode_pos_inode_nonzero = 191,

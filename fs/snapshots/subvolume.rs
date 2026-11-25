@@ -435,6 +435,23 @@ fn check_subvol<'a, 't>(
         return Ok(());
     }
 
+    // set_deleted() reparents a subvolume's children before it's a tombstone:
+    // a creation_parent naming no key at all is one that wasn't
+    let parent = s.v().creation_parent.get();
+    if parent != 0 {
+        match __get_snapshot(t, parent, false) {
+            Err(e) if e.matches(c::ENOENT) => {
+                if fsck_err!(t, id::subvol_creation_parent_missing,
+                             "subvolume {id} has creation_parent {parent}, which doesn't exist:\n{}",
+                             s.to_text(fs))? {
+                    s.v_mut(t)?.creation_parent = 0.into();
+                }
+            }
+            Err(e) => return Err(e),
+            Ok(_)  => {}
+        }
+    }
+
     let snapid = s.v().snapshot();
     let mut snap_iter = BtreeIter::new(t, Btree::snapshots, pos(0, snapid as u64),
                                        BtreeIterFlags::INTENT);
