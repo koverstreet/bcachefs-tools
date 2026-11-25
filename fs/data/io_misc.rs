@@ -314,7 +314,7 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
 
     if len > 0 {
         if MAX_FILE_SIZE.wrapping_sub(inode_u.bi_size) < len as u64 {
-            return Err(c::EFBIG.into());
+            return t.fs().throw(Errcode::EFBIG_adjust_i_size);
         }
 
         if offset >= inode_u.bi_size {

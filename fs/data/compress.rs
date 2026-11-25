@@ -690,15 +690,15 @@ fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchE
         if let Some(err) = err {
             writeln!(err, "invalid compression type");
         }
-        return Err(c::EINVAL.into());
+        return Err(e::EINVAL_compression_type.into());
     };
 
     let mut level = 0;
     if let Some(i) = colon {
         let l = core::str::from_utf8(&s[i + 1..])
-            .map_err(|_| BchError::from(c::EINVAL))
+            .map_err(|_| BchError::from(e::EINVAL_compression_level_utf8))
             .and_then(crate::os::sysfs::parse_int::<u32>)
-            .and_then(|l| if l > 15 || (t == 0 && l != 0) { Err(c::EINVAL.into()) } else { Ok(l) });
+            .and_then(|l| if l > 15 || (t == 0 && l != 0) { Err(e::EINVAL_compression_level.into()) } else { Ok(l) });
         level = match l {
             Ok(l)    => l,
             Err(ret) => {

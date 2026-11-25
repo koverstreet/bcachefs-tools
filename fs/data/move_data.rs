@@ -569,6 +569,6 @@ pub fn data_job(fs: &Fs, stats: &MoveStats, op: &c::bch_ioctl_data) -> Result<()
             fs.btree_interior_updates_flush();
             scrub(fs, stats, op.scrub())
         }
-        _ => Err(c::EINVAL.into()),
+        _ => fs.throw(err::EINVAL_data_job_op),
     }
 }

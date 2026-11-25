@@ -460,7 +460,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             Ok(b) => b,
             // in flight already
             Err(RegisterError::Exists) => return Ok(false),
-            Err(RegisterError::Alloc)  => return Err(c::ENOMEM.into()),
+            Err(RegisterError::Alloc)  => return self.fs.throw(Errcode::ENOMEM_copygc_in_flight),
         };
         batch.push(b).expect("reserved");
         Ok(true)

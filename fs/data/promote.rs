@@ -96,7 +96,7 @@ pub(crate) async fn run<'h>(mut u: Body<'h>, start_time: u64) {
     u.read_done.store(true, Relaxed);
     if read.ret.is_err() {
         drop(listed);
-        return u.exit(Err(BchError::from(c::EIO)));
+        return u.exit(Err(fs.err(Errcode::EIO_promote_read)));
     }
     {
         let k = BkeySC::from(u.index.k.as_ref());

@@ -121,7 +121,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket:
                           data_opts: &c::data_update_opts, found: Option<BadRef>) -> Result<(), BchError> {
     let btree = iter.btree();
 
-    t.allocate_dropping_locks(|| moving.updates_reserve().map_err(|_| c::ENOMEM.into()))
+    t.allocate_dropping_locks(|| moving.updates_reserve().map_err(|_| t.fs().err(Errcode::ENOMEM_move_updates_reserve)))
         .map_err(|e| if e.matches(c::ENOMEM) { t.fs().err(Errcode::ENOMEM_move_extent) } else { e })?;
 
     // SAFETY: flush_all() waits for every task before the context goes

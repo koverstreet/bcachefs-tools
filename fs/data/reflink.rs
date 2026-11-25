@@ -796,7 +796,7 @@ pub fn make_extent_indirect<'a, 't>(
      * logged ops btree:
      */
     if bkey_ge(reflink_iter.pos(), pos(0, c::ReflinkPIdxFlags::IDX_MAX - orig.k().size as u64)) {
-        return Err(c::ENOSPC.into());
+        return fs.throw(Errcode::ENOSPC_reflink_idx_max);
     }
 
     let r_v_buf_u64s = orig.k().u64s as u32 + 2 + c::BCH_REPLICAS_MAX;
@@ -876,7 +876,7 @@ pub fn remap_range(
     while ret.is_ok() && bkey_lt(dst_iter.pos(), dst_end) {
         ret = lockrestart_do(&trans, |t| -> Result<(), BchError> {
             if fatal_signal_pending() {
-                return Err(c::EINTR.into());
+                return fs.throw(Errcode::EINTR_remap_range_fatal_signal);
             }
 
             src_iter.set_snapshot(subvolume::get_snapshot(t, src_inum.subvol as u32)?);

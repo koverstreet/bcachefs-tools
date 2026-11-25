@@ -208,7 +208,7 @@ fn stripe_head_devs_update(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>
     g.devs.mask         = mask;
 
     if head_stripe(g).is_some_and(|s| !s.lock().allocated) && !leaving.d.is_empty() {
-        stripe_head_detach(fs, g, Some(BchError::from(c::EINTR)));
+        stripe_head_detach(fs, g, Some(fs.err(Errcode::EINTR_stripe_head_devs_changed)));
     }
 }
 

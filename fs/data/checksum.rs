@@ -396,7 +396,7 @@ impl Fs {
         for chunk in r {
             if chunk.len() % CHACHA_BLOCK_SIZE != 0 {
                 crate::bch_err_ratelimited!(self, "bio not aligned for encryption");
-                return Err(BchError::from(c::EIO));
+                return self.throw(Errcode::EIO_encrypt_unaligned);
             }
             chunk.with_mapped(|p, len| stream.apply_keystream(unsafe { core::slice::from_raw_parts_mut(p, len) }));
         }
@@ -578,7 +578,7 @@ fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
     let mut k = c::bch_key::default();
     match key.read(&mut crate::util::vstructs::plain_bytes_mut(&mut k)) {
         Ok(n) if n == size_of_val(&k) => Ok(k),
-        _                             => Err(BchError::from(c::EINVAL)),
+        _                             => Err(Errcode::EINVAL_keyring_key_size.into()),
     }
 }
 
@@ -615,7 +615,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
 
     let why: String = match reply {
         Ok(Given::Taken(key)) => return key,
-        Ok(Given::Rejected)   => return Err(BchError::from(c::ENOKEY)),
+        Ok(Given::Rejected)   => return Err(Errcode::ENOKEY_passphrase_rejected.into()),
         Ok(Given::Ended)      => "no passphrase read: end of file on stdin".into(),
         Ok(Given::Declined)   => "no passphrase given: systemd-ask-password was declined".into(),
         Ok(Given::Settled)    => "no passphrase read".into(),
@@ -642,7 +642,7 @@ pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
     let desc = key_description(&sb.uuid());
     let key = KeyRing::from_special_id(KeyRingIdentifier::User, false)
         .and_then(|r| r.search(desc.as_str()))
-        .map_err(|_| BchError::from(c::ENOKEY))?;
+        .map_err(|_| BchError::from(Errcode::ENOKEY_revoke_key_not_found))?;
     let _ = key.revoke();
     Ok(())
 }
@@ -673,7 +673,7 @@ fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt, user_k
         sb_key.chacha20(&user_key, sb.nonce());
         if sb_key.is_encrypted() {
             crate::bch_err!(fs, "incorrect encryption key");
-            return Err(BchError::from(c::EINVAL));
+            return fs.throw(Errcode::EINVAL_incorrect_encryption_key);
         }
     }
     Ok(sb_key.into_key())
@@ -723,7 +723,7 @@ pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
 pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
     if sb.field::<c::bch_sb_field_crypt>().is_some() {
-        return Err(BchError::from(c::EINVAL));
+        return fs.throw(Errcode::EINVAL_enable_encryption_already);
     }
 
     let mut key = c::bch_key::default();

@@ -679,6 +679,23 @@ xmacro! {
         (EINTR, EINTR_wb_resize_inc_locked, 651),
         (EINTR, EINTR_wb_resize_flushing_locked, 652),
         (EROFS, erofs_wb_update_non_wb_btree, 653),
+        (EIO, EIO_encrypt_unaligned, 654),
+        (EINVAL, EINVAL_keyring_key_size, 655),
+        (ENOKEY, ENOKEY_passphrase_rejected, 656),
+        (ENOKEY, ENOKEY_revoke_key_not_found, 657),
+        (EINVAL, EINVAL_incorrect_encryption_key, 658),
+        (EINVAL, EINVAL_enable_encryption_already, 659),
+        (EINVAL, EINVAL_compression_type, 660),
+        (EINVAL, EINVAL_compression_level_utf8, 661),
+        (EINVAL, EINVAL_compression_level, 662),
+        (ENOMEM, ENOMEM_copygc_in_flight, 663),
+        (EINTR, EINTR_stripe_head_devs_changed, 664),
+        (EFBIG, EFBIG_adjust_i_size, 665),
+        (EINVAL, EINVAL_data_job_op, 666),
+        (ENOMEM, ENOMEM_move_updates_reserve, 667),
+        (EIO, EIO_promote_read, 668),
+        (ENOSPC, ENOSPC_reflink_idx_max, 669),
+        (EINTR, EINTR_remap_range_fatal_signal, 670),
     }
 }
 
