@@ -1,9 +1,5 @@
-// Bindgen for the userspace Linux kernel-compat layer (the in-tree `include/`
-// shim). Parses the same fs/ wrapper header as the bcachefs-kernel crate, but
-// emits only the symbols *defined under* include/ (plus the system primitives
-// they transitively reference, e.g. __u64/__le16). The bcachefs-kernel crate
-// blocklists this same set and imports it from here, so each C type is bound
-// exactly once.
+// Bindgen for what userspace Rust calls in C: liburcu, the compression and
+// raid libraries, and include/'s unicode - wrapper.h's.
 use std::path::PathBuf;
 
 include!("../../../clang_target.rs");
@@ -92,9 +88,9 @@ fn main() {
         // than these bindings would be no value of a Rust enum. Its parameter
         // names and strategies the same, though only passed to it.
         .constified_enum("ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective|ZSTD_strategy")
-        // Own only what's defined under include/ — the kernel-compat surface.
-        // allowlist_recursively (default) pulls in the system primitives these
-        // reference (__u64 etc.), so they're emitted here too.
+        // What's defined under include/: unicode's. allowlist_recursively
+        // (default) pulls in the system primitives these reference (__u64
+        // etc.), so they're emitted here too.
         .allowlist_file(format!("{}/.*", include_dir.display()))
         // fs/ references a few system / urcu types directly that aren't
         // reachable from include/ alone; own them here too so the bcachefs-kernel
@@ -103,9 +99,7 @@ fn main() {
         .allowlist_type("gid_t")
         .allowlist_type("dev_t")
         .allowlist_type("cds_.*")
-        // wrapper.h's consts: codegen.h's, in-kernel
-        .allowlist_var("RUST_CONST_HELPER_.*")
-        // and its functions named by macros: liburcu's flavour's
+        // wrapper.h's functions named by macros: liburcu's flavour's
         .allowlist_function("RUST_FN_HELPER_.*")
         // errnos, for bch2_err_matches() against a bare errno, or returning
         // one as C does (darray_push()'s -ENOMEM) - the kernel crate's
@@ -126,19 +120,6 @@ fn main() {
         .allowlist_type("z_stream|ZSTD_ErrorCode|ZSTD_cParameter|ZSTD_ResetDirective")
         .allowlist_var("ZLIB_VERSION|MAX_WBITS|Z_OK|Z_STREAM_END|Z_FINISH|Z_DEFLATED")
         .allowlist_var("Z_DEFAULT_STRATEGY|Z_DEFAULT_COMPRESSION|Z_BEST_SPEED|Z_BEST_COMPRESSION")
-        // printbuf is an fs/ type owned by bcachefs-kernel; don't emit the
-        // userspace helpers that take it (they reference the blocklisted type
-        // and belong to bch_bindgen anyway).
-        .blocklist_function("prt_.*")
-        .blocklist_type("printbuf")
-        .blocklist_function("sysfs_.*")
-        // Empty opaque structs — only ever used behind pointers. As zero-field
-        // structs they make every extern fn that transitively embeds one trip
-        // improper_ctypes. opaque_type gives them a blob field so they're
-        // FFI-safe, without us inventing a layout.
-        .opaque_type("lock_class_key")
-        .opaque_type("lockdep_map")
-        .opaque_type("bch_ioctl_data_event")
         .generate_inline_functions(true)
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))
@@ -146,10 +127,9 @@ fn main() {
         .generate()
         .expect("BindGen Generation Failure: [bcachefs-shim]");
 
-    // wrapper.h's consts and functions, by the names of the macros they're of
+    // wrapper.h's functions, by the names of the macros they're of
     std::fs::write(out_dir.join("bindings.rs"),
                    bindings.to_string()
-                       .replace("pub const RUST_CONST_HELPER_", "pub const ")
                        .replace("pub fn RUST_FN_HELPER_", "pub fn "))
         .expect("Writing to output file failed for: `bindings.rs`");
 
@@ -182,8 +162,7 @@ fn main() {
     // dh-cargo Built-Using (Debian): point at the workspace root (== the dpkg
     // build's $PWD) so dh-cargo-built-using sees this lib as built from our own
     // in-tree source and skips it, rather than aborting on a build path no
-    // Debian package owns. Mirrors the same declaration in fs/build.rs and
-    // bch_bindgen/build.rs. `root` is the workspace root.
+    // Debian package owns. `root` is the workspace root.
     println!(
         "dh-cargo:deb-built-using=bcachefs_shim_static_wrappers=0={}",
         root.display()
