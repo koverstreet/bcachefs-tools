@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! try_update() for the core atomics, as rustc 1.95 names fetch_update(),
-//! which it deprecates: our floor, rustc 1.85, has only fetch_update(). A
+//! which it deprecates: our floor, rustc 1.88, has only fetch_update(). A
 //! function, not a method - an extension trait's method loses to the
 //! inherent one where it exists, and its imports warn unused there. Goes
 //! when the floor has try_update(): each try_update(&a, ..) is

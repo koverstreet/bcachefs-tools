@@ -2,7 +2,7 @@
 name = "bcachefs-dkms"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 license = "GPL-2.0"
 publish = false
 
