@@ -16,7 +16,7 @@ pub mod sort;
 
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::cache::NodeBufs;
-use crate::btree::path::LockedNode;
+use crate::btree::path::{LockedNode, NodeLock};
 use crate::c;
 use crate::cstructs::c as cs;
 use crate::data_structures::dst_room::DstRoom;
@@ -122,7 +122,7 @@ pub struct BtreeNode {
 
     /* Key/pointer for this btree node: its published half */
     #[init(LockedBy::new(NodeContents::new(), PublishedKey::new()))]
-    pub contents: LockedBy<NodeContents, PublishedKey>,
+    pub contents: LockedBy<NodeContents, PublishedKey, NodeLock<BtreeNode>>,
 
     /* the journal pins of its current write and the one before */
     pub writes: [Pin; 2],

@@ -24,7 +24,7 @@ use crate::util::rcu::{RcuDropMember, RcuHead, Srcu};
 use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::types::{CacheAligned, NeBytes, bits_to_longs};
 use crate::btree::node_scan::NodeScan;
-use crate::btree::path::BtreePath;
+use crate::btree::path::{BtreePath, NodeLock};
 use crate::new_lock;
 use crate::util::projections::Volatile;
 use crate::util::ratelimit::Ratelimit;
@@ -504,7 +504,7 @@ pub struct bkey_cached {
     pub journal: cs::journal_entry_pin,
 
     #[init(LockedBy::new(Default::default(), ()))]
-    pub contents: LockedBy<crate::btree::key_cache::EntryContents>,
+    pub contents: LockedBy<crate::btree::key_cache::EntryContents, (), NodeLock<bkey_cached>>,
     /* the key cache's lookups lock it: dropped once they're past it */
     #[rcu_head]
     #[init(unsafe { RcuDropMember::new() })]

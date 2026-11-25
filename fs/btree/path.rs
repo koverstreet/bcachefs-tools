@@ -31,7 +31,7 @@ use crate::util::Printbuf;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
-use crate::locking::{Locked, LockedBy};
+use crate::locking::{Alone, Guard, Locked, LockedBy};
 use crate::locking::six::{six_trylock_ip, SixHold};
 use crate::c::SixLockType;
 use core::cmp::Ordering;
@@ -1693,18 +1693,22 @@ impl BtreePath {
 
 /// A PathNode whose lock protects only part of it: the part only a hold on the
 /// lock reaches.
-pub trait PathNodeContents: PathNode {
+pub trait PathNodeContents: PathNode + Sized {
     type Contents;
     type Published;
 
-    fn locked_contents(&self) -> &LockedBy<Self::Contents, Self::Published>;
+    fn locked_contents(&self) -> &LockedBy<Self::Contents, Self::Published, NodeLock<Self>>;
 }
+
+/// The lock a node's contents are under, as LockedBy names it: the node's
+/// own, its common part's six lock - what a LockedNode of it holds.
+pub struct NodeLock<T>(PhantomData<T>);
 
 impl PathNodeContents for BtreeNode {
     type Contents = NodeContents;
     type Published = PublishedKey;
 
-    fn locked_contents(&self) -> &LockedBy<NodeContents, PublishedKey> {
+    fn locked_contents(&self) -> &LockedBy<NodeContents, PublishedKey, NodeLock<Self>> {
         &self.contents
     }
 }
@@ -1713,10 +1717,22 @@ impl PathNodeContents for c::bkey_cached {
     type Contents = EntryContents;
     type Published = ();
 
-    fn locked_contents(&self) -> &LockedBy<EntryContents> {
+    fn locked_contents(&self) -> &LockedBy<EntryContents, (), NodeLock<Self>> {
         &self.contents
     }
 }
+
+// a LockedNode is had only while its node's lock is held, as its mode says
+impl<T: PathNodeContents, M> Guard for LockedNode<'_, T, M> {
+    type Name = NodeLock<T>;
+    type Root = T;
+
+    fn root(&self) -> &T {
+        self.node
+    }
+}
+
+impl<T: PathNodeContents> Alone for LockedNode<'_, T, Write> {}
 
 /// How a LockedNode's node is held: Held any way, its contents had by &; or
 /// for Write, its contents by &mut.
@@ -1777,14 +1793,15 @@ impl<'p, T: PathNode> LockedNode<'p, T, Write> {
     where
         T: PathNodeContents,
     {
-        unsafe { self.node.locked_contents().protected() }
+        self.get_of(self.node.locked_contents())
     }
 
     pub fn contents_mut(&mut self) -> &mut T::Contents
     where
         T: PathNodeContents,
     {
-        unsafe { self.node.locked_contents().protected_mut() }
+        let node = self.node;
+        self.get_mut_of(node.locked_contents())
     }
 }
 
