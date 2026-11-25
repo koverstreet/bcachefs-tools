@@ -138,6 +138,29 @@ fn dladdr_symbol(addr: c_ulong) -> String {
     format!("{addr:#x}")
 }
 
+/// @f's name, mangled as the binary has it: a function's address, so its own
+/// symbol's, not the byte before's.
+pub fn fn_name(f: c_ulong) -> String {
+    if RESOLVING.get() {
+        return dladdr_symbol(f);
+    }
+    let _lock = RESOLVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    RESOLVING.set(true);
+
+    let mut name = None;
+    unsafe {
+        // the last, as symbolize(): the function's, not one inlined into it
+        backtrace::resolve_unsynchronized(f as *mut c_void, |sym| {
+            if let Some(n) = sym.name() {
+                name = Some(String::from_utf8_lossy(n.as_bytes()).into_owned());
+            }
+        });
+    }
+
+    RESOLVING.set(false);
+    name.unwrap_or_else(|| dladdr_symbol(f))
+}
+
 /// @addr's symbol: "name+0xoff", mangled as the binary has it, and
 /// " file:line" where the debug info has it.
 pub fn symbolize(addr: c_ulong) -> String {

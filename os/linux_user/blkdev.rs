@@ -121,8 +121,10 @@ pub fn dev(bdev: &BlockDevice) -> c::dev_t {
 }
 
 /// Its name: the path it was opened by, its last component.
-pub fn prt_name(out: &mut Printbuf, bdev: &BlockDevice) {
-    out.write_bytes(bdev.name.to_bytes());
+impl crate::util::ToText for BlockDevice {
+    fn to_text(&self, out: &mut Printbuf) {
+        out.write_bytes(self.name.to_bytes());
+    }
 }
 
 /// Its sysfs directory's kobject.

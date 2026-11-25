@@ -58,8 +58,7 @@ use crate::c;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::BchError;
 use crate::os::blkdev::BlockDevice;
-use crate::util::backtrace::prt_symbol;
-use crate::util::printbuf::prt_bdevname;
+use crate::util::backtrace::prt_fn_name;
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Completion, Done, WaitSync, Waiter};
 use crate::util::gather::GatherRef;
@@ -523,7 +522,7 @@ impl ToText for Bio {
         }
 
         write!(out, "bi_bdev:\t");
-        prt_bdevname(out, unsafe { crate::os::blkdev::bio_bdev(b) });
+        unsafe { crate::os::blkdev::bio_bdev(b) }.to_text(out);
         out.newline();
 
         write!(out, "bi_opf:\t{} ", request_op_str(self.op()));
@@ -544,7 +543,7 @@ impl ToText for Bio {
         let remaining = unsafe { AtomicI32::from_ptr((&raw const b.__bi_remaining.counter).cast_mut()) };
         write!(out, "bi_remaining:\t{}\n", remaining.load(Relaxed) as u32);
         write!(out, "bi_end_io:\t");
-        prt_symbol(out, b.bi_end_io.map_or(0, |f| f as usize as c_ulong));
+        prt_fn_name(out, b.bi_end_io.map_or(0, |f| f as usize as c_ulong));
         out.newline();
 
         write!(out, "bi_vcnt\t{}\n", self.nr_vecs());

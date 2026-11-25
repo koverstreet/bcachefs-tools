@@ -30,7 +30,7 @@ use crate::sb::counters::counters_init;
 use crate::sb::io::{read_super, sb_to_fs, Holder};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevKobjRef, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::util::alloc::{Arc, KVVec};
 use crate::util::refcount::PercpuRef;
 use crate::util::ffi::c_char;
@@ -41,7 +41,6 @@ use crate::os::module::ModuleRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::PlacedDrop;
-use crate::util::printbuf::prt_bdevname;
 use crate::util::rcu::{read_lock, RcuPtrWriter};
 use crate::util::refcount::{RefGuard, WaitableRef};
 use crate::util::place::Placed;
@@ -464,7 +463,7 @@ impl Fs {
         if self.sb.multi_device.get() {
             prt!(&mut name, "{}", self.sb.user_uuid());
         } else {
-            prt_bdevname(&mut name, Some(sbs[0].bdev()));
+            sbs[0].bdev().to_text(&mut name);
         }
         if name.allocation_failure() {
             return Err(Errcode::ENOMEM_fs_name_alloc.into());

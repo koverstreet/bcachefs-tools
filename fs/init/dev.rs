@@ -238,9 +238,9 @@ use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::os::kobject::{into_ref, GroupList, KobjOwner};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
 use crate::os::percpu::PerCpu;
-use crate::util::printbuf::{prt_bdevname, DateTime, Msg};
+use crate::util::printbuf::{DateTime, Msg};
 use crate::util::rcu::read_lock;
-use crate::util::{Nsecs, Printbuf};
+use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{bch_err_fn, prt};
 use core::ffi::CStr;
 use core::pin::Pin;
@@ -677,7 +677,7 @@ fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [c_char]) -> bool {
 
 pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut c::bch_dev_identity) {
     let mut bdevname = Printbuf::new();
-    prt_bdevname(&mut bdevname, Some(bdev));
+    bdev.to_text(&mut bdevname);
     strscpy(&mut id.name, bdevname.as_bytes());
 
     let dev = crate::os::blkdev::dev(bdev);
@@ -716,33 +716,22 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice
 
     if fs.seq == dev.seq && fs.write_time != dev.write_time {
         log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
-            prt!(out, "Split brain detected between ");
-            prt_bdevname(out, dev_bdev);
-            prt!(out, " and ");
-            prt_bdevname(out, fs_bdev);
-            prt!(out, ":\nseq={} but write_time different, got\n", dev.seq.get());
-            prt_bdevname(out, fs_bdev);
-            prt!(out, " {}\n", DateTime(fs.write_time.get() as i64));
-            prt_bdevname(out, dev_bdev);
-            prt!(out, " {}\nNot using older sb", DateTime(dev.write_time.get() as i64));
+            prt!(out, "Split brain detected between {dev_bdev} and {fs_bdev}:\n\
+                       seq={} but write_time different, got\n\
+                       {fs_bdev} {}\n\
+                       {dev_bdev} {}\n\
+                       Not using older sb",
+                 dev.seq.get(), DateTime(fs.write_time.get() as i64), DateTime(dev.write_time.get() as i64));
         }));
         return Err(Errcode::device_splitbrain.into());
     }
 
     if seq_from_fs != 0 && seq_from_fs < dev.seq.get() {
         log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
-            prt!(out, "Split brain detected between ");
-            prt_bdevname(out, dev_bdev);
-            prt!(out, " and ");
-            prt_bdevname(out, fs_bdev);
-            prt!(out, ":\n");
-            prt_bdevname(out, fs_bdev);
-            prt!(out, " believes seq of ");
-            prt_bdevname(out, dev_bdev);
-            prt!(out, " to be {seq_from_fs}, but ");
-            prt_bdevname(out, dev_bdev);
-            prt!(out, " has {}\nNot using ", dev.seq.get());
-            prt_bdevname(out, dev_bdev);
+            prt!(out, "Split brain detected between {dev_bdev} and {fs_bdev}:\n\
+                       {fs_bdev} believes seq of {dev_bdev} to be {seq_from_fs}, but {dev_bdev} has {}\n\
+                       Not using {dev_bdev}",
+                 dev.seq.get());
         }));
         return Err(Errcode::device_splitbrain.into());
     }
@@ -777,7 +766,7 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
     ca.write_clones.init(state, || BioSet::new(4)).map_err(|_| fs.err(Errcode::ENOMEM_dev_write_clones_init))?;
 
     let mut name = Printbuf::new();
-    prt_bdevname(&mut name, Some(sb.bdev()));
+    sb.bdev().to_text(&mut name);
     let dev = crate::os::blkdev::dev(sb.bdev());
 
     /* Commit: */

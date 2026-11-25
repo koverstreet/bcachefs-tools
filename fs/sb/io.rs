@@ -1094,10 +1094,9 @@ impl c::bch_sb_io {
         let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
         if bytes as u64 > max {
             use crate::util::log::{log_no_fs, LogLevel};
-            use crate::util::printbuf::{prt_bdevname, Msg};
+            use crate::util::printbuf::Msg;
             log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
-                prt_bdevname(out, Some(bdev));
-                write!(out, ": superblock too big: want {bytes} but have {max}");
+                prt!(out, "{bdev}: superblock too big: want {bytes} but have {max}");
             }));
             return Err(c::Errcode::ENOSPC_sb.into());
         }
@@ -2411,7 +2410,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 
         if read != expected {
             let mut msg = LogMsg::new(fs);
-            crate::util::printbuf::prt_bdevname(&mut msg, dev_sb.io.bdev());
+            prt!(msg, "{}", dev_sb.io.bdev());
             if read < expected {
                 prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
                 if matches!(fs.opts().errors(), c::ErrorAction::continue_ |

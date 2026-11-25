@@ -1,6 +1,6 @@
 #![allow(non_camel_case_types)]
 
-use core::ffi::{CStr, c_uint, c_void};
+use core::ffi::{CStr, c_uint};
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 use crate::c;
@@ -544,24 +544,6 @@ impl Printbuf {
         true
     }
 
-    /// @p, as the kernel's printf extension @fmt prints it - %pS, %ps, %pg:
-    /// only snprintf() knows them.
-    pub fn prt_ptr(&mut self, fmt: &CStr, p: *const c_void) {
-        let len = loop {
-            let size = if self.size != 0 { self.remaining() + 1 } else { 0 };
-            let len = unsafe { c::snprintf(self.buf.wrapping_add(self.pos()), size as _, fmt.as_ptr().cast(), p) };
-            let len = len.max(0) as usize;
-            if len > self.remaining() && self.make_room(len) {
-                continue;
-            }
-            break len;
-        };
-
-        let indent_pos = self.pos();
-        self.pos += len.min(self.remaining()) as u32;
-        self.do_indent(indent_pos);
-    }
-
     /*
      * Print an array of chars, handling embedded control characters:
      *   \n: prt_newline	newline that obeys current indent level
@@ -823,12 +805,14 @@ unsafe fn realloc(p: *mut c_char, size: usize, vmalloc: bool) -> *mut c_char {
     q.map_or(core::ptr::null_mut(), |q| q.as_ptr().cast())
 }
 
-/// @bdev's name: os::blkdev::prt_name()'s. NULL is "(null)", as %pg prints
-/// it: C names the filesystem's superblock's device, which has none.
-pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&crate::os::blkdev::BlockDevice>) {
-    match bdev {
-        Some(bdev) => crate::os::blkdev::prt_name(out, bdev),
-        None       => out.write_bytes(b"(null)"),
+/// None is "(null)", as %pg printed it: a filesystem's superblock's device,
+/// which has none.
+impl ToText for Option<&crate::os::blkdev::BlockDevice> {
+    fn to_text(&self, out: &mut Printbuf) {
+        match self {
+            Some(bdev) => bdev.to_text(out),
+            None       => out.write_bytes(b"(null)"),
+        }
     }
 }
 

@@ -96,9 +96,12 @@ pub fn dev(bdev: &BlockDevice) -> c::dev_t {
     bdev.bd_dev
 }
 
-/// Its name, as %pg prints it: its disk's and partition's.
-pub fn prt_name(out: &mut Printbuf, bdev: &BlockDevice) {
-    out.prt_ptr(c"%pg", core::ptr::from_ref(bdev).cast());
+/// Its name, its sysfs directory's: its disk's and partition's - sda1,
+/// nvme0n1p1 - as add_partition() names it.
+impl crate::util::ToText for BlockDevice {
+    fn to_text(&self, out: &mut Printbuf) {
+        out.write_bytes(unsafe { CStr::from_ptr(self.bd_device.kobj.name.cast()) }.to_bytes());
+    }
 }
 
 /// Its sysfs directory's kobject.

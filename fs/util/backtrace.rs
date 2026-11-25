@@ -30,7 +30,7 @@ use core::ffi::c_ulong;
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name
 /// demangled - a Rust name, mangled; anything else as it is.
 fn prt_symbol_demangled(out: &mut Printbuf, sym: &str) {
-    let (name, rest) = sym.split_at(sym.find('+').unwrap_or(sym.len()));
+    let (name, rest) = sym.split_at(sym.find(['+', ' ']).unwrap_or(sym.len()));
 
     prt_demangled(out, name);
     prt!(out, "{rest}");
@@ -83,6 +83,30 @@ pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
         return;
     }
 
+    demangle_in_place(out, start);
+}
+
+/// @f's name: a function's address, not a return address - and no offset.
+#[cfg(kernel)]
+pub(crate) fn prt_fn_name(out: &mut Printbuf, f: c_ulong) {
+    let start = out.as_bytes().len();
+
+    let written = unsafe {
+        out.write_in_place(c::KSYM_SYMBOL_LEN as usize, |buf| {
+            c::sprint_symbol_no_offset(buf.cast(), f as _) as usize
+        })
+    };
+    if !written {
+        prt!(out, "{f:#x}");
+        return;
+    }
+
+    demangle_in_place(out, start);
+}
+
+/// The symbol kallsyms wrote to @out from @start, demangled.
+#[cfg(kernel)]
+fn demangle_in_place(out: &mut Printbuf, start: usize) {
     // demangling reads the name as it writes: a Rust name is moved out of
     // @out first, and left as it is if it can't be
     let mut bounce = KVVec::new();
@@ -106,6 +130,12 @@ pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
 #[cfg(not(kernel))]
 pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
     prt_symbol_demangled(out, &crate::os::stacktrace::symbolize(addr));
+}
+
+/// @f's name: a function's address, not a return address - and no offset.
+#[cfg(not(kernel))]
+pub(crate) fn prt_fn_name(out: &mut Printbuf, f: c_ulong) {
+    prt_symbol_demangled(out, &crate::os::stacktrace::fn_name(f));
 }
 
 /// @stack, a frame a line, as the kernel prints them: "[<0>] " and the

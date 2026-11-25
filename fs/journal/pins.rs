@@ -105,13 +105,13 @@ impl Pin {
     }
 }
 
-/* A function, as %ps prints it */
+/* A function, by its name */
 struct Symbol(*const c_void);
 
 impl core::fmt::Display for Symbol {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = Printbuf::new();
-        out.prt_ptr(c"%ps", self.0);
+        crate::util::backtrace::prt_fn_name(&mut out, self.0 as usize as core::ffi::c_ulong);
         f.write_str(out.as_str())
     }
 }
