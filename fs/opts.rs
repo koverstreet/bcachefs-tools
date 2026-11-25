@@ -169,7 +169,7 @@ pub struct bch_opts {
           hint = "#")]
     pub journal_replicas: u8,
 
-    /// Number of data replicas (erasure coding currently caps this at 3, RAID6)
+    /// Number of data replicas
     #[opt(uint(1, BCH_REPLICAS_MAX),
           flags = fs | inode | format | mount_old | runtime,
           sb = bch_sb::data_replicas_want,

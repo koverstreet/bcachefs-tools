@@ -1124,7 +1124,8 @@ pub enum MetadataVersion {
     per_dev_fragmentation_lru = BCH_VERSION(1, 39),
     /// 2026-11: Inline data extents carry their own checksums; stripe
     /// backpointers carry the stripe index, so stripes sharing a block
-    /// during reuse don't share a backpointer
+    /// during reuse don't share a backpointer; stripes have more than two
+    /// parity blocks
     inline_data_csum = BCH_VERSION(1, 40),
 }
 

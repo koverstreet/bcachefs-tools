@@ -23,7 +23,7 @@ use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, 
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, MemberState};
+use crate::format::{DataType, MemberState, MetadataVersion};
 use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
 use crate::debug::trace::events;
@@ -534,6 +534,10 @@ pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request,
 {
     let fs = t.fs();
     let redundancy = u32::from(req.ec_replicas).wrapping_sub(1);
+    // more parity than raid6's: 1.40's
+    if redundancy > 2 && fs.request_incompat_feature(MetadataVersion::inline_data_csum).is_err() {
+        return fs.throw(Errcode::ec_alloc_failed_redundancy_incompat);
+    }
     let disk_label = match Target::decode(req.target) {
         Target::Group(g) if g > u8::MAX.into() => return fs.throw(Errcode::ec_alloc_failed_disk_label_too_big),
         Target::Group(g) => g + 1, /* 0 == no label */

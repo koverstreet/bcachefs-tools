@@ -210,10 +210,6 @@ impl c::bch_inode_opts {
             self.set_data_checksum_from_inode(from_inode);
             self.set_erasure_code_from_inode(from_inode);
         }
-        /* We currently only support up to RAID6: */
-        if self.erasure_code != 0 {
-            self.data_replicas = self.data_replicas.min(3);
-        }
     }
 }
 

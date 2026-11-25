@@ -637,6 +637,7 @@ xmacro! {
         (ec_alloc_failed, ec_alloc_failed_no_redundancy, 606),
         (ec_alloc_failed, ec_alloc_failed_insufficient_devs, 607),
         (ec_alloc_failed, ec_alloc_failed_disk_label_too_big, 608),
+        (ec_alloc_failed, ec_alloc_failed_redundancy_incompat, 638),
         (ec_alloc_failed, ec_alloc_failed_transient, 612),
         (ec_alloc_failed_transient, ec_alloc_failed_stripe_alloc, 609),
         (ec_alloc_failed_transient, ec_alloc_failed_no_usable_block, 610),
