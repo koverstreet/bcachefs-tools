@@ -36,6 +36,7 @@ use crate::locking::{Locked, SpinLockIrq};
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox};
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::Printbuf;
+use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int, c_void, CStr};
 use core::fmt;
@@ -309,10 +310,6 @@ impl Daemon {
 
 const KTHREAD_SHOULD_STOP: u32 = 1;
 
-unsafe extern "C" {
-    fn calloc(n: usize, size: usize) -> *mut c_void;
-}
-
 fn kthread_flags<'a>(p: *mut task_struct) -> &'a AtomicUsize {
     unsafe { &(*p).kthread_flags }
 }
@@ -330,11 +327,15 @@ fn to_kthread(p: *mut task_struct) -> *mut KthreadStruct {
 }
 
 /// @p's last ref is put: a kthread's thread, unless it's been joined, is
-/// detached.
-pub(super) unsafe fn task_free(p: *mut task_struct) {
+/// detached. The layout @p's allocation is freed by: a kthread's, or a plain
+/// task's.
+pub(super) unsafe fn task_free(p: *mut task_struct) -> Layout {
     unsafe {
         if (*p).flags & PF_KTHREAD != 0 {
             drop((*to_kthread(p)).thread.take());
+            Layout::new::<KthreadStruct>()
+        } else {
+            Layout::new::<task_struct>()
         }
     }
 }
@@ -361,7 +362,7 @@ fn kthread_start_fn(p: Task) {
 pub(crate) unsafe fn kthread_create_name(thread_fn: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
                                              thread_data: *mut c_void,
                                              name: *const c_char) -> *mut task_struct {
-    let k = unsafe { calloc(1, size_of::<KthreadStruct>()) }.cast::<KthreadStruct>();
+    let k = unsafe { std::alloc::alloc_zeroed(Layout::new::<KthreadStruct>()) }.cast::<KthreadStruct>();
     if k.is_null() {
         return (-(c::ENOMEM as isize)) as *mut task_struct;
     }

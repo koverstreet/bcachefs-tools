@@ -455,12 +455,13 @@ pub(crate) fn table_arrays(paths: *mut BtreePath, nr: usize)
 }
 
 impl BtreeTrans<'_> {
-    /// A table the transaction's done with, from its allocated bitmap: freed
-    /// once readers are done with it, unless it's the embedded one.
-    fn table_retire(&self, allocated: *mut c_ulong) {
+    /// A table of @nr paths the transaction's done with, from its allocated
+    /// bitmap: freed once readers are done with it, unless it's the embedded
+    /// one.
+    fn table_retire(&self, allocated: *mut c_ulong, nr: usize) {
         if allocated != self._paths_allocated.as_ptr().cast() {
             // kfree_rcu_mightsleep() is kvfree_rcu_mightsleep()
-            unsafe { crate::util::alloc::kfree_rcu_mightsleep(allocated.cast()) };
+            unsafe { crate::util::alloc::kfree_rcu_mightsleep(allocated.cast(), TableLayout::of(nr).size) };
         }
     }
 }
@@ -516,7 +517,7 @@ impl Paths<'_> {
         t.nr_paths.set(nr as PathIdx);
         self.table = Paths::table_of(t);
 
-        t.table_retire(old_allocated);
+        t.table_retire(old_allocated, old_nr);
     }
 }
 
@@ -1633,8 +1634,9 @@ pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
 }
 
 pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
-    let (allocated, _, _) = table_arrays(trans.paths.replace(ptr::null_mut()), trans.nr_paths.get().into());
-    trans.table_retire(allocated);
+    let nr = trans.nr_paths.get().into();
+    let (allocated, _, _) = table_arrays(trans.paths.replace(ptr::null_mut()), nr);
+    trans.table_retire(allocated, nr);
 }
 
 pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {

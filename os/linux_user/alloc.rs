@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Allocation, for userspace, for util/alloc.rs: Kmalloc, Vmalloc and KVmalloc
-//! over std's allocator, which takes no flags and no memalloc scope. What's
-//! freed a grace period on with no head, by kfree_rcu_mightsleep(), is
-//! malloc()'s.
+//! over std's allocator, which takes no flags and no memalloc scope, and
+//! frees by the layout it was asked for: what's freed a grace period on says
+//! it, in its head or in rcu_free_ptr()'s wrapper.
 
 #[path = "../alloc.rs"]
 mod common;
@@ -134,35 +134,40 @@ pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
     *b
 }
 
-/// kmalloc(), as the shim's slab.h had it: aligned to the largest power of two
-/// in @size, up to a page; tried ten times, the shrinkers run between; zeroed
-/// with ZERO. Null if it can't - or for NOFAIL, an abort. free() takes it back.
+/// kmalloc(), as the shim's slab.h had it: kv_layout()'s - aligned to the
+/// largest power of two in @size, up to a page - from std's allocator; tried
+/// ten times, the shrinkers run between; zeroed with ZERO. Null if it can't -
+/// or for NOFAIL, an abort. kfree_sized() takes it back.
 fn kmalloc_noprof(size: usize, gfp: Flags) -> *mut c_void {
-    for _ in 0..10 {
-        let p = if size != 0 {
-            let align = (1usize << size.ilog2()).min(super::kernel::PAGE_SIZE).max(size_of::<*mut c_void>());
-            let mut p = core::ptr::null_mut();
-            if unsafe { libc::posix_memalign(&mut p, align, size) } != 0 {
-                p = core::ptr::null_mut();
-            }
-            p
-        } else {
-            unsafe { libc::malloc(0) }
-        };
+    let Ok(layout) = kv_layout(size) else { return core::ptr::null_mut() };
+    if size == 0 {
+        return dangling(layout).as_ptr().cast();
+    }
 
+    for _ in 0..10 {
+        let p = if gfp.contains(flags::ZERO) {
+            unsafe { std::alloc::alloc_zeroed(layout) }
+        } else {
+            unsafe { std::alloc::alloc(layout) }
+        };
         if !p.is_null() {
-            if gfp.contains(flags::ZERO) {
-                unsafe { p.cast::<u8>().write_bytes(0, size) };
-            }
-            return p;
+            return p.cast();
         }
 
         super::shrinker::run_shrinkers(gfp, true);
     }
     if gfp.contains(flags::NOFAIL) {
-        std::alloc::handle_alloc_error(Layout::from_size_align(size, 1).expect("an allocation's"));
+        std::alloc::handle_alloc_error(layout);
     }
     core::ptr::null_mut()
+}
+
+/// # Safety
+/// @p is kmalloc_noprof()'s, of @size bytes, and nothing uses it after.
+unsafe fn kfree_sized(p: *mut c_void, size: usize) {
+    if size != 0 {
+        unsafe { std::alloc::dealloc(p.cast(), kv_layout(size).expect("its allocation's")) };
+    }
 }
 
 /// @size bytes kvzalloc()'d, NOFAIL: kfree_rcu_mightsleep() takes it back.
@@ -270,55 +275,58 @@ unsafe extern "C" fn kvfree_rcu_cb<T: ?Sized + HasRcuHead>(head: *mut c::rcu_hea
     }
 }
 
-/// C's kfree_rcu_mightsleep(): @p freed a grace period on.
+/// C's kfree_rcu_mightsleep(): @p, kvzalloc_nofail()'s of @size bytes, freed
+/// a grace period on.
 ///
 /// # Safety
 /// Only RCU readers use @p after.
-pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void) {
-    unsafe { rcu_free_ptr(p) }
+pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void, size: usize) {
+    if size != 0 {
+        unsafe { rcu_free_ptr(p, kv_layout(size).expect("its allocation's")) }
+    }
 }
 
 /*
- * The rcu_head embedded in the object can't be used directly: call_rcu() hands
- * the callback &obj->rcu, and free() needs the base of the allocation, which
- * isn't recoverable from that without knowing the field's offset. So carry the
- * pointer in a wrapper.
+ * The object has no rcu_head of its own to use: carry the pointer, and the
+ * layout std's allocator frees it by, in a wrapper.
  *
  * If the wrapper can't be allocated, block for a grace period rather than free
  * under readers - slow, but the alternative is the bug this replaced.
  */
 #[repr(C)]
 struct RcuFreeWrapper {
-    rcu: c::rcu_head,
-    p:   *mut c_void,
+    rcu:    c::rcu_head,
+    p:      *mut c_void,
+    layout: Layout,
 }
 
 unsafe extern "C" fn rcu_free_wrapper_cb(head: *mut c::rcu_head) {
     let w = head.cast::<RcuFreeWrapper>();
     unsafe {
-        libc::free((*w).p);
-        libc::free(w.cast());
+        std::alloc::dealloc((*w).p.cast(), (*w).layout);
+        std::alloc::dealloc(w.cast(), Layout::new::<RcuFreeWrapper>());
     }
 }
 
-/// @p, malloc()'s, freed a grace period on.
+/// @p, std's allocator's of @layout, freed a grace period on.
 ///
 /// # Safety
 /// Only RCU readers use @p after.
-pub(super) unsafe fn rcu_free_ptr(p: *mut c_void) {
+pub(super) unsafe fn rcu_free_ptr(p: *mut c_void, layout: Layout) {
     if p.is_null() {
         return;
     }
 
-    let w = unsafe { libc::malloc(size_of::<RcuFreeWrapper>()) }.cast::<RcuFreeWrapper>();
+    let w = unsafe { std::alloc::alloc(Layout::new::<RcuFreeWrapper>()) }.cast::<RcuFreeWrapper>();
     if !w.is_null() {
         unsafe {
             (&raw mut (*w).p).write(p);
+            (&raw mut (*w).layout).write(layout);
             super::rcu::Flavor::RCU.call_raw(&raw mut (*w).rcu, rcu_free_wrapper_cb);
         }
     } else {
         super::rcu::synchronize();
-        unsafe { libc::free(p) };
+        unsafe { std::alloc::dealloc(p.cast(), layout) };
     }
 }
 
@@ -328,7 +336,7 @@ pub fn bio_pages_alloc(size: usize, gfp: Flags) -> *mut c_void {
 }
 
 /// # Safety
-/// @p is bio_pages_alloc()'s, and nothing uses it after.
-pub unsafe fn bio_pages_free(p: *mut c_void, _size: usize) {
-    unsafe { libc::free(p) }
+/// @p is bio_pages_alloc()'s, of @size bytes, and nothing uses it after.
+pub unsafe fn bio_pages_free(p: *mut c_void, size: usize) {
+    unsafe { kfree_sized(p, size) }
 }

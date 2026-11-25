@@ -414,12 +414,13 @@ pub unsafe fn kvfree_rcu<T: ?Sized + HasRcuHead>(p: NonNull<u8>, _layout: Layout
     unsafe { c::rust_kvfree_rcu(p.as_ptr().cast(), p.as_ptr().wrapping_add(T::HEAD).cast()) }
 }
 
-/// C's kfree_rcu_mightsleep(): @p, kmalloc()'d, freed a grace period on -
-/// which it may wait out, having nowhere to queue it.
+/// C's kfree_rcu_mightsleep(): @p, kvzalloc_nofail()'s, freed a grace period
+/// on - which it may wait out, having nowhere to queue it. kvfree() needs no
+/// @size.
 ///
 /// # Safety
 /// Only RCU readers use @p after.
-pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void) {
+pub unsafe fn kfree_rcu_mightsleep(p: *mut c_void, _size: usize) {
     unsafe { c::rust_kfree_rcu_mightsleep(p) }
 }
 

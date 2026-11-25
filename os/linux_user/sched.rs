@@ -12,10 +12,6 @@ use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering::{Acquire, Rela
 use rustix::thread::futex;
 use std::time::{Duration, Instant};
 
-unsafe extern "C" {
-    fn calloc(n: usize, size: usize) -> *mut c_void;
-}
-
 pub const TASK_RUNNING:         c_uint = 0;
 pub const TASK_INTERRUPTIBLE:   c_uint = 1;
 pub const TASK_UNINTERRUPTIBLE: c_uint = 2;
@@ -35,7 +31,7 @@ pub const PF_KTHREAD:            c_uint = 0x00200000;	/* I am a kernel thread */
 pub const PF_MEMALLOC_NORECLAIM: c_uint = 0x00800000;	/* All allocation requests will clear __GFP_DIRECT_RECLAIM */
 pub const PF_MEMALLOC_NOWARN:    c_uint = 0x01000000;	/* All allocation requests will inherit __GFP_NOWARN */
 
-/// Zeroed, it's a task, not yet a thread's: calloc()'d.
+/// Zeroed, it's a task, not yet a thread's.
 #[allow(non_camel_case_types)]
 pub struct task_struct {
     pub(super) thread_fn:     Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
@@ -65,7 +61,7 @@ fn state<'a>(p: *mut task_struct) -> &'a AtomicU32 {
 /// A task for the thread that calls this - not one of kthread_create()'s,
 /// which makes its own: the main thread's, a test harness's, fuse's workers.
 fn task_new() -> *mut task_struct {
-    let p = unsafe { calloc(1, size_of::<task_struct>()) }.cast::<task_struct>();
+    let p = unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<task_struct>()) }.cast::<task_struct>();
     assert!(!p.is_null(), "error allocating a task_struct");
 
     unsafe {
@@ -162,8 +158,8 @@ pub unsafe fn put_task_struct(t: *mut task_struct) {
  */
 unsafe fn __put_task_struct(t: *mut task_struct) {
     unsafe {
-        super::kthread::task_free(t);
-        super::alloc::rcu_free_ptr(t.cast());
+        let layout = super::kthread::task_free(t);
+        super::alloc::rcu_free_ptr(t.cast(), layout);
     }
 }
 
