@@ -508,12 +508,11 @@ fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError
     Ok(parked)
 }
 
-/// EC allocation failed - the write never happened, but the extent still
+/// EC allocation failed, @err - the write never happened, but the extent still
 /// needs erasure coding. Mark it pending so reconcile retries from the pending
-/// list instead of the main scan.
-pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
+/// list instead of the main scan. The error the update ends with is returned.
+pub(crate) fn ec_alloc_failed(u: &c::data_update, err: BchError) -> BchError {
     let fs = u.op.fs();
-    let err = BchError::from_raw(-i32::from(u.op.error));
     let parked = park_update(u, ParkReason::UpdateFailed { err, opts: &u.op.opts, data_opts: &u.index.opts });
 
     /*
@@ -523,8 +522,9 @@ pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
      * ec_alloc_failed itself is suppressed there because it parks.
      */
     if let Ok(false) = parked {
-        u.op.error = -fs.err(Errcode::ec_alloc_failed_pending_race).raw() as i16;
+        return fs.err(Errcode::ec_alloc_failed_pending_race);
     }
+    err
 }
 
 /// The read had no device to read from: one the extent's on is offline, and

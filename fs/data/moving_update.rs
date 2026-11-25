@@ -102,12 +102,11 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     // needs erasure coding, so mark it pending for reconcile to retry. Not for
     // the transient failures: nothing retries the pending list on its own, so
     // parking work a retry would have done abandons it
-    if let Err(e) = ret {
-        if e.matches(Errcode::ec_alloc_failed) &&
-           !e.matches(Errcode::ec_alloc_failed_transient) {
-            crate::data::update_index::ec_alloc_failed(&mut u);
-        }
-    }
+    let ret = match ret {
+        Err(e) if e.matches(Errcode::ec_alloc_failed) && !e.matches(Errcode::ec_alloc_failed_transient) =>
+            Err(crate::data::update_index::ec_alloc_failed(&u, e)),
+        ret => ret,
+    };
     u.exit(ret);
     drop(bucket);
 }
