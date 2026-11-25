@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::os::lockdep::LockClass;
-use crate::util::place::{Contained, Field, FieldOf, Here, Path, Place, Placed, RefValue};
+use crate::util::place::{Contained, Field, FieldOf, Here, Path, PathField, Place, Placed, RefValue};
 use crate::util::refcount::AtomicRef;
 use crate::util::projections::Publish;
 use crate::util::sharing::{self, Sharing};
@@ -667,7 +667,7 @@ impl<G: Guard> GuardPath<G> for Here {
 
 impl<G: Guard, P: GuardPath<G>, const N: u64> GuardPath<G> for FieldOf<P, N>
 where
-    P::To: Field<N>,
+    P::To: PathField<N>,
 {
     type To = <P::To as Field<N>>::Type;
     const OFFSET: usize = P::OFFSET + <P::To as Field<N>>::OFFSET;

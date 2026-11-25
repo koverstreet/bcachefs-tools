@@ -36,7 +36,7 @@ unsafe impl TryRefcount for Kobject {
 use super::{GroupList, Groups, KobjOwner, KobjPlace, Kobject};
 use crate::os::sysfs::Dir;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::place::{At, Field, FieldOf, Here, Path, Placed};
+use crate::util::place::{At, FieldOf, Here, Path, PathField, Placed};
 use crate::util::refcount::RefGuard;
 
 /// What holds a KobjOwner - a MaybeRcuAlloc, or the static it's in - given up
@@ -63,7 +63,7 @@ impl<T: 'static> KobjAlloc<T> for &'static T {
 /// is the one returned, and the last put gives @b back to its release.
 pub(crate) fn into_ref<T, const N: u64>(b: MaybeRcuAlloc<T>) -> RefGuard<Placed<Kobject, At<T, N>>>
 where
-    T: KobjOwner<Alloc = MaybeRcuAlloc<T>> + Field<N, Type = Placed<Kobject, At<T, N>>>,
+    T: KobjOwner<Alloc = MaybeRcuAlloc<T>> + PathField<N, Type = Placed<Kobject, At<T, N>>>,
     T::Dir: Dir<Kobj = Placed<Kobject, At<T, N>>>,
     Placed<Kobject, At<T, N>>: Refcount<Target = T>,
 {

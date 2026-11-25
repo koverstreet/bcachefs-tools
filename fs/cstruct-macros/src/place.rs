@@ -41,8 +41,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens as _};
 use syn::parse::{Parse, ParseStream, Parser as _};
 use syn::punctuated::Punctuated;
-use syn::{bracketed, token, Error, Field, Fields, FnArg, Ident, ItemStruct, Lifetime, LitStr, Pat, PatType, Path,
-          Token, Type};
+use syn::{bracketed, token, Data, DataStruct, DeriveInput, Error, Field, Fields, FnArg, Ident, ItemStruct, Lifetime,
+          LitStr, Pat, PatType, Path, Token, Type, Visibility};
 
 use crate::cstruct::FieldDef;
 
@@ -277,19 +277,35 @@ pub(crate) fn is_empty_at_field(f: &FieldDef) -> bool {
     f.placed_at && (f.ident == AT_FIELD || f.ident.to_string().starts_with(INNER_AT_FIELD))
 }
 
-/// Field<N> for field @name, of type @ty, of @inst_ty - @impl_g and @where_c
-/// its generics, @cfg the field's #[cfg].
-pub(crate) fn field_impl(cfg: &TokenStream, impl_g: &impl quote::ToTokens, inst_ty: &TokenStream,
-                         where_c: Option<&syn::WhereClause>, name: &Ident, ty: &Type) -> TokenStream {
-    let n = name.to_string();
-    quote! {
-        #cfg
-        #[automatically_derived]
-        impl #impl_g crate::util::place::Field<{ crate::util::place::name(#n) }> for #inst_ty #where_c {
-            type Type = #ty;
-            const OFFSET: usize = ::core::mem::offset_of!(#inst_ty, #name);
+/// Field<N> for each field of @input, under its #[cfg]s, and PathField<N>
+/// for one visible outside its module, or marked #[field].
+pub(crate) fn field_impls(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let Data::Struct(DataStruct { fields: Fields::Named(fields), .. }) = &input.data else {
+        return Err(Error::new_spanned(input, "a Field is a named field of a struct"));
+    };
+    let inst = &input.ident;
+    let (impl_g, ty_g, where_c) = input.generics.split_for_impl();
+    Ok(fields.named.iter().map(|f| {
+        let (name, ty) = (f.ident.as_ref().expect("a named field"), &f.ty);
+        let n = name.to_string();
+        let n = quote!({ crate::util::place::name(#n) });
+        let cfg: Vec<_> = f.attrs.iter().filter(|a| a.path().is_ident("cfg")).collect();
+        let readable = !matches!(f.vis, Visibility::Inherited) || f.attrs.iter().any(|a| a.path().is_ident("field"));
+        let path_field = readable.then(|| quote! {
+            #(#cfg)*
+            #[automatically_derived]
+            impl #impl_g crate::util::place::PathField<#n> for #inst #ty_g #where_c {}
+        });
+        quote! {
+            #(#cfg)*
+            #[automatically_derived]
+            impl #impl_g crate::util::place::Field<#n> for #inst #ty_g #where_c {
+                type Type = #ty;
+                const OFFSET: usize = ::core::mem::offset_of!(#inst #ty_g, #name);
+            }
+            #path_field
         }
-    }
+    }).collect())
 }
 
 /// The initializer for field @name, without #[init]: InitAt's, if a placed

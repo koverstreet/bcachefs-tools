@@ -84,7 +84,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let has_lifetimes = input.generics.lifetimes().next().is_some();
 
     let mut inits = Vec::new();
-    let mut field_impls = Vec::new();
+    let mut field_impls = vec![place::field_impls(&input)?];
     let mut at: Option<&Type> = None;
     for (i, f) in fields.iter().enumerate() {
         let Some(name) = &f.ident else {
@@ -93,7 +93,6 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         let (ty, has) = (&f.ty, |n: &str| f.attrs.iter().any(|a| a.path().is_ident(n)));
         let cfg: Vec<_> = f.attrs.iter().filter(|a| a.path().is_ident("cfg")).collect();
         let cfg = quote!(#(#cfg)*);
-        field_impls.push(place::field_impl(&cfg, &impl_g, &inst_ty, where_c, name, ty));
 
         let init = match f.attrs.iter().find(|a| a.path().is_ident("init")) {
             Some(a) => Some(initializer(a, name)?),

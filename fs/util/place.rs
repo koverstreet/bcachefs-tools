@@ -131,6 +131,11 @@ pub(crate) trait Field<const N: u64> {
     const OFFSET: usize;
 }
 
+/// Field N, which a path - field!() - may hand out a reference to: a field
+/// visible outside its struct's module, or one marked #[field]. The derives
+/// make them, with the Field.
+pub(crate) trait PathField<const N: u64>: Field<N> {}
+
 /// Proof that what holds it was made at B's field N - by at(), which alone
 /// makes one. Zero bytes, as C's char[0] for it: FFI-safe, as CacheAligned
 /// is, for the C structs that hold one. The atomics, none of them, are so
@@ -631,7 +636,7 @@ where
 
 impl<T, P: Path<T>, const N: u64> Path<T> for FieldOf<P, N>
 where
-    P::To: Field<N> + 'static,
+    P::To: PathField<N> + 'static,
 {
     type To = <P::To as Field<N>>::Type;
     fn get(t: &T) -> &Self::To {
