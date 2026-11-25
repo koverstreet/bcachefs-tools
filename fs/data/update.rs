@@ -145,9 +145,6 @@ pub struct data_update {
     /* its key in c->update_table, while it's in: Held's in_flight */
     pub in_flight_key: c::data_update_key,
 
-    /* associated with @index.ctxt: its index in the context's updates */
-    pub io_seq: u64,
-
     pub rbio: Rbio,
     pub op: c::bch_write_op,
     /* the bio the write's of, owning the pages the read reads into */
@@ -891,19 +888,13 @@ impl c::data_update {
         Ok(true)
     }
 
-    /// Gives back what init() took: @held, the reservation, its place in its
-    /// moving context's counts - whose waiters are woken after the nocow locks
-    /// go - and the bios' memory.
+    /// Gives back what init() took: @held, the reservation and the bios'
+    /// memory. A mover's place in its context's updates is the mover's to
+    /// give back, after.
     pub(crate) fn exit(&mut self, held: Held, ret: Result<(), BchError>) {
         self.trace(ret);
         drop(held);
         self.op.res.put();
-
-        if let Some(moving) = self.index.moving() {
-            moving.update_done(self.io_seq);
-            moving.wake();
-        }
-
         self.bios_free();
     }
 }

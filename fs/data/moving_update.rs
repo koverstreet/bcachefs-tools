@@ -35,10 +35,6 @@ use crate::data::read::{read_update, ReadDone};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::args_stored_once;
 
-fn moving_size(u: &c::data_update) -> (&Moving<'_>, u32) {
-    (u.index.moving().expect("a mover's update has its context"), u.index.k.as_ref().k().size)
-}
-
 /// Counts the read's errors in the context's stats. For a scrub, a poisoned
 /// extent is data already lost even if it reads back clean, as moving it gives
 /// the bad data a new checksum. Not for the journal scrub, where uncorrected
@@ -60,13 +56,14 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
     }
 }
 
-/// The body: reads, counted in the context as @read_io; then waits for its
-/// turn, then writes - nothing, if the read failed. @bucket counts the update
-/// against the bucket it's moving data off, until it's done. A journal scrub's
-/// update puts what it finds bad to @found. @runq is the context's run queue.
+/// The body, @seq in its context's updates: reads, counted in the context as
+/// @read_io; then waits for its turn, then writes - nothing, if the read
+/// failed. @bucket counts the update against the bucket it's moving data off,
+/// until it's done. A journal scrub's update puts what it finds bad to @found.
+/// @runq is the context's run queue.
 #[args_stored_once]
-async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>, found: Option<BadRef>,
-             runq: Resume<'_>) {
+async fn run(mut u: Body, seq: u64, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>,
+             found: Option<BadRef>, runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
         read_update(d.op.fs(), &mut d.rbio, d.index.k.as_ref(), d.index.btree_id, d.index.opts.read_flags,
@@ -81,8 +78,9 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
     requeue(runq).await;
 
     let write_io = {
-        let (moving, size) = moving_size(&u);
-        moving.update_write_start(u.io_seq);
+        let moving = u.index.moving().expect("a mover's update has its context");
+        let size = u.index.k.as_ref().k().size;
+        moving.update_write_start(seq);
         read_error_stats(&u, &read, moving, size);
         moving.io_start(true, size)
     };
@@ -107,7 +105,13 @@ async fn run(mut u: Body, read_io: MovingIo, bucket: Option<RefGuard<c::move_buc
             Err(crate::data::update_index::ec_alloc_failed(&u, e)),
         ret => ret,
     };
+    // off the context's updates once exit() has its nocow locks gone, as what
+    // waits for those waits on the context
+    let ctxt = u.index.ctxt.take();
     u.exit(ret);
+    let moving = Moving::of(ctxt.as_deref().expect("a mover's update has its context"));
+    moving.update_done(seq);
+    moving.wake();
     drop(bucket);
 }
 
@@ -132,14 +136,14 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
         Err(e) => return Err(e),
     };
     u.rbio.bio.get_mut().set_ioprio(IOPRIO_IDLE);
-    u.io_seq = moving.update_issue(u.turn().get_pinned());
+    let seq = moving.update_issue(u.turn().get_pinned());
 
     let size = BkeySC::from(u.index.k.as_ref()).k.size;
     let read_io = moving.io_start(false, size);
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
     let runq = Resume::run_queue(moving.runq());
 
-    u.start(|b| async move |_: &Update| run(b, read_io, bucket, found, runq).await);
+    u.start(|b| async move |_: &Update| run(b, seq, read_io, bucket, found, runq).await);
 
     moving.stats().keys_moved.fetch_add(1, Relaxed);
     moving.stats().sectors_moved.fetch_add(size.into(), Relaxed);
