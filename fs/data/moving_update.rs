@@ -28,7 +28,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{read_err_benign, IOPRIO_IDLE};
 use crate::errcode::BchError;
-use crate::data::update_task::{self, Body, Update};
+use crate::data::update_task::{self, Body};
 use crate::util::refcount::RefGuard;
 use crate::util::task::{requeue, Resume, Spawn};
 use crate::data::read::{read_update, ReadDone};
@@ -62,7 +62,7 @@ fn read_error_stats(u: &c::data_update, read: &ReadDone, moving: &Moving<'_>, si
 /// until it's done. A journal scrub's update puts what it finds bad to @found.
 /// @runq is the context's run queue.
 #[args_stored_once]
-async fn run(mut u: Body, seq: u64, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>,
+async fn run(mut u: Body<'_>, seq: u64, read_io: MovingIo, bucket: Option<RefGuard<c::move_bucket>>,
              found: Option<BadRef>, runq: Resume<'_>) {
     let read = {
         let d = &mut *u;
@@ -143,7 +143,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
     let bucket = bucket_in_flight.map(|b| unsafe { RefGuard::get(b) });
     let runq = Resume::run_queue(moving.runq());
 
-    u.start(|b| async move |_: &Update| run(b, seq, read_io, bucket, found, runq).await);
+    u.start(|b| run(b, seq, read_io, bucket, found, runq));
 
     moving.stats().keys_moved.fetch_add(1, Relaxed);
     moving.stats().sectors_moved.fetch_add(size.into(), Relaxed);

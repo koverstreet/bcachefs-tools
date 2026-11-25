@@ -215,6 +215,15 @@ impl<H, M, A: Alloc + Copy, K> TaskSlot<'_, H, M, A, K> {
     }
 }
 
+impl<H, M, A: Alloc + Copy, K> core::ops::Deref for TaskSlot<'_, H, M, A, K> {
+    type Target = H;
+
+    /// The home, before there's a task to borrow it.
+    fn deref(&self) -> &H {
+        unsafe { self.home.as_ref() }
+    }
+}
+
 impl<H, M, A: Alloc + Copy, K> Drop for TaskSlot<'_, H, M, A, K> {
     fn drop(&mut self) {
         unsafe { (self.free)(self.home) }

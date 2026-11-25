@@ -1,33 +1,34 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A data update run as an async task: the update, an Update, is the home of
-//! its task's box (util/task's TaskBox), and the body - the async fn that
-//! runs it, a mover's (moving_update.rs) or a promote's (promote.rs) - its
-//! future.
+//! its task's box (util/task's TaskSlot, an Exclusive one), and the body - the
+//! async fn that runs it, a mover's (moving_update.rs) or a promote's
+//! (promote.rs) - its future, which has the update as its own.
 //!
 //! The update is pinned in the box: its IO holds pointers into it - the read
 //! into rbio, the write into op.
 //!
 //! Each step of its life has a type:
-//! - spawn() makes the box, with the update zeroed and no task yet: Spawned.
+//! - spawn() makes the box, with the update zeroed and no task yet: Spawned -
+//!   or a promote's, spawn_held(), the update holding its InFlight, whose
+//!   write ref its queue's found through.
 //! - init() sets the update up in the spawner's transaction: Ready - or, on
-//!   error, the box is dropped. The spawner makes its task with its body,
-//!   made then, as what it's given only exists then. A mover's starts at
-//!   once, and reads itself, awaiting read_update(), which borrows the
-//!   update's rbio and key; a promote's is started by the read it's made for,
-//!   when the read into its rbio is done, and given what it came to.
-//! - The body holds the update as a Body, and writes with what its read came
-//!   to (ReadDone): write()'s input, not fields of the update.
+//!   error, the box is dropped. A mover's starts at once, and reads itself,
+//!   awaiting read_update(), which borrows the update's rbio and key; a
+//!   promote's waits for the read it's made for to read into its rbio -
+//!   AwaitingRead - which starts it with what it came to.
+//! - The task's future is made as it starts, by its body, from a Body: the
+//!   update, as the task's own, and what init() took, which exit() gives back.
 //!
-//! Body derefs to the data_update, and Ready to its Body. While its IO is in
-//! flight the IO writes the update, so no other reference to it may be live
-//! then: write() takes the Body by &mut until the IO is done - lending the op
-//! to the write path's write(), awaited as a mover's read() is - and each
-//! deref makes a new reference from the raw pointer.
+//! Body derefs to the data_update. While its IO is in flight the IO writes the
+//! update, so no other reference to it may be live then: write() takes the
+//! Body by &mut until the IO is done - lending the op to the write path's
+//! write(), awaited as a mover's read() is.
 //!
 //! An update in flight is on the data_update async object list, which
-//! debugfs walks under RCU: so the task's memory is freed a grace period after it's done, as every
-//! task's is, and the Update dropped then too, its key buffer with it - an RcuDropMember's.
+//! debugfs walks under RCU, reading it racily: so the task's memory is freed
+//! a grace period after it's done, as every task's is, and the Update dropped
+//! then too, its key buffer with it - an RcuDropMember's.
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, TransAttempt};
@@ -38,16 +39,19 @@ use crate::data::scrub_journal::BadRef;
 use crate::data::update::Held;
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::data::promote::InFlight;
 use crate::fs::Fs;
+use crate::os::workqueue::Queue;
+use crate::util::alloc::Kmalloc;
 use crate::util::gather::Gather;
-use crate::util::task::{waiter, Resume, Spawn};
+use crate::util::task::{waiter, Exclusive, Resume, Spawn, TaskList, TaskSlot};
 use crate::util::rcu::RcuDropMember;
-use crate::util::task::{TaskBox, TaskList, TaskSlot};
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::c_int;
+use core::future::Future;
 use core::mem::MaybeUninit;
-use core::ops::{AsyncFnOnce, Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use pin_init::{pin_data, pin_init, pinned_drop};
@@ -57,153 +61,200 @@ use crate::format::Btree;
 // on any thread, and an update runs on whichever thread its IO completes on
 unsafe impl Send for c::data_update {}
 
-// SAFETY: shared as its box's home - its task's, its endios', the async object
-// list's walk - each by its own protocol: the Dones and Gather atomic, the
-// data_update C's or the Body's in turn, @read its starter's then its body's
-unsafe impl Sync for Update {}
-
 #[pin_data(PinnedDrop)]
-pub struct Update {
-    /// A promote's read, as it came to: written as its task's started
-    read:      UnsafeCell<Option<ReadDone>>,
+pub(crate) struct Update {
+    /// A promote's read, as it came to: given as its task's started
+    read:      Option<ReadDone>,
     /// A mover's turn to write - moving_update.rs; a promote's is never used
     #[pin]
     turn:      Gather<(), waiter::Async>,
     listed:    AsyncObjSlot,
-    /// Zeroed until init(), which expects that
+    /// A promote's - spawn_held()'s: its write ref, what keeps its queue, and
+    /// its place under the limit
+    promote:   Option<InFlight>,
+    /// Zeroed until init(), which expects that; read by the listing's walk
     u:         UnsafeCell<MaybeUninit<c::data_update>>,
     /// The listing's walk may be reading its key
     rcu:       RcuDropMember,
+}
+
+impl Update {
+    /// Its data_update, init()ed: every Update but alloc()'s and init()'s is.
+    fn data(&self) -> &c::data_update {
+        unsafe { (*self.u.get()).assume_init_ref() }
+    }
+
+    fn data_mut(self: Pin<&mut Self>) -> &mut c::data_update {
+        unsafe { self.project().u.get_mut().assume_init_mut() }
+    }
+}
+
+type Slot<'q, F> = TaskSlot<'q, Update, F, Kmalloc, Exclusive>;
+
+/// How an update's task has its queue: the spawner's, which it says outlives
+/// the task - spawn()'s - or, a promote's, @on's in the filesystem the
+/// update's write ref keeps - spawn_held()'s.
+pub struct Borrowed<'q> {
+    at:    Spawn<'q, 'static>,
+    tasks: &'q TaskList,
+}
+
+pub struct WriteHeld(fn(&Fs) -> &Queue);
+
+fn alloc<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, enomem: c::Errcode) -> Result<Slot<'q, F>, BchError> {
+    let fs = t.fs();
+    t.allocate_dropping_locks(|| {
+        let init = pin_init!(Update {
+            read:      None,
+            turn <- Gather::new(),
+            listed:    AsyncObjSlot::none(),
+            promote:   None,
+            u:         UnsafeCell::new(MaybeUninit::zeroed()),
+            // its drop doesn't sleep
+            rcu:       unsafe { RcuDropMember::new() },
+        });
+        TaskSlot::exclusive_in(Kmalloc, init)
+    })
+    .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })
 }
 
 /// Makes the update's box, its task to run on @at, with the update zeroed. Out
 /// of memory is reported as @enomem.
 ///
 /// # Safety
-/// @at, and what the body borrows, outlive the task.
-pub unsafe fn spawn<'q, M>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, tasks: &'q TaskList,
-                           enomem: c::Errcode) -> Result<Spawned<'q, M>, BchError>
-where
-    M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()>,
-    for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
-{
-    let fs = t.fs();
-    t.allocate_dropping_locks(|| {
-        let init = pin_init!(Update {
-            read:      UnsafeCell::new(None),
-            turn <- Gather::new(),
-            listed:    AsyncObjSlot::none(),
-            u:         UnsafeCell::new(MaybeUninit::zeroed()),
-            // its drop doesn't sleep
-            rcu:       unsafe { RcuDropMember::new() },
-        });
-        TaskSlot::alloc(init)
-    })
-    .map(|slot| Spawned { slot, at, tasks })
-    .map_err(|e| if e.matches(c::ENOMEM) { fs.err(enomem) } else { e })
+/// @at, and what the body borrows, outlive the task; the body keeps its Body
+/// only in the future it makes.
+pub unsafe fn spawn<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, tasks: &'q TaskList,
+                                          enomem: c::Errcode) -> Result<Spawned<'q, F>, BchError> {
+    Ok(Spawned { slot: alloc(t, enomem)?, on: Borrowed { at, tasks } })
+}
+
+/// spawn(), for a promote: on the queue @on finds in the filesystem
+/// @in_flight's write ref keeps - which the update holds till it's dropped,
+/// after its task.
+pub(crate) fn spawn_held<F: Future + Send>(t: &TransAttempt<'_, '_>, in_flight: InFlight, on: fn(&Fs) -> &Queue,
+                                           enomem: c::Errcode) -> Result<Spawned<'static, F, WriteHeld>, BchError> {
+    let mut slot = alloc(t, enomem)?;
+    *slot.home().project().promote = Some(in_flight);
+    Ok(Spawned { slot, on: WriteHeld(on) })
 }
 
 /// An update still zeroed, in a box with no task yet: freed a grace period
 /// after it's done - the async object list's walk may still be reading it.
-pub struct Spawned<'q, M> {
-    slot:  TaskSlot<'q, Update, M>,
-    at:    Spawn<'q, 'static>,
-    tasks: &'q TaskList,
+pub struct Spawned<'q, F, K = Borrowed<'q>> {
+    slot: Slot<'q, F>,
+    on:   K,
 }
 
-impl<'q, M> Spawned<'q, M>
-where
-    M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()>,
-    for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
-{
+impl<'q, F: Future + Send, K> Spawned<'q, F, K> {
     /// Sets the update up with data_update::init() and readies it for its
     /// read: lists it. On error the box is dropped.
     #[allow(clippy::too_many_arguments)]
     pub fn init(mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
                 wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
-                btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, M>, BchError> {
+                btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, F, K>, BchError> {
         let mut up = self.slot.home();
         // SAFETY: zeroed, and pinned in the box
         let held = unsafe {
-            let u = &mut *up.u.get().cast::<c::data_update>();
+            let u = &mut *up.as_mut().project().u.get_mut().as_mut_ptr();
             u.init(t, iter, moving, wp, io_opts, data_opts, btree, k)?
         };
         // SAFETY: the box's home, pinned
         let listed = unsafe { AsyncObjSlot::new(t.fs(), &*up) };
         *up.as_mut().project().listed = listed;
 
-        let body = Body { up: NonNull::from(up.as_ref().get_ref()), held };
-        Ok(Ready { slot: self.slot, at: self.at, tasks: self.tasks, body })
+        Ok(Ready { slot: self.slot, on: self.on, held })
     }
 }
 
 /// An update that's set up, its box's task not made yet: the spawner makes it.
-pub struct Ready<'q, M> {
-    slot:  TaskSlot<'q, Update, M>,
-    at:    Spawn<'q, 'static>,
-    tasks: &'q TaskList,
-    body:  Body,
+pub struct Ready<'q, F, K = Borrowed<'q>> {
+    slot: Slot<'q, F>,
+    on:   K,
+    held: Held,
 }
 
-impl<'q, M> Ready<'q, M>
-where
-    M: for<'h> AsyncFnOnce<(&'h Update,), Output = ()> + 'q,
-    for<'h> <M as AsyncFnOnce<(&'h Update,)>>::CallOnceFuture: Send,
-{
-    fn task(self, body: impl FnOnce(Body) -> M) -> TaskBox<'q, Update> {
-        let Ready { slot, at, tasks, body: b } = self;
-        slot.init(at, tasks, body(b), None).expect("a queue's or run queue's task: nothing in it fails")
+impl<F: Future + Send, K> Ready<'_, F, K> {
+    /// Its turn to write, as a mover's update: shared, as the moving
+    /// context's updates fifo holds a ref on it.
+    pub fn turn(&self) -> &Gather<(), waiter::Async> {
+        &self.slot.turn
     }
+}
 
-    /// The task, its future made by @body from the update's Body, for a read
-    /// another does into its rbio - a promote's - to start.
-    pub fn awaiting_read(self, body: impl FnOnce(Body) -> M) -> AwaitingRead<'q> {
-        AwaitingRead(self.task(body))
-    }
-
-    /// The task, started: its body reads.
-    pub fn start(self, body: impl FnOnce(Body) -> M) {
+impl<'q, F: Future<Output = ()> + Send> Ready<'q, F> {
+    /// The task, its future made by @body from the update's Body, started:
+    /// its body reads.
+    pub fn start(self, body: impl FnOnce(Body<'q>) -> F) {
+        let Ready { slot, on: Borrowed { at, tasks }, held } = self;
         // SAFETY: spawn()'s: its queue, and what the body borrows, outlive it
-        unsafe { self.task(body).start_unchecked() };
+        unsafe { slot.start_unchecked(at, tasks, move |up| body(Body { up, held })) };
     }
 }
 
-/// An update's task, made, waiting for the read into its rbio: started only
-/// with what the read came to, which the body takes with Body::read().
-/// Dropped unstarted, the update is never exit()ed.
-pub struct AwaitingRead<'q>(TaskBox<'q, Update>);
+/// What makes an AwaitingRead's future from its update's Body, once the read's
+/// done: for every lifetime of the Body, so it can keep it only in the future.
+pub trait ReadBody: Send + 'static {
+    type Fut<'h>: Future<Output = ()> + Send;
 
-impl AwaitingRead<'_> {
+    fn make(self, u: Body<'_>) -> Self::Fut<'_>;
+}
+
+impl<F: Future + Send> Ready<'static, F, WriteHeld> {
+    /// The task, to have its future made by @body, for a read another does
+    /// into its rbio - a promote's - to start.
+    pub fn awaiting_read<B: ReadBody<Fut<'static> = F>>(self, body: B) -> AwaitingRead<B> {
+        let Ready { slot, on: WriteHeld(on), held } = self;
+        AwaitingRead { slot, on, held, body }
+    }
+}
+
+impl<F: Future + Send, K> Deref for Ready<'_, F, K> {
+    type Target = c::data_update;
+
+    fn deref(&self) -> &c::data_update {
+        self.slot.data()
+    }
+}
+
+impl<F: Future + Send, K> DerefMut for Ready<'_, F, K> {
+    fn deref_mut(&mut self) -> &mut c::data_update {
+        self.slot.home().data_mut()
+    }
+}
+
+/// An update's task, waiting for the read into its rbio: made and started
+/// only with what the read came to, which the body takes with Body::read().
+/// Dropped unstarted, the update is never exit()ed.
+pub struct AwaitingRead<B: ReadBody> {
+    slot: Slot<'static, B::Fut<'static>>,
+    on:   fn(&Fs) -> &Queue,
+    held: Held,
+    body: B,
+}
+
+impl<B: ReadBody> AwaitingRead<B> {
     pub fn rbio(&self) -> &Rbio {
-        unsafe { &(*self.0.u.get()).assume_init_ref().rbio }
+        &self.slot.data().rbio
     }
 
     /// Its rbio, the task not started: the read's, reading into it.
     pub fn rbio_mut(&mut self) -> &mut Rbio {
-        unsafe { &mut (*self.0.u.get()).assume_init_mut().rbio }
+        &mut self.slot.home().data_mut().rbio
     }
 
-    /// # Safety
-    /// spawn()'s: its queue, and what the body borrows, outlive it.
-    pub unsafe fn start(self, read: ReadDone) {
+    pub fn start(self, read: ReadDone) {
+        let AwaitingRead { mut slot, on, held, body } = self;
+        *slot.home().project().read = Some(read);
+        let fs = NonNull::from(slot.promote.as_ref().expect("a promote's update, with its InFlight").fs());
+        // its queue and task list, through the write ref the update holds -
+        // which the Body never reaches - till it's dropped, after the future;
+        // the body borrows nothing, and its make() can keep the Body, for any
+        // lifetime, only in the future it makes
         unsafe {
-            *self.0.read.get() = Some(read);
-            self.0.start_unchecked();
+            let fs = fs.as_ref();
+            slot.start_unchecked(Spawn::Queue(on(fs)), fs.tasks(), move |up| body.make(Body { up, held }))
         }
-    }
-}
-
-impl<M> Deref for Ready<'_, M> {
-    type Target = Body;
-
-    fn deref(&self) -> &Body {
-        &self.body
-    }
-}
-
-impl<M> DerefMut for Ready<'_, M> {
-    fn deref_mut(&mut self) -> &mut Body {
-        &mut self.body
     }
 }
 
@@ -226,41 +277,28 @@ unsafe impl AsyncObj for Update {
 
     #[cold]
     fn to_text(&self, out: &mut Printbuf, _: &Fs) {
-        // SAFETY: init()ed before it was listed
-        let u = unsafe { (*self.u.get()).assume_init_ref() };
-        crate::data::update::data_update_inflight_to_text(out, u)
+        crate::data::update::data_update_inflight_to_text(out, self.data())
     }
 }
 
 // ── Body ─────────────────────────────────────────────────────────────────
 
-/// A handle on an init()ed update, and what it holds from init() till exit():
-/// the spawner's, in a Ready, then the body's.
-pub struct Body {
-    up:   NonNull<Update>,
+/// The update, its task's own, and what it holds from init() till exit().
+pub struct Body<'h> {
+    up:   Pin<&'h mut Update>,
     held: Held,
 }
 
-// SAFETY: the update is the task's, and a task may run on any thread
-unsafe impl Send for Body {}
-
-impl Body {
-    /// The Update, for its Completions, Gather and slots - not the
-    /// data_update, which C writes.
-    fn update(&self) -> &Update {
-        // SAFETY: pinned in the task, which outlives its body
-        unsafe { self.up.as_ref() }
-    }
-
+impl Body<'_> {
     /// Its turn to write, as a mover's update: shared, as the moving
     /// context's updates fifo holds a ref on it.
     pub fn turn(&self) -> &Gather<(), waiter::Async> {
-        &self.update().turn
+        &self.up.turn
     }
 
     /// What the read another did came to: AwaitingRead's, taken once.
     pub fn read(&mut self) -> ReadDone {
-        unsafe { (*self.update().read.get()).take() }.expect("a data update's read, given as its task started")
+        self.up.as_mut().project().read.take().expect("a data update's read, given as its task started")
     }
 
     /// The write of what @read read, if read_done() says there is one,
@@ -281,30 +319,22 @@ impl Body {
     /// Takes the update off its async object list, and exit()s it with what
     /// it held.
     pub fn exit(self, ret: Result<(), BchError>) {
-        let Body { up, held } = self;
-        // SAFETY: only we touch these - the walk reads the list, not the slot
-        let u = unsafe {
-            let up = up.as_ptr();
-            (*up).listed = AsyncObjSlot::none();
-            (*(*up).u.get()).assume_init_mut()
-        };
-        u.exit(held, ret)
+        let Body { mut up, held } = self;
+        *up.as_mut().project().listed = AsyncObjSlot::none();
+        up.data_mut().exit(held, ret)
     }
 }
 
-impl Deref for Body {
+impl Deref for Body<'_> {
     type Target = c::data_update;
 
     fn deref(&self) -> &c::data_update {
-        // SAFETY: init()ed before a Body's made. No IO it's lent to is in
-        // flight: read() and write() hold the Body by &mut till they're done
-        unsafe { (*self.update().u.get()).assume_init_ref() }
+        self.up.data()
     }
 }
 
-impl DerefMut for Body {
+impl DerefMut for Body<'_> {
     fn deref_mut(&mut self) -> &mut c::data_update {
-        // SAFETY: as deref(); and the Body is the update's only owner
-        unsafe { (*(*self.up.as_ptr()).u.get()).assume_init_mut() }
+        self.up.as_mut().data_mut()
     }
 }

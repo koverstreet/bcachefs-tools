@@ -81,7 +81,7 @@ use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, Btree
                          LoopFlow, TransAttempt, UpdateTriggerFlags};
 use crate::{bch_err, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
 use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch, InlineDataRef},
-                  promote::{promote_alloc, Promoted}, update::read_err_benign, update_task::AwaitingRead};
+                  promote::{promote_alloc, Promoted, PromoteTask}, update::read_err_benign};
 use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut};
 use crate::data::reflink::{lookup_indirect_extent, Indirect};
 use crate::errcode::{Errcode as err, ret_to_c, ret_to_result_void, BchError};
@@ -398,7 +398,7 @@ enum Kind<'r> {
     Bounce(&'r Rbio, BioBox<'r, Rbio<Pages<'r>>, Pool>),
     /// The promote's task, reading into its bio, started with what was read
     /// once the fragment's done with it
-    Promote(&'r Rbio, AwaitingRead<'r>),
+    Promote(&'r Rbio, PromoteTask),
     /// A fragment's task's own bio, in its home: a clone, or bounced into the
     /// pages it has
     Home(&'r Rbio, Pin<&'r mut FragmentBio>, Option<Pages<'r>>),
@@ -585,7 +585,7 @@ impl<'r> Fragment<'r> {
         };
         if let Some(task) = promote {
             let done = ReadDone::unretried(ret, Some(plan.pick));
-            unsafe { task.start(done) };
+            task.start(done);
         }
         read
     }
@@ -1314,17 +1314,17 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, mut
     Ok(Some(Planned { how, plan, range, ca, k }))
 }
 
-enum How<'r> {
+enum How {
     /// The read's own: not split
     Own,
     Clone,
     /// Pages of its own: the size, and how to allocate them
     Bounce(usize, Flags),
-    Promote(Promoted<'r>),
+    Promote(Promoted),
 }
 
 struct Planned<'r, 'k> {
-    how:   How<'r>,
+    how:   How,
     plan:  Plan,
     range: BioRange<'r>,
     ca:    Option<DevIoRef<c::DevReadRefKind>>,

@@ -23,7 +23,7 @@ use crate::c::Errcode;
 use crate::data::extents::BkeyVExtents;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::read::Rbio;
-use crate::data::update_task::{self, AwaitingRead, Body, Update};
+use crate::data::update_task::{self, AwaitingRead, Body, ReadBody};
 use crate::debug::async_objs::AsyncObjSlot;
 use crate::errcode::BchError;
 use crate::fs::{Fs, WriteRef};
@@ -32,10 +32,10 @@ use crate::debug::trace::events;
 use crate::util::atomic::try_update;
 use crate::os::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
-use crate::util::task::{Resume, Spawn};
+use crate::util::task::Resume;
 use crate::os::workqueue::Queue;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::args_stored_once;
+use cstruct_macros::in_place;
 use crate::format::{Btree, BkeyType};
 
 /// The in-flight limit, per online CPU.
@@ -59,9 +59,10 @@ impl Fs {
     }
 }
 
-/// What a promote holds while in flight: a write ref, so the filesystem
-/// doesn't go read-only under it, and its place under the limit.
-struct InFlight(WriteRef);
+/// What a promote holds while in flight - its update does, till it's dropped:
+/// a write ref, so the filesystem doesn't go read-only under it, and its place
+/// under the limit.
+pub(crate) struct InFlight(WriteRef);
 
 impl InFlight {
     fn tryget(fs: &Fs) -> Result<Self, BchError> {
@@ -70,6 +71,10 @@ impl InFlight {
             return fs.throw(Errcode::nopromote_ratelimited);
         }
         Ok(InFlight(write))
+    }
+
+    pub(crate) fn fs(&self) -> &Fs {
+        &self.0
     }
 }
 
@@ -81,10 +86,9 @@ impl Drop for InFlight {
 
 // ── The promote ──────────────────────────────────────────────────────────
 
-/// The body, started when the read's done: the write. @in_flight is held until
-/// after exit().
-#[args_stored_once]
-async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
+/// The body, started when the read's done: the write.
+#[in_place(PromoteFut)]
+pub(crate) async fn run<'h>(mut u: Body<'h>, start_time: u64) {
     let fs = u.op.fs();
     let listed = unsafe { AsyncObjSlot::new(fs, &u.rbio) };
 
@@ -103,7 +107,6 @@ async fn run(mut u: Body, in_flight: InFlight, start_time: u64) {
     fs.times.get(c::TimeStat::data_promote as usize).update(start_time);
     drop(listed);
     u.exit(Ok(()));
-    drop(in_flight);
 }
 
 // ── Making one ───────────────────────────────────────────────────────────
@@ -129,8 +132,24 @@ fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<()
     Ok(())
 }
 
+/// A promote's body, once its read's done: run(), from when it began.
+pub(crate) struct PromoteBody {
+    start_time: u64,
+}
+
+impl ReadBody for PromoteBody {
+    type Fut<'h> = PromoteFut<'h>;
+
+    fn make(self, u: Body<'_>) -> PromoteFut<'_> {
+        run(u, self.start_time)
+    }
+}
+
+/// A promote's task, awaiting its read.
+pub(crate) type PromoteTask = AwaitingRead<PromoteBody>;
+
 fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC<'_>, opts: &c::bch_inode_opts,
-                   failed: Option<&mut c::bch_io_failures>) -> Result<AwaitingRead<'r>, BchError> {
+                   failed: Option<&mut c::bch_io_failures>) -> Result<PromoteTask, BchError> {
 
     if failed.is_none() {
         should_promote(fs, k, opts)?;
@@ -168,24 +187,20 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC
     let in_flight = InFlight::tryget(fs)?;
     let start_time = local_clock();
 
-    // SAFETY: the task borrows nothing, and promote_wq is drained before the
-    // filesystem is freed
-    let task = unsafe {
-        update_task::spawn(t, Spawn::Queue(fs.promote_wq()), fs.tasks(), Errcode::nopromote_enomem)
-    }?;
+    let task = update_task::spawn_held(t, in_flight, |fs| fs.promote_wq(), Errcode::nopromote_enomem)?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped
     let u = task.init(t, None, None, c::write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
 
-    Ok(u.awaiting_read(move |b| async move |_: &Update| run(b, in_flight, start_time).await))
+    Ok(u.awaiting_read(PromoteBody { start_time }))
 }
 
 /// A promote made: its task, whose read bio the read's to read into as its
 /// bounce, and which the read starts with what it read when it's done with
 /// the bio; and whether the read's to be of the whole extent - a self-heal,
 /// or promote_whole_extents.
-pub(crate) struct Promoted<'r> {
-    pub task:  AwaitingRead<'r>,
+pub(crate) struct Promoted {
+    pub task:  PromoteTask,
     pub whole: bool,
 }
 
@@ -197,7 +212,7 @@ pub(crate) struct Promoted<'r> {
 #[inline(never)]
 pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, k: BkeySC<'_>, orig: &'r Rbio,
                                 opts: &c::bch_inode_opts, failed: Option<&mut c::bch_io_failures>)
-    -> Result<Option<Promoted<'r>>, BchError>
+    -> Result<Option<Promoted>, BchError>
 {
     let self_healing = failed.is_some();
     let btree = if k.k.key_type() == BkeyType::reflink_v {
