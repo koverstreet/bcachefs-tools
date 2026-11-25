@@ -146,6 +146,7 @@ pub struct At<B, const N: u64> {
 
 mod sealed {
     pub(crate) trait Sealed {}
+    pub(crate) trait FieldPath {}
 }
 
 /// What an At says: B's field N - the type there, and where in B the value
@@ -664,10 +665,15 @@ where
 }
 
 /// A path of fields and elements only: what it reaches is at a fixed offset
-/// in the T it starts from, so the T is had back from it - up().
-pub(crate) trait FieldPath<T>: Path<T> {
+/// in the T it starts from, so the T is had back from it - up(). Sealed:
+/// what's trusted is OFFSET, so only these are.
+pub(crate) trait FieldPath<T>: Path<T> + sealed::FieldPath {
     const OFFSET: usize;
 }
+
+impl sealed::FieldPath for Here {}
+impl<P, const N: u64> sealed::FieldPath for FieldOf<P, N> {}
+impl<P, const I: usize> sealed::FieldPath for ElemOf<P, I> {}
 
 impl<T> FieldPath<T> for Here {
     const OFFSET: usize = 0;

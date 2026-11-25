@@ -642,11 +642,20 @@ pub(crate) trait HoldsRef<A>: Guard {}
 /// A path from a guard's root down to what a split of it hands out - as
 /// field!() writes one, of fields and the values of refs the guard holds: at
 /// OFFSET of the root, as many bytes as a To, which get() follows it to.
-pub(crate) trait GuardPath<G: Guard> {
+/// Sealed: a split trusts OFFSET, so only these are.
+pub(crate) trait GuardPath<G: Guard>: sealed::GuardPath {
     type To;
     const OFFSET: usize;
     fn get(g: &G) -> &Self::To;
 }
+
+mod sealed {
+    pub(crate) trait GuardPath {}
+}
+
+impl sealed::GuardPath for Here {}
+impl<P, const N: u64> sealed::GuardPath for FieldOf<P, N> {}
+impl<P> sealed::GuardPath for RefValue<P> {}
 
 impl<G: Guard> GuardPath<G> for Here {
     type To = G::Root;
