@@ -133,6 +133,19 @@ where
             Ok(TaskBox { home, task, free: free::<H, FutureOf<M, H>, A>, _q: PhantomData })
         }
     }
+
+    /// init(), on the queue and task list @on finds through the home - which
+    /// the box holds, lending it only as &H, till it's dropped after the
+    /// future: so they last the task, but for its work returning, which the
+    /// queue's drain waits on.
+    pub fn init_held(self, on: impl FnOnce(&H) -> (&Queue, &TaskList), make: M,
+                     done: Option<unsafe fn(NonNull<H>)>) -> Result<TaskBox<'q, H>, BchError>
+    where
+        M: 'q,
+    {
+        let (q, list) = on(unsafe { self.home.as_ref() });
+        self.init(Spawn::Queue(q), list, make, done)
+    }
 }
 
 /// An Exclusive slot is of the future its task will be, @F - made by a closure
@@ -476,19 +489,14 @@ impl<H> Drop for TaskBox<'_, H> {
 }
 
 /// A task nothing joins, on the queue and task list @on finds through
-/// @held: @make's future, in a box with @held, which it borrows. @held is
-/// lent only as &H and dropped after the future, as the box frees itself, so
-/// what @on found lasts the task - but for its work returning, which the
-/// queue's drain waits on: the box borrows nothing outside itself.
+/// @held: @make's future, in a box with @held, which it borrows - init_held().
 pub fn spawn<H, M>(held: H, on: impl FnOnce(&H) -> (&Queue, &TaskList), make: M) -> Result<(), BchError>
 where
     H: Send + Sync + 'static,
     M: for<'h> AsyncFnOnce<(&'h H,), Output = ()> + 'static,
     for<'h> <M as AsyncFnOnce<(&'h H,)>>::CallOnceFuture: Send,
 {
-    let slot = TaskSlot::alloc(held)?;
-    let (q, list) = on(unsafe { slot.home.as_ref() });
-    slot.init(Spawn::Queue(q), list, make, None)?.start();
+    TaskSlot::alloc(held)?.init_held(on, make, None)?.start();
     Ok(())
 }
 
