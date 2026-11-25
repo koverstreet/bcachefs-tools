@@ -169,7 +169,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &c::bch_io_
 #[in_place(NodeWriteFut)]
 async fn write_task<'h>(wbio: Pin<&'h mut Bio>, fs: BackRef<Fs>, b: BackRef<BtreeNode>, w: BsetWrite,
                         key: NodeKey, sector_offset: u16, shard_cpu: Option<u16>, start_time: u64) {
-    let fs = unsafe { fs.get() };
+    let fs = &*fs;
 
     let mut at = key;
     for ptr in BkeyS::from(&mut *at).arm::<PtrsMut>().expect("a btree node pointer, with pointers").ptrs_mut(fs) {
