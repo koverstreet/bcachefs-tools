@@ -26,8 +26,7 @@ use crate::debug::trace::events;
 use crate::util::alloc::{Kmalloc, Vec};
 use crate::util::log::LogMsg;
 use crate::locking::{Locked, SpinLockIrq};
-use crate::util::gather::{Fold, Gather, GatherRef};
-use crate::util::backref::BackRef;
+use crate::util::gather::{Fold, Gather, GatherRef, Scope};
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Spawn, TaskSlot, WaitSync};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
@@ -135,8 +134,7 @@ pub type BadRef = GatherRef<'static, Bad, waiter::Sync>;
 /// The node @key points to, its replicas on the devices that are there read,
 /// and the verdict made: what's bad queued for repair, or the node lost if
 /// every one read is.
-async fn node_verdict(fs: BackRef<Fs>, key: BtreeKeyBuf, reads: &mut Replicas<ReplicaRead<'static>>) -> Bad {
-    let fs = &*fs;
+async fn node_verdict(fs: &Fs, key: BtreeKeyBuf, reads: &mut Replicas<ReplicaRead<'_>>) -> Bad {
     let read = read_replicas(reads, &fs.btree.read_complete_wq).await;
 
     let (mut checked, mut bad) = (0, 0);
@@ -158,28 +156,24 @@ async fn node_verdict(fs: BackRef<Fs>, key: BtreeKeyBuf, reads: &mut Replicas<Re
 }
 
 /// The node @k points to, at @level of @btree, its replicas on the devices
-/// that are there read back - in a task whose verdict @found gathers.
+/// that are there read back - in a task of @nodes, whose verdict it gathers.
 ///
 /// On read_complete_wq, not the moving context's run queue, which runs only
 /// in its waits: the replicas' buffers can be the bounce pool's, which this
 /// thread may wait on for the next node - and a task the thread runs would
 /// never give them back.
-fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u32, k: BkeySC<'_>)
-    -> Result<(), BchError>
+fn scrub_node<'s, 'f: 's>(fs: &'f Fs, nodes: &Scope<'s, Bad, waiter::Sync>, btree: Btree, level: u32,
+                          k: BkeySC<'_>) -> Result<(), BchError>
 {
     // A v1 pointer carries nothing to check a replica against
     if k.arm::<c::BtreePtrV2>().is_none() {
         return Ok(());
     }
 
-    // the task holds it: @found's wait drains the task
-    let fs_ref = unsafe { BackRef::new(fs) };
-    let fs = unsafe { fs_ref.get() };
-
     // made in the task's box, its home: room for BCH_BKEY_PTRS_MAX replicas
     // is a kilobyte, and this can be under scrub(), under the moves
     // flush_all() runs on its stack
-    let mut slot = TaskSlot::exclusive_in(Kmalloc, ::pin_init::init_zeroed::<Replicas<ReplicaRead<'static>>>())?;
+    let mut slot = TaskSlot::exclusive_in(Kmalloc, ::pin_init::init_zeroed::<Replicas<ReplicaRead<'s>>>())?;
     let reads = slot.home().get_mut();
     let mut ret = Ok(());
 
@@ -197,19 +191,17 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
     }
 
     if !reads.is_empty() {
-        let (key, found) = (BtreeKeyBuf::new(btree, level, k), found.get_pinned());
-        unsafe {
-            slot.start(Spawn::Queue(&fs.btree.read_complete_wq), fs.tasks(), move |reads| async move {
-                found.put(node_verdict(fs_ref, key, reads.get_mut()).await)
-            })
-        };
+        let key = BtreeKeyBuf::new(btree, level, k);
+        slot.start_in(nodes, Spawn::Queue(&fs.btree.read_complete_wq), fs.tasks(),
+                      move |reads| node_verdict(fs, key, reads.get_mut()));
     }
     ret
 }
 
 /// The extent @k, at @level of @btree, its replica on @dev read back -
 /// asynchronously, as a move: a bad one is queued for repair by the read path,
-/// and what's bad put to @found.
+/// and what's bad put to @found - its ref borrowing nothing, as the move's
+/// update holds it past any borrow.
 fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &c::bch_inode_opts, btree: Btree,
                 level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
     let data_opts = c::data_update_opts {
@@ -270,6 +262,8 @@ fn scrub_range(m: &Moving<'_>, jk: &c::journal_keys, start: u64, end: u64) -> Op
 
     fs.event_inc_trace(events::journal_scrub_range, |out| prt!(out, "seq {}-{end}", start + 1));
 
+    stack_pin_init!(let node_verdicts = Gather::new());
+    let nodes = Scope::new(&node_verdicts);
     stack_pin_init!(let found = Gather::<Bad, waiter::Sync>::new());
     let mut move_ret = Ok(());
 
@@ -292,7 +286,7 @@ fn scrub_range(m: &Moving<'_>, jk: &c::journal_keys, start: u64, end: u64) -> Op
          * need checking here too.
          */
         if k.k.is_btree_ptr() {
-            if let Err(e) = scrub_node(fs, &found, btree, level, k) {
+            if let Err(e) = scrub_node(fs, &nodes, btree, level, k) {
                 move_ret = Err(e);
             }
             continue;
@@ -316,7 +310,8 @@ fn scrub_range(m: &Moving<'_>, jk: &c::journal_keys, start: u64, end: u64) -> Op
 
     // flush_all() first: the extents' updates run only in its waits
     m.flush_all();
-    let bad = found.wait_sync(Sleep::IDLE);
+    let mut bad = found.wait_sync(Sleep::IDLE);
+    bad.add(nodes.wait_sync(Sleep::IDLE));
 
     if let Err(e) = move_ret {
         bch_err!(fs, "journal scrub: move error {e} in flush range seq {}-{end}", start + 1);
