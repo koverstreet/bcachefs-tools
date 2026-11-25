@@ -685,7 +685,8 @@ pub fn reconstruct_subvol_root(
 
 /// Recreate missing subvolume key @subvol, at leaf @snapshot with root inode
 /// @root - from reconstruct_subvol_root() - and point the snapshot, and its
-/// tree if it has no master subvolume, back at it.
+/// tree if it has no master subvolume, back at it. Where it's mounted is the
+/// root's to say; it's a snapshot if its tree has a master already.
 pub fn reconstruct_subvol(
     t:        &TransAttempt<'_, '_>,
     snapshot: u32,
@@ -696,13 +697,11 @@ pub fn reconstruct_subvol(
 
     bch_info!(fs, "reconstructing subvol {subvol} with root inode {root}");
 
-    let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
-    k.k_mut().p = pos(0, subvol as u64);
-    let v = k.v_mut();
-    v.snapshot = snapshot.into();
-    v.inode    = root.into();
-    v.set_state(c::SubvolumeState::live);
-    t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
+    let fs_path_parent = match inode::find_by_inum_snapshot(t, root, snapshot, BtreeIterFlags::empty()) {
+        Ok(u)                          => u.bi_parent_subvol,
+        Err(e) if e.matches(c::ENOENT) => 0,
+        Err(e)                         => return Err(e),
+    };
 
     let tree = bch_err_msg!(fs,
         t.bkey_get_mut::<c::Snapshot, _>(Btree::snapshots, pos(0, snapshot as u64),
@@ -714,16 +713,27 @@ pub fn reconstruct_subvol(
         }),
         "getting snapshot {snapshot}")?;
 
-    bch_err_msg!(fs,
+    let had_master = bch_err_msg!(fs,
         t.bkey_get_mut::<c::SnapshotTree, _>(Btree::snapshot_trees, pos(0, tree as u64),
                                               BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |st| {
             let st = st.v_mut();
-            if st.master_subvol == 0 {
+            let had_master = st.master_subvol != 0;
+            if !had_master {
                 st.master_subvol = subvol.into();
             }
-            Ok(())
+            Ok(had_master)
         }),
-        "getting snapshot tree {tree}")
+        "getting snapshot tree {tree}")?;
+
+    let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
+    k.k_mut().p = pos(0, subvol as u64);
+    let v = k.v_mut();
+    v.snapshot       = snapshot.into();
+    v.inode          = root.into();
+    v.fs_path_parent = fs_path_parent.into();
+    v.set_snap(had_master);
+    v.set_state(c::SubvolumeState::live);
+    t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())
 }
 
 /// Whether an inode of mode @mode can own keys in @btree.
