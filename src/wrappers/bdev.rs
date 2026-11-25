@@ -107,50 +107,15 @@ pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
         .map_err(|e| e.raw_os_error())
 }
 
-mod blkid {
-    use core::ffi::{c_char, c_int, c_void};
-
-    pub type Probe = *mut c_void;
-
-    pub const PARTS_MAGIC: c_int   = 1 << 3;
-    pub const SUBLKS_LABEL: c_int  = 1 << 1;
-    pub const SUBLKS_TYPE: c_int   = 1 << 5;
-    pub const SUBLKS_MAGIC: c_int  = 1 << 9;
-
-    #[link(name = "blkid")]
-    unsafe extern "C" {
-        pub fn blkid_get_library_version(ver_string: *mut *const c_char, date_string: *mut *const c_char) -> c_int;
-        pub fn blkid_new_probe() -> Probe;
-        pub fn blkid_free_probe(pr: Probe);
-        pub fn blkid_probe_set_device(pr: Probe, fd: c_int, off: i64, size: i64) -> c_int;
-        pub fn blkid_probe_enable_partitions(pr: Probe, enable: c_int) -> c_int;
-        pub fn blkid_probe_set_partitions_flags(pr: Probe, flags: c_int) -> c_int;
-        pub fn blkid_probe_enable_superblocks(pr: Probe, enable: c_int) -> c_int;
-        pub fn blkid_probe_set_superblocks_flags(pr: Probe, flags: c_int) -> c_int;
-        pub fn blkid_do_fullprobe(pr: Probe) -> c_int;
-        pub fn blkid_do_probe(pr: Probe) -> c_int;
-        pub fn blkid_do_wipe(pr: Probe, dryrun: c_int) -> c_int;
-        pub fn blkid_probe_lookup_value(pr: Probe, name: *const c_char, data: *mut *const c_char,
-                                        len: *mut usize) -> c_int;
-    }
-
-    /// @name's value, as the probe found it.
-    pub fn lookup(pr: Probe, name: &std::ffi::CStr) -> Option<String> {
-        let mut data = core::ptr::null();
-        let mut len = 0;
-        unsafe { blkid_probe_lookup_value(pr, name.as_ptr(), &mut data, &mut len) };
-        (!data.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(data) }.to_string_lossy().into_owned())
-    }
-}
-
 /// Check for existing filesystems using blkid and optionally wipe them.
-pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
+pub fn blkid_check(fd: std::os::fd::BorrowedFd<'_>, path: &std::ffi::CStr, force: bool) {
     use crate::util::die;
+    use rsblkid::device::TagName;
+    use rsblkid::probe::{FsProperty, PartitionScanningOption, Probe, ScanResult};
 
-    let mut version = core::ptr::null();
-    let version_code = unsafe { blkid::blkid_get_library_version(&mut version, core::ptr::null_mut()) };
-    let version = unsafe { std::ffi::CStr::from_ptr(version) }.to_string_lossy();
-    if version_code < 2401 {
+    let lib = rsblkid::utils::misc::library_version();
+    if lib.release_code() < 2401 {
+        let version = lib.version_string();
         if force {
             eprintln!("Continuing with out of date libblkid {version} because --force was passed.");
         } else {
@@ -163,39 +128,36 @@ pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
         }
     }
 
-    let pr = unsafe { blkid::blkid_new_probe() };
-    if pr.is_null() {
-        die("blkid error 1");
-    }
-    if unsafe { blkid::blkid_probe_set_device(pr, fd, 0, 0) } != 0 {
-        die("blkid error 2");
-    }
-    if unsafe {
-        blkid::blkid_probe_enable_partitions(pr, 1) != 0 ||
-        blkid::blkid_probe_set_partitions_flags(pr, blkid::PARTS_MAGIC) != 0 ||
-        blkid::blkid_probe_enable_superblocks(pr, 1) != 0 ||
-        blkid::blkid_probe_set_superblocks_flags(pr,
-            blkid::SUBLKS_LABEL | blkid::SUBLKS_TYPE | blkid::SUBLKS_MAGIC) != 0
-    } {
-        die("blkid error 3");
-    }
-    if unsafe { blkid::blkid_do_fullprobe(pr) } < 0 {
-        die("blkid error 4");
+    let file = fd.try_clone_to_owned()
+        .unwrap_or_else(|e| die(&format!("blkid: duplicating the device's fd: {e}")));
+    let mut pr = Probe::builder()
+        .scan_file(std::fs::File::from(file))
+        .allow_writes()
+        .scan_device_partitions(true)
+        .partitions_scanning_options([PartitionScanningOption::Magic])
+        .collect_fs_properties([FsProperty::Label, FsProperty::Type, FsProperty::Magic])
+        .build()
+        .unwrap_or_else(|e| die(&format!("blkid: {e}")));
+
+    if matches!(pr.find_device_properties(), ScanResult::Error | ScanResult::ConflictingValues | ScanResult::Exception(_)) {
+        die("blkid: probing for existing filesystems failed");
     }
 
-    let fs_type = blkid::lookup(pr, c"TYPE");
-    let fs_label = blkid::lookup(pr, c"LABEL");
-    let pt_type = blkid::lookup(pr, c"PTTYPE");
-
-    if fs_type.is_some() || pt_type.is_some() {
+    // what's there by blkid_probe_has_value(): a type rsblkid has no name for
+    // is still there
+    let (has_fs, has_pt) = (pr.device_property_has_value(TagName::Type), pr.device_property_has_value(TagName::PtType));
+    if has_fs || has_pt {
         let path = path.to_string_lossy();
-        if let Some(fs_type) = &fs_type {
-            match &fs_label {
+        let value = |pr: &mut Probe, name| pr.lookup_device_property_value(name).map(|t| t.value().to_owned());
+        if has_fs {
+            let fs_type = value(&mut pr, TagName::Type).unwrap_or_else(|| "unrecognised".into());
+            match value(&mut pr, TagName::Label) {
                 Some(label) => println!("{path} contains a {fs_type} filesystem labelled '{label}'"),
                 None        => println!("{path} contains a {fs_type} filesystem"),
             }
         }
-        if let Some(pt_type) = &pt_type {
+        if has_pt {
+            let pt_type = value(&mut pr, TagName::PtType).unwrap_or_else(|| "unrecognised".into());
             println!("{path} contains a {pt_type} partition table");
         }
 
@@ -207,18 +169,16 @@ pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
         }
         /*
          * Wipe fs superblock and partition-table signatures both (the
-         * probe enables BLKID_SUBLKS_MAGIC and BLKID_PARTS_MAGIC), so
-         * former-partition fs signatures can't linger to confuse
-         * UUID-based device discovery after a whole-disk format.
+         * probe collects both magics), so former-partition fs signatures
+         * can't linger to confuse UUID-based device discovery after a
+         * whole-disk format.
          */
-        while unsafe { blkid::blkid_do_probe(pr) } == 0 {
-            if unsafe { blkid::blkid_do_wipe(pr, 0) } != 0 {
+        while let ScanResult::FoundProperties = pr.run_scan() {
+            if pr.delete_properties_from_device().is_err() {
                 die("Failed to wipe preexisting metadata.");
             }
         }
     }
-
-    unsafe { blkid::blkid_free_probe(pr) };
 }
 
 fn fd_metadata(fd: RawFd) -> Metadata {

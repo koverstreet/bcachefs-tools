@@ -84,7 +84,7 @@ impl DevOpts {
         use crate::wrappers::bdev::{blkid_check, open_device};
         let mode = c::BLK_OPEN_READ | c::BLK_OPEN_WRITE | c::BLK_OPEN_EXCL | c::BLK_OPEN_BUFFERED | extra_mode;
         self.file = Some(open_device(&self.path, mode)?);
-        blkid_check(self.fd(), &self.path, force);
+        blkid_check(self.as_fd(), &self.path, force);
         Ok(())
     }
 
