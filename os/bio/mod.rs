@@ -739,7 +739,7 @@ impl<O: BioOwner, B> Remapped<'_, O, B> {
     /// Nothing touches the bio, or the buffer it's mapped to, until @r's
     /// Gather has been waited on; nor walks or submits the bio until its next
     /// reset(); @bdev stays open till then.
-    pub unsafe fn submit_gathered(self, bdev: &BlockDevice, sector: u64, r: GatherRef<(), waiter::Sync>) {
+    pub unsafe fn submit_gathered(self, bdev: &BlockDevice, sector: u64, r: GatherRef<'static, (), waiter::Sync>) {
         let mut this = core::mem::ManuallyDrop::new(self);
         let bio = this.owner.bio_mut().aim(bdev, sector);
         // SAFETY: the owner's, built for this IO; the caller keeps it, and

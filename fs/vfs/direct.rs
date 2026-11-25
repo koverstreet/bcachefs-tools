@@ -37,8 +37,8 @@ use cstruct_macros::{args_stored_once, in_place};
 use pin_init::{pin_data, pin_init, stack_pin_init};
 
 type F = c::ReadFlags;
-type Splits = Gather<Result<(), BchError>, waiter::Async>;
-type SplitRef = GatherRef<Result<(), BchError>, waiter::Async>;
+type Splits = Gather<'static, Result<(), BchError>, waiter::Async>;
+type SplitRef = GatherRef<'static, Result<(), BchError>, waiter::Async>;
 type Pool = &'static Mempool<Kmalloc>;
 
 static DIOS: Mempool<Kmalloc> = ::pin_init::zeroed();

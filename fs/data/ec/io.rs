@@ -131,7 +131,7 @@ impl Gathered<BlockErrs> for EcBio {
 pub(crate) struct BlockIo<'a, Rw: IoRefIdx, Wt: Waiter> {
     /// Waited on, or its drop waits, before the buffer's had back
     #[pin]
-    done:    Gather<BlockErrs, Wt>,
+    done:    Gather<'static, BlockErrs, Wt>,
     fs:      &'a Fs,
     buf:     &'a mut StripeBuf,
     _r:      PhantomData<fn() -> Rw>,

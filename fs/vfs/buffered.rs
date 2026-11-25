@@ -52,8 +52,8 @@ use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
 
 type F = c::ReadFlags;
 /// A single folio's read: its caller waits for each extent's
-type Single = Gather<Result<(), BchError>, waiter::Sync>;
-type SingleRef = GatherRef<Result<(), BchError>, waiter::Sync>;
+type Single = Gather<'static, Result<(), BchError>, waiter::Sync>;
+type SingleRef = GatherRef<'static, Result<(), BchError>, waiter::Sync>;
 
 const PAGE_SECTORS: u64 = (PAGE_SIZE >> 9) as u64;
 

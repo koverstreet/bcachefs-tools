@@ -2130,7 +2130,7 @@ struct Frozen<'a> {
 #[pin_init::pin_data]
 pub struct SbIos<'a> {
     #[pin]
-    gather: Gather<(), waiter::Sync>,
+    gather: Gather<'static, (), waiter::Sync>,
     frozen: KVVec<Frozen<'a>>,
 }
 

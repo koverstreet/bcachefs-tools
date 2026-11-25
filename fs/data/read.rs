@@ -589,8 +589,8 @@ impl<'r> Fragment<'r> {
     }
 }
 
-type Reads = Gather<Result<(), BchError>, waiter::Async>;
-type ReadRef = GatherRef<Result<(), BchError>, waiter::Async>;
+type Reads = Gather<'static, Result<(), BchError>, waiter::Async>;
+type ReadRef = GatherRef<'static, Result<(), BchError>, waiter::Async>;
 
 pub(crate) fn retry_pool() -> impl PinInit<Mempool<Kmalloc>, BchError> {
     let layout = Layout::new::<RetryOwnedFut<'static>>();

@@ -103,7 +103,7 @@ pub struct IoMark(u64);
 pub struct InFlightUpdate {
     /// What holds its turn to write, till every update issued before it has
     /// started its write
-    turn:    Option<GatherRef<(), waiter::Async>>,
+    turn:    Option<GatherRef<'static, (), waiter::Async>>,
     started: bool,
     done:    bool,
 }
@@ -135,7 +135,7 @@ pub struct MovingContext {
 
     /* A ref each for what's in flight - MovingIo's - which drop waits out */
     #[pin]
-    in_flight:      Gather<(), waiter::Sync>,
+    in_flight:      Gather<'static, (), waiter::Sync>,
 
     io:             IoCounts,
 
@@ -182,7 +182,7 @@ pub struct MovingIo {
     write:   bool,
     sectors: u32,
     /// Dropped last: once it's put, the context may be gone
-    _ref:    GatherRef<(), waiter::Sync>,
+    _ref:    GatherRef<'static, (), waiter::Sync>,
 }
 
 // SAFETY: it touches only the context's counters, which are atomics, and its
@@ -317,7 +317,7 @@ impl<'a> Moving<'a> {
 
     /// An update issued: its seq. @turn holds its turn to write till every
     /// update issued before it has started its write.
-    pub(crate) fn update_issue(&self, turn: GatherRef<(), waiter::Async>) -> u64 {
+    pub(crate) fn update_issue(&self, turn: GatherRef<'static, (), waiter::Async>) -> u64 {
         let w = self.0.write_next.get();
         self.with_updates(|f| {
             let seq = f.back_idx();

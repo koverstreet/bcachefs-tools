@@ -606,12 +606,13 @@ impl<T: HasBio, A: Alloc> BioBox<'_, T, A> {
     /// Submitted at @sector of @dev's device, which it holds, given up to the
     /// IO with its ref to @r's Gather: once it's done, what its T makes of
     /// the IO's status (Gathered) is put - after the box is dropped, so its
-    /// bio's freed before the gather's waiter can wake. 'static: the IO has
-    /// it for as long as it takes.
-    pub fn submit_gathered<F: Fold, Wt: Waiter, W: Width>(self, dev: T::Dev, sector: u64, r: GatherRef<F, Wt, W>)
+    /// bio's freed before the gather's waiter can wake. What it borrows
+    /// outlives the Gather, 'g, which is gone only once the IO is done.
+    pub fn submit_gathered<'g, F: Fold, Wt: Waiter, W: Width>(self, dev: T::Dev, sector: u64,
+                                                               r: GatherRef<'g, F, Wt, W>)
     where
         T: Gathered<F> + HoldsDev,
-        Self: Send + 'static,
+        Self: Send + 'g,
     {
         let bio = hold_dev(core::mem::ManuallyDrop::new(self).as_mut(), dev, sector);
         unsafe {

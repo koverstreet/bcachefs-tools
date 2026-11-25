@@ -116,7 +116,7 @@ impl Fold for Bad {
 
 /// A ref on a flush range's Gather: what an extent's update or a node's task
 /// finds is put to it.
-pub type BadRef = GatherRef<Bad, waiter::Sync>;
+pub type BadRef = GatherRef<'static, Bad, waiter::Sync>;
 
 /*
  * A btree node the journal scrub found a pointer to in the window.
@@ -164,7 +164,7 @@ async fn node_verdict(fs: BackRef<Fs>, key: BtreeKeyBuf, reads: &mut Replicas<Re
 /// in its waits: the replicas' buffers can be the bounce pool's, which this
 /// thread may wait on for the next node - and a task the thread runs would
 /// never give them back.
-fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u32, k: BkeySC<'_>)
+fn scrub_node(fs: &Fs, found: &Gather<'static, Bad, waiter::Sync>, btree: Btree, level: u32, k: BkeySC<'_>)
     -> Result<(), BchError>
 {
     // A v1 pointer carries nothing to check a replica against
@@ -210,7 +210,7 @@ fn scrub_node(fs: &Fs, found: &Gather<Bad, waiter::Sync>, btree: Btree, level: u
 /// The extent @k, at @level of @btree, its replica on @dev read back -
 /// asynchronously, as a move: a bad one is queued for repair by the read path,
 /// and what's bad put to @found.
-fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &c::bch_inode_opts, btree: Btree,
+fn scrub_extent(m: &Moving<'_>, found: &Gather<'static, Bad, waiter::Sync>, io_opts: &c::bch_inode_opts, btree: Btree,
                 level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
     let data_opts = c::data_update_opts {
         type_:      c::DataUpdateType::scrub_no_repair,

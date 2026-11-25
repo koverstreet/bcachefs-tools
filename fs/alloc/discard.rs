@@ -131,7 +131,7 @@ pub(crate) struct Discard {
 }
 
 /// A worker's discards: those in flight, and those done, to reap.
-type Discards = Gather<KVVec<Discard>, waiter::Sync>;
+type Discards = Gather<'static, KVVec<Discard>, waiter::Sync>;
 
 enum NotAdded {
     /// One is in flight for the bucket already.
@@ -365,7 +365,7 @@ impl Gathered<KVVec<Discard>> for DiscardBio {
 
 impl Discard {
     /// Issue it, to be put to its worker's Discards by @done.
-    fn submit(self, fs: &Fs, done: GatherRef<KVVec<Discard>, waiter::Sync>) {
+    fn submit(self, fs: &Fs, done: GatherRef<'static, KVVec<Discard>, waiter::Sync>) {
         let ca = &self.ca;
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);
         let size = u32::from(ca.mi.get().bucket_size) << 9;

@@ -64,7 +64,7 @@ type Ret = Result<(), BchError>;
 /// A job's, beside its task: what it returned, and its ref on the join.
 struct JobHome {
     ret:  UnsafeCell<Option<Ret>>,
-    join: UnsafeCell<Option<GatherRef<(), waiter::Sync>>>,
+    join: UnsafeCell<Option<GatherRef<'static, (), waiter::Sync>>>,
 }
 
 // SAFETY: @ret is the job's to write, then the scope's to read after the

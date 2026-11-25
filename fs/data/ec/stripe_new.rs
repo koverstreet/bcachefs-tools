@@ -181,10 +181,10 @@ pub struct StripeNew {
     io_refs:              AtomicI32,
     /// The io refs' ref on @in_flight, put by the last: before it, as a
     /// Gather's drop waits for its refs
-    in_flight_ref:        GatherRefSlot<(), waiter::Async>,
+    in_flight_ref:        GatherRefSlot<'static, (), waiter::Async>,
     /// What its task waits on to be in flight
     #[pin]
-    pub(crate) in_flight:            Gather<(), waiter::Async>,
+    pub(crate) in_flight:            Gather<'static, (), waiter::Async>,
     seq:                  AtomicU64,
     /// Why it's cancelled - a writer's IO failed, or its head gave up on it:
     /// the first error
