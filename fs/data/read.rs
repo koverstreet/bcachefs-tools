@@ -45,11 +45,13 @@
 //! is a read of its own, its one fragment planned and made as its task starts
 //! (extent_make()), and read in the task.
 //!
-//! Each fragment's task puts what it read to read()'s Gather, which read()
-//! awaits once its walk is done - having given back first what's the
-//! filesystem's, as once it's put the read and the filesystem may go. The
-//! first error put is the read's; the walk's own - an extent it couldn't read
-//! - are in the read's ret.
+//! Each fragment's task is started in read()'s Scope, which read() awaits once
+//! its walk is done: what it read is put there once the task's home and
+//! future are dropped - the fragment having given back first what's the
+//! filesystem's, as once it's put the read and the filesystem may go. So a
+//! fragment borrows the read for the scope, its clone of the read's bio
+//! included. The first error put is the read's; the walk's own - an extent
+//! it couldn't read - are in the read's ret.
 //!
 //! A fragment that needs a reconstruct, or fails with a retryable error, goes
 //! to a retry (Fragment::end()), awaited in its task: its future in a slot of
@@ -97,7 +99,7 @@ use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
 use crate::os::bio::{pages, Bio, BioBox, BioFuture, BioLend, BioOwns, BioRange, BioSubmit,
                        BvecMempool, Data, HasBio, Lent, Pages, Typed};
-use crate::util::gather::{Gather, GatherRef};
+use crate::util::gather::{Gather, Scope};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Kmalloc};
 use crate::os::module::{Quiesced, ThisModule};
@@ -589,8 +591,7 @@ impl<'r> Fragment<'r> {
     }
 }
 
-type Reads = Gather<Result<(), BchError>, waiter::Async>;
-type ReadRef = GatherRef<'static, Result<(), BchError>, waiter::Async>;
+type Reads<'s> = Scope<'s, Result<(), BchError>, waiter::Async>;
 
 pub(crate) fn retry_pool() -> impl PinInit<Mempool<Kmalloc>, BchError> {
     let layout = Layout::new::<RetryOwnedFut<'static>>();
@@ -1377,8 +1378,10 @@ impl<'r> Planned<'r, '_> {
     /// The fragment started: a task in a box of its own, from the module's
     /// pool, which puts what it read to @reads - or, for the read's own bio,
     /// the walk's last, made into @own for read() to read.
-    fn start(self, t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, reads: &Reads, split_trace: bool,
-             own: &mut Option<Fragment<'r>>) -> Result<(), BchError>
+    fn start<'s>(self, t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, reads: &Reads<'s>,
+                 split_trace: bool, own: &mut Option<Fragment<'r>>) -> Result<(), BchError>
+    where
+        'r: 's,
     {
         match self.how {
             How::Own => return self.make(fs, orig, own),
@@ -1401,7 +1404,6 @@ impl<'r> Planned<'r, '_> {
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.init()) }? BchError)
             }),
             None => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, 0, 0, |b| {
-                let b = unsafe { b.borrowing() };
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.clone_of(range)) }? BchError)
             }),
         }?;
@@ -1415,12 +1417,11 @@ impl<'r> Planned<'r, '_> {
             fs.event_inc_trace(events::data_read_split, |out| rb.to_text_atomic(out, plan.read_pos, plan.flags));
         }
 
-        let r = reads.get_pinned();
         let make = move |home| {
             let kind = Kind::Home(orig, home, buffers);
-            fragment_task(r, Fragment { ca, ..Fragment::new(fs, kind, plan, Dst::Range(range)) })
+            fragment_read(Fragment { ca, ..Fragment::new(fs, kind, plan, Dst::Range(range)) })
         };
-        start_task(t, plan.pick.do_ec_reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
+        start_task(t, plan.pick.do_ec_reconstruct, |at| slot.start_in(reads, at, fs.tasks(), make));
         Ok(())
     }
 
@@ -1428,8 +1429,10 @@ impl<'r> Planned<'r, '_> {
     // Apart: the fragment, made here and moved into its task, isn't in the
     // frame of every read's start()
     #[inline(never)]
-    fn start_promote(self, t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, reads: &Reads, split_trace: bool)
-        -> Result<(), BchError>
+    fn start_promote<'s>(self, t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, reads: &Reads<'s>,
+                         split_trace: bool) -> Result<(), BchError>
+    where
+        'r: 's,
     {
         let reconstruct = self.plan.pick.do_ec_reconstruct;
         let mut f = None;
@@ -1448,9 +1451,7 @@ impl<'r> Planned<'r, '_> {
                 return Err(e);
             }
         };
-        let r = reads.get_pinned();
-        let make = move |_| fragment_task(r, f);
-        start_task(t, reconstruct, |at| unsafe { slot.start(at, fs.tasks(), make) });
+        start_task(t, reconstruct, |at| slot.start_in(reads, at, fs.tasks(), move |_| fragment_read(f)));
         Ok(())
     }
 }
@@ -1787,14 +1788,10 @@ fn retry_boxed<'a>(f: Fragment<'a>, ret: Result<(), BchError>, at: Locate<'a>, r
     unsafe { Pin::new_unchecked(b) }
 }
 
-/// What it read is put to @r last, what's the filesystem's given back first:
-/// once it's put, the read and the filesystem may go.
+/// What's the filesystem's given back before it returns what it read: once
+/// that's put, the read and the filesystem may go.
 #[in_place(FragmentFut)]
-async fn fragment_task<'r>(r: ReadRef, f: Fragment<'r>) {
-    r.put(fragment_read(f).await)
-}
-
-async fn fragment_read(mut f: Fragment<'_>) -> Result<(), BchError> {
+async fn fragment_read<'r>(mut f: Fragment<'r>) -> Result<(), BchError> {
     let ret = if f.plan.pick.do_ec_reconstruct {
         Ok(())
     } else {
@@ -1961,8 +1958,8 @@ pub async fn read_update(fs: &Fs, rbio: &mut Rbio, k: &BkeyI, btree: Btree, flag
 }
 
 #[inline(never)]
-fn read_walk<'r>(fs: &'r Fs, orig: &'r Rbio, inum: c::subvol_inum, flags: F, reads: &Reads,
-                 own: &mut Option<Fragment<'r>>) -> Result<(), BchError>
+fn read_walk<'s, 'r: 's>(fs: &'r Fs, orig: &'r Rbio, inum: c::subvol_inum, flags: F, reads: &Reads<'s>,
+                         own: &mut Option<Fragment<'r>>) -> Result<(), BchError>
 {
     let trans = btree_trans!(fs);
     let mut walk = Walk { range: orig.bio().range(), flags, split: false };
@@ -2005,15 +2002,16 @@ fn read_walk<'r>(fs: &'r Fs, orig: &'r Rbio, inum: c::subvol_inum, flags: F, rea
 
 #[args_stored_once]
 pub async fn read(fs: &Fs, orig: &Rbio, inum: c::subvol_inum, flags: F) -> Result<(), BchError> {
-    stack_pin_init!(let reads = Reads::new());
+    stack_pin_init!(let gather = Gather::new());
+    let reads = Scope::new(&gather);
     let mut own = None;
     let walked = read_walk(fs, orig, inum, flags, &reads, &mut own);
     {
         // the read's own bio's task: the fragment in the task's future alone,
         // made where it lives, and the future gone before the wait below
-        stack_pin_init!(let own = init_with(|| own.map(|f| fragment_task(reads.get_pinned(), f))));
+        stack_pin_init!(let own = init_with(|| own.map(fragment_read)));
         if let Some(own) = own.as_pin_mut() {
-            own.await;
+            reads.get().put(own.await);
         }
     }
     let ret = reads.wait(Resume::queue(Queue::system_dfl())).await;
