@@ -446,7 +446,7 @@ impl Dev {
         if !self.kobj.in_sysfs() {
             return;
         }
-        if let Some(ca) = self.io_ref_read.tryget_live() {
+        if let Some(ca) = self.io_ref_read.tryget() {
             let b = crate::os::blkdev::kobj(ca.bdev());
             if b.in_sysfs() {
                 b.unlink(c"bcachefs");
@@ -470,7 +470,7 @@ impl Dev {
             self.kobj.add(Some(&fs.kobj), name.as_c_str())?;
         }
 
-        if let Some(ca) = self.io_ref_read.tryget_live() {
+        if let Some(ca) = self.io_ref_read.tryget() {
             let block = crate::os::blkdev::kobj(ca.bdev());
 
             block.link(&self.kobj, c"bcachefs")?;
@@ -1340,7 +1340,7 @@ impl Fs {
              * We just changed the superblock UUID, invalidate cache and send a
              * uevent to update /dev/disk/by-uuid
              */
-            let ca = ca.io_ref_read.tryget_live().expect("a device just attached, under state_lock");
+            let ca = ca.io_ref_read.tryget().expect("a device just attached, under state_lock");
             crate::os::blkdev::invalidate(ca.bdev());
 
             let mut uuid_str = Printbuf::new();
@@ -1385,7 +1385,7 @@ impl Fs {
         let ca = state.devs()[dev_idx as usize].get().expect("a device just attached");
         let ca: &Dev = &ca;
 
-        if let Some(ca) = ca.io_ref_read.tryget_live() {
+        if let Some(ca) = ca.io_ref_read.tryget() {
             ca.mi_field_upgrades();
         }
 
@@ -1500,7 +1500,7 @@ impl Fs {
         }
 
         let bucket_size = u64::from(ca.mi.get().bucket_size);
-        if let Some(ca) = ca.io_ref_read.tryget_live() {
+        if let Some(ca) = ca.io_ref_read.tryget() {
             let capacity = crate::os::blkdev::capacity(ca.bdev());
             if capacity < bucket_size * nbuckets {
                 prt!(err, "New size {} larger than device size {}\n", bucket_size * nbuckets, capacity);
