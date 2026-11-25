@@ -276,7 +276,7 @@ impl c::bch_fs_btree_write_buffer {
                 if self.inc.size.get() >= new_size {
                     return Ok(());
                 }
-                let Some(mut g) = self.inc.try_lock() else { return Err(BchError::from(c::EINTR)) };
+                let Some(mut g) = self.inc.try_lock() else { return self.fs().throw(Errcode::EINTR_wb_resize_inc_locked) };
                 let (inc, live) = g.parts();
                 inc.keys.resize(live, new_size, WB_RESIZE_GFP)
             }
@@ -284,7 +284,7 @@ impl c::bch_fs_btree_write_buffer {
                 if self.flushing.keys.size.get() >= new_size {
                     return Ok(());
                 }
-                let Some(mut g) = self.flushing.try_lock() else { return Err(BchError::from(c::EINTR)) };
+                let Some(mut g) = self.flushing.try_lock() else { return self.fs().throw(Errcode::EINTR_wb_resize_flushing_locked) };
                 let (f, live) = g.parts();
                 f.keys.resize(&live.keys, new_size, WB_RESIZE_GFP)
             }
@@ -329,7 +329,7 @@ pub fn wb_btree_to_btree(idx: c::WbBtree) -> Btree {
 fn insert_err(fs: &Fs, btree: Btree, k: &BkeyI) -> BchError {
     crate::fs_inconsistent!(fs, "attempting to do write buffer update on non wb btree={btree}\n{}",
                             BkeySC::from(k).to_text(fs));
-    BchError::from(c::EROFS)
+    fs.err(Errcode::erofs_wb_update_non_wb_btree)
 }
 
 /// An update through the write buffer, for a btree that doesn't use it, is an

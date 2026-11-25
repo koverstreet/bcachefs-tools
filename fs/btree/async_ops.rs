@@ -91,7 +91,7 @@ impl Op {
             let b = n.node();
             (b.contents().data().keys.seq.get() == self.seq).then(|| BtreeNodeRef::from(b))
         }) else {
-            return Err(BchError::from(c::ENOENT));
+            return t.fs().throw(c::Errcode::ENOENT_async_op_node_gone);
         };
 
         if self.op == AsyncBtreeOp::Rewrite {

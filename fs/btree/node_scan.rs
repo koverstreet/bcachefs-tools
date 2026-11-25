@@ -173,7 +173,7 @@ impl<'f> DevScan<'f> {
     fn new(fs: &'f Fs, ca: &'f DevIoRef<c::DevReadRefKind>) -> Result<Self, BchError> {
         let Some(buf) = NodeBuf::alloc(fs) else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating buf");
-            return Err(c::ENOMEM.into());
+            return fs.throw(Errcode::ENOMEM_node_scan_buf);
         };
 
         /* not buf_nr_bvecs(): it's remapped onto what read_done swaps in, which may be vmalloc */
@@ -182,7 +182,7 @@ impl<'f> DevScan<'f> {
         let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating bio");
-            return Err(c::ENOMEM.into());
+            return fs.throw(Errcode::ENOMEM_node_scan_bio);
         };
 
         Ok(DevScan { fs, ca, buf, bio })
@@ -276,7 +276,7 @@ impl<'f> DevScan<'f> {
         let mut nodes = fs.btree.node_scan.lock();
         if bn.keys.big_endian() != cfg!(target_endian = "big") {
             bch_err!(fs, "try_read_btree_node() can't handle endian conversion");
-            return Err(c::EINVAL.into());
+            return fs.throw(Errcode::EINVAL_node_scan_endian);
         }
         nodes.push(n)?;
         Ok(())

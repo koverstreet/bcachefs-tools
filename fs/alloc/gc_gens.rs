@@ -56,7 +56,7 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
                 res.put();
 
                 if fs.flags.get(c::FsFlag::going_ro) {
-                    return Err(BchError::from(c::EROFS));
+                    return fs.throw(Errcode::erofs_gc_gens_going_ro);
                 }
 
                 drop_stale_ptrs(t, iter, k)

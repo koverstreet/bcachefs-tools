@@ -990,7 +990,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             .map(|l| BtreeNodeRef::from(l.node()));
         match b {
             Some(b) => self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::WriteFlags::empty()),
-            None    => Err(BchError::from(c::ENOENT)),
+            None    => self.fs().throw(c::Errcode::ENOENT_btree_node_rewrite_key),
         }
     }
 }

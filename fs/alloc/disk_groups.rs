@@ -380,7 +380,7 @@ pub trait SbDiskGroupsMut: SbResize {
     /// All or nothing: an error leaves the superblock as it was.
     fn disk_path_find_or_create(&mut self, name: &[u8]) -> Result<u32, BchError> {
         if !path_labels(name).all(label_valid) {
-            return Err(c::EINVAL.into());
+            return Err(Errcode::EINVAL_disk_label_invalid.into());
         }
 
         let mut labels = path_labels(name).peekable();
@@ -529,7 +529,7 @@ fn opt_target_parse(fs: &Fs, val: &[u8], err: Option<&mut Printbuf>) -> Result<T
 /// A target's, a label's value: none is EINVAL, and the filesystem's names
 /// are needed.
 fn opt_parse_args<'a>(fs: Option<&'a Fs>, val: Option<&'a [u8]>) -> Result<(&'a Fs, &'a [u8]), BchError> {
-    let val = val.ok_or(BchError::from(c::EINVAL))?;
+    let val = val.ok_or(BchError::from(Errcode::option_target_no_value))?;
     let fs = fs.ok_or(BchError::from(Errcode::option_needs_open_fs))?;
     Ok((fs, val))
 }

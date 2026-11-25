@@ -732,7 +732,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
         update.to_text(&mut msg);
         paths[path].to_text(&mut msg, path);
         fs.emergency_read_only(&mut msg);
-        return Err(BchError::from(c::EIO));
+        return fs.throw(Errcode::EIO_insert_node_not_locked);
     }
 
     let b = paths[path].locked_btree_node(level).expect("a node to insert into, intent locked");

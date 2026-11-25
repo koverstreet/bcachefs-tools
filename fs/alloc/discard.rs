@@ -341,7 +341,7 @@ impl Discard {
         }
         if claimed.push(dev_bucket).is_err() {
             ca.discard_slot_put();
-            return Err(NotAdded::Full(BchError::from(c::ENOMEM)));
+            return Err(NotAdded::Full(fs.err(Errcode::ENOMEM_discard_claim)));
         }
         drop(claimed);
         Ok(Discard { ca, dev_bucket })
@@ -458,7 +458,7 @@ impl<'a> Worker<'a> {
 
         let issued = match self.g.try_get() {
             Ok(r) => Discard::claim(ca, bucket, self.fastpath).map(|d| (r, d)),
-            Err(_) => Err(NotAdded::Full(BchError::from(c::ENOMEM))),
+            Err(_) => Err(NotAdded::Full(fs.err(Errcode::ENOMEM_discard_scope))),
         };
         match issued {
             Ok((r, d)) => {

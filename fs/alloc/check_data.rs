@@ -148,7 +148,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     } else {
         (p.crc.compressed_size as usize) << 9
     };
-    let buf = io_buf(bytes, Flags::empty()).map_err(|_| BchError::from(c::ENOMEM))?;
+    let buf = io_buf(bytes, Flags::empty()).map_err(|_| fs.err(Errcode::ENOMEM_kill_replica_buf))?;
 
     let mut bio = BioBox::<Bio<Buffer<_>>>::new::<BchError, _>(
         Buffer::nr_vecs(&buf), c::req_op_REQ_OP_READ as u32, |b| b.init_from(|bio| Ok(Buffer::fill(bio, buf))))?;

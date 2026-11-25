@@ -664,6 +664,21 @@ xmacro! {
         (ENOMEM, ENOMEM_btree_node_cache_insert, 634),
         (EEXIST, EEXIST_btree_node_cache_insert, 635),
         (EINVAL, bio_full, 637),
+        (ENOMEM, ENOMEM_kill_replica_buf, 639),
+        (ENOMEM, ENOMEM_discard_claim, 640),
+        (ENOMEM, ENOMEM_discard_scope, 641),
+        (EINVAL, EINVAL_disk_label_invalid, 642),
+        (option_value, option_target_no_value, 643),
+        (EROFS, erofs_gc_gens_going_ro, 644),
+        (ENOENT, ENOENT_async_op_node_gone, 645),
+        (EIO, EIO_insert_node_not_locked, 646),
+        (ENOMEM, ENOMEM_node_scan_buf, 647),
+        (ENOMEM, ENOMEM_node_scan_bio, 648),
+        (EINVAL, EINVAL_node_scan_endian, 649),
+        (ENOENT, ENOENT_btree_node_rewrite_key, 650),
+        (EINTR, EINTR_wb_resize_inc_locked, 651),
+        (EINTR, EINTR_wb_resize_flushing_locked, 652),
+        (EROFS, erofs_wb_update_non_wb_btree, 653),
     }
 }
 
