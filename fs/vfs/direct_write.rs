@@ -24,7 +24,7 @@ use crate::util::alloc::Kmalloc;
 use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
-use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
+use crate::util::task::{exclusive_size, DoneWith, Resume, Spawn, TaskSlot, WaitSync};
 use crate::os::iov_iter::{HeldIovIter, IovIter};
 use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
@@ -32,7 +32,7 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::os::ops::IntoRaw;
 use crate::os::workqueue::Queue;
 use crate::util::refcount::TryRefcount;
-use super::direct::End;
+use super::direct::{sync_end, End};
 use crate::vfs::folio::Mapping;
 use crate::vfs::inode::DioStarted;
 use crate::os::kiocb::Kiocb;
@@ -320,11 +320,7 @@ async fn dio_write_task<'h, P: UserPage>(dio: Pin<&'h mut Dio<P>>, mut end: End)
         mapping.inode().quota_reservation_put(&mut d.quota_res);
     }
 
-    // an async kiocb's position moved on before it's completed; a sync
-    // one's caller moves its own
-    if let End::Async(done) = &mut end {
-        done.advance(d.written << 9);
-    }
+    end.advance(d.written << 9);
     end.complete(dio_write_done(d));
 }
 
@@ -416,13 +412,8 @@ fn direct_write_of<P: UserPage>(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'
         d.sync = sync;
 
         let mut slot = DoneWith::new();
-        let (end, wait) = match sync {
-            false => (End::Async(unsafe { k.queued() }.expect("an async kiocb")), None),
-            true  => {
-                let (wait, r) = CompletionReturn::new(&mut slot, waiter::Sync::current());
-                (End::Sync(r), Some(wait))
-            }
-        };
+        let (caller, wait) = sync_end(sync, &mut slot);
+        let end = unsafe { k.owed(caller) };
 
         unsafe { dio.start(Spawn::Inline, fs.tasks(), move |d| dio_write_task(d, end)) };
 

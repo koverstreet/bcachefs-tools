@@ -10,7 +10,8 @@
 //! any, then the first; and the dio's ended: the kiocb's completion, or the
 //! caller waiting for it.
 
-use crate::os::kiocb::{self, Kiocb};
+use crate::os::kiocb::{Kiocb, Owed, SyncEnd};
+use crate::os::ops::IntoRaw;
 use super::file::InodeFile;
 use crate::c;
 use crate::data::read::{self, ReadErrReport, Rbio};
@@ -26,7 +27,6 @@ use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::unlikely;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
-use crate::os::ops::IntoRaw;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Return, Spawn, TaskSlot,
                         WaitSync};
@@ -63,20 +63,31 @@ pub fn pools_exit(q: &Quiesced<'_>) {
     DIOS.exit(q);
 }
 
-/// A dio's end: its kiocb's completion, or its caller waiting - the read's
-/// and the write's.
-pub(super) enum End {
-    Async(kiocb::Completion),
-    Sync(Return<Result<usize, BchError>, waiter::Sync>),
+type Ret = Result<usize, BchError>;
+
+/// A dio's end - the read's and the write's: what it owes its kiocb, which
+/// lends it the inode, and the filesystem, till it's completed.
+pub(super) type End = Owed<CallerEnd, InodeFile>;
+
+/// A sync dio's end: what it returns its caller, who waits.
+pub(super) struct CallerEnd(Return<Ret, waiter::Sync>);
+
+impl SyncEnd<Ret> for CallerEnd {
+    fn complete(self, ret: Ret) {
+        self.0.complete(ret)
+    }
 }
 
-impl End {
-    pub(super) fn complete(self, ret: Result<usize, BchError>) {
-        match self {
-            End::Async(done) => done.complete(ret.into_raw()),
-            End::Sync(r) => r.complete(ret),
-        }
+/// If @sync, the dio's caller's end: @slot's return, for the dio, and its
+/// wait, for the caller.
+pub(super) fn sync_end(sync: bool, slot: &mut DoneWith<Ret, waiter::Sync>)
+    -> (Option<CallerEnd>, Option<CompletionReturn<'_, Ret, waiter::Sync>>)
+{
+    if !sync {
+        return (None, None);
     }
+    let (wait, r) = CompletionReturn::new(slot, waiter::Sync::current());
+    (Some(CallerEnd(r)), Some(wait))
 }
 
 /// P is what its bio has of the user's pages: Pinned, a user-backed iter's,
@@ -169,8 +180,9 @@ async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, 
 
 #[in_place(DioFut)]
 #[allow(clippy::too_many_arguments)]
-async fn dio_task<'h, P: UserPage>(mut dio: Pin<&'h mut DioBio<P>>, fs: &'h Fs, end: End, mut iter: CallersIter,
+async fn dio_task<'h, P: UserPage>(mut dio: Pin<&'h mut DioBio<P>>, end: End, mut iter: CallersIter,
                                    mut offset: u64, inum: c::subvol_inum, flags: F, count: usize) {
+    let fs = end.inode().fs();
     let should_dirty = iter.get().user_backed();
 
     let ret = match set_up(dio.as_mut().pages(), iter.get(), &mut offset, should_dirty) {
@@ -243,17 +255,12 @@ fn read_of<P: UserPage>(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, 
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;
 
     let mut slot = DoneWith::new();
-    let (end, wait) = match unsafe { req.queued() } {
-        Some(done) => (End::Async(done), None),
-        None => {
-            let (wait, r) = CompletionReturn::new(&mut slot, waiter::Sync::current());
-            (End::Sync(r), Some(wait))
-        }
-    };
+    let (caller, wait) = sync_end(req.is_sync(), &mut slot);
+    let end = unsafe { req.owed(caller) };
 
     unsafe {
         let callers = CallersIter::new(&mut iter);
-        dio.start(Spawn::Inline, fs.tasks(), move |d| dio_task(d, fs, end, callers, offset, inum, flags, len as usize))
+        dio.start(Spawn::Inline, fs.tasks(), move |d| dio_task(d, end, callers, offset, inum, flags, len as usize))
     };
     drop(iter);
 

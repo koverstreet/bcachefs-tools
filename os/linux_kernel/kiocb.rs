@@ -7,6 +7,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::os::file::{Any, File, FsFile};
 use crate::os::iov_iter::IovIter;
+use crate::os::ops::IntoRaw;
 use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
@@ -83,14 +84,18 @@ impl<'a, D> Kiocb<'a, D> {
         if ret < 0 { Err(BchError::from_raw(ret as i32)) } else { Ok(ret as usize) }
     }
 
-    /// An async kiocb's completion, for once the call's returned -EIOCBQUEUED:
-    /// None for a sync one, which the call's return completes.
+    /// What's owed it, once the call's taken it on: an async kiocb's
+    /// completion - or @sync, the end of a caller that waits for it, which a
+    /// sync kiocb's always is.
     ///
     /// # Safety
-    /// If it's completed, the call returns -EIOCBQUEUED: the VFS keeps the
-    /// kiocb for the completion then, and only then.
-    pub unsafe fn queued(&mut self) -> Option<Completion> {
-        (!self.is_sync()).then(|| Completion(NonNull::from(&mut *self.0)))
+    /// Without @sync, the call returns -EIOCBQUEUED: the VFS keeps the kiocb,
+    /// and its file, for the completion then, and only then. With @sync, the
+    /// caller waits for it before it returns. Either way the file's held till
+    /// the Owed's completed.
+    pub unsafe fn owed<S>(&mut self, sync: Option<S>) -> Owed<S, D> {
+        assert!(sync.is_some() || !self.is_sync(), "a sync kiocb, owed a completion");
+        Owed { kiocb: NonNull::from(&mut *self.0), sync, _d: PhantomData }
     }
 }
 
@@ -100,20 +105,57 @@ impl<'a, D: FsFile> Kiocb<'a, D> {
     }
 }
 
-/// An async kiocb's completion: what it read or wrote, or its error, given
-/// once.
-pub struct Completion(NonNull<c::kiocb>);
+/// What a call owes its kiocb, once it's taken it on: an async kiocb's
+/// completion, or S, the end of a caller that waits for it - what it read or
+/// wrote, or its error, given once. While it's owed, the kiocb's file is held
+/// - the aio or io_uring request's, put once it's completed, or the
+/// caller's, which waits - so file() and inode() lend it, and complete() ends
+/// the loan.
+pub struct Owed<S, D = Any> {
+    kiocb: NonNull<c::kiocb>,
+    /// The caller's end, if it waits; else the kiocb's ki_complete
+    sync:  Option<S>,
+    _d:    PhantomData<fn() -> D>,
+}
 
-unsafe impl Send for Completion {}
+/// The end of a call whose caller waits for it: what an Owed's completion
+/// is, for a kiocb that's done once the call returns.
+pub trait SyncEnd<R> {
+    fn complete(self, ret: R);
+}
 
-impl Completion {
-    /// Its position moved on @bytes, before it's completed: what was written.
-    pub fn advance(&mut self, bytes: u64) {
-        unsafe { (*self.0.as_ptr()).ki_pos += bytes as i64 };
+// completed by whichever thread finishes the IO
+unsafe impl<S: Send, D> Send for Owed<S, D> {}
+
+impl<S, D> Owed<S, D> {
+    pub fn file(&self) -> &File<D> {
+        unsafe { &*(*self.kiocb.as_ptr()).ki_filp.cast::<File<D>>() }
     }
 
-    pub fn complete(self, ret: isize) {
-        let k = self.0.as_ptr();
-        unsafe { ((*k).ki_complete.expect("an async kiocb's completion"))(k, ret) }
+    /// An async kiocb's position moved on @bytes, before it's completed:
+    /// what was written. A sync one's caller moves its own.
+    pub fn advance(&mut self, bytes: u64) {
+        if self.sync.is_none() {
+            unsafe { (*self.kiocb.as_ptr()).ki_pos += bytes as i64 };
+        }
+    }
+
+    pub fn complete<R: IntoRaw<isize>>(self, ret: R)
+    where
+        S: SyncEnd<R>,
+    {
+        match self.sync {
+            Some(s) => s.complete(ret),
+            None => {
+                let k = self.kiocb.as_ptr();
+                unsafe { ((*k).ki_complete.expect("an async kiocb's completion"))(k, ret.into_raw()) }
+            }
+        }
+    }
+}
+
+impl<S, D: FsFile> Owed<S, D> {
+    pub fn inode(&self) -> &D::Inode {
+        self.file().inode()
     }
 }
