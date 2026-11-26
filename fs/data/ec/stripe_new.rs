@@ -140,7 +140,7 @@ use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef, Watermar
 use crate::btree::bkey::{pos, BkeyV};
 use crate::alloc::write_point::WritePointLocked;
 use crate::data::ec::head::{StripeBlockMask, EcStripeNewState as State};
-use crate::init::dev::{bch_devs_mask, DevsMask};
+use crate::init::dev::DevsMask;
 use crate::data::ec::buf::{parity_blocks, MemWait, StripeBuf};
 use crate::data::ec::open::StripeClaim;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
@@ -321,7 +321,7 @@ pub(crate) struct Internal {
     /// Its maker's io ref - its head's or repair's - till fill() puts it
     maker:                Option<IoRef>,
 
-    pub(crate) devs:      bch_devs_mask,
+    pub(crate) devs:      DevsMask,
     pub(crate) watermark: Watermark,
 
     pub(crate) allocated:           bool,
@@ -355,7 +355,7 @@ pub(crate) struct Internal {
 pub(crate) type StripeNewBox = TaskBox<'static, StripeNew>;
 
 /// The stripes being made that their heads and repairs have handed on: in
-/// bch_fs_ec.new_stripes, each until its task is done with it. A stripe is
+/// FsEc.new_stripes, each until its task is done with it. A stripe is
 /// its maker's until it's handed on, and comes here then - where nothing can
 /// fail - so room is kept for every stripe held: capacity >= len + @held.
 pub(crate) struct NewStripes {
@@ -417,7 +417,7 @@ impl StripeNew {
     /// task, made - open: ec_new_stripe_alloc(). Its one io ref is its
     /// maker's, in @maker.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn alloc(fs: &Fs, devs: bch_devs_mask, watermark: Watermark, disk_label: u32, algorithm: u32,
+    pub(crate) fn alloc(fs: &Fs, devs: DevsMask, watermark: Watermark, disk_label: u32, algorithm: u32,
              nr_data: u32, nr_parity: u32, blocksize: u32) -> Result<StripeNewBox, BchError> {
         let init = pin_init!(StripeNew {
             // SAFETY: its head, a repair on reconcile's thread - stopped
@@ -540,7 +540,7 @@ unsafe impl Refcount for StripeNew {
 
 impl Internal {
     /// Open, on @devs, at @watermark: its keys zeroed, for new_stripe_key().
-    fn new(devs: bch_devs_mask, watermark: Watermark) -> impl PinInit<Self> {
+    fn new(devs: DevsMask, watermark: Watermark) -> impl PinInit<Self> {
         pin_init!(Internal {
             write:               None,
             task:                None,

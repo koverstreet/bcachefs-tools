@@ -44,12 +44,12 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::data::extents::bch_extent_crc_unpacked;
+use crate::data::extents::ExtentCrcUnpacked;
 use crate::format::{CompressionOpt as opts, Bpos, CompressionType, SbFeatures, CompressionOpt_arms};
 use crate::errcode::{Errcode as e, BchError, ZSTD_ERRS};
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
 use crate::init::error::{count_fsck_err, id};
-use crate::sb::errors::bch2_decompress_sb_err;
+use crate::sb::errors::decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::os::bio::{BioRange, Mapped};
 use crate::util::{alloc::Box,
@@ -259,7 +259,7 @@ pub(crate) fn map_or_alloc<'a>(fs: &'a Fs, r: BioRange<'a>) -> Dst<'a> {
 // ── Decompression ────────────────────────────────────────────────────────
 
 /// @src decompressed in @dst: all of its uncompressed_size, or an error.
-pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, crc: &bch_extent_crc_unpacked)
+pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, crc: &ExtentCrcUnpacked)
     -> Result<VolatileSlice<'a>, BchError>
 {
     let t = crc.compression_type.get();
@@ -350,14 +350,14 @@ pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, 
 pub(crate) fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), BchError> {
     if let Err(err) = ret {
         if fs.opts().no_data_io.get() == 0 {
-            fs.sb_error_count(bch2_decompress_sb_err(err.raw()));
+            fs.sb_error_count(decompress_sb_err(err.raw()));
         }
     }
     ret
 }
 
 /// @src, the compressed extent, decompressed into @dst.
-pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: bch_extent_crc_unpacked)
+pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: ExtentCrcUnpacked)
     -> Result<(), BchError>
 {
     let dst_len = (crc.uncompressed_size as usize) << 9;
@@ -552,7 +552,7 @@ fn compress<'a>(fs: &Fs, dst: Out<'a>, src: &[u8], src_len: &mut usize,
 
 fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: Bpos) -> bool {
     let src_len = src.len();
-    let crc = bch_extent_crc_unpacked {
+    let crc = ExtentCrcUnpacked {
         compressed_size:   (dst.len() >> 9) as u32,
         uncompressed_size: (src_len >> 9) as u32,
         compression_type:  t.into(),

@@ -12,12 +12,12 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
                          TransAttempt};
 use crate::btree::scrub::{read_replicas, ReplicaRead, Replicas};
 use crate::c;
-use crate::alloc::write_point::write_point_specifier;
-use crate::btree::journal_overlay::journal_keys;
+use crate::alloc::write_point::WritePointSpecifier;
+use crate::btree::journal_overlay::JournalKeys;
 use crate::data::extents_format::BtreePtrV2;
-use crate::data::update::{data_update_opts, DataUpdateType};
+use crate::data::update::{DataUpdateOpts, DataUpdateType};
 use crate::init::{dev::DevsMask, damage, error::id, recovery::btree_lost_data};
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::data::extents::{BkeyVExtents, Extents, ReadFlags};
 use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::ptrs::{extents_match, BkeyVPtrs, Ptrs};
@@ -205,9 +205,9 @@ fn scrub_node<'s, 'f: 's>(fs: &'f Fs, nodes: &Scope<'s, Bad, waiter::Sync>, btre
 /// asynchronously, as a move: a bad one is queued for repair by the read path,
 /// and what's bad put to @found - its ref borrowing nothing, as the move's
 /// update holds it past any borrow.
-fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &bch_inode_opts, btree: Btree,
+fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &InodeOpts, btree: Btree,
                 level: u32, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
-    let data_opts = data_update_opts {
+    let data_opts = DataUpdateOpts {
         type_:      DataUpdateType::scrub_no_repair,
         read_flags: ReadFlags::hard_require_read_device,
         read_dev:   dev,
@@ -229,7 +229,7 @@ fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &bch
 
 /// The seqs of the flush entries in the scrub's window - back from the
 /// newest, as far as scrub_journal_max_rewind_secs - oldest first.
-fn flush_window(fs: &Fs, jk: &journal_keys) -> Result<Vec<u64>, BchError> {
+fn flush_window(fs: &Fs, jk: &JournalKeys) -> Result<Vec<u64>, BchError> {
     let flushes_of = || jk.entries().iter().filter(|i| !i.ignored() && !i.jset().no_flush());
 
     /*
@@ -259,7 +259,7 @@ fn flush_window(fs: &Fs, jk: &journal_keys) -> Result<Vec<u64>, BchError> {
 
 /// What the journal entries in seq range (@start, @end] point to, read back:
 /// None if it all was good.
-fn scrub_range(m: &Moving<'_>, jk: &journal_keys, start: u64, end: u64) -> Option<Bad> {
+fn scrub_range(m: &Moving<'_>, jk: &JournalKeys, start: u64, end: u64) -> Option<Bad> {
     let fs = m.trans().fs();
     let io_opts = get_fs(fs, false);
 
@@ -384,7 +384,7 @@ pub fn scrub(fs: &Fs) -> Result<u64, BchError> {
     let stats = MoveStats::default();
     stats.reset();
 
-    let ctxt = MovingCtxt::new(fs, &stats, write_point_specifier::default(), false)?;
+    let ctxt = MovingCtxt::new(fs, &stats, WritePointSpecifier::default(), false)?;
 
     /*
      * Scrub one flush range at a time, newest first. Within each range,
@@ -508,7 +508,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     /* Repair it from whatever replica is good */
     let io_opts = get_io_opts(t, None, k)?;
 
-    let data_opts = data_update_opts {
+    let data_opts = DataUpdateOpts {
         type_:         DataUpdateType::self_heal,
         target:        io_opts.background_target.into(),
         ptrs_io_error: bad_devs as u16,
@@ -533,7 +533,7 @@ pub fn do_repairs(fs: &Fs) {
     let stats = MoveStats::default();
     stats.reset();
 
-    let Ok(ctxt) = MovingCtxt::new(fs, &stats, write_point_specifier::RECONCILE, true) else {
+    let Ok(ctxt) = MovingCtxt::new(fs, &stats, WritePointSpecifier::RECONCILE, true) else {
         bch_err!(fs, "journal scrub: no memory for a moving context, not repairing {} extents/btree nodes",
                  repairs.len());
         return;

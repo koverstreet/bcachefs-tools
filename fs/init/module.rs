@@ -35,9 +35,9 @@ pub(crate) static BCACHEFS_KOBJ: StaticKobject = StaticKobject::new();
 /// made.
 pub(crate) fn bcachefs_exit(m: &ModuleExit) {
     #[cfg(CONFIG_DEBUG_FS)]
-    crate::debug::debug::bch2_debug_exit(m);
+    crate::debug::debug::debug_module_exit(m);
     #[cfg(kernel)]
-    crate::init::chardev::bch2_chardev_exit(m);
+    crate::init::chardev::chardev_module_exit(m);
     crate::btree::lock_graph::graphs_exit();
     BCACHEFS_KOBJ.put();
 
@@ -67,7 +67,7 @@ crate::init_fn! {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         crate::btree::bkey::pack_test();
 
-        crate::util::futex::bch2_futex_init();
+        crate::util::futex::futex_init();
         #[cfg(kernel)]
         crate::os::simd::init();
 
@@ -82,11 +82,11 @@ crate::init_fn! {
         crate::btree::lock_graph::graphs_init()?;
         crate::btree::key_cache::btree_key_cache_module_init()?;
         #[cfg(kernel)]
-        crate::init::chardev::bch2_chardev_init(m)?;
+        crate::init::chardev::chardev_module_init(m)?;
         #[cfg(kernel)]
         crate::vfs::new_inode::vfs_init(m)?;
         #[cfg(CONFIG_DEBUG_FS)]
-        ret_to_result_void(crate::debug::debug::bch2_debug_init())?;
+        ret_to_result_void(crate::debug::debug::debug_module_init())?;
         Ok(())
     }
 }

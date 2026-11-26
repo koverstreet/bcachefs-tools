@@ -9,12 +9,12 @@ use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, LoopFlow, TransA
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::alloc::buckets::ReservationFlags;
-use crate::alloc::dev_select::dev_stripe_state;
-use crate::alloc::foreground::{alloc_request, open_buckets, Watermark};
-use crate::data::ec::head::{DevStripes, ec_dev_stripe_state};
-use crate::data::extents_format::bch_extent_ptr;
+use crate::alloc::dev_select::DevStripeState;
+use crate::alloc::foreground::{alloc_request, OpenBuckets, Watermark};
+use crate::data::ec::head::{DevStripes, EcDevStripeState};
+use crate::data::extents_format::ExtentPtr;
 use crate::data::write::WriteFlags;
-use crate::init::dev::{bch_devs_list, bch_devs_mask};
+use crate::init::dev::{DevsList, DevsMask};
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::copygc;
 use crate::data::ec::open::OpenStripe;
@@ -56,7 +56,7 @@ fn blocks_centroid(fs: &Fs, v: &Stripe<Validated>, blocks: &[Slot]) -> u64 {
 /// Blocks @slots of @v, for @want of them, of @data_type, from @stripe's
 /// spreading: one at a time, the centroid moving as they're placed.
 #[allow(clippy::too_many_arguments)]
-fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripe: &mut dev_stripe_state,
+fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripe: &mut DevStripeState,
                 v: &mut Stripe<Validated>, blocks: &mut [Slot], block_devs: &BlockDevsWriter,
                 data_type: DataType, slots: core::ops::Range<usize>, have: &mut usize)
     -> Result<(), BchError>
@@ -73,7 +73,7 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripe: &mut 
         let ret = t.bucket_alloc_set(req, stripe);
         for ob in req.ptrs.drain(fs) {
             let j = slots.clone().find(|&j| !blocks[j].gotten()).expect("a block left to fill");
-            req.devs_may_alloc.d.clear(ob.id().dev().into());
+            req.devs_may_alloc.clear(ob.id().dev().into());
             v.block_ptrs_mut()[j] = ob.ptr();
             block_devs.add(ob.id().dev().into());
             blocks[j].fill(StripeBlock::Pinned(ob));
@@ -102,9 +102,9 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripes: &mu
     // rebuilt from the blocks it has: a request can come twice - a full
     // stripe, then stripe reuse - and the first's released buckets would
     // wrongly exclude their devices' domains
-    req.devs_chosen = bch_devs_mask::default();
+    req.devs_chosen = DevsMask::default();
     // as the sector allocator, which we bypass, would
-    req.devs_may_alloc.d.and(&fs.allocator.rw_devs[DataType::user].load());
+    req.devs_may_alloc.and(&fs.allocator.rw_devs[DataType::user].load());
 
     let (mut have_data, mut have_parity) = (0, 0);
     for i in (0..nr_blocks).filter(|&i| s.blocks[i].gotten()) {
@@ -112,9 +112,9 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripes: &mu
         // a block on a failed or removed device isn't repaired here: that
         // needs its extents updated, by backpointer
         if u32::from(dev) != BCH_SB_MEMBER_INVALID {
-            req.devs_may_alloc.d.clear(dev.into());
+            req.devs_may_alloc.clear(dev.into());
             // the new blocks away from these' domains
-            req.devs_chosen.d.set(dev.into());
+            req.devs_chosen.set(dev.into());
         }
         if i < nr_data { have_data += 1 } else { have_parity += 1 }
     }
@@ -221,10 +221,10 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut alloc_request, s: &mu
 
 /// Whether copygc will run on any of @devs - would free buckets there:
 /// copygc_can_run_on_devs().
-fn copygc_can_run_on_devs(fs: &Fs, devs: &bch_devs_mask) -> bool {
+fn copygc_can_run_on_devs(fs: &Fs, devs: &DevsMask) -> bool {
     let mark = fs.mark_lock().read();
     let rcu = read_lock();
-    let any = fs.devs_rcu_in(devs.d.iter(), &rcu).any(|ca| copygc::dev_wait_amount(ca, &mark).0 <= 0);
+    let any = fs.devs_rcu_in(devs.iter(), &rcu).any(|ca| copygc::dev_wait_amount(ca, &mark).0 <= 0);
     any
 }
 
@@ -232,7 +232,7 @@ fn copygc_can_run_on_devs(fs: &Fs, devs: &bch_devs_mask) -> bool {
 /// won't run on the devices that had none - which this leaves in
 /// req.devs_may_alloc.
 fn will_not_allocate(fs: &Fs, req: &mut alloc_request, s: &Internal) -> bool {
-    req.devs_may_alloc.d.not_and(&s.devs.d);
+    req.devs_may_alloc.not_and(&s.devs);
 
     req.watermark == Watermark::copygc || !copygc_can_run_on_devs(fs, &req.devs_may_alloc)
 }
@@ -261,11 +261,11 @@ fn shrink_to_gotten(s: &mut Internal, nr_blocks: usize, nr_parity: usize) {
 
     let v = s.new_stripe.stripe_mut();
     v.block_ptrs_mut().copy_within(old_nr_data..old_nr_data + parity_gotten, new_nr_data);
-    v.block_ptrs_mut()[new_nr_blocks..].fill(bch_extent_ptr::from_bits(Align8U64(0)));
+    v.block_ptrs_mut()[new_nr_blocks..].fill(ExtentPtr::from_bits(Align8U64(0)));
     v.nr_blocks = new_nr_blocks as u8;
     v.nr_redundant = parity_gotten as u8;
 
-    let mut devs = bch_devs_list::default();
+    let mut devs = DevsList::default();
     for (b, p) in s.blocks.iter().zip(v.block_ptrs()) {
         let ob_dev = b.bucket().map(|b| u32::from(b.id().dev()));
         assert!(ob_dev.is_none_or(|d| d == u32::from(p.dev())), "a shrunk stripe's block not on its bucket's device");
@@ -280,7 +280,7 @@ fn shrink_to_gotten(s: &mut Internal, nr_blocks: usize, nr_parity: usize) {
 /// shrinks to what it got - else it's stripe_insufficient_devices, for the
 /// write to fall back to replication. The request's left as it was.
 pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request,
-                                       dev_stripe: &ec_dev_stripe_state, s: &mut InternalGuard<'_>,
+                                       dev_stripe: &EcDevStripeState, s: &mut InternalGuard<'_>,
                                        may_shrink: bool)
     -> Result<(), BchError>
 {
@@ -347,10 +347,10 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc
 struct ReqSaved {
     flags:          WriteFlags,
     data_type:      DataType,
-    ptrs:           open_buckets,
+    ptrs:           OpenBuckets,
     nr_replicas:    u8,
     nr_effective:   c_uint,
-    devs_may_alloc: bch_devs_mask,
+    devs_may_alloc: DevsMask,
 }
 
 impl ReqSaved {
@@ -448,7 +448,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 /// waiting; else packed into an old stripe, and the rest waited for - the
 /// stripe shrunk to what it got, if they can't be had. Packed first, where
 /// devices are low on space.
-fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, dev_stripe: &ec_dev_stripe_state,
+fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, dev_stripe: &EcDevStripeState,
                           s: &mut InternalGuard<'_>) -> Result<(), BchError> {
     if s.reuse.is_none() && should_reuse_stripe(t.fs(), s) {
         try_stripe_reuse(t, s)?;
@@ -474,7 +474,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, dev
 /// @s, unless it is already: a slot, buckets from @dev_stripe, the disk
 /// reservation for its parity, and its buckets in the table of new stripes'.
 pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut alloc_request,
-                                    dev_stripe: &ec_dev_stripe_state, s: &mut InternalGuard<'_>,
+                                    dev_stripe: &EcDevStripeState, s: &mut InternalGuard<'_>,
                                     stripe_fs: &BackRef<Fs>) -> Result<(), BchError> {
     if s.slot_claim.is_none() {
         stripe_idx_alloc(t, s)?;

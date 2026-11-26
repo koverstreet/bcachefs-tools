@@ -12,7 +12,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, 
                          UpdateTriggerFlags, Watermark};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::data::ec::format::Stripe;
-use crate::data::extents_format::{bch_extent_stripe_ptr, BKEY_EXTENT_U64s_MAX};
+use crate::data::extents_format::{ExtentStripePtr, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::posix::{logged_ops_format::LoggedOpStripeUpdate, inode_opts::get_io_opts, logged_ops};
 use crate::data::durability::drop_extra_durability;
@@ -207,7 +207,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
 
         let at = kp.ptrs_decoded(fs).find(|d| u32::from(d.ptr.dev()) == new_dev).map(|d| d.pos)
             .expect("the pointer just moved");
-        let stripe_ptr = bch_extent_stripe_ptr::new()
+        let stripe_ptr = ExtentStripePtr::new()
             .with_block(u.new.idx())
             .with_redundancy(new.v().nr_redundant)
             .with_idx(new_idx);

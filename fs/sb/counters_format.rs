@@ -316,6 +316,6 @@ pub enum PersistentCounter {
 #[whole(tail = d: [Le64])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_counters {
+pub struct SbFieldCounters {
     pub d: [Le64; 0],
 }

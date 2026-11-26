@@ -12,10 +12,10 @@
 use crate::btree::{bkey::{pos, spos}, iter::{lockrestart_do, BtreeIter, BtreeIterFlags}};
 use crate::btree_trans;
 use crate::c;
-use crate::alloc::{buckets::ReservationFlags, write_point::write_point_specifier};
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::alloc::{buckets::ReservationFlags, write_point::WritePointSpecifier};
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::data::durability::BkeyVDurability;
-use crate::data::write::{write, WriteBio, WriteFor, bch_write_op, WriteFlags as w};
+use crate::data::write::{write, WriteBio, WriteFor, WriteOp, WriteFlags as w};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::{Fs, WriteRef};
@@ -32,7 +32,7 @@ use crate::os::ops::IntoRaw;
 use crate::os::workqueue::Queue;
 use crate::util::refcount::TryRefcount;
 use super::direct::{sync_end, End};
-use crate::vfs::{folio::Mapping, inode::{DioStarted, InodeInfoFlag, quota_res}};
+use crate::vfs::{folio::Mapping, inode::{DioStarted, InodeInfoFlag, QuotaRes}};
 use crate::os::kiocb::Kiocb;
 use super::file::InodeFile;
 use core::ops::ControlFlow;
@@ -52,7 +52,7 @@ struct Dio<P: UserPage> {
     extending: bool,
     sync:      bool,
     flush:     bool,
-    quota_res: quota_res,
+    quota_res: QuotaRes,
     written:   u64,
 
     iter:      HeldIovIter,
@@ -63,7 +63,7 @@ struct Dio<P: UserPage> {
     write_ref: Option<WriteRef>,
 
     #[pin]
-    op:        bch_write_op,
+    op:        WriteOp,
     #[pin]
     wbio:      Bio<Holds<P>>,
 }
@@ -86,7 +86,7 @@ pub fn pools_exit(q: &Quiesced<'_>) {
     DIO_WRITES.exit(q);
 }
 
-fn check_range_allocated(fs: &Fs, inum: subvol_inum, mut offset: u64, size: u64,
+fn check_range_allocated(fs: &Fs, inum: SubvolInum, mut offset: u64, size: u64,
                          nr_replicas: u32, compressed: bool) -> bool {
     let trans = btree_trans!(fs);
     let end = offset + size;
@@ -254,10 +254,10 @@ async fn dio_write_loop<P: UserPage>(d: &mut Dio<P>) -> Result<(), BchError> {
     let fs = inode.fs();
     let opts = inode_opts::get_inode(fs, &inode.inode());
     // its caller's, not a worker's: every bio of the dio to the same one
-    let write_point = write_point_specifier::hashed(current_id());
+    let write_point = WritePointSpecifier::hashed(current_id());
 
     loop {
-        unsafe { bch_write_op::init_at(&raw mut d.op, fs, opts) };
+        unsafe { WriteOp::init_at(&raw mut d.op, fs, opts) };
         let op = &mut d.op;
         op.target      = op.opts.foreground_target;
         op.write_point = write_point;
@@ -382,12 +382,12 @@ fn direct_write_of<P: UserPage>(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'
                 extending,
                 sync:      false,
                 flush,
-                quota_res: quota_res { sectors: 0 },
+                quota_res: QuotaRes { sectors: 0 },
                 written:   0,
                 iter:      unsafe { HeldIovIter::new(it) },
                 started:   Some(started),
                 write_ref: Some(write_ref),
-                op         <- bch_write_op::init(fs, opts),
+                op         <- WriteOp::init(fs, opts),
                 wbio       <- b.init::<BchError, _>(),
             }? BchError)
         }) {

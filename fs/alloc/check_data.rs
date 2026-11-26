@@ -30,7 +30,7 @@ use crate::btree::scrub::node_replica_good;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::data::extents_format::{bch_extent_ptr, BKEY_EXTENT_U64s_MAX};
+use crate::data::extents_format::{ExtentPtr, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::write::WriteFlags;
 use crate::fs::FsFlag;
@@ -498,7 +498,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     // until the node's rewrite replaces it. set_needs_reconcile() pads a key
     // short of its replicas with those, but not a key at one replica
     if new.as_sc().arm::<Ptrs>().is_some_and(|p| p.ptrs(fs).next().is_none()) {
-        let ptr = bch_extent_ptr::new().with_dev(BCH_SB_MEMBER_INVALID as u8);
+        let ptr = ExtentPtr::new().with_dev(BCH_SB_MEMBER_INVALID as u8);
         let mut kp = new.reborrow().arm::<PtrsMut>().expect("a btree node pointer: entries to its end");
         let end = kp.entries_end();
         kp.insert_entry(end, &[ptr.into_bits().0]).expect("room for a pointer: the copy's made with it");
@@ -507,7 +507,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     // No triggers, at either level: gc owns alloc info and accounting here
     // and marks the new key itself when we restart. Transactional triggers
     // would check it against the alloc btree gc is rebuilding (fatal on
-    // insert, GH #910), and - since gc_pos is already at this key - also mark
+    // insert, GH #910), and - since GcPos is already at this key - also mark
     // it into gc state before gc has marked the old key.
     if level == 0 {
         return t.update(iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN);

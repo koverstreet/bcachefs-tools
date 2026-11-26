@@ -5,22 +5,22 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BkeyV, BKEY_U64S};
-use crate::btree::cache::{bch2_btree_id_level_to_text, OwnedNode};
+use crate::btree::cache::{btree_id_level_to_text, OwnedNode};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeRef, BtreeTrans};
-use crate::btree::key_cache::{EntryContents, bkey_cached};
+use crate::btree::key_cache::{EntryContents, BkeyCached};
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
 use crate::btree::locking::BtreeNodeLockedType::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents, NodeKey, PublishedKey};
 use crate::btree::traverse::advance_to_pos;
-use crate::btree::locking::btree_bkey_cached_common;
-use crate::btree::update::btree_insert_entry;
+use crate::btree::locking::BtreeBkeyCachedCommon;
+use crate::btree::update::BtreeInsertEntry;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::data_structures::{dst_room::DstRoom, bitmap::Bitmap};
 use crate::debug::{params::debug_check_iterators, trace::{events, TraceEvent}};
 use crate::prt;
 use crate::errcode::{Errcode, err_ptr, errptr_or_null, BchError};
-use crate::format::{BkeyType, Bpos, Btree, bch_val, bkey, BTREE_MAX_DEPTH};
+use crate::format::{BkeyType, Bpos, Btree, Val, Bkey, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
@@ -37,7 +37,7 @@ pub const BTREE_ITER_MAX: u32 = 1 << 10;
 
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]
-pub struct btree_trans_paths {
+pub struct BtreeTransPaths {
     pub nr_paths: c_ulong,
     pub paths: [BtreePath; 0],
 }
@@ -46,7 +46,7 @@ pub struct btree_trans_paths {
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Alone, Guard, Locked, LockedBy};
-use crate::locking::six::{six_trylock_ip, SixHold, six_lock, six_lock_waiter, SixLockType};
+use crate::locking::six::{six_trylock_ip, SixHold, SixLock, SixLockWaiter, SixLockType};
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
 use core::marker::PhantomData;
@@ -73,7 +73,7 @@ macro_rules! copy {
 /// What a peek found: a key's value - NULL for a hole - its header where the
 /// peek unpacked or copied it - for an iterator's peek, its own, iter->k.
 #[derive(Clone, Copy)]
-pub(crate) struct KeyVal(pub(crate) *const bch_val);
+pub(crate) struct KeyVal(pub(crate) *const Val);
 
 /// A path level's node, as C has it: NULL above the root, an error pointer
 /// saying why there's no node, or the node - only had by decoding it. An
@@ -126,7 +126,7 @@ impl<T> NodePtr<T> {
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct btree_path_level<T: PathNode = btree_bkey_cached_common> {
+pub struct BtreePathLevel<T: PathNode = BtreeBkeyCachedCommon> {
     /* a cached path's is a struct bkey_cached's */
     pub b: NodePtr<T>,
     pub iter: KeyIter,
@@ -134,10 +134,10 @@ pub struct btree_path_level<T: PathNode = btree_bkey_cached_common> {
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
     pub lock_taken_time: u64,
 }
-copy!([T: PathNode] btree_path_level<T>);
+copy!([T: PathNode] BtreePathLevel<T>);
 
 #[bitfield(u16)]
-pub struct btree_path_bits {
+pub struct BtreePathBits {
     #[bits(7)] pub btree_id: Btree,
     cached:           bool,
     preserve:         bool,
@@ -155,7 +155,7 @@ pub struct btree_path_bits {
 /// their common parts. All are C's struct btree_path.
 #[repr(C)]
 #[derive(MaybeZeroable, BitfieldMembers)]
-pub struct BtreePath<T: PathNode = btree_bkey_cached_common> {
+pub struct BtreePath<T: PathNode = BtreeBkeyCachedCommon> {
     pub sorted_idx: PathIdx,
     pub ref_: u8,
     pub intent_ref: u8,
@@ -164,10 +164,10 @@ pub struct BtreePath<T: PathNode = btree_bkey_cached_common> {
     pub pos: Bpos,
 
     #[members]
-    pub bits: btree_path_bits,
+    pub bits: BtreePathBits,
     pub nodes_locked: u8,
 
-    pub l: [btree_path_level<T>; BTREE_MAX_DEPTH as usize],
+    pub l: [BtreePathLevel<T>; BTREE_MAX_DEPTH as usize],
     /* C's TRACK_PATH_ALLOCATED, which btree/types_inline.h defines from
      * these: rustc sees only the configuration */
     #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
@@ -242,7 +242,7 @@ impl Paths<'_> {
     /// to see - waited for with @wait, the transaction's own read holds on the
     /// node set aside meanwhile. On failure, six's error: the lock's back to
     /// intent, and the caller marks the level so, after the wait.
-    pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &six_lock_waiter,
+    pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &SixLockWaiter,
                                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
         let (node, intent) = self[idx].hold_marked_write(level);
         let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[SixLockType::SIX_LOCK_read as usize] as c_int;
@@ -418,7 +418,7 @@ impl Paths<'_> {
 /// Where a path table's parts are, in bytes from its start, for @nr paths:
 /// the allocated bitmap, then the header's nr_paths right before the paths,
 /// then sorted and updates. One block, so that what reads another thread's -
-/// the cycle detector, bch2_btree_trans_to_text() - has all of it from the
+/// the cycle detector, btree_trans_to_text() - has all of it from the
 /// one pointer it rcu_dereference()s, trans->paths, stepping back from it as
 /// C's trans_paths_nr() and trans_paths_allocated() do; and so that one free
 /// retires it. A transaction's first table is embedded in it; past that, one
@@ -434,10 +434,10 @@ struct TableLayout {
 impl TableLayout {
     const fn of(nr: usize) -> Self {
         let header  = bits_to_longs(nr) * size_of::<c_ulong>();
-        let paths   = header + offset_of!(btree_trans_paths, paths);
+        let paths   = header + offset_of!(BtreeTransPaths, paths);
         let sorted  = paths + nr * size_of::<BtreePath>();
         let updates = sorted + (nr + 4) * size_of::<PathIdx>();
-        TableLayout { header, paths, sorted, updates, size: updates + nr * size_of::<btree_insert_entry>() }
+        TableLayout { header, paths, sorted, updates, size: updates + nr * size_of::<BtreeInsertEntry>() }
     }
 }
 
@@ -452,14 +452,14 @@ const _: () = {
 };
 
 /// The header of the table whose paths start at @paths: trans_paths_nr()'s.
-pub(crate) fn table_header(paths: *mut BtreePath) -> *mut btree_trans_paths {
-    paths.wrapping_byte_sub(offset_of!(btree_trans_paths, paths)).cast()
+pub(crate) fn table_header(paths: *mut BtreePath) -> *mut BtreeTransPaths {
+    paths.wrapping_byte_sub(offset_of!(BtreeTransPaths, paths)).cast()
 }
 
 /// The rest of the table whose @nr paths start at @paths: its allocated
 /// bitmap - trans_paths_allocated()'s, its start - sorted and updates.
 pub(crate) fn table_arrays(paths: *mut BtreePath, nr: usize)
-    -> (*mut c_ulong, *mut PathIdx, *mut btree_insert_entry)
+    -> (*mut c_ulong, *mut PathIdx, *mut BtreeInsertEntry)
 {
     let l = TableLayout::of(nr);
     let start = paths.cast::<u8>().wrapping_sub(l.paths);
@@ -515,7 +515,7 @@ impl Paths<'_> {
          * Note the first realloc retires trans->_paths, which is embedded in
          * the trans and never freed - so that poison has to be cleared when a
          * trans is initialized, or it shows up in the next transaction's live
-         * paths. See bch2_trans_paths_init().
+         * paths. See trans_paths_init().
          */
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             for path in self.iter_mut() {
@@ -553,7 +553,7 @@ impl<T: PathNode> BtreePath<T> {
 
 pub(in crate::btree) struct PathsUpdates<'a, 't> {
     pub(in crate::btree) paths:   &'a mut Paths<'t>,
-    pub(in crate::btree) updates: &'a mut [btree_insert_entry],
+    pub(in crate::btree) updates: &'a mut [BtreeInsertEntry],
 }
 
 impl<'t> Paths<'t> {
@@ -580,7 +580,7 @@ impl<'t> Paths<'t> {
     }
 
     /// All the room for updates: one per path.
-    fn updates_buf(&mut self) -> &mut [btree_insert_entry] {
+    fn updates_buf(&mut self) -> &mut [BtreeInsertEntry] {
         let (_, _, updates) = table_arrays(self.table.cast(), self.table.len());
         unsafe { core::slice::from_raw_parts_mut(updates, self.table.len()) }
     }
@@ -597,24 +597,24 @@ impl<'t> Paths<'t> {
     /// The key updates queued: trans_for_each_update(). They're in the
     /// table's allocation, after the paths - growing moves them, and the
     /// transaction beginning drops them, both with the table borrowed mutably.
-    pub(crate) fn updates(&self) -> &[btree_insert_entry] {
+    pub(crate) fn updates(&self) -> &[BtreeInsertEntry] {
         unsafe { self.trans.updates_unguarded() }
     }
 
     /// updates(), each with its key: in the transaction's memory while it's
     /// queued.
-    pub(crate) fn update_keys(&self) -> impl Iterator<Item = (&btree_insert_entry, &BkeyI)> {
+    pub(crate) fn update_keys(&self) -> impl Iterator<Item = (&BtreeInsertEntry, &BkeyI)> {
         self.updates().iter().map(|i| (i, i.key()))
     }
 
-    pub(crate) fn update_mut(&mut self, i: usize) -> &mut btree_insert_entry {
+    pub(crate) fn update_mut(&mut self, i: usize) -> &mut BtreeInsertEntry {
         let nr = self.trans.nr_updates.get() as usize;
         &mut self.updates_buf()[..nr][i]
     }
 
     /// @n queued at @i, the updates from @i on moved up one: there's room for
     /// one per path.
-    pub(crate) fn insert_update(&mut self, i: usize, n: btree_insert_entry) -> &mut btree_insert_entry {
+    pub(crate) fn insert_update(&mut self, i: usize, n: BtreeInsertEntry) -> &mut BtreeInsertEntry {
         let t = self.trans;
         let nr = t.nr_updates.get() as usize;
         assert!(i <= nr, "queueing update {i} of {nr}");
@@ -1204,8 +1204,8 @@ impl BtreePath {
 
     /// Its key cache entry, if it's a cached path holding it locked.
     #[inline(always)]
-    pub(crate) fn locked_key_cached(&self) -> Option<LockedNode<'_, bkey_cached>> {
-        self.downcast::<bkey_cached>()?.locked_node(0)
+    pub(crate) fn locked_key_cached(&self) -> Option<LockedNode<'_, BkeyCached>> {
+        self.downcast::<BkeyCached>()?.locked_node(0)
     }
 
     /// The level's node, to write: a btree node the path holds write locked.
@@ -1217,7 +1217,7 @@ impl BtreePath {
     /// Its key cache entry, to write: locked_btree_node_mut()'s, of a cached
     /// path.
     #[inline(always)]
-    pub(crate) fn locked_key_cached_mut(&mut self) -> Option<LockedNode<'_, bkey_cached, Write>> {
+    pub(crate) fn locked_key_cached_mut(&mut self) -> Option<LockedNode<'_, BkeyCached, Write>> {
         self.locked_node_mut(0)
     }
 
@@ -1283,7 +1283,7 @@ impl BtreePath {
         Some((LockedNode { node: unsafe { &*b }, _mode: PhantomData }, &mut self.l[level].iter))
     }
 
-    pub(crate) fn peek_slot(&self, u: &mut bkey) -> Option<KeyVal> {
+    pub(crate) fn peek_slot(&self, u: &mut Bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
 
         if self.l[level].b.is_null() {
@@ -1307,11 +1307,11 @@ impl BtreePath {
                 }
             }
 
-            *u = bkey::new();
+            *u = Bkey::new();
             u.p = self.pos;
             Some(KeyVal(ptr::null()))
         } else {
-            let ck = self.downcast::<bkey_cached>()?.locked_node(0)?;
+            let ck = self.downcast::<BkeyCached>()?.locked_node(0)?;
 
             ebug_assert!({ let key = ck.key.get(); Btree(key.btree_id) == self.btree_id() && key.pos == self.pos });
 
@@ -1354,7 +1354,7 @@ impl BtreePath {
              if self.preserve() { 'P' } else { ' ' },
              if self.should_be_locked() { 'S' } else { ' ' },
              if self.cached() { 'C' } else { 'B' });
-        bch2_btree_id_level_to_text(out, self.btree_id(), self.level().into());
+        btree_id_level_to_text(out, self.btree_id(), self.level().into());
         prt!(out, " pos {}", self.pos);
 
         if let Some(b) = self.locked_btree_node(self.level() as usize) {
@@ -1618,7 +1618,7 @@ fn path_verify_level_err(path: &BtreePath, level: usize, keys: &Keys<'_>, p: Opt
 }
 
 /// A transaction's path table, as it starts: its own, embedded.
-pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
+pub fn trans_paths_init(trans: &BtreeTrans<'_>) {
     trans.nr_paths.set(BTREE_ITER_INITIAL as PathIdx);
     trans.paths.set(trans._paths.as_ptr().cast());
     unsafe { (*trans.trans_paths.as_ptr()).nr_paths = BTREE_ITER_INITIAL.into() };
@@ -1645,42 +1645,42 @@ pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
     paths.lists_mut().0[0] = 1;
 }
 
-pub fn bch2_trans_paths_exit(trans: &BtreeTrans<'_>) {
+pub fn trans_paths_exit(trans: &BtreeTrans<'_>) {
     let nr = trans.nr_paths.get().into();
     let (allocated, _, _) = table_arrays(trans.paths.replace(ptr::null_mut()), nr);
     trans.table_retire(allocated, nr);
 }
 
-pub fn bch2_btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {
+pub fn btree_path_to_text(out: &mut Printbuf, _trans: &BtreeTrans<'_>, path_idx: PathIdx, path: &BtreePath) {
     path.to_text(out, path_idx)
 }
 
 /// What a path's levels point at: a btree node, or - a cached path's - a key
-/// cache entry, each starting with a btree_bkey_cached_common. The common part
+/// cache entry, each starting with a BtreeBkeyCachedCommon. The common part
 /// is one too, for code over any path: relocking, the cycle detector.
 ///
 /// # Safety
-/// Self starts with a btree_bkey_cached_common, and a common part whose cached
+/// Self starts with a BtreeBkeyCachedCommon, and a common part whose cached
 /// flag is CACHED is the start of one. It's freed only by what's locked it for
 /// intent and write: a hold on its lock keeps it.
 pub unsafe trait PathNode: 'static {
     /// The cached flag of a common part that's one of these; None for any.
     const CACHED: Option<bool>;
 
-    fn common(&self) -> &btree_bkey_cached_common;
+    fn common(&self) -> &BtreeBkeyCachedCommon;
 
     /// What a common part is the start of, if it's one of these: by its
     /// cached flag.
-    fn from_common(b: &btree_bkey_cached_common) -> Option<&Self> where Self: Sized {
+    fn from_common(b: &BtreeBkeyCachedCommon) -> Option<&Self> where Self: Sized {
         Self::CACHED.map_or(true, |cached| cached == b.cached)
             .then(|| unsafe { &*core::ptr::from_ref(b).cast() })
     }
 }
 
-unsafe impl PathNode for btree_bkey_cached_common {
+unsafe impl PathNode for BtreeBkeyCachedCommon {
     const CACHED: Option<bool> = None;
 
-    fn common(&self) -> &btree_bkey_cached_common {
+    fn common(&self) -> &BtreeBkeyCachedCommon {
         self
     }
 }
@@ -1688,21 +1688,21 @@ unsafe impl PathNode for btree_bkey_cached_common {
 unsafe impl PathNode for BtreeNode {
     const CACHED: Option<bool> = Some(false);
 
-    fn common(&self) -> &btree_bkey_cached_common {
+    fn common(&self) -> &BtreeBkeyCachedCommon {
         &self.c
     }
 }
 
-unsafe impl PathNode for bkey_cached {
+unsafe impl PathNode for BkeyCached {
     const CACHED: Option<bool> = Some(true);
 
-    fn common(&self) -> &btree_bkey_cached_common {
+    fn common(&self) -> &BtreeBkeyCachedCommon {
         &self.c
     }
 }
 
-const _: () = assert!(offset_of!(BtreeNode, c) == 0 && offset_of!(bkey_cached, c) == 0 &&
-                      offset_of!(btree_bkey_cached_common, lock) == 0);
+const _: () = assert!(offset_of!(BtreeNode, c) == 0 && offset_of!(BkeyCached, c) == 0 &&
+                      offset_of!(BtreeBkeyCachedCommon, lock) == 0);
 
 impl BtreePath {
     /// As a path of Ts, if it is one: by its cached flag.
@@ -1734,7 +1734,7 @@ impl PathNodeContents for BtreeNode {
     }
 }
 
-impl PathNodeContents for bkey_cached {
+impl PathNodeContents for BkeyCached {
     type Contents = EntryContents;
     type Published = ();
 
@@ -1897,8 +1897,8 @@ impl<'p, T: PathNode> UnlockedNode<'p, T> {
     }
 
     /// Its lock: of a node, what's had without it.
-    pub fn lock(self) -> &'p Locked<six_lock> {
-        unsafe { &*self.node.as_ptr().cast::<Locked<six_lock>>() }
+    pub fn lock(self) -> &'p Locked<SixLock> {
+        unsafe { &*self.node.as_ptr().cast::<Locked<SixLock>>() }
     }
 }
 

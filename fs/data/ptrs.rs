@@ -23,16 +23,15 @@ use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal,
 use crate::btree::bkey_methods::SetError;
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
 use crate::data::checksum::BCH_NONCE_EXTENT;
-use crate::data::extents::{BkeyVExtents, bch_extent_crc_unpacked, extent_ptr_decoded};
+use crate::data::extents::{BkeyVExtents, ExtentCrcUnpacked, ExtentPtrDecoded};
 use crate::errcode::BchError;
 use crate::data::ec::format::Stripe;
-use crate::data::extents_format::{bch_extent_crc32, bch_extent_ptr, CRC32_NONCE_MAX,
-    ExtentEntryType_arms, bch_extent_crc128, bch_extent_crc64, ExtentFlags, bch_extent_crc64_bits,
-    bch_extent_crc128_bits, BtreePtr, BtreePtrV2, Extent, bch_extent_flags, bch_extent_stripe_ptr};
-use crate::data::reconcile::format::{bch_extent_rebalance_v1, bch_extent_reconcile, bch_extent_reconcile_bp};
+use crate::data::extents_format::{ExtentCrc32, ExtentPtr, CRC32_NONCE_MAX,
+    ExtentEntryType_arms, ExtentCrc128, ExtentCrc64, ExtentFlags, ExtentCrc64Bits,
+    ExtentCrc128Bits, BtreePtr, BtreePtrV2, Extent};
 use crate::data::reflink_format::ReflinkV;
-use crate::init::dev::bch_devs_list;
-use crate::opts::bch_inode_opts;
+use crate::init::dev::DevsList;
+use crate::opts::InodeOpts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::fs::Fs;
 use crate::debug::trace::events;
@@ -45,7 +44,7 @@ use crate::data_structures::array_vec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
 use crate::format::{Bversion, CompressionType, DataType, MemberState, Nonce, BkeyType, BkeyTypeFlags,
-    bch_csum, bkey, CsumType, BkeyType_arms};
+    Csum, Bkey, CsumType, BkeyType_arms};
 
 mod edit;
 mod read;
@@ -60,10 +59,10 @@ pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, ptr_swab};
 pub(crate) use ops::{extent_ptr_to_text, ptrs_ops};
 
 macro_rules! extent_entries {
-    ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
+    ($(($name:tt, $nr:literal, $ty:ty)),* $(,)?) => { ::paste::paste! {
         pub fn extent_entry_type_u64s(ty: u32) -> Option<usize> {
             Some(match ty {
-                $($nr => size_of::<[<bch_extent_ $name>]>() / 8,)*
+                $($nr => size_of::<$ty>() / 8,)*
                 _ => return None,
             })
         }
@@ -78,7 +77,7 @@ macro_rules! extent_entries {
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         pub enum ExtentEntry<'a> {
-            $($name(&'a [<bch_extent_ $name>]),)*
+            $($name(&'a $ty),)*
             /// One of a type this code doesn't know, the filesystem's table
             /// stepping over it.
             Unknown { ty: u32, bytes: &'a [u8] },
@@ -91,7 +90,7 @@ macro_rules! extent_entries {
         /// An Unknown, Invalid or PastEnd entry can't be edited.
         #[allow(non_camel_case_types)]
         pub enum ExtentEntryMut<'a> {
-            $($name(&'a mut [<bch_extent_ $name>]),)*
+            $($name(&'a mut $ty),)*
             Unknown { ty: u32, bytes: &'a [u8] },
             Invalid { ty: u32, bytes: &'a [u8] },
             PastEnd { ty: u32, bytes: &'a [u8] },
@@ -126,7 +125,7 @@ macro_rules! extent_entries {
                     None => {}
                 }
                 match ty {
-                    $($nr if b.len() == size_of::<[<bch_extent_ $name>]>() =>
+                    $($nr if b.len() == size_of::<$ty>() =>
                         if let Some(a) = cast_plain(b) { return Self::$name(a) },)*
                     _ => {}
                 }
@@ -154,8 +153,8 @@ macro_rules! extent_entries {
                     None => {}
                 }
                 match ty {
-                    $($nr if b.len() == size_of::<[<bch_extent_ $name>]>() &&
-                             cast_plain::<[<bch_extent_ $name>]>(b).is_some() =>
+                    $($nr if b.len() == size_of::<$ty>() &&
+                             cast_plain::<$ty>(b).is_some() =>
                         return Self::$name(cast_plain_mut(b).unwrap()),)*
                     _ => {}
                 }
@@ -316,7 +315,7 @@ impl<S: KeyState + InPlace> PtrsEntries for Stripe<S> {
     fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
         let start = offset_of!(Stripe, repr.ptrs);
         let Some(s) = Self::arm_ref(k.val_bytes()) else { return start..start };
-        start..(start + s.nr_blocks as usize * size_of::<bch_extent_ptr>()).min(k.val_bytes().len())
+        start..(start + s.nr_blocks as usize * size_of::<ExtentPtr>()).min(k.val_bytes().len())
     }
 }
 
@@ -409,14 +408,14 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
             .map(move |(at, (ty, b, stop))| (EntryPos((start + at) / 8), ExtentEntry::new(ty, b, stop)))
     }
 
-    fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &bch_extent_ptr> {
+    fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &ExtentPtr> {
         self.extent_entries(fs).filter_map(|e| match e {
             ExtentEntry::ptr(p) => Some(p),
             _ => None,
         })
     }
 
-    fn crcs(&self, fs: &Fs) -> impl Iterator<Item = bch_extent_crc_unpacked> {
+    fn crcs(&self, fs: &Fs) -> impl Iterator<Item = ExtentCrcUnpacked> {
         let k = self.k();
         self.extent_entries(fs).filter_map(move |e| crc_unpack(k, e))
     }
@@ -431,7 +430,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
         self.extent_entries_at(fs).filter_map(move |(pos, e)| match e {
             ExtentEntry::ptr(ptr) => Some(DecodedPtr {
-                p: extent_ptr_decoded {
+                p: ExtentPtrDecoded {
                     has_ec: ec.is_some(),
                     crc,
                     ptr: *ptr,
@@ -466,7 +465,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     /// pointers has no such data.
     ///
     /// XXX (C's): if some data actually is compressed, we want
-    /// bch_extent_reconcile.wont_recompress_smaller
+    /// ExtentReconcile.wont_recompress_smaller
     fn propagate_incompressible(&mut self, fs: &Fs, src: BkeySC<'_>)
     where Self: BkeyVMut
     {
@@ -499,7 +498,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// Its pointer to device @dev, if it has one: bch2_bkey_has_device_c().
-    fn has_device(&self, fs: &Fs, dev: u32) -> Option<&bch_extent_ptr> {
+    fn has_device(&self, fs: &Fs, dev: u32) -> Option<&ExtentPtr> {
         self.ptrs(fs).find(|p| u32::from(p.dev()) == dev)
     }
 
@@ -517,8 +516,8 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
     /// The devices it points to, BCH_SB_MEMBER_INVALID placeholders skipped:
     /// bch2_bkey_devs().
-    fn devs(&self, fs: &Fs) -> bch_devs_list {
-        let mut d = bch_devs_list::default();
+    fn devs(&self, fs: &Fs) -> DevsList {
+        let mut d = DevsList::default();
         for p in self.ptrs(fs).filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID) {
             d.data[usize::from(d.nr)] = p.dev();
             d.nr += 1;
@@ -546,7 +545,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     /// Whether it has pointer @m, to data @offset sectors into its extent -
     /// the device, gen and place on disk, given where each extent starts:
     /// bch2_bkey_matches_ptr().
-    fn matches_ptr(&self, fs: &Fs, m: &bch_extent_ptr, offset: u64) -> bool {
+    fn matches_ptr(&self, fs: &Fs, m: &ExtentPtr, offset: u64) -> bool {
         let start = self.k().start_offset();
         self.ptrs_decoded(fs).any(|d| {
             d.p.ptr.dev() == m.dev() &&
@@ -572,7 +571,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
             .map(move |(at, (ty, b, stop))| (EntryPos((start + at) / 8), ExtentEntryMut::new(ty, b, stop)))
     }
 
-    fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut bch_extent_ptr>
+    fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut ExtentPtr>
     where Self: BkeyVMut
     {
         self.extent_entries_mut(fs).filter_map(|e| match e {
@@ -582,7 +581,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// Its pointer at @at, to edit.
-    fn ptr_mut_at(&mut self, fs: &Fs, at: EntryPos) -> Option<&mut bch_extent_ptr>
+    fn ptr_mut_at(&mut self, fs: &Fs, at: EntryPos) -> Option<&mut ExtentPtr>
     where Self: BkeyVMut
     {
         self.extent_entries_mut_at(fs).find_map(|(pos, e)| match e {
@@ -669,7 +668,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// The first of its cached pointers that shouldn't be, and why.
-    fn cached_ptr_to_drop(&self, fs: &Fs, opts: &bch_inode_opts) -> Option<(EntryPos, &'static str)> {
+    fn cached_ptr_to_drop(&self, fs: &Fs, opts: &InodeOpts) -> Option<(EntryPos, &'static str)> {
         let rcu = read_lock();
         let mut have_cached = false;
 
@@ -683,7 +682,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// Drops the cached pointers it shouldn't have.
-    fn drop_extra_cached_ptrs(&mut self, fs: &Fs, opts: &bch_inode_opts)
+    fn drop_extra_cached_ptrs(&mut self, fs: &Fs, opts: &InodeOpts)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
         while let Some((at, why)) = self.cached_ptr_to_drop(fs, opts) {
@@ -698,7 +697,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     /// XXX: C's - if a walk dropped the pointer itself, C dereferences NULL
     /// where this panics; only cached pointers are dropped, and the callers
     /// pass pointers that aren't.
-    fn set_cached(&mut self, fs: &Fs, opts: &bch_inode_opts, dev: u32)
+    fn set_cached(&mut self, fs: &Fs, opts: &InodeOpts, dev: u32)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
         // C's pointer to it, forgotten once a drop moves the entries
@@ -779,7 +778,7 @@ impl<K: BkeyV<V: PtrsEntries>> BkeyVPtrs for K {}
 /// Why @d shouldn't be cached, if it's a cached pointer - @have_cached if one
 /// before it is: maybe_drop_cached_ptr()'s tests. A bucket its device doesn't
 /// have is stale, as C's -1 is.
-fn cached_ptr_drop_reason(fs: &Fs, opts: &bch_inode_opts, d: &DecodedPtr<'_>, have_cached: bool,
+fn cached_ptr_drop_reason(fs: &Fs, opts: &InodeOpts, d: &DecodedPtr<'_>, have_cached: bool,
                           rcu: &ReadGuard) -> Option<&'static str> {
     let ptr = d.ptr;
     if ptr.cached() == 0 {
@@ -808,13 +807,13 @@ fn cached_ptr_drop_reason(fs: &Fs, opts: &bch_inode_opts, d: &DecodedPtr<'_>, ha
     None
 }
 
-/// A pointer, decoded: ptrs_decoded()'s. @p is C's extent_ptr_decoded, a
+/// A pointer, decoded: ptrs_decoded()'s. @p is C's ExtentPtrDecoded, a
 /// copy - its read path's fields zero; @ptr is the pointer in the key, and
 /// @pos where it is, to edit it by.
 #[derive(Clone, Copy)]
 pub struct DecodedPtr<'a> {
-    pub p: extent_ptr_decoded,
-    pub ptr: &'a bch_extent_ptr,
+    pub p: ExtentPtrDecoded,
+    pub ptr: &'a ExtentPtr,
     pub pos: EntryPos,
 }
 
@@ -840,7 +839,7 @@ pub fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> DataType {
 }
 
 /// @sectors of @p's extent, as the sectors it takes on disk: compressed, if it is.
-pub fn ptr_disk_sectors(sectors: u64, p: &extent_ptr_decoded) -> u64 {
+pub fn ptr_disk_sectors(sectors: u64, p: &ExtentPtrDecoded) -> u64 {
     if crc_is_compressed(&p.crc) {
         (sectors * u64::from(p.crc.compressed_size)).div_ceil(p.crc.uncompressed_size.into())
     } else {
@@ -855,11 +854,11 @@ pub fn ptr_disk_sectors(sectors: u64, p: &extent_ptr_decoded) -> u64 {
 pub struct EntryPos(usize);
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
-/// checksum's bytes where bch_csum has them.
+/// checksum's bytes where Csum has them.
 /// The crc of @k's pointers before any crc entry - none, the data as it is,
 /// all of it live: bch2_extent_crc_unpack(k, NULL).
-pub(crate) fn crc_none(k: &bkey) -> bch_extent_crc_unpacked {
-    bch_extent_crc_unpacked {
+pub(crate) fn crc_none(k: &Bkey) -> ExtentCrcUnpacked {
+    ExtentCrcUnpacked {
         compressed_size:   k.size,
         uncompressed_size: k.size,
         live_size:         k.size,
@@ -867,8 +866,8 @@ pub(crate) fn crc_none(k: &bkey) -> bch_extent_crc_unpacked {
     }
 }
 
-pub(crate) fn crc_unpack(k: &bkey, entry: ExtentEntry<'_>) -> Option<bch_extent_crc_unpacked> {
-    // The packed checksum bytes, at the start of a bch_csum word - C stores
+pub(crate) fn crc_unpack(k: &Bkey, entry: ExtentEntry<'_>) -> Option<ExtentCrcUnpacked> {
+    // The packed checksum bytes, at the start of a Csum word - C stores
     // them there through a cast, with no byte swap:
     fn csum_word(bytes: &[u8]) -> Le64 {
         let mut w = [0u8; 8];
@@ -878,7 +877,7 @@ pub(crate) fn crc_unpack(k: &bkey, entry: ExtentEntry<'_>) -> Option<bch_extent_
 
     let unpacked = |csum_type: CsumType, compression_type: CompressionType, compressed_raw: u16,
                     uncompressed_raw: u16, offset: u16, nonce: u16, csum| {
-        bch_extent_crc_unpacked {
+        ExtentCrcUnpacked {
             compressed_size:   u32::from(compressed_raw) + 1,
             uncompressed_size: u32::from(uncompressed_raw) + 1,
             live_size:         k.size,
@@ -895,12 +894,12 @@ pub(crate) fn crc_unpack(k: &bkey, entry: ExtentEntry<'_>) -> Option<bch_extent_
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw().into(), e.uncompressed_size_raw().into(),
                      e.offset().into(), 0,
-                     bch_csum { lo: csum_word(&e.csum().to_ne_bytes()), hi: Le64::new(0) }),
+                     Csum { lo: csum_word(&e.csum().to_ne_bytes()), hi: Le64::new(0) }),
         ExtentEntry::crc64(e) =>
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw(), e.uncompressed_size_raw(),
                      e.offset(), e.nonce(),
-                     bch_csum { lo: csum_word(&{ e.csum_lo }.to_ne_bytes()),
+                     Csum { lo: csum_word(&{ e.csum_lo }.to_ne_bytes()),
                                 hi: csum_word(&e.csum_hi().to_ne_bytes()) }),
         ExtentEntry::crc128(e) =>
             unpacked(e.csum_type(), e.compression_type(),
@@ -919,19 +918,19 @@ fn crc_size_raw<T: TryFrom<u32>>(size: u32) -> Option<T> {
 }
 
 /// @crc's checksum type's size in bytes, if it's one this version knows.
-fn crc_csum_bytes(crc: &bch_extent_crc_unpacked) -> Option<u32> {
+fn crc_csum_bytes(crc: &ExtentCrcUnpacked) -> Option<u32> {
     crc.csum_type.get().bytes()
 }
 
 /// The checksum's bytes, lo's then hi's - where a packed entry's come from.
-fn csum_bytes(csum: &bch_csum) -> [u8; 16] {
+fn csum_bytes(csum: &Csum) -> [u8; 16] {
     let mut b = [0u8; 16];
     b[..8].copy_from_slice(&csum.lo.get().to_le_bytes());
     b[8..].copy_from_slice(&csum.hi.get().to_le_bytes());
     b
 }
 
-impl bch_extent_ptr {
+impl ExtentPtr {
     /// Its field @field, by C's name, set to @v: for kvdb, to make the keys
     /// fsck repairs.
     pub fn set_field<'p>(&mut self, field: &'p str, v: u64) -> Result<(), SetError<'p>> {
@@ -951,10 +950,10 @@ impl bch_extent_ptr {
     }
 }
 
-impl bch_extent_crc32 {
+impl ExtentCrc32 {
     /// @crc as a crc32 entry, if it fits: a checksum of at most 4 bytes, and
     /// no nonce.
-    pub fn pack(crc: &bch_extent_crc_unpacked) -> Option<Self> {
+    pub fn pack(crc: &ExtentCrcUnpacked) -> Option<Self> {
         if crc_csum_bytes(crc)? > 4 || u32::from(crc.nonce) > CRC32_NONCE_MAX {
             return None;
         }
@@ -970,16 +969,16 @@ impl bch_extent_crc32 {
     }
 }
 
-impl bch_extent_crc64 {
+impl ExtentCrc64 {
     /// @crc as a crc64 entry, if it fits: a checksum of at most 10 bytes.
-    pub fn pack(crc: &bch_extent_crc_unpacked) -> Option<Self> {
+    pub fn pack(crc: &ExtentCrcUnpacked) -> Option<Self> {
         if crc_csum_bytes(crc)? > 10 {
             return None;
         }
         let csum = csum_bytes(&crc.csum);
 
-        Some(bch_extent_crc64 {
-            bits: bch_extent_crc64_bits::new()
+        Some(ExtentCrc64 {
+            bits: ExtentCrc64Bits::new()
                 .with_compressed_size_raw_checked(crc_size_raw(crc.compressed_size)?).ok()?
                 .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
                 .with_offset_checked(crc.offset).ok()?
@@ -992,14 +991,14 @@ impl bch_extent_crc64 {
     }
 }
 
-impl bch_extent_crc128 {
+impl ExtentCrc128 {
     /// @crc as a crc128 entry, if it fits - a checksum type this version
     /// knows, any of which this holds.
-    pub fn pack(crc: &bch_extent_crc_unpacked) -> Option<Self> {
+    pub fn pack(crc: &ExtentCrcUnpacked) -> Option<Self> {
         crc_csum_bytes(crc)?;
 
-        Some(bch_extent_crc128 {
-            bits: bch_extent_crc128_bits::new()
+        Some(ExtentCrc128 {
+            bits: ExtentCrc128Bits::new()
                 .with_compressed_size_raw_checked(crc_size_raw(crc.compressed_size)?).ok()?
                 .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
                 .with_offset_checked(crc.offset).ok()?
@@ -1015,11 +1014,11 @@ impl ExtentEntryMut<'_> {
     /// Packs @crc into this crc entry, as its own type: bch2_extent_crc_pack()
     /// with the entry's type. None if it isn't a crc entry, or @crc doesn't
     /// fit it.
-    pub fn set_crc(&mut self, crc: &bch_extent_crc_unpacked) -> Option<()> {
+    pub fn set_crc(&mut self, crc: &ExtentCrcUnpacked) -> Option<()> {
         match self {
-            Self::crc32(e)  => **e = bch_extent_crc32::pack(crc)?,
-            Self::crc64(e)  => **e = bch_extent_crc64::pack(crc)?,
-            Self::crc128(e) => **e = bch_extent_crc128::pack(crc)?,
+            Self::crc32(e)  => **e = ExtentCrc32::pack(crc)?,
+            Self::crc64(e)  => **e = ExtentCrc64::pack(crc)?,
+            Self::crc128(e) => **e = ExtentCrc128::pack(crc)?,
             _ => return None,
         }
         Some(())
@@ -1027,13 +1026,13 @@ impl ExtentEntryMut<'_> {
 }
 
 /// Whether @crc's data is compressed - incompressible isn't: crc_is_compressed().
-pub fn crc_is_compressed(crc: &bch_extent_crc_unpacked) -> bool {
+pub fn crc_is_compressed(crc: &ExtentCrcUnpacked) -> bool {
     crc.compression_type != CompressionType::none &&
         crc.compression_type != CompressionType::incompressible
 }
 
 /// The nonce of @crc's data, in an extent of version @version: extent_nonce().
-pub fn extent_nonce(version: Bversion, crc: &bch_extent_crc_unpacked) -> Nonce {
+pub fn extent_nonce(version: Bversion, crc: &ExtentCrcUnpacked) -> Nonce {
     let compression_type = if crc_is_compressed(crc) { crc.compression_type.get().0 } else { 0 };
     let size = if compression_type != 0 { crc.uncompressed_size } else { 0 };
     let (lo, hi) = (version.lo, version.hi);
@@ -1051,7 +1050,7 @@ pub fn extent_nonce(version: Bversion, crc: &bch_extent_crc_unpacked) -> Nonce {
 
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
-pub fn crc_is_encoded(crc: &bch_extent_crc_unpacked) -> bool {
+pub fn crc_is_encoded(crc: &ExtentCrcUnpacked) -> bool {
     crc.csum_type != CsumType::none || crc_is_compressed(crc)
 }
 
@@ -1076,12 +1075,12 @@ pub fn drop_stale_ptrs<'a, 't>(
 /// Where on @p's device the data of its extent, starting at @start, would
 /// start: C's (s64) ptr.offset + crc.offset - bkey_start_offset(), which
 /// wraps - two are compared, so wrapping or not doesn't matter.
-fn ptr_data_start(p: &extent_ptr_decoded, start: u64) -> u64 {
+fn ptr_data_start(p: &ExtentPtrDecoded, start: u64) -> u64 {
     p.ptr.offset().wrapping_add(p.crc.offset.into()).wrapping_sub(start)
 }
 
 /// The same pointer, as bch2_extent_ptr_eq(): all of it but its entry type.
-pub fn ptr_eq(a: &bch_extent_ptr, b: &bch_extent_ptr) -> bool {
+pub fn ptr_eq(a: &ExtentPtr, b: &ExtentPtr) -> bool {
     a.cached() == b.cached() && a.unwritten() == b.unwritten() && a.offset() == b.offset() &&
         a.dev() == b.dev() && a.generation() == b.generation()
 }
@@ -1090,8 +1089,8 @@ pub fn ptr_eq(a: &bch_extent_ptr, b: &bch_extent_ptr) -> bool {
 /// device - or the same block of the same stripe - and gen, the same place
 /// given where each extent starts (one may have been trimmed), and
 /// overlapping on disk: bch2_bkey_ptrs_match().
-pub fn ptrs_match(k1: &bkey, p1: &extent_ptr_decoded, k2: &bkey, p2: &extent_ptr_decoded) -> bool {
-    let overlaps = |a: &extent_ptr_decoded, b: &extent_ptr_decoded| {
+pub fn ptrs_match(k1: &Bkey, p1: &ExtentPtrDecoded, k2: &Bkey, p2: &ExtentPtrDecoded) -> bool {
+    let overlaps = |a: &ExtentPtrDecoded, b: &ExtentPtrDecoded| {
         a.ptr.offset() >= b.ptr.offset() && a.ptr.offset() < b.ptr.offset() + u64::from(b.crc.compressed_size)
     };
 
@@ -1208,12 +1207,12 @@ mod tests {
                 "a crc128 doesn't fit in a word");
     }
 
-    fn crc(csum_type: CsumType, size: u32, offset: u16, nonce: u16) -> bch_extent_crc_unpacked {
+    fn crc(csum_type: CsumType, size: u32, offset: u16, nonce: u16) -> ExtentCrcUnpacked {
         // a checksum as wide as its type, every byte nonzero
         let n = csum_type.bytes().unwrap() as usize;
         let mut b = [0u8; 16];
         b.iter_mut().take(n).enumerate().for_each(|(i, x)| *x = 0xa0 + i as u8);
-        bch_extent_crc_unpacked {
+        ExtentCrcUnpacked {
             compressed_size:   size,
             uncompressed_size: size,
             live_size:         size - u32::from(offset),
@@ -1221,7 +1220,7 @@ mod tests {
             compression_type:  CompressionType::none.into(),
             offset,
             nonce,
-            csum: bch_csum { lo: Le64::new(u64::from_le_bytes(b[..8].try_into().unwrap())),
+            csum: Csum { lo: Le64::new(u64::from_le_bytes(b[..8].try_into().unwrap())),
                              hi: Le64::new(u64::from_le_bytes(b[8..].try_into().unwrap())) },
         }
     }
@@ -1235,9 +1234,9 @@ mod tests {
     fn ptr_swab_reads_the_other_endianness() {
         use crate::format::CsumType as t;
 
-        let c32 = bch_extent_crc32::pack(&crc(t::crc32c, 8, 0, 0)).unwrap();
-        let c64 = bch_extent_crc64::pack(&crc(t::chacha20_poly1305_80, 8, 0, 3)).unwrap();
-        let c128 = bch_extent_crc128::pack(&crc(t::chacha20_poly1305_128, 8, 0, 3)).unwrap();
+        let c32 = ExtentCrc32::pack(&crc(t::crc32c, 8, 0, 0)).unwrap();
+        let c64 = ExtentCrc64::pack(&crc(t::chacha20_poly1305_80, 8, 0, 3)).unwrap();
+        let c128 = ExtentCrc128::pack(&crc(t::chacha20_poly1305_128, 8, 0, 3)).unwrap();
         let ptr = word(0, 0x123456789);
 
         let native: std::vec::Vec<u64> = [words_of(&c32), vec![ptr], words_of(&c64), vec![ptr],

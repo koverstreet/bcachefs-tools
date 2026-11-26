@@ -20,7 +20,7 @@
 //!  - pointers, of any key with them: an entry's position depends on the
 //!    entries before it, and the entries are C bitfields, which typeinfo
 //!    doesn't describe - so ptrs[N].field, N counting only the pointers,
-//!    found by the entry walk and set in place: bch_extent_ptr::set_field().
+//!    found by the entry walk and set in place: ExtentPtr::set_field().
 //!    The other entries - crcs, an extent's stripe_ptr - can't be set yet.
 //!
 //! A value is an integer (decimal, 0x hex, or negative), or for an
@@ -29,10 +29,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::{bkey::{BkeyP, BkeyS, BkeySC}, bkey::prelude::*, iter::{NoRoom, TransBkey}};
-use crate::posix::{inode::bch_inode_unpacked, dirent, inode};
+use crate::posix::{inode::InodeUnpacked, dirent, inode};
 use crate::snapshots::format::{SnapshotState, SubvolumeState};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion, bkey, Error};
+use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion, Bkey, Error};
 use crate::fs::Fs;
 use crate::typeinfo::{self, AccessError, FieldRef, ResolveError, TypeInfo};
 use crate::util::names::Names;
@@ -128,7 +128,7 @@ impl TransBkey<'_, '_> {
     /// Made an error key, saying @err if the filesystem's version allows it:
     /// bch2_set_bkey_error().
     pub fn set_error(&mut self, fs: &Fs, err: ErrorKeyReason) {
-        assert!(self.as_u64s().len() * 8 >= size_of::<bkey>() + size_of::<Error>(),
+        assert!(self.as_u64s().len() * 8 >= size_of::<Bkey>() + size_of::<Error>(),
                 "no room in the key's buffer for an error key");
         self.k_mut().set_key_type(BkeyType::error);
 
@@ -203,16 +203,16 @@ impl TransBkey<'_, '_> {
     }
 
     /// Set @field of inode @u, unpacked from this key, and pack it back.
-    fn set_inode<'p>(&mut self, mut u: bch_inode_unpacked, field: &'p str, val: &'p str)
+    fn set_inode<'p>(&mut self, mut u: InodeUnpacked, field: &'p str, val: &'p str)
         -> Result<(), SetError<'p>>
     {
         let target = typeinfo::resolve_with_bits(
-            <bch_inode_unpacked as TypeInfo>::INFO, field)?;
+            <InodeUnpacked as TypeInfo>::INFO, field)?;
         let v = parse_val(self.k().type_, field, val)?;
 
         let u_bytes = unsafe {
             core::slice::from_raw_parts_mut(&mut u as *mut _ as *mut u8,
-                                            size_of::<bch_inode_unpacked>())
+                                            size_of::<InodeUnpacked>())
         };
         write(u_bytes, field, &target, v)?;
 

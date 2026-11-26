@@ -4,7 +4,7 @@ use super::{btree_ptr_hash_val, cached_node, node_key_hash_val, BtreeCacheGuard,
     BtreeNodeList};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::node::BtreeNode;
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
@@ -46,7 +46,7 @@ impl BtreeNode {
 /* Pinning */
 
 fn node_pinned(lists: &BtreeCacheLists, b: &BtreeNode) -> bool {
-    let pos = bbpos { btree: Btree(b.c.btree_id.get().into()), pos: b.key_peek().k.p };
+    let pos = Bbpos { btree: Btree(b.c.btree_id.get().into()), pos: b.key_peek().k.p };
 
     let mask = lists.pinned_nodes_mask[(b.c.level.get() != 0) as usize];
 
@@ -146,7 +146,7 @@ impl Fs {
              * publish itself on any btree_path the detector walks).
              *
              * Memory barrier pairs with the smp_mb() in
-             * bch2_six_check_for_deadlock — without it, the lockless walker
+             * six_check_for_deadlock — without it, the lockless walker
              * can read a stale hash_val after wake and still think this is
              * the node it was looking for.
              */

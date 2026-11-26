@@ -36,7 +36,7 @@ use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::alloc::format::BucketGens;
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::errcode::{BchError, Errcode};
 use crate::fs::{Fs, WriteRef};
 use crate::init::{error::id, passes, progress::Progress};
@@ -529,7 +529,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 fn delete_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck) -> BchError {
     let fs = t.fs();
     if who == FreespaceCheck::Allocator {
-        let pos = bbpos { btree: iter.btree(), pos: iter.pos() };
+        let pos = Bbpos { btree: iter.btree(), pos: iter.pos() };
         // No write ref - the filesystem is going read-only - and it is left for fsck
         let _ = fs.spawn_write(async move |fs: &WriteRef| {
             let _ = crate::bch_err_fn!(&**fs, recheck_freespace_key(fs, pos));
@@ -556,7 +556,7 @@ fn repair_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
 
 /// The allocator's repair: the freespace entry at @pos checked again, in a
 /// transaction of its own, if it's still there.
-fn recheck_freespace_key(fs: &Fs, pos: bbpos) -> Result<(), BchError> {
+fn recheck_freespace_key(fs: &Fs, pos: Bbpos) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
         let mut iter = BtreeIter::new(t, pos.btree, pos.pos, BtreeIterFlags::empty());

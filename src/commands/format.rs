@@ -24,13 +24,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::opts::{bch_opts, OptFlags, OptId};
+use bcachefs_kernel::opts::{Opts, OptFlags, OptId};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::SbFieldType;
 
 use crate::commands::format_util::{kernel_format_version, DevOpts, FormatOpts};
-use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
+use crate::commands::opts::{find_opt_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
@@ -106,7 +106,7 @@ struct DevConfig {
     /// Device options that can only be resolved once the sb exists (labels):
     opt_strs: Vec<(OptId, String)>,
     fs_size: u64,
-    opts: bch_opts,
+    opts: Opts,
 }
 
 /// Get the value for a long option, consuming the next argv entry if needed.
@@ -155,11 +155,11 @@ struct FormatConfig {
     uuid_bytes:      Option<[u8; 16]>,
     format_version:  Option<MetadataVersion>,
     superblock_size: u32,
-    fs_opts:         bch_opts,
+    fs_opts:         Opts,
     deferred_opts:   Vec<(OptId, String)>,
 }
 
-fn requested_replicas(fs_opts: &bch_opts) -> u8 {
+fn requested_replicas(fs_opts: &Opts) -> u8 {
     let defaults = bcachefs_kernel::opts::DEFAULTS;
     let data = if fs_opts.data_replicas != 0 {
         fs_opts.data_replicas
@@ -241,10 +241,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     // Per-device accumulator
     let mut cur_dev_opt_strs: Vec<(OptId, String)> = Vec::new();
     let mut cur_fs_size: u64 = 0;
-    let mut cur_dev_opts: bch_opts = Default::default();
+    let mut cur_dev_opts: Opts = Default::default();
     let mut unconsumed_dev_option = false;
 
-    let mut fs_opts: bch_opts = Default::default();
+    let mut fs_opts: Opts = Default::default();
     let mut deferred_opts: Vec<(OptId, String)> = Vec::new();
 
     macro_rules! push_device {
@@ -294,7 +294,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
             };
             let name = raw_name.replace('-', "_");
 
-            if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
+            if let Some((opt_id, opt, negated)) = find_opt_negated(&name) {
                 if opt.flags.bits() & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()
@@ -321,7 +321,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // String-member options (failure_domain) parse to a
                             // placeholder 0 - the parse is validation only, the
                             // value is the string itself, applied to the
-                            // bch_member at superblock write time (the
+                            // Member at superblock write time (the
                             // OptId::failure_domain arm in format_util.rs).
                             // Routing the placeholder into bch_opts would drop
                             // the string silently:
@@ -613,7 +613,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         let dev_paths: Vec<PathBuf> = cfg.devices.iter().map(|d| PathBuf::from(&d.path)).collect();
         drop(devices);
 
-        let open_opts: bch_opts = Default::default();
+        let open_opts: Opts = Default::default();
 
         // Starting and stopping the filesystem log what the kernel would put
         // in dmesg: shown only if it fails. Copying in --source isn't

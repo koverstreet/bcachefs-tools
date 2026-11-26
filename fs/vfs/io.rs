@@ -9,11 +9,11 @@ use pin_init::stack_pin_init;
 use crate::btree::bkey::{bkey_ge, pos};
 use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
-use crate::alloc::write_point::write_point_specifier;
-use crate::init::{dev::bch_devs_mask, error::{count_fsck_err, id}};
-use crate::posix::{inode::bch_inode_unpacked, inode, inode_opts};
+use crate::alloc::write_point::WritePointSpecifier;
+use crate::init::{dev::DevsMask, error::{count_fsck_err, id}};
+use crate::posix::{inode::InodeUnpacked, inode, inode_opts};
 use crate::sb::members::DevWriteRefKind;
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::vfs::inode::PagecacheBlock;
 use crate::data::dev_bio::DevBio;
 use crate::data::durability::BkeyVDurability;
@@ -58,11 +58,11 @@ impl InodeInfo {
          * that shows up after the exchange, and is picked up by the next flush
          * either way.
          */
-        let mut devs = bch_devs_mask::default();
-        self.ei_devs_need_flush.take(&mut devs.d);
+        let mut devs = DevsMask::default();
+        self.ei_devs_need_flush.take(&mut devs);
 
         stack_pin_init!(let g = Gather::<(), waiter::Sync>::new());
-        for dev in devs.d.iter() {
+        for dev in devs.iter() {
             let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<DevWriteRefKind>(ca));
             let Some(ca) = ca else { continue };
 
@@ -100,7 +100,7 @@ impl InodeInfo {
     }
 }
 
-fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<u64, BchError> {
+fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<u64, BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::uninit(t.trans());
     let mut u = inode::__peek(t, &mut iter, inum, BtreeIterFlags::empty(),
@@ -292,7 +292,7 @@ impl InodeInfo {
         Ok(ret)
     }
 
-    fn extend(&self, idmap: MntIdmap<'_>, inode_u: &bch_inode_unpacked, attr: &c::iattr)
+    fn extend(&self, idmap: MntIdmap<'_>, inode_u: &InodeUnpacked, attr: &c::iattr)
         -> Result<(), BchError>
     {
         self.zero_pagecache_posteof();
@@ -548,7 +548,7 @@ impl InodeInfo {
                 }
 
                 io_misc::extent_fallocate(t, inum, &mut iter, sectors, &opts, &mut i_sectors_delta,
-                                          write_point_specifier::hashed(current_id()))?;
+                                          WritePointSpecifier::hashed(current_id()))?;
 
                 self.i_sectors_acct(Some(&mut *quota_res), i_sectors_delta);
 

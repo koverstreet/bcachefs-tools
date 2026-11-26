@@ -26,10 +26,10 @@
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
 use crate::btree::trans::{__bch2_trans_get, TransGuard};
-use crate::alloc::write_point::write_point_specifier;
+use crate::alloc::write_point::WritePointSpecifier;
 use crate::bcachefs_ioctl::IoctlDataEventRet;
-use crate::btree::bbpos::bbpos;
-use crate::data::update::data_update_index;
+use crate::btree::bbpos::Bbpos;
+use crate::data::update::DataUpdateIndex;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, DataType};
 use crate::fs::{Fs, FsFlag};
@@ -64,9 +64,9 @@ nest! {
         pub ret: Volatile<IoctlDataEventRet>,
 
         /* Where the walk is: data_type and pos, or for phys, dev and offset */
-        pub at: pub struct bch_move_stats_at {
+        pub at: pub struct MoveStatsAt {
             pub data_type: Volatile<DataType>,
-            pub pos: Volatile<bbpos>,
+            pub pos: Volatile<Bbpos>,
             pub dev: Volatile<c_uint>,
             pub offset: Volatile<u64>,
         },
@@ -83,7 +83,7 @@ nest! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
-pub struct move_bucket_key {
+pub struct MoveBucketKey {
     pub bucket: Bpos,
     pub generation: c_uint,
 }
@@ -94,7 +94,7 @@ impl MoveStats {
     pub fn reset(&self) {
         self.ret.set(IoctlDataEventRet(0));
         self.at.data_type.set(DataType::user);
-        self.at.pos.set(bbpos::default());
+        self.at.pos.set(Bbpos::default());
         self.at.dev.set(0);
         self.at.offset.set(0);
 
@@ -117,13 +117,13 @@ impl MoveStats {
     }
 
     /// Where whoever's moving through it is, for a data job's progress.
-    pub fn set_pos(&self, pos: bbpos) {
+    pub fn set_pos(&self, pos: Bbpos) {
         self.at.pos.set(pos);
     }
 
     /// A walk's progress: at @iter's key, @sectors more seen.
     pub fn walked(&self, iter: &BtreeIter<'_>, sectors: u64) {
-        self.set_pos(bbpos { btree: iter.btree(), pos: iter.pos() });
+        self.set_pos(Bbpos { btree: iter.btree(), pos: iter.pos() });
         self.add_sectors_seen(sectors);
     }
 }
@@ -171,7 +171,7 @@ pub struct InFlightUpdate {
 pub struct MovingContext {
     trans:          TransGuard<'static>,
     stats:          Cell<NonNull<MoveStats>>,
-    wp:             write_point_specifier,
+    wp:             WritePointSpecifier,
     wait_on_copygc: bool,
 
     /* A ref each for what's in flight - MovingIo's - which drop waits out */
@@ -261,7 +261,7 @@ impl Drop for MovingIo {
 impl<'a> MovingCtxt<'a> {
     /// Moves counted into @stats, written to @wp; with @wait_on_copygc,
     /// ratelimit() waits while copygc runs.
-    pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: write_point_specifier, wait_on_copygc: bool)
+    pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: WritePointSpecifier, wait_on_copygc: bool)
         -> Result<MovingCtxt<'a>, BchError>
     {
         let init = pin_init!(MovingContext {
@@ -329,7 +329,7 @@ impl<'a> Moving<'a> {
         &self.0.io
     }
 
-    pub(crate) fn write_point(&self) -> write_point_specifier {
+    pub(crate) fn write_point(&self) -> WritePointSpecifier {
         self.0.wp
     }
 
@@ -494,7 +494,7 @@ impl<'a> Moving<'a> {
     }
 }
 
-impl data_update_index {
+impl DataUpdateIndex {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
         self.ctxt.as_deref().map(Moving::of)

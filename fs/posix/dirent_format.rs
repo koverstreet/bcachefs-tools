@@ -24,8 +24,8 @@ use crate::util::vstructs::{cast_plain, plain_bytes, Unvalidated};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
-use crate::format::bch_val;
-use crate::posix::str_hash::bch_hash_info;
+use crate::format::Val;
+use crate::posix::str_hash::HashInfo;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -55,7 +55,7 @@ nest! {
     #[derive(SizedVal, BitfieldMembers)]
     #[repr(C, align(8))]
     pub struct Dirent {
-        pub v: bch_val,
+        pub v: Val,
 
         /* Target inode number: */
         #>[repr(C)]
@@ -65,7 +65,7 @@ nest! {
             /* DT_SUBVOL */
             #>[repr(C)]
             #>[derive(Plain)]
-            pub subvol: pub struct bch_dirent_subvol {
+            pub subvol: pub struct DirentSubvol {
                 pub d_child_subvol: Le32,
                 pub d_parent_subvol: Le32,
             },
@@ -78,17 +78,17 @@ nest! {
         #[members]
         #>[derive(Clone, Copy, MaybeZeroable, TypeInfo)]-
         #>[bitfield(u8)]
-        pub bits: pub struct bch_dirent_bits {
+        pub bits: pub struct DirentBits {
             d_type:     u5,
             d_unused:   u2,
             d_casefold: u1,
         },
 
         #>[repr(C, packed)]
-        pub name_block: pub union bch_dirent_name_block {
+        pub name_block: pub union DirentNameBlock {
             #>[repr(C)]
             #>[derive(Plain)]
-            pub d_cf_name_block: pub struct bch_dirent_cf_name_block {
+            pub d_cf_name_block: pub struct DirentCfNameBlock {
                 pub d_pad: u8,
                 /*
                  * C's padding, for __le16's alignment: zerocopy's le::U16 has
@@ -129,7 +129,7 @@ impl Dirent {
     /// The target, read through the half of the union d_type says is live.
     pub fn target(&self) -> DirentTarget {
         if self.d_type() as u32 == DT_SUBVOL {
-            let s = cast_plain::<bch_dirent_subvol>(plain_bytes(&self.target)).expect("an arm of the union");
+            let s = cast_plain::<DirentSubvol>(plain_bytes(&self.target)).expect("an arm of the union");
             DirentTarget::Subvol {
                 child:  s.d_child_subvol.get(),
                 parent: s.d_parent_subvol.get(),
@@ -179,7 +179,7 @@ impl<'k> DirentName<'k> {
 /// d_cf_name_block.d_names, past the lengths.
 pub(super) const D_NAME_OFFSET:  usize = offset_of!(Dirent, name_block);
 pub(super) const D_NAMES_OFFSET: usize = D_NAME_OFFSET +
-    offset_of!(bch_dirent_cf_name_block, d_names);
+    offset_of!(DirentCfNameBlock, d_names);
 
 /// A dirent's name block as an unvalidated value describes it, for validate
 /// and to_text - see the top of the file. The lengths are as stored, and
@@ -214,7 +214,7 @@ impl<'k> RawNames<'k> {
         let block_len = block.len().saturating_sub(padding);
 
         let (name_len, cf_len) = if casefold {
-            let cf = cast_plain::<bch_dirent_cf_name_block>(&v[D_NAME_OFFSET..]).expect("a dirent's name block");
+            let cf = cast_plain::<DirentCfNameBlock>(&v[D_NAME_OFFSET..]).expect("a dirent's name block");
             (cf.d_name_len.get() as usize, cf.d_cf_name_len.get() as usize)
         } else {
             (block_len, 0)
@@ -415,7 +415,7 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
     k.k_mut().u64s = have_u64s.min(u8::MAX as usize) as u8;
 
     // Only cf_encoding is read, and None means not casefolded:
-    let hash_info = ::pin_init::zeroed::<bch_hash_info>();
+    let hash_info = ::pin_init::zeroed::<HashInfo>();
     let k = k.as_mut().arm::<Dirent>().expect("a dirent");
     super::dirent::init_name(fs, k, &hash_info, OsStr::from_bytes(val.as_bytes()), None)
         .map_err(|_| SetError::BadName { val })

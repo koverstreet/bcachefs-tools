@@ -57,22 +57,22 @@ use bcachefs_shim::sync::SetOnce;
 use std::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::Errcode;
-use crate::btree::cache::{bch_fs_btree_cache, btree_evicted_size};
-use crate::btree::interior::{bch_fs_btree_interior_updates, bch_fs_btree_reserve_cache};
-use crate::btree::key_cache::bch_fs_btree_key_cache;
+use crate::btree::cache::{FsBtreeCache, BtreeEvictedSize};
+use crate::btree::interior::{FsBtreeInteriorUpdates, FsBtreeReserveCache};
+use crate::btree::key_cache::FsBtreeKeyCache;
 use crate::btree::node::BtreeWriteType;
-use crate::btree::trans::bch_fs_btree_trans;
-use crate::btree::write::btree_write_stats;
-use crate::btree::write_buffer::{bch_fs_btree_write_buffer, WbBtree};
-use crate::journal::journal::journal_entry_res;
-use crate::opts::bch_opts;
+use crate::btree::trans::FsBtreeTrans;
+use crate::btree::write::BtreeWriteStats;
+use crate::btree::write_buffer::{FsBtreeWriteBuffer, WbBtree};
+use crate::journal::journal::JournalEntryRes;
+use crate::opts::Opts;
 
 #[placed(Fs.btree)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
-#[init_args(opts: &bch_opts)]
-pub struct bch_fs_btree {
+#[init_args(opts: &Opts)]
+pub struct FsBtree {
     #[init((btree_max_u64s(opts.btree_node_size) / 3) as u16)]
     pub foreground_merge_threshold: u16,
 
@@ -80,7 +80,7 @@ pub struct bch_fs_btree {
     #[init(Mempool::new_in(crate::btree::cache::bounce_bufs(), 1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
     pub bounce_pool: Mempool<crate::btree::cache::BounceBufs>,
 
-    pub write_stats: [btree_write_stats; BtreeWriteType::NR as usize],
+    pub write_stats: [BtreeWriteStats; BtreeWriteType::NR as usize],
 
     #[pin]
     #[init(fill_iter_pool(opts), ENOMEM_fs_other_alloc)]
@@ -100,21 +100,21 @@ pub struct bch_fs_btree {
            ENOMEM_fs_other_alloc)]
     pub write_complete_wq: Late<Workqueue>,
 
-    pub root_journal_res: journal_entry_res,
+    pub root_journal_res: JournalEntryRes,
 
     #[pin]
-    pub cache: bch_fs_btree_cache,
-    #[init(btree_evicted_size { entries: SetOnce::new() })]
-    pub evicted_size: btree_evicted_size,
+    pub cache: FsBtreeCache,
+    #[init(BtreeEvictedSize { entries: SetOnce::new() })]
+    pub evicted_size: BtreeEvictedSize,
     #[pin]
-    pub key_cache: bch_fs_btree_key_cache,
+    pub key_cache: FsBtreeKeyCache,
     /*
      * One per BTREE_IS_write_buffer btree (indexed by BCH_WB_BTREE_*, see
      * bch_wb_btree_idx()). Each instance has its own intake/flushing
      * buffers and locks.
      */
     #[pin]
-    pub write_buffer: [bch_fs_btree_write_buffer; WbBtree::NR as usize],
+    pub write_buffer: [FsBtreeWriteBuffer; WbBtree::NR as usize],
     /*
      * Per-btree flush_work runs on write_buffer_wq; once the sorted key
      * list crosses a threshold the flush parallelizes across CPUs by
@@ -146,13 +146,13 @@ pub struct bch_fs_btree {
      */
     pub write_buffer_flush_wait: crate::util::futex::EventCount,
     #[pin]
-    pub trans: bch_fs_btree_trans,
+    pub trans: FsBtreeTrans,
     #[pin]
-    #[init(bch_fs_btree_reserve_cache::init())]
-    pub reserve_cache: bch_fs_btree_reserve_cache,
+    #[init(FsBtreeReserveCache::init())]
+    pub reserve_cache: FsBtreeReserveCache,
     #[pin]
     #[late]
-    pub interior_updates: bch_fs_btree_interior_updates,
+    pub interior_updates: FsBtreeInteriorUpdates,
     #[pin]
     #[init(crate::btree::async_ops::AsyncOps::init())]
     #[late]
@@ -167,7 +167,7 @@ pub fn btree_max_u64s(btree_node_size: u32) -> usize {
     (btree_node_size as usize - size_of::<crate::util::vstructs::Head<btree_node>>()) / size_of::<u64>()
 }
 
-fn fill_iter_pool(opts: &bch_opts) -> impl PinInit<Mempool, BchError> {
+fn fill_iter_pool(opts: &Opts) -> impl PinInit<Mempool, BchError> {
     let btree_blocks = (opts.btree_node_size as usize >> 9) >> (opts.block_size as usize >> 9).ilog2();
     Mempool::new(1, (btree_blocks + 1) * 2 * size_of::<SortRun>())
 }

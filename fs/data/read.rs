@@ -86,14 +86,14 @@ use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, P
 use crate::data::reflink::{lookup_indirect_extent, Indirect};
 use crate::errcode::{Errcode as err, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Dev, Fs, FsFlag};
-use crate::init::{damage, error::{bch2_inum_offset_err_msg_trans, inum_offset_err_msg, id}};
+use crate::init::{damage, error::{inum_offset_err_msg_trans, inum_offset_err_msg, id}};
 use crate::posix::inode_opts::get_io_opts;
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::debug::{trace::events, async_objs::{AsyncObj, AsyncObjSlot, AsyncObjKind}};
 use crate::sb::counters::{Event, Sectors};
-use crate::sb::errors::{bch2_decompress_sb_err, SbErrorId};
+use crate::sb::errors::{decompress_sb_err, SbErrorId};
 use crate::sb::members::{DevIoRef, DevReadRefKind};
-use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot, subvol_inum};
+use crate::snapshots::subvolume::{for_each_in_subvolume_max, get_snapshot, SubvolInum};
 use crate::util::backref::BackRef;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
 use crate::os::bio::{pages, Bio, BioBox, BioFuture, BioLend, BioOwns, BioRange, BioSubmit,
@@ -114,10 +114,11 @@ use core::alloc::Layout;
 use core::pin::Pin;
 use cstruct_macros::{args_stored_once, bch_enum, in_place, MaybeZeroable, Init, TypeInfo};
 use crate::format::{Bpos, Btree, Bversion, DataType, MetadataVersion, Nonce, CsumType};
-use crate::data::extents::{bch_extent_crc_unpacked, bch_io_failures, extent_ptr_decoded, ReadFlags};
-use crate::data::extents_format::{bch_extent_flags, bch_extent_ptr, bch_extent_crc128, ExtentFlags};
+use crate::data::extents::{ExtentCrcUnpacked, ExtentPtrDecoded, ReadFlags};
+use crate::data::ptrs::IoFailures;
+use crate::data::extents_format::{bch_extent_flags, ExtentPtr, ExtentCrc128, ExtentFlags};
 use crate::data::reflink_format::ReflinkP;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::sb::members_format::MemberErrorType;
 use crate::util::time_stats::TimeStat;
 
@@ -169,7 +170,7 @@ pub struct RbioHdr {
     pub read_for: ReadFor,
 
     pub subvol: u32,
-    pub opts: bch_inode_opts,
+    pub opts: InodeOpts,
 
     pub err_report: Option<BackRef<ReadErrReport>>,
 }
@@ -229,7 +230,7 @@ impl RbioHdr {
 }
 
 impl Rbio {
-    pub(crate) fn update<'a>(opts: bch_inode_opts, read_for: ReadFor, bio: impl PinInit<Bio, BchError> + 'a)
+    pub(crate) fn update<'a>(opts: InodeOpts, read_for: ReadFor, bio: impl PinInit<Bio, BchError> + 'a)
         -> impl PinInit<Self, BchError> + 'a
     {
         Self::with(local_clock(), read_for, 0, opts, None, bio)
@@ -257,10 +258,10 @@ impl<B: BioOwns> Rbio<B> {
     where
         B: 'a,
     {
-        Self::with(orig.start_time, orig.read_for, 0, bch_inode_opts::default(), None, bio)
+        Self::with(orig.start_time, orig.read_for, 0, InodeOpts::default(), None, bio)
     }
 
-    pub fn new<'a>(opts: bch_inode_opts, subvol: u32, err_report: Option<&'a ReadErrReport>,
+    pub fn new<'a>(opts: InodeOpts, subvol: u32, err_report: Option<&'a ReadErrReport>,
                    bio: impl PinInit<Bio<B>, BchError> + 'a) -> impl PinInit<Self, BchError> + 'a
     where
         B: 'a,
@@ -269,7 +270,7 @@ impl<B: BioOwns> Rbio<B> {
         Self::with(local_clock(), ReadFor::BCH_READ_FOR_read, subvol, opts, err_report, bio)
     }
 
-    fn with(start_time: u64, read_for: ReadFor, subvol: u32, opts: bch_inode_opts,
+    fn with(start_time: u64, read_for: ReadFor, subvol: u32, opts: InodeOpts,
             err_report: Option<BackRef<ReadErrReport>>, bio: impl PinInit<Bio<B>, BchError>)
         -> impl PinInit<Self, BchError>
     {
@@ -337,7 +338,7 @@ unsafe impl AsyncObj for Rbio {
 
 pub struct ReadDone {
     pub ret:           Result<(), BchError>,
-    pub pick:          Option<extent_ptr_decoded>,
+    pub pick:          Option<ExtentPtrDecoded>,
     pub ptrs_io_error: u16,
     pub poisoned:      Option<Poisoned>,
 }
@@ -347,7 +348,7 @@ pub struct ReadDone {
 pub type Poisoned = Box<BkeyBuf>;
 
 impl ReadDone {
-    fn unretried(ret: Result<(), BchError>, pick: Option<extent_ptr_decoded>) -> Self {
+    fn unretried(ret: Result<(), BchError>, pick: Option<ExtentPtrDecoded>) -> Self {
         ReadDone { ret, pick, ptrs_io_error: 0, poisoned: None }
     }
 }
@@ -355,7 +356,7 @@ impl ReadDone {
 #[derive(Clone, Copy)]
 struct Plan {
     flags:              F,
-    pick:               extent_ptr_decoded,
+    pick:               ExtentPtrDecoded,
     read_pos:           Bpos,
     data_btree:         Btree,
     data_pos:           Bpos,
@@ -604,8 +605,8 @@ pub(crate) fn retry_pool() -> impl PinInit<Mempool, BchError> {
 }
 
 struct FailureState {
-    io:       bch_io_failures,
-    read:     Option<extent_ptr_decoded>,
+    io:       IoFailures,
+    read:     Option<ExtentPtrDecoded>,
     poisoned: Option<Poisoned>,
 }
 
@@ -669,7 +670,7 @@ impl<'a> Walk<'a> {
 
 #[derive(Clone, Copy)]
 enum Locate<'a> {
-    Inode(subvol_inum),
+    Inode(SubvolInum),
     Key(&'a BkeyI, Btree),
 }
 
@@ -725,7 +726,7 @@ pub(crate) fn extent_of<'a>(t: &TransAttempt<'a, '_>, read_pos: Bpos, k: BkeySC<
 #[cold]
 fn read_err_msg(trans: &BtreeTrans<'_>, out: &mut Printbuf, read: &Rbio, read_pos: Bpos) {
     write!(out, "data read error at ");
-    bch2_inum_offset_err_msg_trans(trans, out, read.subvol, read_pos);
+    inum_offset_err_msg_trans(trans, out, read.subvol, read_pos);
     if read.is_update() {
         write!(out, " (internal move) ");
     }
@@ -758,7 +759,7 @@ fn is_csum_err(e: BchError) -> bool {
 
 pub fn data_read_sb_err(e: BchError) -> SbErrorId {
     if e.matches(err::decompress) {
-        bch2_decompress_sb_err(e.raw())
+        decompress_sb_err(e.raw())
     } else if is_csum_err(e) {
         id::data_read_csum_err
     } else {
@@ -768,7 +769,7 @@ pub fn data_read_sb_err(e: BchError) -> SbErrorId {
 
 #[cold]
 fn retry_report(fs: &Fs, read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
-                failed: &bch_io_failures, orig_ret: Result<(), BchError>, ret: Result<(), BchError>) {
+                failed: &IoFailures, orig_ret: Result<(), BchError>, ret: Result<(), BchError>) {
     let trans = btree_trans!(fs);
     let trans = &trans;
     let ret = ret.err();
@@ -830,7 +831,7 @@ fn should_retry(e: BchError) -> bool {
 
 fn retry_state<'r>(mut f: Fragment<'r>, ret: Result<(), BchError>) -> (RetryState<'r>, &'r Rbio) {
     f.fs.event_inc_trace(events::data_read_retry, |out| f.to_text(out));
-    let mut failures = FailureState { io: bch_io_failures::default(), read: f.plan.landed.then_some(f.plan.pick), poisoned: None };
+    let mut failures = FailureState { io: IoFailures::default(), read: f.plan.landed.then_some(f.plan.pick), poisoned: None };
     if let Err(e) = ret {
         failed_bio_to_text(&mut failures.io, f.bio(), e);
     }
@@ -862,7 +863,7 @@ fn resume_target(f: &Fragment<'_>) -> Resume<'static> {
     }
 }
 
-fn can_narrow_crc(n: &bch_extent_crc_unpacked) -> bool {
+fn can_narrow_crc(n: &ExtentCrcUnpacked) -> bool {
     n.csum_type != CsumType::none && n.live_size < n.uncompressed_size && !crc_is_compressed(n)
 }
 
@@ -874,11 +875,11 @@ fn trace_read<E: Event<Kind = Sectors>>(fs: &Fs, read: &Rbio, e: E, sectors: u64
     });
 }
 
-// Out of line, and into @indirect: a bch_inode_opts returned through
+// Out of line, and into @indirect: a InodeOpts returned through
 // fragment_of()'s frame is two of them there
 #[inline(never)]
-fn read_opts<'o>(t: &TransAttempt<'_, '_>, orig: &'o Rbio, k: BkeySC<'_>, indirect: &'o mut Option<bch_inode_opts>)
-    -> Result<&'o bch_inode_opts, BchError>
+fn read_opts<'o>(t: &TransAttempt<'_, '_>, orig: &'o Rbio, k: BkeySC<'_>, indirect: &'o mut Option<InodeOpts>)
+    -> Result<&'o InodeOpts, BchError>
 {
     if k.arm::<Indirect>().is_none() {
         return Ok(&orig.opts);
@@ -993,7 +994,7 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan) {
         return;
     }
 
-    let mut new = bch_extent_crc_unpacked::default();
+    let mut new = ExtentCrcUnpacked::default();
     if fs.rechecksum_bio(rbio.bio().range(), p.version, crc, None, Some(&mut new), crc.offset.into(), crc.live_size,
                          crc.csum_type.get()).is_err() {
         bch_err!(fs, "error verifying existing checksum while narrowing checksum (memory corruption?)");
@@ -1015,7 +1016,7 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan) {
     }
 }
 
-fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan, new: bch_extent_crc_unpacked) -> Result<(), BchError> {
+fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan, new: ExtentCrcUnpacked) -> Result<(), BchError> {
     let fs = t.fs();
     let crc = p.pick.crc;
     let fail = || fs.err(err::rbio_narrow_crcs_fail);
@@ -1034,7 +1035,7 @@ fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan, new: bch_extent_crc_un
     }
 
     let mut n = t.bkey_reassemble_room(k, usize::from(k.k.u64s) * size_of::<u64>() +
-                                           size_of::<bch_extent_crc128>())?;
+                                           size_of::<ExtentCrc128>())?;
     let narrowed = n.reborrow().arm::<PtrsMut>().expect("an extent with pointers, matched")
         .narrow_crc(fs, crc, new);
     if !narrowed {
@@ -1043,21 +1044,21 @@ fn narrow_crcs_update(t: &TransAttempt<'_, '_>, p: &Plan, new: bch_extent_crc_un
     t.update(&iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
-fn mark_failure(pick: &extent_ptr_decoded, failed: &mut bch_io_failures, e: BchError) -> BchError {
+fn mark_failure(pick: &ExtentPtrDecoded, failed: &mut IoFailures, e: BchError) -> BchError {
     if e.matches(err::data_read_retry_avoid) || e.matches(err::blockdev_io_error) {
         failed.mark(pick, e);
     }
     e
 }
 
-fn ptrs_io_error(fs: &Fs, k: BkeySC<'_>, failed: &bch_io_failures) -> u16 {
+fn ptrs_io_error(fs: &Fs, k: BkeySC<'_>, failed: &IoFailures) -> u16 {
     let failed_dev = |dev: u32| failed.dev(dev).is_some_and(|f| f.errcode != 0 || f.csum_nr != 0);
     k.arm::<Ptrs>().map_or(0, |kp| {
         kp.ptrs(fs).enumerate().filter(|(_, p)| failed_dev(p.dev().into())).fold(0, |m, (i, _)| m | 1 << i)
     })
 }
 
-fn failed_bio_to_text(failed: &mut bch_io_failures, bio: &Bio, e: BchError) {
+fn failed_bio_to_text(failed: &mut IoFailures, bio: &Bio, e: BchError) {
     if e == err::BLK_STS_INVAL.into() {
         let msg = &mut failed.ec_msg;
         write!(msg, "Failing bio, after block layer completion:\n");
@@ -1066,7 +1067,7 @@ fn failed_bio_to_text(failed: &mut bch_io_failures, bio: &Bio, e: BchError) {
 }
 
 #[cold]
-fn stale_dirty_pointer(trans: &BtreeTrans<'_>, ca: &Dev, k: BkeySC<'_>, ptr: bch_extent_ptr) {
+fn stale_dirty_pointer(trans: &BtreeTrans<'_>, ca: &Dev, k: BkeySC<'_>, ptr: ExtentPtr) {
     let fs = trans.fs();
     let bucket = ca.ptr_bucket_pos(&ptr);
     let mut buf = Printbuf::new();
@@ -1238,7 +1239,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, mut
     // and written again on every read.
     //
     // TODO: carry the compact reconcile opts through the read and write paths
-    // instead of a full bch_inode_opts; then the read bio can hold the
+    // instead of a full InodeOpts; then the read bio can hold the
     // effective opts per extent, and this goes.
     let mut indirect_opts = None;
     let opts = read_opts(t, orig, k, &mut indirect_opts)?;
@@ -1607,14 +1608,14 @@ fn fragment_read_done(f: &mut Fragment<'_>) -> Result<(), BchError> {
         narrow_crcs_from_read(fs, r, p);
     }
 
-    let decrypt = |src: BioRange<'_>, crc: &bch_extent_crc_unpacked, nonce: Nonce| -> Result<(), BchError> {
+    let decrypt = |src: BioRange<'_>, crc: &ExtentCrcUnpacked, nonce: Nonce| -> Result<(), BchError> {
         if crc.csum_type.get().is_encryption() {
             fs.encrypt_range(nonce, src).map_err(|_| fs.err(err::data_read_decrypt_err))
         } else {
             Ok(())
         }
     };
-    let decompress = |src: BioRange<'_>, dst: BioRange<'_>, crc: &bch_extent_crc_unpacked, nonce: Nonce|
+    let decompress = |src: BioRange<'_>, dst: BioRange<'_>, crc: &ExtentCrcUnpacked, nonce: Nonce|
         -> Result<(), BchError>
     {
         assert!(bounced, "a compressed read not bounced");
@@ -1731,7 +1732,7 @@ async fn retry_walk(fs: &Fs, read: &Rbio, range: BioRange<'_>, at: Locate<'_>,
 
 /// The key at @data_pos, into @sk, if it's still the one @pick was read from.
 #[inline(never)]
-fn retry_key(fs: &Fs, data_btree: Btree, data_pos: Bpos, pick: &extent_ptr_decoded, sk: &mut BkeyBuf) {
+fn retry_key(fs: &Fs, data_btree: Btree, data_pos: Bpos, pick: &ExtentPtrDecoded, sk: &mut BkeyBuf) {
     // @pick may have been moved to the part of the extent read, with
     // @data_pos: matched by where its data starts
     let data_offset = data_pos.offset.wrapping_sub(pick.crc.offset.into());
@@ -1825,7 +1826,7 @@ async fn fragment_read<'r>(mut f: Fragment<'r>) -> Result<(), BchError> {
         ret
     };
     // the retry's state goes in its box, before the await: not in this future
-    let inum = subvol_inum { subvol: f.kind.read().subvol.into(), inum: f.plan.read_pos.inode };
+    let inum = SubvolInum { subvol: f.kind.read().subvol.into(), inum: f.plan.read_pos.inode };
     let retry = match f.end(ret, Locate::Inode(inum), None) {
         Ok(ret) => return ret,
         Err(retry) => retry,
@@ -1962,7 +1963,7 @@ pub async fn read_update(fs: &Fs, rbio: &mut Rbio, k: &BkeyI, btree: Btree, flag
 }
 
 #[inline(never)]
-fn read_walk<'s, 'r: 's>(fs: &'r Fs, orig: &'r Rbio, inum: subvol_inum, flags: F, reads: &Reads<'s>,
+fn read_walk<'s, 'r: 's>(fs: &'r Fs, orig: &'r Rbio, inum: SubvolInum, flags: F, reads: &Reads<'s>,
                          own: &mut Option<Fragment<'r>>) -> Result<(), BchError>
 {
     let trans = btree_trans!(fs);
@@ -2005,7 +2006,7 @@ fn read_walk<'s, 'r: 's>(fs: &'r Fs, orig: &'r Rbio, inum: subvol_inum, flags: F
 }
 
 #[args_stored_once]
-pub async fn read(fs: &Fs, orig: &Rbio, inum: subvol_inum, flags: F) -> Result<(), BchError> {
+pub async fn read(fs: &Fs, orig: &Rbio, inum: SubvolInum, flags: F) -> Result<(), BchError> {
     stack_pin_init!(let gather = Gather::new());
     let reads = Scope::new(&gather);
     let mut own = None;

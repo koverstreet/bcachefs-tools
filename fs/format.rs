@@ -27,7 +27,7 @@
 //!
 //! Backup superblocks do not reside in a fixed location; also, superblocks do
 //! not have a fixed size. To locate backup superblocks we have struct
-//! bch_sb_layout; we store a copy of this inside every superblock, and also
+//! SbLayout; we store a copy of this inside every superblock, and also
 //! before the first superblock.
 //!
 //! JOURNAL:
@@ -43,7 +43,7 @@
 //!
 //! bcachefs btrees are copy on write b+ trees, where nodes are big (typically
 //! 128k-256k) and log structured. We use struct btree_node for writing the first
-//! entry in a given node (offset 0), and struct btree_node_entry for all
+//! entry in a given node (offset 0), and struct BtreeNodeEntry for all
 //! subsequent writes.
 //!
 //! After the header, btree node entries contain a list of keys in sorted order.
@@ -71,11 +71,11 @@
 #![allow(non_camel_case_types)]
 
 
-use crate::alloc::{disk_groups_format::BCH_SB_LABEL_SIZE, replicas_format::bch_replicas_entry_v1};
-use crate::data::{extents_format::bch_extent_ptr, reconcile::format::ReconcileWorkId};
+use crate::alloc::{disk_groups_format::BCH_SB_LABEL_SIZE, replicas_format::ReplicasEntryV1};
+use crate::data::{extents_format::ExtentPtr, reconcile::format::ReconcileWorkId};
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut,
-                            floored_by_self, from_bytes_mut, Head, Unvalidated,
+                            from_bytes_mut, Head, Unvalidated,
                             UnvalidatedEntriesMut, Validated, ViewEntries};
 use crate::btree::bkey::{AllTypes, AnyKey, BkeyP, BkeyPHeader, FamilyVal};
 use core::mem::offset_of;
@@ -93,7 +93,7 @@ pub struct __uuid_t {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bkey_format {
+pub struct BkeyFormat {
     pub key_u64s: u8,
     pub nr_fields: u8,
     /* One unused slot for now: */
@@ -132,7 +132,7 @@ pub struct Bpos {
 /* Empty placeholder struct, for container_of() */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_val {
+pub struct Val {
     pub __nothing: [u64; 0],
 }
 
@@ -171,7 +171,7 @@ impl PartialOrd for Bversion {
 }
 
 #[bitfield(u8)]
-pub struct bkey_format_bits {
+pub struct BkeyFormatBits {
     format:         u7,
     needs_whiteout: u1,
 }
@@ -184,13 +184,13 @@ pub struct bkey_format_bits {
  * History: (quoting Kent)
  *
  * Specifically, when i was designing bkey, I wanted the header to be no
- * bigger than necessary so that bkey_packed could use the rest. That means that
+ * bigger than necessary so that BkeyPacked could use the rest. That means that
  * decently offten extent keys will fit into only 8 bytes, instead of spilling over
  * to 16.
  *
  * But packed_bkey treats the part after the header - the packed section -
  * as a single multi word, variable length integer. And bkey, the unpacked
- * version, is just a special case version of a bkey_packed; all the packed
+ * version, is just a special case version of a BkeyPacked; all the packed
  * bkey code will work on keys in any packed format, the in-memory
  * representation of an unpacked key also is just one type of packed key...
  *
@@ -203,13 +203,13 @@ pub struct bkey_format_bits {
 #[cfg(target_endian = "little")]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
-pub struct bkey {
+pub struct Bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
 
     /* Format of key (0 for format local to btree node) */
     #[members]
-    pub format_bits: bkey_format_bits,
+    pub format_bits: BkeyFormatBits,
 
     /* Type of the value */
     pub type_: u8,
@@ -224,13 +224,13 @@ pub struct bkey {
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
 #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
-pub struct bkey {
+pub struct Bkey {
     /* Size of combined key and value, in u64s */
     pub u64s: u8,
 
     /* Format of key (0 for format local to btree node) */
     #[members]
-    pub format_bits: bkey_format_bits,
+    pub format_bits: BkeyFormatBits,
 
     /* Type of the value */
     pub type_: u8,
@@ -244,7 +244,7 @@ pub struct bkey {
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
-pub struct bkey_packed {
+pub struct BkeyPacked {
     pub _data: [u64; 0],
 
     /* Size of combined key and value, in u64s */
@@ -254,11 +254,11 @@ pub struct bkey_packed {
 
     /*
      * XXX: next incompat on disk format change, switch format and
-     * needs_whiteout - bkey_packed() will be cheaper if format is the high
+     * needs_whiteout - BkeyPacked() will be cheaper if format is the high
      * bits of the bitfield
      */
     #[members]
-    pub format_bits: bkey_format_bits,
+    pub format_bits: BkeyFormatBits,
 
     /* Type of the value */
     pub type_: u8,
@@ -267,21 +267,21 @@ pub struct bkey_packed {
     /*
      * We copy bkeys with struct assignment in various places, and while
      * that shouldn't be done with packed bkeys we can't disallow it in C,
-     * and it's legal to cast a bkey to a bkey_packed  - so padding it out
+     * and it's legal to cast a bkey to a BkeyPacked  - so padding it out
      * to the same size as struct bkey should hopefully be safest.
      */
-    pub pad: [u8; core::mem::size_of::<bkey>() - 3],
+    pub pad: [u8; core::mem::size_of::<Bkey>() - 3],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_le128 {
+pub struct Le128 {
     pub lo: Le64,
     pub hi: Le64,
 }
 
 #[allow(non_upper_case_globals)]
-pub const BKEY_U64s: usize = size_of::<bkey>() / size_of::<u64>();
+pub const BKEY_U64s: usize = size_of::<Bkey>() / size_of::<u64>();
 #[allow(non_upper_case_globals)]
 pub const BKEY_U64s_MAX: u8 = u8::MAX;
 #[allow(non_upper_case_globals)]
@@ -302,16 +302,6 @@ pub enum BkeyField {
     BKEY_FIELD_VERSION_HI,
     BKEY_FIELD_VERSION_LO,
     BKEY_NR_FIELDS,
-}
-
-/* bkey with inline value */
-#[repr(C)]
-#[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bkey_i {
-    pub _data: [u64; 0],
-
-    pub k: bkey,
-    pub v: bch_val,
 }
 
 #[bch_enum(flags)]
@@ -473,26 +463,26 @@ pub enum BkeyType {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Deleted {
-    pub v: bch_val,
+    pub v: Val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Whiteout {
-    pub v: bch_val,
+    pub v: Val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct ExtentWhiteout {
-    pub v: bch_val,
+    pub v: Val,
 }
 
 #[grown(from = err, bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Error {
-    pub v: bch_val,
+    pub v: Val,
     pub err: u8,
     pub pad: [u8; 7],
 }
@@ -536,26 +526,26 @@ pub enum ErrorKeyReason {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Cookie {
-    pub v: bch_val,
+    pub v: Val,
     pub cookie: Le64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct HashWhiteout {
-    pub v: bch_val,
+    pub v: Val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Set {
-    pub v: bch_val,
+    pub v: Val,
 }
 
 /* 128 bits, sufficient for cryptographic MACs: */
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_csum {
+pub struct Csum {
     pub lo: Le64,
     pub hi: Le64,
 }
@@ -563,7 +553,7 @@ pub struct bch_csum {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers)]
 pub struct Backpointer {
-    pub v: bch_val,
+    pub v: Val,
     pub btree_id: u8,
     pub level: u8,
     pub data_type: u8,
@@ -589,7 +579,7 @@ pub struct BackpointerFlags {
      *   - backpointers   <-> extents:	already required for backpointer fsck
      *
      * Invariant: when bp.flags PHYS != 0, reconcile_phys[PHYS] must have an entry
-     * at bp.k.p, and the extent must carry a bch_extent_reconcile entry whose
+     * at bp.k.p, and the extent must carry a ExtentReconcile entry whose
      * rb_work_id_phys() equals PHYS. Every path that mutates reconcile_opts on an
      * extent must keep the bp's PHYS flag in sync.
      */
@@ -770,48 +760,48 @@ tagged_union! {
     #[size(header)]
     pub enum bch_sb_field {
         /// Journal bucket list for this device
-        journal(crate::format::bch_sb_field_journal) = 0,
+        journal(crate::format::SbFieldJournal) = 0,
         /// Member device list (v1)
-        members_v1(crate::sb::members_format::bch_sb_field_members_v1) = 1,
+        members_v1(crate::sb::members_format::SbFieldMembersV1) = 1,
         /// Encryption key and KDF settings
-        crypt(crate::format::bch_sb_field_crypt) = 2,
+        crypt(crate::format::SbFieldCrypt) = 2,
         /// Replica entries (v0)
-        replicas_v0(crate::alloc::replicas_format::bch_sb_field_replicas_v0) = 3,
+        replicas_v0(crate::alloc::replicas_format::SbFieldReplicasV0) = 3,
         /// Quota timelimit and warnlimit fields
-        quota(crate::posix::quota_format::bch_sb_field_quota) = 4,
+        quota(crate::posix::quota_format::SbFieldQuota) = 4,
         /// Device label strings and label path tree structure
-        disk_groups(crate::alloc::disk_groups_format::bch_sb_field_disk_groups) = 5,
+        disk_groups(crate::alloc::disk_groups_format::SbFieldDiskGroups) = 5,
         /// Clean shutdown: btree roots and usage counters, allowing journal
         /// replay to be skipped
-        clean(crate::format::bch_sb_field_clean) = 6,
+        clean(crate::format::SbFieldClean) = 6,
         /// Replica entries: lists of devices with extents replicated across
         /// them
-        replicas(crate::alloc::replicas_format::bch_sb_field_replicas) = 7,
+        replicas(crate::alloc::replicas_format::SbFieldReplicas) = 7,
         /// Blacklisted journal sequence numbers
-        journal_seq_blacklist(crate::journal::seq_blacklist_format::bch_sb_field_journal_seq_blacklist) = 8,
+        journal_seq_blacklist(crate::journal::seq_blacklist_format::SbFieldJournalSeqBlacklist) = 8,
         /// Journal bucket list (v2)
-        journal_v2(crate::format::bch_sb_field_journal_v2) = 9,
+        journal_v2(crate::format::SbFieldJournalV2) = 9,
         /// Persistent counters: IO statistics, error counts, and cumulative
         /// metrics across mounts
-        counters(crate::sb::counters_format::bch_sb_field_counters) = 10,
+        counters(crate::sb::counters_format::SbFieldCounters) = 10,
         /// Member device list (v2)
-        members_v2(crate::sb::members_format::bch_sb_field_members_v2) = 11,
+        members_v2(crate::sb::members_format::SbFieldMembersV2) = 11,
         /// Persistent error log: records errors detected during operation or
         /// fsck so they survive across mounts
-        errors(crate::sb::errors_format::bch_sb_field_errors) = 12,
+        errors(crate::sb::errors_format::SbFieldErrors) = 12,
         /// Extended superblock: required recovery passes, accumulated silenced
         /// errors, and other flags
-        ext(crate::format::bch_sb_field_ext) = 13,
+        ext(crate::format::SbFieldExt) = 13,
         /// Minimum on-disk format version for safe downgrade, with required
         /// recovery passes
-        downgrade(crate::sb::downgrade_format::bch_sb_field_downgrade) = 14,
+        downgrade(crate::sb::downgrade_format::SbFieldDowngrade) = 14,
         /// Tracks which recovery passes have been run successfully
-        recovery_passes(crate::init::passes_format::bch_sb_field_recovery_passes) = 15,
+        recovery_passes(crate::init::passes_format::SbFieldRecoveryPasses) = 15,
         /// Per-extent-type size limits
-        extent_type_u64s(crate::data::extents_sb_format::bch_sb_field_extent_type_u64s) = 16,
+        extent_type_u64s(crate::data::extents_sb_format::SbFieldExtentTypeU64s) = 16,
         /// Persistent error log, v2: adds the time of first occurrence to each
         /// entry
-        errors_v2(crate::sb::errors_format::bch_sb_field_errors_v2) = 17,
+        errors_v2(crate::sb::errors_format::SbFieldErrorsV2) = 17,
     }
 }
 
@@ -828,22 +818,22 @@ pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
 #[whole(tail = buckets: [Le64])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_journal {
+pub struct SbFieldJournal {
     pub buckets: [Le64; 0],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_journal_v2_entry {
+pub struct SbFieldJournalV2Entry {
     pub start: Le64,
     pub nr: Le64,
 }
 
-#[whole(tail = d: [bch_sb_field_journal_v2_entry])]
+#[whole(tail = d: [SbFieldJournalV2Entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_journal_v2 {
-    pub d: [bch_sb_field_journal_v2_entry; 0],
+pub struct SbFieldJournalV2 {
+    pub d: [SbFieldJournalV2Entry; 0],
 }
 
 /* BCH_SB_FIELD_crypt: */
@@ -856,48 +846,48 @@ pub struct Nonce {
 
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_key {
+pub struct Key {
     pub key: [Le64; 4],
 }
 
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_encrypted_key {
+pub struct EncryptedKey {
     pub magic: Le64,
-    pub key: bch_key,
+    pub key: Key,
 }
 
-impl bch_sb_field_crypt {
-    pub fn key(&self) -> &bch_encrypted_key {
+impl SbFieldCrypt {
+    pub fn key(&self) -> &EncryptedKey {
         &self.key
     }
 }
 
 // ── Encryption key material ─────────────────────────────────────
 //
-// bch_key/bch_encrypted_key hold the filesystem encryption key. They're
+// Key/EncryptedKey hold the filesystem encryption key. They're
 // kept out of DERIVE_READD (see codegen.rs) so they derive neither Copy (a
 // Drop type can't be Copy) nor Debug (don't leak key bytes). The key is
 // wiped on drop — via the `zeroize` crate in userspace, and a hand-rolled
 // volatile memset in-kernel, which can't pull in the `zeroize` crate.
 
-impl Clone for bch_key {
+impl Clone for Key {
     fn clone(&self) -> Self {
         Self { key: self.key }
     }
 }
 
-impl Clone for bch_encrypted_key {
+impl Clone for EncryptedKey {
     fn clone(&self) -> Self {
         Self { magic: self.magic, key: self.key.clone() }
     }
 }
 
-impl bch_encrypted_key {
+impl EncryptedKey {
     pub const MAGIC: &[u8; 8] = b"bch**key";
 
     /// Plaintext (unencrypted) key for the crypt field (remove-passphrase).
-    pub fn new_unencrypted(key: bch_key) -> Self {
+    pub fn new_unencrypted(key: Key) -> Self {
         Self { magic: u64::from_le_bytes(*Self::MAGIC).into(), key }
     }
 
@@ -905,7 +895,7 @@ impl bch_encrypted_key {
         self.magic.get() != u64::from_le_bytes(*Self::MAGIC)
     }
 
-    pub fn into_key(self) -> bch_key {
+    pub fn into_key(self) -> Key {
         self.key.clone()
     }
 }
@@ -914,36 +904,36 @@ impl bch_encrypted_key {
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[cfg(feature = "std")]
-impl Zeroize for bch_key {
+impl Zeroize for Key {
     fn zeroize(&mut self) { self.key.zeroize(); }
 }
 #[cfg(feature = "std")]
-impl Drop for bch_key {
+impl Drop for Key {
     fn drop(&mut self) { self.zeroize(); }
 }
 #[cfg(feature = "std")]
-impl ZeroizeOnDrop for bch_key {}
+impl ZeroizeOnDrop for Key {}
 
 #[cfg(feature = "std")]
-impl Zeroize for bch_encrypted_key {
+impl Zeroize for EncryptedKey {
     fn zeroize(&mut self) {
         self.magic.zeroize();
         self.key.zeroize();
     }
 }
 #[cfg(feature = "std")]
-impl Drop for bch_encrypted_key {
+impl Drop for EncryptedKey {
     fn drop(&mut self) { self.zeroize(); }
 }
 #[cfg(feature = "std")]
-impl ZeroizeOnDrop for bch_encrypted_key {}
+impl ZeroizeOnDrop for EncryptedKey {}
 
 #[cfg(not(feature = "std"))]
-impl Drop for bch_key {
+impl Drop for Key {
     fn drop(&mut self) { crate::util::wipe(&mut self.key); }
 }
 #[cfg(not(feature = "std"))]
-impl Drop for bch_encrypted_key {
+impl Drop for EncryptedKey {
     fn drop(&mut self) { crate::util::wipe(self); }
 }
 
@@ -957,16 +947,16 @@ impl Drop for bch_encrypted_key {
 #[whole]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct bch_sb_field_crypt {
+pub struct SbFieldCrypt {
     #[members]
-    pub flags: bch_sb_field_crypt_flags,
+    pub flags: SbFieldCryptFlags,
     #[members]
-    pub kdf_flags: bch_sb_field_crypt_kdf_flags,
-    pub key: bch_encrypted_key,
+    pub kdf_flags: SbFieldCryptKdfFlags,
+    pub key: EncryptedKey,
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_field_crypt_flags {
+pub struct SbFieldCryptFlags {
     #[bits(4)]  kdf_type:   KdfType,
     __:                     u60,
 }
@@ -979,7 +969,7 @@ pub enum KdfType {
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_field_crypt_kdf_flags {
+pub struct SbFieldCryptKdfFlags {
     /* stored as base 2 log of scrypt params: */
     scrypt_n:               u16,
     scrypt_r:               u16,
@@ -994,7 +984,7 @@ pub struct bch_sb_field_crypt_kdf_flags {
 #[unsized_vstruct(u64s = u64s)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry {
+pub struct JsetEntry {
     u64s: Le16,
     pub btree_id: u8,
     pub level: u8,
@@ -1004,10 +994,10 @@ pub struct jset_entry {
     pub _data: [u64; 0],
 }
 
-#[whole(tail = start: [u64], entries = jset_entry)]
+#[whole(tail = start: [u64], entries = JsetEntry)]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_clean {
+pub struct SbFieldClean {
     pub flags: Le32,
     pub _read_clock: Le16, /* no longer used */
     pub _write_clock: Le16,
@@ -1020,12 +1010,12 @@ pub struct bch_sb_field_clean {
 #[grown(from = btrees_lost_data)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct bch_sb_field_ext {
+pub struct SbFieldExt {
     pub recovery_passes_required: [Le64; 2],
     pub errors_silent: [Le64; 8],
     pub btrees_lost_data: Le64,
     #[members]
-    pub flags0: bch_sb_field_ext_flags0,
+    pub flags0: SbFieldExtFlags0,
     /*
      * Like btrees_lost_data, but never cleared - btrees_lost_data gates
      * reconstruction and is cleared when repair completes; this is the
@@ -1039,13 +1029,13 @@ pub struct bch_sb_field_ext {
      * mutation) so the on-disk value is always current. Lets consistency
      * checks that would otherwise destroy data based on an in-memory table
      * they can't fully trust (check_key_has_snapshot) instead reschedule
-     * the check pass. Runtime copy: bch_sb.btrees_clean.
+     * the check pass. Runtime copy: Sb.btrees_clean.
      */
     pub btrees_clean: Le64,
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_field_ext_flags0 {
+pub struct SbFieldExtFlags0 {
     dev_readahead:                          u20,
     ec_stripe_buf_limit:                    u6,
     scrub_max_rewind_secs:                  u12,
@@ -1221,7 +1211,7 @@ pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_layout {
+pub struct SbLayout {
     pub magic: __uuid_t, /* bcachefs superblock UUID */
     pub layout_type: u8,
     pub sb_max_size_bits: u8, /* base 2 of 512 byte sectors */
@@ -1232,7 +1222,7 @@ pub struct bch_sb_layout {
 // bch_dev's copy is read without sb_lock - by the allocator, until the
 // superblock buckets are marked - and may be read mid-edit, each offset as
 // before or after
-impl crate::util::projections::TearSafe for bch_sb_layout {}
+impl crate::util::projections::TearSafe for SbLayout {}
 
 pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 
@@ -1255,8 +1245,8 @@ pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 #[unsized_vstruct(u64s = u64s, entries = bch_sb_field)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct bch_sb {
-    pub csum: bch_csum,
+pub struct Sb {
+    pub csum: Csum,
     pub version: Le16<MetadataVersion>,
     pub version_min: Le16<MetadataVersion>,
     pub pad: [Le16; 2],
@@ -1276,13 +1266,13 @@ pub struct bch_sb {
     pub time_base_hi: Le32,
     pub time_precision: Le32,
 
-    #[members] pub flags0: bch_sb_flags0,
-    #[members] pub flags1: bch_sb_flags1,
-    #[members] pub flags2: bch_sb_flags2,
-    #[members] pub flags3: bch_sb_flags3,
-    #[members] pub flags4: bch_sb_flags4,
-    #[members] pub flags5: bch_sb_flags5,
-    #[members] pub flags6: bch_sb_flags6,
+    #[members] pub flags0: SbFlags0,
+    #[members] pub flags1: SbFlags1,
+    #[members] pub flags2: SbFlags2,
+    #[members] pub flags3: SbFlags3,
+    #[members] pub flags4: SbFlags4,
+    #[members] pub flags5: SbFlags5,
+    #[members] pub flags6: SbFlags6,
     pub write_time: Le64,
     pub features: Le64<SbFeatures>,
     /* features 64 on: there are none yet */
@@ -1290,17 +1280,17 @@ pub struct bch_sb {
     pub compat: Le64<SbCompats>,
     pub compat_hi: Le64,
 
-    pub layout: bch_sb_layout,
+    pub layout: SbLayout,
 
     pub start: [Head<bch_sb_field>; 0],
     pub _data: [Le64; 0],
 }
 
-impl bch_sb<Unvalidated> {
+impl Sb<Unvalidated> {
     /// Its count less @u64s, for a section shrunk in place, the sections after
     /// it moved down: sb/io.rs's, as validate repairs one.
     pub(crate) fn sub_u64s(&mut self, u64s: u32) {
-        let h = cast_plain_mut::<bch_sb_head>(bytes_of_mut(self)).expect("a superblock's head");
+        let h = cast_plain_mut::<SbHead>(bytes_of_mut(self)).expect("a superblock's head");
         h.u64s = Le32::new(h.u64s.get() - u64s);
     }
 }
@@ -1318,7 +1308,7 @@ impl bch_sb<Unvalidated> {
  */
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags0 {
+pub struct SbFlags0 {
     initialized:                    bool,
     clean:                          bool,
     #[bits(6)]  csum_type:          CsumType,
@@ -1348,7 +1338,7 @@ pub struct bch_sb_flags0 {
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags1 {
+pub struct SbFlags1 {
     #[bits(4)]  str_hash_type:          StrHashOpt,
     compression_type_lo:                u4,
     inode_32bit:                        bool,
@@ -1371,13 +1361,13 @@ pub struct bch_sb_flags1 {
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags2 {
+pub struct SbFlags2 {
     background_compression_type_lo:             u4,
     gc_reserve_bytes:                           u60,
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags3 {
+pub struct SbFlags3 {
     erasure_code:                       u16,
     metadata_target:                    u12,
     shard_inums:                        bool,
@@ -1388,7 +1378,7 @@ pub struct bch_sb_flags3 {
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags4 {
+pub struct SbFlags4 {
     journal_reclaim_delay:                      u32,
     journal_transaction_names:                  bool,
     nocow:                                      bool,
@@ -1400,7 +1390,7 @@ pub struct bch_sb_flags4 {
 }
 
 /// The compression options, each in two fields: _HI is the bits it grew.
-impl bch_sb_head {
+impl SbHead {
     pub fn compression_type(&self) -> u8 {
         self.compression_type_lo() | self.compression_type_hi() << 4
     }
@@ -1421,7 +1411,7 @@ impl bch_sb_head {
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags5 {
+pub struct SbFlags5 {
     #[bits(16)] version_upgrade_complete:   MetadataVersion,
     allocator_stuck_timeout:                u16,
     #[bits(16)] version_incompat:           MetadataVersion,
@@ -1429,7 +1419,7 @@ pub struct bch_sb_flags5 {
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_flags6 {
+pub struct SbFlags6 {
     shard_inums_nbits:                  u4,
     write_error_timeout:                u10,
     csum_err_retry_nr:                  u6,
@@ -1666,51 +1656,51 @@ pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
 
 /* Journal */
 #[allow(non_upper_case_globals)]
-pub const JSET_KEYS_U64s: usize = size_of::<Head<jset_entry>>() / size_of::<u64>();
+pub const JSET_KEYS_U64s: usize = size_of::<Head<JsetEntry>>() / size_of::<u64>();
 
 /* A journal entry is the type its type says: */
 tagged_union! {
     in crate::format;
-    #[storage(crate::format::jset_entry)]
+    #[storage(crate::format::JsetEntry)]
     #[tag(type_: u8)]
     #[tag_enum(JsetEntryType: u32, nr)]
     #[size(header)]
-    pub enum jset_entry {
+    pub enum JsetEntry {
         /// Btree key updates
         btree_keys(crate::format::jset_entry_btree_keys) = 0,
         /// Btree root pointers, recorded every journal write
         btree_root(crate::format::jset_entry_btree_root) = 1,
         /// Legacy, no longer used
-        prio_ptrs(crate::format::jset_entry_prio_ptrs) = 2,
+        prio_ptrs(crate::format::JsetEntryPrioPtrs) = 2,
         /// Blacklist a single journal sequence number
-        blacklist(crate::format::jset_entry_blacklist) = 3,
+        blacklist(crate::format::JsetEntryBlacklist) = 3,
         /// Blacklist a range of journal sequence numbers
-        blacklist_v2(crate::format::jset_entry_blacklist_v2) = 4,
+        blacklist_v2(crate::format::JsetEntryBlacklistV2) = 4,
         /// Maximum key version for encryption nonce derivation
-        usage(crate::format::jset_entry_usage) = 5,
+        usage(crate::format::JsetEntryUsage) = 5,
         /// Legacy: usage accounting moved to accounting btree
-        data_usage(crate::format::jset_entry_data_usage) = 6,
+        data_usage(crate::format::JsetEntryDataUsage) = 6,
         /// IO clock: total reads and writes in sectors since filesystem
         /// creation
-        clock(crate::format::jset_entry_clock) = 7,
+        clock(crate::format::JsetEntryClock) = 7,
         /// Legacy: per-device usage moved to accounting btree
-        dev_usage(crate::format::jset_entry_dev_usage) = 8,
+        dev_usage(crate::format::JsetEntryDevUsage) = 8,
         /// Free-form log message for fsck actions and diagnostic events
-        log(crate::format::jset_entry_log) = 9,
+        log(crate::format::JsetEntryLog) = 9,
         /// Old value being overwritten, for debugging and journal_rewind
         overwrite(crate::format::jset_entry_overwrite) = 10,
         /// Write buffer keys, transformed to btree_keys before writing to disk
         write_buffer_keys(crate::format::jset_entry_write_buffer_keys) = 11,
         /// Wall clock time at journal write
-        datetime(crate::format::jset_entry_datetime) = 12,
+        datetime(crate::format::JsetEntryDatetime) = 12,
         /// Structured log entry containing a btree key
         log_bkey(crate::format::jset_entry_log_bkey) = 13,
         /// Oldest journal seq safe for rewind (discards may have invalidated
         /// earlier seqs)
-        rewind_limit(crate::format::jset_entry_rewind_limit) = 14,
+        rewind_limit(crate::format::JsetEntryRewindLimit) = 14,
         /// Rewind in progress: keys from entries in this seq range use
         /// overwrite entries
-        rewind(crate::format::jset_entry_rewind) = 15,
+        rewind(crate::format::JsetEntryRewind) = 15,
     }
 }
 
@@ -1728,7 +1718,7 @@ macro_rules! jset_entry_keys {
 jset_entry_keys!(jset_entry_btree_keys, jset_entry_btree_root, jset_entry_overwrite,
                  jset_entry_write_buffer_keys, jset_entry_log_bkey);
 
-impl jset_entry<Validated> {
+impl JsetEntry<Validated> {
     /// Its keys, if its payload is keys: None for any other entry.
     pub fn keys(&self) -> Option<ViewEntries<'_, AnyKey<Validated>>> {
         Some(match self.typed().ok()? {
@@ -1742,7 +1732,7 @@ impl jset_entry<Validated> {
     }
 }
 
-impl jset_entry<Unvalidated> {
+impl JsetEntry<Unvalidated> {
     /// keys(), mutably, each checked against what's left of the entry.
     pub fn keys_mut(&mut self) -> Option<UnvalidatedEntriesMut<'_, AnyKey<Unvalidated>>> {
         Some(match JsetEntryType(self.type_.into()) {
@@ -1761,7 +1751,7 @@ impl jset_entry<Unvalidated> {
 #[whole(tail = _data: [u64])]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_prio_ptrs {
+pub struct JsetEntryPrioPtrs {
     pub _data: [u64; 0],
 }
 
@@ -1778,14 +1768,14 @@ pub struct jset_entry_prio_ptrs {
 #[whole]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_blacklist {
+pub struct JsetEntryBlacklist {
     pub seq: Le64,
 }
 
 #[whole]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_blacklist_v2 {
+pub struct JsetEntryBlacklistV2 {
     pub start: Le64,
     pub end: Le64,
 }
@@ -1802,7 +1792,7 @@ pub enum FsUsageType {
 #[whole]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_usage {
+pub struct JsetEntryUsage {
     pub v: Le64,
 }
 
@@ -1810,15 +1800,15 @@ pub struct jset_entry_usage {
 #[whole]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_data_usage {
+pub struct JsetEntryDataUsage {
     pub v: Le64,
-    pub r: Head<bch_replicas_entry_v1>,
+    pub r: Head<ReplicasEntryV1>,
 }
 
 #[whole]
 #[repr(C, packed)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_clock {
+pub struct JsetEntryClock {
     pub rw: u8,
     pub pad: [u8; 7],
     pub time: Le64,
@@ -1826,43 +1816,43 @@ pub struct jset_entry_clock {
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_dev_usage_type {
+pub struct JsetEntryDevUsageType {
     pub buckets: Le64,
     pub sectors: Le64,
     pub fragmented: Le64,
 }
 
-#[whole(tail = d: [jset_entry_dev_usage_type])]
+#[whole(tail = d: [JsetEntryDevUsageType])]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_dev_usage {
+pub struct JsetEntryDevUsage {
     pub dev: Le32,
     pub pad: u32,
 
     pub _buckets_ec: Le64, /* No longer used */
     pub _buckets_unavailable: Le64, /* No longer used */
 
-    pub d: [jset_entry_dev_usage_type; 0],
+    pub d: [JsetEntryDevUsageType; 0],
 }
 
 #[whole(tail = d: [u8])]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_log {
+pub struct JsetEntryLog {
     pub d: [u8; 0],
 }
 
 #[whole]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_datetime {
+pub struct JsetEntryDatetime {
     pub seconds: Le64,
 }
 
 #[whole]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_rewind_limit {
+pub struct JsetEntryRewindLimit {
     pub seq: Le64,
 }
 
@@ -1873,7 +1863,7 @@ pub struct jset_entry_rewind_limit {
 #[whole]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct jset_entry_rewind {
+pub struct JsetEntryRewind {
     pub from: Le64,
     pub to: Le64,
 }
@@ -1888,17 +1878,17 @@ pub struct jset_entry_rewind {
  *
  * version is for on disk format changes.
  */
-#[unsized_vstruct(u64s = u64s, entries = jset_entry)]
+#[unsized_vstruct(u64s = u64s, entries = JsetEntry)]
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct jset {
-    pub csum: bch_csum,
+pub struct Jset {
+    pub csum: Csum,
 
     pub magic: Le64,
     pub seq: Le64,
     pub version: Le32<MetadataVersion>,
     #[members]
-    pub flags: jset_flags,
+    pub flags: JsetFlags,
 
     u64s: Le32, /* size of d[] in u64s */
 
@@ -1910,15 +1900,13 @@ pub struct jset {
     /* Sequence number of oldest dirty journal entry */
     pub last_seq: Le64,
 
-    pub start: [Head<jset_entry>; 0],
+    pub start: [Head<JsetEntry>; 0],
     pub _data: [u64; 0],
 }
 
-/* A journal entry's keys, Views as its walk yields them: each one's header is whole. */
-floored_by_self!(bkey_i);
 
 #[bitfield(Le32)]
-pub struct jset_flags {
+pub struct JsetFlags {
     #[bits(4)] csum_type:   CsumType,
     big_endian:             bool,
     no_flush:               bool,
@@ -1950,7 +1938,7 @@ pub const BTREE_MAX_DEPTH: u32 = 4;
 #[unsized_vstruct(u64s = u64s)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct bset {
+pub struct Bset {
     pub seq: Le64,
 
     /*
@@ -1963,11 +1951,11 @@ pub struct bset {
     pub journal_seq: Le64,
 
     #[members]
-    pub flags: bset_flags,
+    pub flags: BsetFlags,
     pub version: Le16<MetadataVersion>,
     u64s: Le16, /* count of d[] in u64s */
 
-    pub start: [bkey_packed; 0],
+    pub start: [BkeyPacked; 0],
     pub _data: [u64; 0],
 }
 
@@ -1976,14 +1964,14 @@ const KEY_OFFSET: &str = "a bset's keys start and end on a u64, and so does each
 /// Validated in place: its keys walked by offset, and it shortened - its
 /// count, and the reference made over, so it still reaches all of it and
 /// nothing past. The bytes past stay what holds it's.
-impl bset<Unvalidated> {
+impl Bset<Unvalidated> {
     /// Its keys' bytes: from its start[] to its end.
     fn start_bytes(&self) -> &[u8] {
-        &self.as_bytes()[offset_of!(Head<bset>, start)..]
+        &self.as_bytes()[offset_of!(Head<Bset>, start)..]
     }
 
     fn start_bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.as_bytes_mut()[offset_of!(Head<bset>, start)..]
+        &mut self.as_bytes_mut()[offset_of!(Head<Bset>, start)..]
     }
 
     /// The key at byte @at of its keys, if all of it is there: None at their
@@ -2020,13 +2008,13 @@ impl bset<Unvalidated> {
                 "shrinking a bset of {have} bytes of keys to {keys_bytes}");
 
         let bytes = self.as_bytes_mut();
-        cast_plain_mut::<Head<bset>>(bytes).expect("a bset's header").set_u64s(keys_bytes / 8);
-        from_bytes_mut(&mut bytes[..offset_of!(Head<bset>, start) + keys_bytes]).expect("a bset, shorter")
+        cast_plain_mut::<Head<Bset>>(bytes).expect("a bset's header").set_u64s(keys_bytes / 8);
+        from_bytes_mut(&mut bytes[..offset_of!(Head<Bset>, start) + keys_bytes]).expect("a bset, shorter")
     }
 }
 
 #[bitfield(Le32)]
-pub struct bset_flags {
+pub struct BsetFlags {
     #[bits(4)]  csum_type:  CsumType,
 
     big_endian:             bool,
@@ -2041,7 +2029,7 @@ pub struct bset_flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct btree_node {
-    pub csum: bch_csum,
+    pub csum: Csum,
     pub magic: Le64,
 
     /* this flags field is encrypted, unlike bset->flags: */
@@ -2051,11 +2039,11 @@ pub struct btree_node {
     /* Closed interval: */
     pub min_key: Bpos,
     pub max_key: Bpos,
-    pub _ptr: bch_extent_ptr, /* not used anymore */
-    pub format: bkey_format,
+    pub _ptr: ExtentPtr, /* not used anymore */
+    pub format: BkeyFormat,
 
     /* C's vstruct macros find u64s and _data on the node itself: */
-    pub keys: Head<bset>,
+    pub keys: Head<Bset>,
 }
 
 #[bitfield(Le64)]
@@ -2084,9 +2072,9 @@ impl btree_node_head {
 #[unsized_vstruct(tail = [u64], u64s = keys.u64s)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
-pub struct btree_node_entry {
-    pub csum: bch_csum,
+pub struct BtreeNodeEntry {
+    pub csum: Csum,
 
     /* C's vstruct macros find u64s and _data on the entry itself: */
-    pub keys: Head<bset>,
+    pub keys: Head<Bset>,
 }

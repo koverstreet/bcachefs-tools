@@ -7,15 +7,15 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::io::RawFd;
 
 use bcachefs_kernel::c;
-use bcachefs_kernel::alloc::{buckets::bucket, disk_groups::Target};
-use bcachefs_kernel::init::dev::{bch_sb_buf, bch_sb_handle};
-use bcachefs_kernel::opts::{bch_opts, OptId};
-use bcachefs_kernel::sb::members_format::{bch_member, BCH_MIN_NR_NBUCKETS, bch_sb_field_members_v2};
+use bcachefs_kernel::alloc::{buckets::Bucket, disk_groups::Target};
+use bcachefs_kernel::init::dev::{bch_sb_buf, SbHandle};
+use bcachefs_kernel::opts::{Opts, OptId};
+use bcachefs_kernel::sb::members_format::{Member, BCH_MIN_NR_NBUCKETS, SbFieldMembersV2};
 use bcachefs_kernel::os::blkdev;
 
 use crate::util::{die, read_exact_at, write_all_at};
-use bcachefs_kernel::format::{MetadataVersion, SbFeatures, bch_encrypted_key, bch_key, bch_sb,
-    bch_sb_field_crypt, bch_sb_field_ext, bch_sb_layout, BCH_SB_LAYOUT_SECTOR, BCH_SB_SECTOR};
+use bcachefs_kernel::format::{MetadataVersion, SbFeatures, EncryptedKey, Key, Sb,
+    SbFieldCrypt, SbFieldExt, SbLayout, BCH_SB_LAYOUT_SECTOR, BCH_SB_SECTOR};
 use bcachefs_kernel::sb::{io::{BCHFS_MAGIC, SbResize}, members::SbMembersMut};
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::alloc::disk_groups::SbDiskGroupsMut;
@@ -50,7 +50,7 @@ pub struct DevOpts {
     pub sb_end: u64,
     pub nbuckets: u64,
     pub fs_size: u64,
-    pub opts: bch_opts,
+    pub opts: Opts,
 }
 
 impl DevOpts {
@@ -99,7 +99,7 @@ impl DevOpts {
 
 /// Resolve a target string (device path or disk group name) to a target id.
 fn parse_target(
-    sb: &bch_sb_handle,
+    sb: &SbHandle,
     devs: &[DevOpts],
     s: Option<&str>,
 ) -> u16 {
@@ -122,7 +122,7 @@ fn parse_target(
 }
 
 /// Set all sb options from a bch_opts struct.
-fn opt_set_sb_all(sb: &mut bch_sb_buf, dev_idx: Option<u32>, opts: &mut bch_opts) {
+fn opt_set_sb_all(sb: &mut bch_sb_buf, dev_idx: Option<u32>, opts: &mut Opts) {
     use bcachefs_kernel::opts;
 
     for opt in &opts::OPTS {
@@ -139,10 +139,10 @@ fn opt_set_sb_all(sb: &mut bch_sb_buf, dev_idx: Option<u32>, opts: &mut bch_opts
 /// Exits on fatal errors (matching the C `die()` behavior).
 pub fn format(
     fs_opt_strs: &[(OptId, String)],
-    mut fs_opts: bch_opts,
+    mut fs_opts: Opts,
     opts: FormatOpts<'_>,
     dev_slice: &mut [DevOpts],
-) -> Option<bch_sb_handle> {
+) -> Option<SbHandle> {
 
     // Get device size if not specified (needed for block size threshold)
     for dev in dev_slice.iter_mut() {
@@ -204,7 +204,7 @@ pub fn format(
         ));
     }
 
-    let mut sb = bch_sb_handle::default();
+    let mut sb = SbHandle::default();
     if sb.sb_realloc(0).is_err() {
         die("insufficient memory");
     }
@@ -242,8 +242,8 @@ pub fn format(
 
     // Create ext field before setting options - some options (e.g.
     // dev_readahead) use set_ext which requires this field to exist
-    let ext_u64s = (std::mem::size_of::<bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
-    sb.field_get_minsize::<bch_sb_field_ext>(ext_u64s);
+    let ext_u64s = (std::mem::size_of::<SbFieldExt>() / std::mem::size_of::<u64>()) as u32;
+    sb.field_get_minsize::<SbFieldExt>(ext_u64s);
 
     opt_set_sb_all(&mut sb, None, &mut fs_opts);
 
@@ -256,13 +256,13 @@ pub fn format(
     sb.sb_mut().time_precision = 1u32.into();
 
     // Member info
-    let mi_size = std::mem::size_of::<Head<bch_sb_field_members_v2>>()
-        + std::mem::size_of::<bch_member>() * dev_slice.len();
+    let mi_size = std::mem::size_of::<Head<SbFieldMembersV2>>()
+        + std::mem::size_of::<Member>() * dev_slice.len();
     let mi_u64s = mi_size / std::mem::size_of::<u64>();
 
-    let mi = sb.field_resize::<bch_sb_field_members_v2>(mi_u64s as u32)
+    let mi = sb.field_resize::<SbFieldMembersV2>(mi_u64s as u32)
         .unwrap_or_else(|| die("failed to resize members_v2 field"));
-    mi.member_bytes = (std::mem::size_of::<bch_member>() as u16).into();
+    mi.member_bytes = (std::mem::size_of::<Member>() as u16).into();
 
     for (idx, dev) in dev_slice.iter_mut().enumerate() {
         let m = sb.member_mut(idx as u32)
@@ -322,14 +322,14 @@ pub fn format(
     // Encryption
     if opts.encrypted {
         let crypt_u64s =
-            std::mem::size_of::<bch_sb_field_crypt>() / std::mem::size_of::<u64>();
+            std::mem::size_of::<SbFieldCrypt>() / std::mem::size_of::<u64>();
         let nonce = sb.sb().nonce();
-        let crypt = sb.field_resize::<bch_sb_field_crypt>(crypt_u64s as u32)
+        let crypt = sb.field_resize::<SbFieldCrypt>(crypt_u64s as u32)
             .unwrap_or_else(|| die("failed to create crypt field"));
 
-        let mut key = bch_key::default();
+        let mut key = Key::default();
         bcachefs_kernel::os::kernel::random_bytes(bcachefs_kernel::util::vstructs::plain_bytes_mut(&mut key));
-        let mut sb_key = bch_encrypted_key::new_unencrypted(key);
+        let mut sb_key = EncryptedKey::new_unencrypted(key);
 
         if let Some(passphrase) = opts.passphrase {
             crypt.kdf_init();
@@ -375,7 +375,7 @@ pub fn format(
                 .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
 
-        bch2_super_write(fd, sb.sb_mut());
+        super_write(fd, sb.sb_mut());
     }
 
     let paths: Vec<&std::ffi::OsStr> = dev_slice
@@ -414,7 +414,7 @@ pub fn format_for_device_add(
     block_size: u32,
     btree_node_size: u32,
 ) -> i32 {
-    let mut fs_opts = bch_opts::default();
+    let mut fs_opts = Opts::default();
     fs_opts.set_block_size(block_size as u16);
     fs_opts.set_btree_node_size(btree_node_size);
 
@@ -456,7 +456,7 @@ const BTREE_NODE_SIZE_MIN: u32 = 64 << 10;
 
 /// The btree node size buckets must hold: the one given, or the smallest
 /// allowed.
-fn btree_node_size_min(opts: &bch_opts) -> u64 {
+fn btree_node_size_min(opts: &Opts) -> u64 {
     if opts.defined(OptId::btree_node_size) {
         opts.btree_node_size as u64
     } else {
@@ -469,7 +469,7 @@ fn btree_node_size_min(opts: &bch_opts) -> u64 {
 /// Prefer at least 2048 buckets per device (512 is the absolute minimum
 /// but gets dicey). Within that constraint, try to reach at least
 /// encoded_extent_max to avoid fragmenting checksummed/compressed extents.
-fn dev_bucket_size_clamp(fs_opts: bch_opts, dev_size: u64, fs_bucket_size: u64) -> u64 {
+fn dev_bucket_size_clamp(fs_opts: Opts, dev_size: u64, fs_bucket_size: u64) -> u64 {
     let min_nr_nbuckets = BCH_MIN_NR_NBUCKETS as u64;
 
     // Largest bucket size that still gives >= 2048 buckets
@@ -510,7 +510,7 @@ fn rounddown_pow_of_two(v: u64) -> u64 {
 /// to 512 bytes to avoid wasting space.
 ///
 /// Returns the block size in bytes.
-pub fn pick_block_size(_fs_opts: &bch_opts, dev_slice: &[DevOpts]) -> u32 {
+pub fn pick_block_size(_fs_opts: &Opts, dev_slice: &[DevOpts]) -> u32 {
     let total_size: u64 = dev_slice.iter().map(|d| d.fs_size).sum();
 
     let block_size = if total_size >= 1u64 << 30 {
@@ -530,7 +530,7 @@ pub fn pick_block_size(_fs_opts: &bch_opts, dev_slice: &[DevOpts]) -> u32 {
 /// Pick the filesystem-wide bucket size based on device sizes and options.
 ///
 /// Returns the bucket size in bytes.
-pub fn pick_bucket_size(opts: &bch_opts, devs: &[DevOpts]) -> u64 {
+pub fn pick_bucket_size(opts: &Opts, devs: &[DevOpts]) -> u64 {
     // Hard minimum: bucket must hold a btree node
     let mut bucket_size = (opts.block_size as u64).max(btree_node_size_min(opts));
 
@@ -569,7 +569,7 @@ pub fn pick_bucket_size(opts: &bch_opts, devs: &[DevOpts]) -> u64 {
     // and devices being added after creation
     let total_ram = total_system_ram();
     let mem_available_for_fsck = total_ram / 8;
-    let bucket_struct_size = std::mem::size_of::<bucket>() as u64;
+    let bucket_struct_size = std::mem::size_of::<Bucket>() as u64;
     let buckets_can_fsck = mem_available_for_fsck / (bucket_struct_size * 3 / 2);
     let mem_lower_bound = (total_fs_size / buckets_can_fsck).next_power_of_two();
     bucket_size = bucket_size.max(mem_lower_bound);
@@ -582,7 +582,7 @@ pub fn pick_bucket_size(opts: &bch_opts, devs: &[DevOpts]) -> u64 {
 /// Validate that a device's bucket size is consistent with filesystem options.
 ///
 /// Exits on validation failure (matches C `die()` behavior).
-pub fn check_bucket_size(opts: &bch_opts, dev: &DevOpts) {
+pub fn check_bucket_size(opts: &Opts, dev: &DevOpts) {
     if dev.opts.bucket_size < opts.block_size as u32 {
         die(&format!(
             "Bucket size ({}) cannot be smaller than block size ({})",
@@ -612,11 +612,11 @@ pub fn check_bucket_size(opts: &bch_opts, dev: &DevOpts) {
 /// Write superblock to all layout locations on disk.
 ///
 /// Exits on I/O errors (matches C `die()` behavior).
-pub fn bch2_super_write(fd: BorrowedFd<'_>, sb: &mut bch_sb) {
+pub fn super_write(fd: BorrowedFd<'_>, sb: &mut Sb) {
     let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
     let layout_range = {
-        let off = std::mem::offset_of!(Head<bch_sb>, layout);
-        off..off + std::mem::size_of::<bch_sb_layout>()
+        let off = std::mem::offset_of!(Head<Sb>, layout);
+        off..off + std::mem::size_of::<SbLayout>()
     };
 
     let nr_superblocks = sb.layout.nr_superblocks as usize;
@@ -683,7 +683,7 @@ pub const SUPERBLOCK_SIZE_DEFAULT: u32 = 2048;
 /// `block_size` and `bucket_size` are in bytes.
 /// `sb_size`, `sb_start`, and `sb_end` are in 512-byte sectors.
 pub fn sb_layout_init(
-    l: &mut bch_sb_layout,
+    l: &mut SbLayout,
     block_size: u32,
     bucket_size: u32,
     sb_size: u32,

@@ -63,12 +63,12 @@ use rustix::mount::MountFlags;
 
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
-use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::posix::dirent::RenameMode;
-use bcachefs_kernel::posix::inode::bch_inode_unpacked;
-use bcachefs_kernel::posix::inode_opts::inode_opt_change;
+use bcachefs_kernel::posix::inode::InodeUnpacked;
+use bcachefs_kernel::posix::inode_opts::InodeOptChange;
 use bcachefs_kernel::posix::xattr_format::Xattr;
-use bcachefs_kernel::snapshots::{format::Subvolume, subvolume::subvol_inum, subvolume};
+use bcachefs_kernel::snapshots::{format::Subvolume, subvolume::SubvolInum, subvolume};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::btree;
@@ -146,9 +146,9 @@ const DT_REG:  u32 = 8;
 const DT_LNK:  u32 = 10;
 const DT_SOCK: u32 = 12;
 
-fn map_root_ino(ino: INodeNo) -> subvol_inum {
+fn map_root_ino(ino: INodeNo) -> SubvolInum {
     let ino: u64 = ino.0;
-    subvol_inum {
+    SubvolInum {
         subvol: BCACHEFS_ROOT_SUBVOL,
         inum: if ino == 1 { BCACHEFS_ROOT_INO } else { ino },
     }
@@ -272,7 +272,7 @@ fn xattr_type(name: &OsStr) -> Result<(XattrType, &OsStr), Errno> {
 /// xattr_type() serves. trusted.* only with @show_trusted: the kernel lists
 /// those only to CAP_SYS_ADMIN, and decides that from the caller, which we
 /// can't see.
-fn xattr_names(fs: &Fs, inum: subvol_inum, show_trusted: bool) -> Result<Vec<u8>, BchError> {
+fn xattr_names(fs: &Fs, inum: SubvolInum, show_trusted: bool) -> Result<Vec<u8>, BchError> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::xattrs, pos(inum.inum, 0), BtreeIterFlags::empty());
     let mut names = Vec::new();
@@ -292,11 +292,11 @@ fn xattr_names(fs: &Fs, inum: subvol_inum, show_trusted: bool) -> Result<Vec<u8>
 
 /// Set xattr @name on @inum, or with @value None remove it - and its ctime.
 /// @flags: XATTR_CREATE, XATTR_REPLACE.
-fn xattr_set(fs: &Fs, inum: subvol_inum, name: &OsStr, value: Option<&[u8]>, flags: i32)
+fn xattr_set(fs: &Fs, inum: SubvolInum, name: &OsStr, value: Option<&[u8]>, flags: i32)
     -> Result<(), Errno>
 {
     let (ty, name) = xattr_type(name)?;
-    let mut inode_u = bch_inode_unpacked::default();
+    let mut inode_u = InodeUnpacked::default();
     btree::iter::trans_commit_do(fs, None, CommitFlags::empty(), |t| {
         xattr::set_trans(t, inum, &mut inode_u, name, value, ty, flags)
     }).map_err(|e| bch_err(&e))
@@ -315,13 +315,13 @@ fn bch_err(e: &BchError) -> Errno {
 fn fuse_create_inode(
     fs:    &Fs,
     req:   &Request,
-    dir:   subvol_inum,
+    dir:   SubvolInum,
     name:  &OsStr,
     mode:  u16,
     rdev:  u64,
-) -> Result<bch_inode_unpacked, BchError> {
-    let mut dir_u: bch_inode_unpacked = Default::default();
-    let mut inode: bch_inode_unpacked = Default::default();
+) -> Result<InodeUnpacked, BchError> {
+    let mut dir_u: InodeUnpacked = Default::default();
+    let mut inode: InodeUnpacked = Default::default();
     let mut subvol: Subvolume = Default::default();
 
     inode::init_early(fs, &mut inode);
@@ -344,7 +344,7 @@ fn fuse_create_inode(
                 rdev,
                 None,
                 None,
-                subvol_inum::default(),
+                SubvolInum::default(),
                 0,
             )
         },
@@ -354,9 +354,9 @@ fn fuse_create_inode(
 }
 
 /// Returns the inode as the unlink left it.
-fn fuse_unlink(fs: &Fs, dir: subvol_inum, name: &OsStr) -> Result<bch_inode_unpacked, BchError> {
-    let mut dir_u: bch_inode_unpacked = Default::default();
-    let mut inode: bch_inode_unpacked = Default::default();
+fn fuse_unlink(fs: &Fs, dir: SubvolInum, name: &OsStr) -> Result<InodeUnpacked, BchError> {
+    let mut dir_u: InodeUnpacked = Default::default();
+    let mut inode: InodeUnpacked = Default::default();
 
     btree::iter::trans_commit_do(
         fs,
@@ -367,7 +367,7 @@ fn fuse_unlink(fs: &Fs, dir: subvol_inum, name: &OsStr) -> Result<bch_inode_unpa
                 t,
                 dir,
                 &mut dir_u,
-                subvol_inum::default(),
+                SubvolInum::default(),
                 &mut inode,
                 name,
                 false,
@@ -379,12 +379,12 @@ fn fuse_unlink(fs: &Fs, dir: subvol_inum, name: &OsStr) -> Result<bch_inode_unpa
 
 fn fuse_link(
     fs:        &Fs,
-    inum:      subvol_inum,
-    newparent: subvol_inum,
+    inum:      SubvolInum,
+    newparent: SubvolInum,
     name:      &OsStr,
-) -> Result<bch_inode_unpacked, BchError> {
-    let mut dir_u: bch_inode_unpacked = Default::default();
-    let mut inode: bch_inode_unpacked = Default::default();
+) -> Result<InodeUnpacked, BchError> {
+    let mut dir_u: InodeUnpacked = Default::default();
+    let mut inode: InodeUnpacked = Default::default();
 
     btree::iter::trans_commit_do(
         fs,
@@ -397,7 +397,7 @@ fn fuse_link(
 }
 
 /// Whether @name exists in @dir.
-fn dirent_exists(fs: &Fs, dir: subvol_inum, name: &OsStr) -> Result<bool, BchError> {
+fn dirent_exists(fs: &Fs, dir: SubvolInum, name: &OsStr) -> Result<bool, BchError> {
     let lookup = inode::find_by_inum(fs, dir)
         .and_then(|dir_u| str_hash::hash_info_init(fs, &dir_u))
         .and_then(|hash_info| dirent::lookup(fs, dir, &hash_info, name));
@@ -413,18 +413,18 @@ fn dirent_exists(fs: &Fs, dir: subvol_inum, name: &OsStr) -> Result<bool, BchErr
 /// BCH_RENAME_OVERWRITE, the one it replaced.
 fn fuse_rename(
     fs:       &Fs,
-    src_dir:  subvol_inum,
+    src_dir:  SubvolInum,
     src_name: &OsStr,
-    dst_dir:  subvol_inum,
+    dst_dir:  SubvolInum,
     dst_name: &OsStr,
     mode:     RenameMode,
-) -> Result<bch_inode_unpacked, BchError> {
-    let mut src_dir_u: bch_inode_unpacked = Default::default();
-    let mut dst_dir_u: bch_inode_unpacked = Default::default();
-    let mut src_inode_u: bch_inode_unpacked = Default::default();
-    let mut dst_inode_u: bch_inode_unpacked = Default::default();
-    let mut src_opt_change: inode_opt_change = Default::default();
-    let mut dst_opt_change: inode_opt_change = Default::default();
+) -> Result<InodeUnpacked, BchError> {
+    let mut src_dir_u: InodeUnpacked = Default::default();
+    let mut dst_dir_u: InodeUnpacked = Default::default();
+    let mut src_inode_u: InodeUnpacked = Default::default();
+    let mut dst_inode_u: InodeUnpacked = Default::default();
+    let mut src_opt_change: InodeOptChange = Default::default();
+    let mut dst_opt_change: InodeOptChange = Default::default();
 
     btree::iter::trans_commit_do(
         fs,
@@ -458,7 +458,7 @@ fn fuse_rename(
 #[allow(clippy::too_many_arguments)]
 fn fuse_setattr(
     fs:         &Fs,
-    inum:       subvol_inum,
+    inum:       SubvolInum,
     mode:       Option<u16>,
     uid:        Option<u32>,
     gid:        Option<u32>,
@@ -468,8 +468,8 @@ fn fuse_setattr(
     mtime_flag: i32,
     mtime:      u64,
     ctime:      Option<u64>,
-) -> Result<bch_inode_unpacked, BchError> {
-    let mut inode_out: bch_inode_unpacked = Default::default();
+) -> Result<InodeUnpacked, BchError> {
+    let mut inode_out: InodeUnpacked = Default::default();
 
     btree::iter::trans_commit_do(
         fs,
@@ -523,7 +523,7 @@ fn fuse_setattr(
 /// cache; without it, truncating down and back up reads the old bytes again
 /// (xfstests generic/029). Growing needs only the new i_size, which
 /// fuse_setattr() writes.
-fn fuse_truncate(fs: &Fs, inum: subvol_inum, new_size: u64) -> Result<(), BchError> {
+fn fuse_truncate(fs: &Fs, inum: SubvolInum, new_size: u64) -> Result<(), BchError> {
     let bi = inode::find_by_inum(fs, inum)?;
     if new_size >= bi.bi_size {
         return Ok(());
@@ -561,7 +561,7 @@ fn fuse_fsync(fs: &Fs) -> Result<(), BchError> {
 /// the caller already has it, so that the usual case - no update due - costs
 /// no transaction; the decision is made again on the current inode inside it.
 /// Failure doesn't fail the read, any more than it does in the kernel.
-fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: subvol_inum, bi: &bch_inode_unpacked) {
+fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: SubvolInum, bi: &InodeUnpacked) {
     if !opts.needs_update(fs, bi, fs.current_time()) {
         return;
     }
@@ -587,7 +587,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: subvol_inum, bi: &bch_inode_
     }
 }
 
-fn fuse_update_inode_after_write(fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
+fn fuse_update_inode_after_write(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     btree::iter::trans_commit_do(
         fs,
         None,
@@ -637,7 +637,7 @@ impl AtimeOpts {
 
     /// atime_needs_update() and relatime_need_update(): with relatime, only
     /// when atime isn't already after the last change, or is a day old.
-    fn needs_update(&self, fs: &Fs, bi: &bch_inode_unpacked, now: u64) -> bool {
+    fn needs_update(&self, fs: &Fs, bi: &InodeUnpacked, now: u64) -> bool {
         let is_dir = rustix::fs::FileType::from_raw_mode(bi.bi_mode.into()) == rustix::fs::FileType::Directory;
         if is_dir && self.nodiratime {
             return false;
@@ -665,7 +665,7 @@ const ALT_NODE_BASE: u64 = 1 << 63;
 /// A node ID the kernel holds: the inode it stands for, and FUSE's lookup count
 /// - one per entry we hand out, dropped by forget.
 struct NodeRef {
-    inum:    subvol_inum,
+    inum:    SubvolInum,
     nlookup: u64,
     /// Open files on it: open() and create() to release(). An unlinked inode
     /// is deleted when the last link and the last open are both gone, as the
@@ -701,7 +701,7 @@ impl NodeMap {
         }
     }
 
-    fn resolve(&self, node: u64) -> Result<subvol_inum, Errno> {
+    fn resolve(&self, node: u64) -> Result<SubvolInum, Errno> {
         if let Some(r) = self.by_node.get(&node) {
             return Ok(r.inum);
         }
@@ -716,7 +716,7 @@ impl NodeMap {
     }
 
     /// A reference to @inum's node ID, counted until put().
-    fn get(&mut self, inum: subvol_inum) -> u64 {
+    fn get(&mut self, inum: SubvolInum) -> u64 {
         let key = (inum.subvol, inum.inum);
         let node = match self.by_inum.get(&key) {
             Some(&node) => node,
@@ -732,7 +732,7 @@ impl NodeMap {
     }
 
     /// @inum's own inode number as its node ID, if it can have it.
-    fn own_node(&mut self, inum: subvol_inum) -> Option<u64> {
+    fn own_node(&mut self, inum: SubvolInum) -> Option<u64> {
         if inum.subvol != BCACHEFS_ROOT_SUBVOL {
             return None;
         }
@@ -758,7 +758,7 @@ impl NodeMap {
 
     /// Drop @nlookup references to @node; with the last, return the inode it
     /// stood for.
-    fn put(&mut self, node: u64, nlookup: u64) -> Option<subvol_inum> {
+    fn put(&mut self, node: u64, nlookup: u64) -> Option<SubvolInum> {
         let r = self.by_node.get_mut(&node)?;
         r.nlookup = r.nlookup.saturating_sub(nlookup);
         if r.nlookup != 0 {
@@ -784,7 +784,7 @@ impl NodeMap {
     }
 
     /// An open file on @node closed: its inode, if that was the last.
-    fn release(&mut self, node: u64) -> Option<subvol_inum> {
+    fn release(&mut self, node: u64) -> Option<SubvolInum> {
         let r = self.by_node.get_mut(&node)?;
         r.opens = r.opens.saturating_sub(1);
         (r.opens == 0 && !r.deleted).then_some(r.inum)
@@ -798,7 +798,7 @@ impl NodeMap {
     /// The node is marked deleted, as the kernel may still hold it: forget
     /// mustn't evict it again, and the inode number is free to be reused - by
     /// an inode that mustn't be handed this node (own_node()).
-    fn delete(&mut self, inum: subvol_inum) -> bool {
+    fn delete(&mut self, inum: SubvolInum) -> bool {
         let key = (inum.subvol, inum.inum);
 
         match self.by_inum.get(&key).and_then(|node| self.by_node.get_mut(node)) {
@@ -810,7 +810,7 @@ impl NodeMap {
     }
 
     /// Forget everything: the inodes still referenced.
-    fn drain(&mut self) -> Vec<subvol_inum> {
+    fn drain(&mut self) -> Vec<SubvolInum> {
         self.by_inum.clear();
         self.by_node.drain().filter(|(_, r)| !r.deleted).map(|(_, r)| r.inum).collect()
     }
@@ -853,13 +853,13 @@ impl BcachefsFs {
     }
 
     /// The inode a node ID from the kernel stands for.
-    fn resolve(&self, node: INodeNo) -> Result<subvol_inum, Errno> {
+    fn resolve(&self, node: INodeNo) -> Result<SubvolInum, Errno> {
         self.nodes.lock().unwrap().resolve(node.0)
     }
 
     /// Hand the kernel a reference to @inum: its node ID, counted until forget.
     /// Taken before the reply goes out, so the forget can't arrive first.
-    fn node_get(&self, inum: subvol_inum) -> INodeNo {
+    fn node_get(&self, inum: SubvolInum) -> INodeNo {
         INodeNo(self.nodes.lock().unwrap().get(inum))
     }
 
@@ -882,7 +882,7 @@ impl BcachefsFs {
     /// The kernel's evict, InodeInfo::evict(): nothing references the inode
     /// any more, so if it has no links left, delete it. A subvolume root with no links is the
     /// subvolume deletion path's to delete, not ours.
-    fn inode_evict(&self, inum: subvol_inum) {
+    fn inode_evict(&self, inum: SubvolInum) {
         let fs = self.fs();
         let bi = match inode::find_by_inum(fs, inum) {
             Ok(bi) => bi,
@@ -912,7 +912,7 @@ impl BcachefsFs {
     /// FUSE_OPEN, and an unlink can land between them. That open finds the
     /// inode deleted and gets ENOENT (NodeMap::open()), as if the unlink had
     /// come before its lookup.
-    fn inode_unlinked(&self, inum: subvol_inum, bi: &bch_inode_unpacked) {
+    fn inode_unlinked(&self, inum: SubvolInum, bi: &InodeUnpacked) {
         if bi.nlink() != 0 || bi.is_dir() || bi.is_subvolume_root() {
             return;
         }
@@ -922,7 +922,7 @@ impl BcachefsFs {
         }
     }
 
-    fn inode_to_attr(&self, bi: &bch_inode_unpacked) -> FileAttr {
+    fn inode_to_attr(&self, bi: &InodeUnpacked) -> FileAttr {
         let fs = self.fs();
         let ts_a = fs.time_to_timespec(bi.bi_atime as i64);
         let ts_m = fs.time_to_timespec(bi.bi_mtime as i64);
@@ -1034,7 +1034,7 @@ impl Filesystem for BcachefsFs {
                 let parent = if (dir.subvol, dir.inum) == (BCACHEFS_ROOT_SUBVOL, BCACHEFS_ROOT_INO) {
                     dir
                 } else {
-                    subvol_inum {
+                    SubvolInum {
                         subvol: if dir_u.bi_parent_subvol != 0 { dir_u.bi_parent_subvol as u64 } else { dir.subvol },
                         inum:   dir_u.bi_dir,
                     }
@@ -1223,7 +1223,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
-        let node = self.node_get(subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        let node = self.node_get(SubvolInum { subvol: dir.subvol, inum: new_inode.bi_inum });
         reply.entry_with_nodeid(node, &TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
@@ -1248,7 +1248,7 @@ impl Filesystem for BcachefsFs {
         let fs = self.fs();
         match fuse_unlink(fs, dir, name) {
             Ok(bi) => {
-                self.inode_unlinked(subvol_inum { subvol: dir.subvol, inum: bi.bi_inum }, &bi);
+                self.inode_unlinked(SubvolInum { subvol: dir.subvol, inum: bi.bi_inum }, &bi);
                 reply.ok()
             }
             Err(e) => reply.error(bch_err(&e)),
@@ -1294,7 +1294,7 @@ impl Filesystem for BcachefsFs {
         };
         buf[..link_bytes.len()].copy_from_slice(link_bytes);
 
-        let sym_inum = subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum };
+        let sym_inum = SubvolInum { subvol: dir.subvol, inum: new_inode.bi_inum };
         if let Err(e) = fs.write(new_inode.bi_inum, 0, dir.subvol as u32, 1, &buf, link_bytes.len() as u64) {
             reply.error(bch_err(&e));
             return;
@@ -1308,7 +1308,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
-        let node = self.node_get(subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        let node = self.node_get(SubvolInum { subvol: dir.subvol, inum: new_inode.bi_inum });
         reply.entry_with_nodeid(node, &TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
@@ -1370,7 +1370,7 @@ impl Filesystem for BcachefsFs {
         match fuse_rename(fs, src_dir, name, dst_dir, newname, mode) {
             Ok(dst_bi) => {
                 if mode == RenameMode::BCH_RENAME_OVERWRITE {
-                    self.inode_unlinked(subvol_inum { subvol: dst_dir.subvol, inum: dst_bi.bi_inum },
+                    self.inode_unlinked(SubvolInum { subvol: dst_dir.subvol, inum: dst_bi.bi_inum },
                                         &dst_bi);
                 }
                 reply.ok()
@@ -1406,7 +1406,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&inode_u);
-        let node = self.node_get(subvol_inum { subvol: parent.subvol, inum: inode_u.bi_inum });
+        let node = self.node_get(SubvolInum { subvol: parent.subvol, inum: inode_u.bi_inum });
         reply.entry_with_nodeid(node, &TTL, &attr, Generation(inode_u.bi_generation as u64));
     }
 
@@ -1787,7 +1787,7 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  create -> ok inum={}", new_inode.bi_inum);
         let attr = self.inode_to_attr(&new_inode);
-        let node = self.node_get(subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        let node = self.node_get(SubvolInum { subvol: dir.subvol, inum: new_inode.bi_inum });
         self.nodes.lock().unwrap().open(node.0);
         reply.created_with_nodeid(
             node, &TTL, &attr,
@@ -1821,7 +1821,7 @@ pub struct Cli {
 fn parse_fuse_mount_options(
     device: &str,
     options: Option<&str>,
-) -> anyhow::Result<(bch_opts, Vec<MountOption>, MountFlags)> {
+) -> anyhow::Result<(Opts, Vec<MountOption>, MountFlags)> {
     let mut mount_options = vec![
         MountOption::FSName(device.to_string()),
         // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
@@ -2434,7 +2434,7 @@ mod tests {
     use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts, MountFlags};
     use super::{NodeMap, ALT_NODE_BASE, BCACHEFS_ROOT_INO, BCACHEFS_ROOT_SUBVOL};
     use bcachefs_kernel::c;
-    use bcachefs_kernel::snapshots::subvolume::subvol_inum;
+    use bcachefs_kernel::snapshots::subvolume::SubvolInum;
     use fuser::MountOption;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -2528,11 +2528,11 @@ mod tests {
         assert!(mount_options.contains(&MountOption::Suid));
     }
 
-    fn inum(subvol: u64, inum: u64) -> subvol_inum {
-        subvol_inum { subvol, inum }
+    fn inum(subvol: u64, inum: u64) -> SubvolInum {
+        SubvolInum { subvol, inum }
     }
 
-    fn resolves_to(map: &NodeMap, node: u64, want: subvol_inum) {
+    fn resolves_to(map: &NodeMap, node: u64, want: SubvolInum) {
         let got = map.resolve(node).unwrap();
         assert_eq!((got.subvol, got.inum), (want.subvol, want.inum), "node {node:#x}");
     }

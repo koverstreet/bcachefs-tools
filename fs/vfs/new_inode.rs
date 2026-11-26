@@ -11,12 +11,12 @@
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
-use crate::posix::inode::bch_inode_unpacked;
-use crate::snapshots::{format::Subvolume, subvolume::subvol_inum};
+use crate::posix::inode::InodeUnpacked;
+use crate::snapshots::{format::Subvolume, subvolume::SubvolInum};
 use crate::vfs::inode::{InodeQuota, InodeReserved, InodeReservedRange, InodeInfoFlag};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::locking::{MemallocFlags, two_state_lock_t};
+use crate::locking::{MemallocFlags, TwoStateLock};
 use crate::new_lock;
 use crate::util::alloc::{flags, AllocError, Flags};
 use crate::os::{module::{Quiesced, ThisModule}, slab::KmemCache, workqueue::{run_raw, WorkAt}};
@@ -47,7 +47,7 @@ impl NewInode {
                                                           ei_reserved_end: Zeroable::zeroed() },
                                      "&inode->ei_reserved_lock"),
             ei_update_lock <- new_lock!((), "&inode->ei_update_lock"),
-            ei_pagecache_lock: two_state_lock_t::new(),
+            ei_pagecache_lock: TwoStateLock::new(),
             ei_quota <- new_lock!(InodeQuota { ei_qid: Default::default(), ei_quota_reserved: 0 },
                                   "&inode->ei_quota_lock"),
             ei_writeback_timer <- crate::new_delayed_work!(run_raw::<InodeInfo>, "&inode->ei_writeback_timer"),
@@ -75,7 +75,7 @@ impl NewInode {
     }
 
     /// Made from @bi - inode @inum, in @subvol.
-    pub fn init(&mut self, trans: &BtreeTrans<'_>, inum: subvol_inum, bi: &bch_inode_unpacked,
+    pub fn init(&mut self, trans: &BtreeTrans<'_>, inum: SubvolInum, bi: &InodeUnpacked,
                 subvol: &Subvolume) {
         let block_bytes = self.fs().block_bytes();
 
@@ -135,11 +135,11 @@ pub fn vfs_init(m: &ThisModule) -> Result<(), BchError> {
     super::direct_write::pools_init(m)?;
     super::writeback::pools_init(m)?;
     super::buffered::pools_init(m)?;
-    ret_to_result_void(super::fs_type::bch2_fs_type_register())
+    ret_to_result_void(super::fs_type::fs_type_register())
 }
 
 /// Past the grace period free() waits: the last inode's back in the cache.
 pub fn vfs_exit(q: &Quiesced<'_>) {
-    super::fs_type::bch2_fs_type_unregister();
+    super::fs_type::fs_type_unregister();
     INODE_CACHE.destroy(q);
 }

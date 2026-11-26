@@ -16,8 +16,8 @@ use crate::btree::trans::TransGuard;
 use crate::data::ec::format::Stripe;
 use crate::alloc::background::BUCKET_GC_GEN_MAX;
 use crate::alloc::format::AllocV4;
-use crate::data::extents::extent_ptr_decoded;
-use crate::data::extents_format::{bch_extent_ptr, Extent, Reservation};
+use crate::data::extents::ExtentPtrDecoded;
+use crate::data::extents_format::{ExtentPtr, Extent, Reservation};
 use crate::sb::{members_format::BCH_SB_MEMBER_INVALID, errors::SbErrorId};
 use crate::errcode::{Errcode, BchError};
 use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
@@ -41,7 +41,7 @@ use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_en
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType, BCH_BKEY_PTRS_MAX,
-    BCH_REPLICAS_MAX, BCH_SB_SECTOR, bkey, SbCompat, SbCompats};
+    BCH_REPLICAS_MAX, BCH_SB_SECTOR, Bkey, SbCompat, SbCompats};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -60,10 +60,10 @@ pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
 /// device, so it's 16 bytes, the lock one of them.
 #[repr(C, align(4))]
 #[derive(MaybeZeroable)]
-pub struct bucket {
+pub struct Bucket {
     pub lock: Locked<ByteLock, BucketData>,
 }
-crate::genradix_entry!(bucket);
+crate::genradix_entry!(Bucket);
 
 nest! {
     /// What a bucket's lock protects. Packed, so it starts right after the
@@ -102,14 +102,14 @@ pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::Atomic
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct bch_dev_usage {
+pub struct DevUsage {
     pub buckets: [u64; DataType::NR as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct bch_dev_usage_type {
+pub struct DevUsageType {
     pub buckets: u64,
     pub sectors: u64, /* _compressed_ sectors: */
     /*
@@ -123,14 +123,14 @@ pub struct bch_dev_usage_type {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct bch_dev_usage_full {
-    pub d: [bch_dev_usage_type; DataType::NR as usize],
+pub struct DevUsageFull {
+    pub d: [DevUsageType; DataType::NR as usize],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct bch_fs_usage_base {
+pub struct FsUsageBase {
     pub hidden: u64,
     pub btree: u64,
     pub data: u64,
@@ -138,7 +138,7 @@ pub struct bch_fs_usage_base {
     pub reserved: u64,
 }
 
-impl bch_fs_usage_base {
+impl FsUsageBase {
     pub fn add_data_type(&mut self, data_type: DataType, sectors: u64) {
 
         let to = match data_type {
@@ -153,7 +153,7 @@ impl bch_fs_usage_base {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
-pub struct bch_fs_usage_short {
+pub struct FsUsageShort {
     pub capacity: u64,
     pub used: u64,
     pub free: u64,
@@ -162,7 +162,7 @@ pub struct bch_fs_usage_short {
 /* Free space by the replica count it's placeable at: [n - 1] at n or more */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
-pub struct bch_fs_placeable {
+pub struct FsPlaceable {
     /* waiting on copygc, if need be */
     pub eventual: [u64; BCH_REPLICAS_MAX as usize],
     /* free buckets only */
@@ -250,13 +250,13 @@ impl Dev {
     }
 
     /// The bucket @ptr points into: PTR_BUCKET_NR().
-    pub fn ptr_bucket(&self, ptr: &bch_extent_ptr) -> u64 {
+    pub fn ptr_bucket(&self, ptr: &ExtentPtr) -> u64 {
         self.sector_to_bucket(ptr.offset())
     }
 
     /// The bucket @ptr points into, as an alloc btree position:
     /// PTR_BUCKET_POS().
-    pub fn ptr_bucket_pos(&self, ptr: &bch_extent_ptr) -> Bpos {
+    pub fn ptr_bucket_pos(&self, ptr: &ExtentPtr) -> Bpos {
         pos(ptr.dev().into(), self.ptr_bucket(ptr))
     }
 
@@ -279,7 +279,7 @@ impl Dev {
 
 impl Dev {
     /// Bucket @b's gc state, if it's one of the device's: gc_bucket().
-    pub fn gc_bucket(&self, b: u64) -> Option<&bucket> {
+    pub fn gc_bucket(&self, b: u64) -> Option<&Bucket> {
         self.bucket_valid(b).then(|| self.buckets_gc.get(b as usize)).flatten()
     }
 }
@@ -288,7 +288,7 @@ impl TransAttempt<'_, '_> {
     /// Gc bucket @g's state, as an alloc key, edited by @f under its lock -
     /// left as it was if @f fails - and device @ca's counters moved from the
     /// old to the new after: a trigger's gc side, on a bucket.
-    pub fn gc_bucket_mod(&self, ca: &Dev, g: &bucket, flags: UpdateTriggerFlags,
+    pub fn gc_bucket_mod(&self, ca: &Dev, g: &Bucket, flags: UpdateTriggerFlags,
                          f: impl FnOnce(&mut AllocV4) -> Result<(), BchError>) -> Result<(), BchError> {
         let (old, new) = {
             let mut b = g.lock.lock();
@@ -340,7 +340,7 @@ impl TransAttempt<'_, '_> {
     /// ignored on overwrite, so deletion works; a stale cached pointer is
     /// cached_ptr_stale: bch2_bucket_ref_update().
     #[allow(clippy::too_many_arguments)]
-    pub fn bucket_ref_update(&self, ca: &Dev, k: BkeySC<'_>, ptr: &bch_extent_ptr,
+    pub fn bucket_ref_update(&self, ca: &Dev, k: BkeySC<'_>, ptr: &ExtentPtr,
                              sectors: i64, ptr_data_type: DataType, b_gen: u8,
                              bucket_data_type: &mut DataType, bucket_sectors: &mut u32) -> Result<(), BchError> {
         assert!(sectors != 0);
@@ -361,7 +361,7 @@ impl TransAttempt<'_, '_> {
     #[cold]
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
-    fn bucket_ref_update_slowpath(&self, ca: &Dev, k: BkeySC<'_>, ptr: &bch_extent_ptr,
+    fn bucket_ref_update_slowpath(&self, ca: &Dev, k: BkeySC<'_>, ptr: &ExtentPtr,
                                   sectors: i64, ptr_data_type: DataType, b_gen: u8,
                                   bucket_data_type: &mut DataType, bucket_sectors: &mut u32) -> Result<(), BchError> {
         let fs = self.fs();
@@ -458,7 +458,7 @@ impl TransAttempt<'_, '_> {
 /// or cached count, as the pointer is - and on insert, the bucket's data type
 /// set from it: __mark_pointer().
 #[allow(clippy::too_many_arguments)]
-fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &Dev, k: BkeySC<'_>, p: &extent_ptr_decoded,
+fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &Dev, k: BkeySC<'_>, p: &ExtentPtrDecoded,
                 sectors: i64, ptr_data_type: DataType, a: &mut AllocV4, insert: bool)
     -> Result<(), BchError>
 {
@@ -564,7 +564,7 @@ fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -
 /// An erasure coded pointer's sectors, in its block of the stripe - the key
 /// in the stripes btree, and gc's copy with gc - and in the stripe's
 /// replicas accounting: bch2_trigger_stripe_ptr().
-fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &extent_ptr_decoded,
+fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &ExtentPtrDecoded,
                       data_type: DataType, sectors: i64, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
@@ -774,7 +774,7 @@ pub(crate) static RESERVATION: Trigger = Trigger(|t, op| trigger_reservation(t, 
 /// Whether @k counts in its snapshot's keys: not a whiteout - iteration skips
 /// those, so snapshot deletion never sees them - nor an extent or a
 /// reservation, which count themselves.
-fn snapshot_key_counted(k: &bkey) -> bool {
+fn snapshot_key_counted(k: &Bkey) -> bool {
     k.p.snapshot != 0 &&
         !k.key_type().is_extent_whiteout() &&
         !k.key_type().is::<Extent>() &&
@@ -791,7 +791,7 @@ pub(crate) fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<
         return Ok(());
     }
 
-    let counted = |k: &bkey| snapshot_key_counted(k).then(|| k.bytes() as i64);
+    let counted = |k: &Bkey| snapshot_key_counted(k).then(|| k.bytes() as i64);
     let (new, old) = (counted(op.new.k()), counted(op.old.k));
 
     let nr    = i64::from(new.is_some()) - i64::from(old.is_some());
@@ -1069,7 +1069,7 @@ impl Dev {
     /// Its free buckets in @usage, less the open ones and @watermark's
     /// reserve, at least 0: __dev_buckets_free(). nr_open_buckets is the
     /// allocator's, read unlocked, as C does.
-    pub fn free_buckets_at(&self, usage: &bch_dev_usage, watermark: Watermark) -> u64 {
+    pub fn free_buckets_at(&self, usage: &DevUsage, watermark: Watermark) -> u64 {
         let open = self.nr_open_buckets.get();
         let free = usage.buckets[DataType::free];
         // as C's: u64s, then max_t(s64, 0, ..)
@@ -1078,10 +1078,10 @@ impl Dev {
 
     /// Its buckets by data type, every CPU's count summed - not under any
     /// lock, so only near enough: bch2_dev_usage_read_fast().
-    pub fn usage_read_fast(&self) -> bch_dev_usage {
+    pub fn usage_read_fast(&self) -> DevUsage {
         // The allocator's: one sweep over the CPUs, reading only the bucket
         // counts, a third of each CPU's usage
-        let mut u = bch_dev_usage::default();
+        let mut u = DevUsage::default();
         for cpu in self.usage.get().cpus() {
             for (i, b) in u.buckets.iter_mut().enumerate() {
                 *b = b.wrapping_add(percpu_field!(cpu, d[i].buckets).get());
@@ -1091,12 +1091,12 @@ impl Dev {
     }
 
     /// All of its usage, as usage_read_fast(): bch2_dev_usage_full_read_fast().
-    pub fn usage_full_read_fast(&self) -> bch_dev_usage_full {
+    pub fn usage_full_read_fast(&self) -> DevUsageFull {
         self.usage.sum_nonnegative()
     }
 
     /// @usage, of this device, as a table.
-    pub fn usage_to_text(&self, out: &mut Printbuf, usage: &bch_dev_usage_full) {
+    pub fn usage_to_text(&self, out: &mut Printbuf, usage: &DevUsageFull) {
         if out.nr_tabstops() < 5 {
             out.tabstops_reset();
             for spaces in [12, 16, 16, 16, 16] {
@@ -1156,13 +1156,13 @@ impl Dev {
 
     /// How many generations @ptr's bucket has moved on from it - None for a
     /// bucket the device doesn't have: dev_ptr_stale_rcu(), which is -1 there.
-    pub fn ptr_stale(&self, ptr: &bch_extent_ptr, rcu: &ReadGuard) -> Option<u8> {
+    pub fn ptr_stale(&self, ptr: &ExtentPtr, rcu: &ReadGuard) -> Option<u8> {
         Some(gen_after(self.bucket_gen(self.ptr_bucket(ptr), rcu)?, ptr.generation()))
     }
 
     /// Whether @ptr's bucket has moved on from it, or isn't the device's:
     /// dev_ptr_stale().
-    pub fn dev_ptr_stale(&self, ptr: &bch_extent_ptr, rcu: &ReadGuard) -> bool {
+    pub fn dev_ptr_stale(&self, ptr: &ExtentPtr, rcu: &ReadGuard) -> bool {
         self.ptr_stale(ptr, rcu) != Some(0)
     }
 }

@@ -12,7 +12,7 @@
 //! print there, and the file frees the channel when both are gone.
 
 use crate::c;
-use crate::bcachefs_ioctl::{bch_ioctl_recovery_status, BCH_IOCTL_RECOVERY_STATUS};
+use crate::bcachefs_ioctl::{IoctlRecoveryStatus, BCH_IOCTL_RECOVERY_STATUS};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
@@ -46,7 +46,7 @@ impl StdioFile for StatusFd {
             let Some(fs) = fs else {
                 return ControlFlow::Break(-(c::ENODEV as c_long));
             };
-            let mut status = bch_ioctl_recovery_status::default();
+            let mut status = IoctlRecoveryStatus::default();
 
             // Everything else this filesystem answers, it answers here: the
             // chardev's ioctl exists to turn a minor back into a bch_fs, and

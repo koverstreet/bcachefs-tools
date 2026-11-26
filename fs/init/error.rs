@@ -32,12 +32,12 @@
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::fs::{Dev, FsFlag, Fs};
 use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags,
-    bkey_validate_context, BkeyValidateFrom};
+    BkeyValidateContext, BkeyValidateFrom};
 use crate::btree::trans::TransGuard;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::errcode::{Errcode, BchError};
 use crate::{prt, new_lock};
-use crate::sb::errors::{FsckFlags, SbErrorId, bch_sb_error_entry_cpu};
+use crate::sb::errors::{FsckFlags, SbErrorId, SbErrorEntryCpu};
 use crate::util::alloc::Vec;
 use crate::os::{kernel::{jiffies, time_after, HZ}, workqueue::Queue};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
@@ -54,7 +54,7 @@ use crate::format::{Bpos, Btree, MemberState, ErrorAction};
 use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
 use crate::opts::FsckErrOpt;
 use crate::sb::members_format::MemberErrorType;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -66,7 +66,7 @@ use crate::snapshots::subvolume::subvol_inum;
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct fsck_damaged_path {
+pub struct FsckDamagedPath {
     pub inum: u64,
     pub snapshot: u32,
     /* SbErrorId, deduped; 0 terminated (error 0 is fs-level) */
@@ -100,7 +100,7 @@ impl FsckErrState {
 pub(crate) struct ErrorsLocked {
     pub(crate) msgs:                    Vec<FsckErrState>,
     pub(crate) msgs_alloc_err:          bool,
-    pub(crate) damaged_paths:           Vec<fsck_damaged_path>,
+    pub(crate) damaged_paths:           Vec<FsckDamagedPath>,
     pub(crate) damaged_paths_alloc_err: bool,
 }
 
@@ -118,7 +118,7 @@ impl ErrorsLocked {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_errors {
+pub struct FsErrors {
     /* What the error paths keep: init/error.rs */
     #[pin]
     #[init(new_lock!(ErrorsLocked::new()))]
@@ -127,7 +127,7 @@ pub struct bch_fs_errors {
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
     #[init(new_lock!(Vec::new()))]
-    pub(crate) counts: Locked<Mutex, Vec<bch_sb_error_entry_cpu>>,
+    pub(crate) counts: Locked<Mutex, Vec<SbErrorEntryCpu>>,
 }
 
 /// The fsck error ids by their names: id::inode_wrong_nlink.
@@ -278,11 +278,11 @@ pub fn fs_fatal_error(fs: &Fs, from: &CStr, msg: &dyn ToText) {
 pub struct BkeyValidate<'a, 'k> {
     pub fs:   &'a Fs,
     pub k:    AnyKeySC<'k, Unvalidated>,
-    pub from: &'a bkey_validate_context,
+    pub from: &'a BkeyValidateContext,
 }
 
 impl<'a, 'k> BkeyValidate<'a, 'k> {
-    pub fn new<V: ?Sized + BkeyVal>(fs: &'a Fs, k: BkeySC<'k, V>, from: &'a bkey_validate_context) -> Self {
+    pub fn new<V: ?Sized + BkeyVal>(fs: &'a Fs, k: BkeySC<'k, V>, from: &'a BkeyValidateContext) -> Self {
         BkeyValidate { fs, k: k.as_read(), from }
     }
 }
@@ -703,7 +703,7 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
 /// The verdict on an invalid key - fsck_delete_bkey, at once, for a check
 /// that's silent, or an error silenced; else fsck_err_verdict()'s, offering
 /// to delete it - fixed without asking, but where it's a write's or a commit's.
-pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &bkey_validate_context, err: SbErrorId,
+pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &BkeyValidateContext, err: SbErrorId,
                              msg: &dyn ToText) -> BchError {
     let vflags = from.bits.flags();
     if vflags.contains(ValidateFlags::silent) {
@@ -775,7 +775,7 @@ pub fn free_fsck_errs(fs: &Fs) {
 const DAMAGED_PATHS_MAX: usize = 4096;
 const DAMAGED_PATHS_PRINT: usize = 200;
 
-impl fsck_damaged_path {
+impl FsckDamagedPath {
     fn add_err(&mut self, err: SbErrorId) {
         let nr = usize::from(self.nr_errors);
         if !self.errors[..nr].contains(&(err.0 as u16)) && nr < self.errors.len() {
@@ -798,7 +798,7 @@ pub fn fsck_damaged(fs: &Fs, pos: Bpos, err: SbErrorId) {
         return;
     }
 
-    let mut p = fsck_damaged_path { inum, snapshot: pos.snapshot, nr_errors: 1, ..Default::default() };
+    let mut p = FsckDamagedPath { inum, snapshot: pos.snapshot, nr_errors: 1, ..Default::default() };
     p.errors[0] = err.0 as u16;
     if paths.len() >= DAMAGED_PATHS_MAX || paths.push(p).is_err() {
         st.damaged_paths_alloc_err = true;
@@ -837,7 +837,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
 }
 
 /// One damaged path, and what happened to it.
-pub fn damaged_path_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, p: &fsck_damaged_path) {
+pub fn damaged_path_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, p: &FsckDamagedPath) {
     // into a buffer of its own, so a restart doesn't print it twice
     let mut path = Printbuf::new();
     match lockrestart_do(trans, |t| damaged_path_resolve(t, p.inum, p.snapshot, &mut path)) {
@@ -895,7 +895,7 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
     -> Result<(), BchError>
 {
     let ret = if subvol != 0 {
-        crate::posix::namei::inum_to_path(t, subvol_inum { subvol: subvol.into(), inum: pos.inode }, out)
+        crate::posix::namei::inum_to_path(t, SubvolInum { subvol: subvol.into(), inum: pos.inode }, out)
     } else if pos.snapshot != 0 {
         crate::posix::namei::inum_snapshot_to_path(t, pos.inode, pos.snapshot, out)
     } else {
@@ -916,7 +916,7 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
 
 /// inum_offset_err_msg(), in transactions of its own - so never from inside
 /// an attempt: that's the attempt's end. For C's callers.
-pub fn bch2_inum_offset_err_msg_trans(trans: &BtreeTrans<'_>, out: &mut Printbuf, subvol: u32, pos: Bpos) {
+pub fn inum_offset_err_msg_trans(trans: &BtreeTrans<'_>, out: &mut Printbuf, subvol: u32, pos: Bpos) {
     let _ = lockrestart_do(trans, |t| inum_offset_err_msg(t, out, subvol, pos));
 }
 

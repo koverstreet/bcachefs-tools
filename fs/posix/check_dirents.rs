@@ -28,9 +28,9 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
-use crate::posix::str_hash::bch_hash_info;
+use crate::posix::str_hash::HashInfo;
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
@@ -46,7 +46,7 @@ struct CheckDirents<'f> {
     s:                SnapshotsSeen,
     dir:              InodeWalker,
     target:           InodeWalker,
-    hash_info:        bch_hash_info<'f>,
+    hash_info:        HashInfo<'f>,
     need_second_pass: bool,
 }
 
@@ -263,7 +263,7 @@ fn check_dirent_to_subvol<'t>(
 
     if fs_path_parent != parent {
         let mut path = Printbuf::new();
-        namei::inum_to_path(t, subvol_inum { subvol: child as u64, inum: target_inum }, &mut path)?;
+        namei::inum_to_path(t, SubvolInum { subvol: child as u64, inum: target_inum }, &mut path)?;
 
         if fsck_err!(t, id::subvol_fs_path_parent_wrong,
                      "subvol with wrong fs_path_parent, should be {parent}\n{path}\n{}",

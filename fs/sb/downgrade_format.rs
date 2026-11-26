@@ -15,7 +15,7 @@ use cstruct_macros::{counted, whole, MaybeZeroable, Plain, TypeInfo};
 #[counted(nr_errors)]
 #[repr(C, align(2))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_downgrade_entry {
+pub struct SbFieldDowngradeEntry {
     pub version: Le16<MetadataVersion>,
     pub recovery_passes: [le::U64; 2],
     pub nr_errors: le::U16,
@@ -24,9 +24,9 @@ pub struct bch_sb_field_downgrade_entry {
 
 /* Each entry is 2 byte aligned and the section's length a multiple of 8, so up
  * to 6 bytes past the last are padding */
-#[whole(tail = start: [u8], entries = bch_sb_field_downgrade_entry)]
+#[whole(tail = start: [u8], entries = SbFieldDowngradeEntry)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_downgrade {
-    pub start: [Head<bch_sb_field_downgrade_entry>; 0],
+pub struct SbFieldDowngrade {
+    pub start: [Head<SbFieldDowngradeEntry>; 0],
 }

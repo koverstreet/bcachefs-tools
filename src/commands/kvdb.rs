@@ -28,7 +28,7 @@
 //! Full semantics: doc/kvdb.md.
 //!
 //! Fields are set by the key type's set() (btree/bkey_methods.rs):
-//! fixed-layout vals and inodes (through bch_inode_unpacked) are fully
+//! fixed-layout vals and inodes (through InodeUnpacked) are fully
 //! editable, entry-stream (extent) vals only up to their fixed header. Updates run the
 //! normal triggers and key validation — per-key-invalid keys are (correctly)
 //! rejected; whether we want a validation-bypass mode for injecting those is
@@ -49,8 +49,8 @@ use bcachefs_kernel::btree::iter::{
     TransBkey, UpdateTriggerFlags,
 };
 use bcachefs_kernel::data::write::WriteFlags;
-use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::posix::{inode::bch_inode_unpacked, inode};
+use bcachefs_kernel::opts::Opts;
+use bcachefs_kernel::posix::{inode::InodeUnpacked, inode};
 use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
@@ -61,9 +61,9 @@ use clap::Parser;
 use crate::device_scan::OpenedFs;
 use crate::logging;
 use crate::wrappers::{handle::BcachefsHandle, online_iter::{OnlineBtreeIter, OnlineIterFlags}};
-use bcachefs_kernel::format::{Bpos, Btree, BkeyType, bch_sb, bkey, Deleted, ErrorAction};
+use bcachefs_kernel::format::{Bpos, Btree, BkeyType, Sb, Bkey, Deleted, ErrorAction};
 
-const BKEY_U64S: usize = size_of::<bkey>() / size_of::<u64>();
+const BKEY_U64S: usize = size_of::<Bkey>() / size_of::<u64>();
 
 // The canonical kvdb documentation: this constant is the --help long text,
 // and docgen extracts it into the Principles of Operation (doc/generated/
@@ -317,14 +317,14 @@ fn render_key(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, key_only: bool) -> String {
 /// A field beyond the end of a short (older-format) value reads as zero,
 /// mirroring update's grow-zero-filled write semantics.
 ///
-/// Inodes are read through the decoded form, bch_inode_unpacked, as update
+/// Inodes are read through the decoded form, InodeUnpacked, as update
 /// writes them: the varint-packed fields have no fixed position.
 fn render_key_fields(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, paths: &[&str]) -> Result<String> {
     if let Some(i) = k.arm::<inode::Inodes>() {
         let u = inode::unpack(fs, i);
-        let mut bytes = [0u8; size_of::<bch_inode_unpacked>()];
+        let mut bytes = [0u8; size_of::<InodeUnpacked>()];
         typeinfo::field_bytes(&u, &mut bytes);
-        return render_fields(&bytes, <bch_inode_unpacked as TypeInfo>::INFO, paths);
+        return render_fields(&bytes, <InodeUnpacked as TypeInfo>::INFO, paths);
     }
 
     render_raw_fields(k, paths)
@@ -898,12 +898,12 @@ fn cmd_set(
 }
 
 // ---------------------------------------------------------------------------
-// superblock fields — same field engine as keys, anchored on bch_sb::INFO
+// superblock fields — same field engine as keys, anchored on Sb::INFO
 // (which carries the BCH_SB_* flag words, #[bitfield]s), written back via
 // bch2_write_super so the csum is recomputed and every sb copy updated.
 
 fn sb_field(field: &str) -> Result<typeinfo::FieldRef> {
-    typeinfo::resolve_with_bits(<Head<bch_sb> as typeinfo::TypeInfo>::INFO, field)
+    typeinfo::resolve_with_bits(<Head<Sb> as typeinfo::TypeInfo>::INFO, field)
         .map_err(|e| anyhow!("{e}"))
 }
 
@@ -1458,7 +1458,7 @@ fn run_line(repl: &mut Repl, line: &str) -> Result<ControlFlow<()>> {
 fn kvdb(cli: Cli) -> Result<()> {
     logging::setup(cli.verbose, cli.colorize);
 
-    let mut fs_opts = bch_opts::default();
+    let mut fs_opts = Opts::default();
     fs_opts.set_degraded(DegradedAction::very);
     // An injection tool must not consume its own injections: background
     // workers in *this* fs instance would otherwise act on the state under

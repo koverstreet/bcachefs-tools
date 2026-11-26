@@ -63,13 +63,13 @@ use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::format::Stripe;
-use crate::alloc::write_point::write_point_specifier;
-use crate::btree::bbpos::bbpos;
+use crate::alloc::write_point::WritePointSpecifier;
+use crate::btree::bbpos::Bbpos;
 use crate::data::extents::ReadFlags;
-use crate::data::reconcile::bch_fs_reconcile;
+use crate::data::reconcile::FsReconcile;
 use crate::data::reconcile::format::{ReconcileWorkId, ReconcileWorkId as w};
-use crate::data::update::{data_update_opts, DataUpdateType};
-use crate::opts::bch_inode_opts;
+use crate::data::update::{DataUpdateOpts, DataUpdateType};
+use crate::opts::InodeOpts;
 use crate::data::ec::repair::{stripe_repair, StripeRepair};
 use crate::data::moving::{key_sectors, IoMark, MoveStats, MovingCtxt};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -80,7 +80,8 @@ use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key,
     SetNeedsReconcileCtx};
 use crate::errcode::{BchError, Errcode as err};
 use crate::fs::{Fs, FsFlag};
-use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::data::reconcile::trigger::PerSnapshotIoOpts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::{prt, bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
 use crate::util::alloc::Vec;
@@ -235,7 +236,7 @@ impl WorkBuf {
 
     /// The next entry, from @work_pos up to @end: a batch read once the last's
     /// done, and @work_pos moved past it - next_reconcile_entry().
-    fn next(&mut self, trans: &TransGuard<'_>, work_pos: &mut bbpos, end: Bpos)
+    fn next(&mut self, trans: &TransGuard<'_>, work_pos: &mut Bbpos, end: Bpos)
         -> Result<Option<Bpos>, BchError>
     {
         if self.next == self.pos.len() {
@@ -304,7 +305,7 @@ struct StripeRetry {
 
 type StripeRetries = Vec<StripeRetry>;
 
-/// The parked stripes, by index: bch_fs_reconcile.stripes_pending.
+/// The parked stripes, by index: FsReconcile.stripes_pending.
 pub type StripesPending = Cuckoo;
 
 impl Fs {
@@ -421,7 +422,7 @@ struct Walker<'a, 'f> {
 }
 
 /// What do_reconcile() traces for a key: the move it started, if it did.
-type Moved = Option<(bch_inode_opts, data_update_opts)>;
+type Moved = Option<(InodeOpts, DataUpdateOpts)>;
 
 /// The iterator flags for reconciling a key in @btree: getting a stripe's
 /// handle needs it intent locked, so the stripe trigger can't delete the
@@ -480,7 +481,7 @@ impl<'a, 'f> Walker<'a, 'f> {
     /// @work, read from @read_dev if it's a phys phase's: its reconcile
     /// options brought up to date and committed, then its plan carried out.
     /// __do_reconcile_extent().
-    fn key(&mut self, t: &TransAttempt<'_, '_>, work: bbpos, iter: &mut BtreeIter<'_>, level: u32,
+    fn key(&mut self, t: &TransAttempt<'_, '_>, work: Bbpos, iter: &mut BtreeIter<'_>, level: u32,
            k: BkeySC<'_>, read_dev: Option<u32>) -> Result<Moved, BchError>
     {
         let ctxt = self.ctxt;
@@ -494,8 +495,8 @@ impl<'a, 'f> Walker<'a, 'f> {
         let fs = t.fs();
         ctxt.set_stats(&fs.reconcile.work_stats);
 
-        let opts = get_io_opts(t, Some(&mut *self.s), k)?;
-        update_reconcile_opts(t, Some(&mut *self.s), &opts, iter, level, k,
+        let opts = get_io_opts(t, Some(&mut self.s), k)?;
+        update_reconcile_opts(t, Some(&mut self.s), &opts, iter, level, k,
                               SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
 
         // The reconcile opts are committed here, not carried into the data
@@ -567,7 +568,7 @@ impl<'a, 'f> Walker<'a, 'f> {
     }
 
     /// Work entry @work in a logical work btree: do_reconcile_extent().
-    fn extent(&mut self, t: &TransAttempt<'_, '_>, work: bbpos) -> Result<(), BchError> {
+    fn extent(&mut self, t: &TransAttempt<'_, '_>, work: Bbpos) -> Result<(), BchError> {
         let fs = t.fs();
         let data_pos = rb_work_to_data_pos(work.pos);
 
@@ -587,7 +588,7 @@ impl<'a, 'f> Walker<'a, 'f> {
 
     /// Work entry @work in a phys work btree - a backpointer, on device
     /// work.pos.inode: do_reconcile_extent_phys().
-    fn extent_phys(&mut self, t: &TransAttempt<'_, '_>, work: bbpos) -> Result<(), BchError> {
+    fn extent_phys(&mut self, t: &TransAttempt<'_, '_>, work: Bbpos) -> Result<(), BchError> {
         let fs = t.fs();
         let mut bp_iter = BtreeIter::new(t, Btree::backpointers, work.pos, BtreeIterFlags::empty());
         // none: a write buffer race
@@ -613,7 +614,7 @@ impl<'a, 'f> Walker<'a, 'f> {
     }
 
     /// Btree node backpointer @bp, at work entry @work: do_reconcile_btree().
-    fn btree(&mut self, t: &TransAttempt<'_, '_>, work: bbpos, bp: &BkeyI<Backpointer>)
+    fn btree(&mut self, t: &TransAttempt<'_, '_>, work: Bbpos, bp: &BkeyI<Backpointer>)
         -> Result<(), BchError>
     {
         let fs = t.fs();
@@ -636,9 +637,9 @@ impl<'a, 'f> Walker<'a, 'f> {
 /// done - or anything fails: the next pass tries again. reconcile_phys_dev().
 fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
     let stats = MoveStats::default();
-    let ctxt = MovingCtxt::new(fs, &stats, write_point_specifier::RECONCILE, true)?;
+    let ctxt = MovingCtxt::new(fs, &stats, WritePointSpecifier::RECONCILE, true)?;
     let mut walker = Walker::new(&ctxt)?;
-    let mut work_pos = bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
+    let mut work_pos = Bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
 
     while ctxt.ratelimit().is_ok() && fs.reconcile_enabled() && !fs.flags.get(FsFlag::going_ro) {
         let trans = ctxt.trans();
@@ -648,7 +649,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
             break;
         }
 
-        let work = bbpos { btree: work_pos.btree, pos: p };
+        let work = Bbpos { btree: work_pos.btree, pos: p };
         if lockrestart_do(trans, |t| walker.extent_phys(t, work)).is_err() {
             break;
         }
@@ -753,7 +754,7 @@ impl<'f> Reconciler<'f, '_> {
     /// reads its entry again - but a buffered phase's, which it's taken.
     fn phase_walk(&self, p: &mut Pass<'_, 'f>, phase: &'static Phase) -> Result<(), BchError> {
         let fs = self.fs;
-        let mut work_pos = bbpos { btree: phase.btree, pos: phase.start };
+        let mut work_pos = Bbpos { btree: phase.btree, pos: phase.start };
 
         while self.interrupted(p.kick).is_none() {
             let trans = self.ctxt.trans();
@@ -995,7 +996,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         fs.unpark_marks_clear();
     }
 
-    let ctxt = MovingCtxt::new(fs, &fs.reconcile.work_stats, write_point_specifier::RECONCILE,
+    let ctxt = MovingCtxt::new(fs, &fs.reconcile.work_stats, WritePointSpecifier::RECONCILE,
                                true)?;
     let r = Reconciler { fs, me, ctxt, copygc_runs_unparked: Cell::new(0) };
 
@@ -1147,7 +1148,7 @@ impl Fs {
 // on_battery, for reconcile_on_ac_only: set as the filesystem starts, and
 // by the power supply notifier on every change, which kicks reconcile.
 
-impl power_supply::Watch for bch_fs_reconcile {
+impl power_supply::Watch for FsReconcile {
     fn power_notifier(&self) -> &PowerNotifier<Self> {
         &self.power_notifier
     }
@@ -1158,7 +1159,7 @@ impl power_supply::Watch for bch_fs_reconcile {
     }
 }
 
-impl PlacedDrop for bch_fs_reconcile {
+impl PlacedDrop for FsReconcile {
     unsafe fn placed_drop(&self) {
         unsafe { self.power_notifier.unregister() }
     }

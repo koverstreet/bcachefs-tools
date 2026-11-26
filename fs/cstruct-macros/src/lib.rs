@@ -463,7 +463,7 @@ pub fn bch_enum(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
 /// ioctl numbers, C's _IO*() #defines:
 ///
 ///   ioctl! {
-///       BCH_IOCTL_DISK_ADD = _IOW(0xbc, 4, c::bch_ioctl_disk),
+///       BCH_IOCTL_DISK_ADD = _IOW(0xbc, 4, IoctlDisk),
 ///       BCHFS_IOC_REINHERIT_ATTRS = _IOR(0xbc, 64, *const core::ffi::c_char),
 ///   }
 ///

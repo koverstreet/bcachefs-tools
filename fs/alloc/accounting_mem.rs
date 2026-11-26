@@ -3,7 +3,7 @@
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::alloc::accounting::{self, accounting_bkey, is_mem, key_to_text,
                         replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
-use crate::alloc::buckets::bch_fs_usage_base;
+use crate::alloc::buckets::FsUsageBase;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
@@ -11,14 +11,13 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, C
                          TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::MarkLockAt;
-use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
-use crate::btree::journal_overlay::journal_keys;
-use crate::init::dev::bch_devs_mask;
-use crate::journal::journal::journal_res;
+use crate::btree::journal_overlay::JournalKeys;
+use crate::journal::journal::JournalRes;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType, bkey, DegradedAction};
+use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType, Bkey, DegradedAction};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
@@ -177,7 +176,7 @@ pub fn mem_read<S>(fs: &Fs, pos: &DiskAccountingPos<S>) -> Counters {
 
 /*
  * Read out accounting keys for replicas entries, as an array of
- * bch_replicas_usage entries.
+ * ReplicasUsage entries.
  *
  * Note: this may be deprecated/removed at smoe point in the future and replaced
  * with something more general, it exists to support the ioctl used by the
@@ -365,7 +364,7 @@ fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchE
         };
 
         let mut buf = Printbuf::new();
-        if !can_read_with_devs(r, &bch_devs_mask { d: fs.devs_online.load() }, flags, Some(&mut buf)) {
+        if !can_read_with_devs(r, &fs.devs_online.load(), flags, Some(&mut buf)) {
             fs.missing_devs_to_text(&mut buf);
             print_str(fs, LogLevel::ERR, &mut buf);
             return Err(fs.err(Errcode::insufficient_devices_to_start));
@@ -402,7 +401,7 @@ fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchE
 
 /// Journal key @i's newer deltas, the keys after it at its position, added
 /// into it and marked overwritten: the index past them.
-fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &journal_keys, not_rw: &mut NotRw<'_>, i: usize)
+fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &JournalKeys, not_rw: &mut NotRw<'_>, i: usize)
     -> Result<usize, BchError>
 {
     let keys = jk.keys();
@@ -453,7 +452,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &journal_keys, not_rw: &
     Ok(end)
 }
 
-fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &journal_keys, not_rw: &mut NotRw<'_>,
+fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &JournalKeys, not_rw: &mut NotRw<'_>,
                        entries: &mut Vec<Entry>, i: usize) -> Result<usize, BchError>
 {
     let next = accumulate_newer(ctx, fs, journal_keys, not_rw, i)?;
@@ -461,7 +460,7 @@ fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &journal_ke
     Ok(next)
 }
 
-fn read_walk(trans: &TransGuard<'_>, journal_keys: &journal_keys, not_rw: &mut NotRw<'_>,
+fn read_walk(trans: &TransGuard<'_>, journal_keys: &JournalKeys, not_rw: &mut NotRw<'_>,
              entries: &mut Vec<Entry>) -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -655,7 +654,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let mut underflow_err = LogMsg::new(fs);
     underflow_err.set_suppressed(true);
 
-    let mut usage = bch_fs_usage_base::default();
+    let mut usage = FsUsageBase::default();
     {
         let mark = fs.mark_lock().read();
         for e in fs.accounting_mem(&mark).entries.iter() {
@@ -755,7 +754,7 @@ crate::recovery_pass!(accounting_read => read);
 
 /// Whether accounting is kept for @e - or it's an entry no accounting
 /// position here holds, a newer version's, and not ours to drop.
-pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &bch_replicas_entry_v1) -> bool {
+pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &ReplicasEntryV1) -> bool {
     let Some(pos) = try_replicas_acct(e.data_type.get(), e.nr_required, &e.devs) else { return true };
     fs.accounting_mem(mark).find(pos.to_bpos()).is_some()
 }
@@ -763,11 +762,11 @@ pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &bch_replicas_entry
 /// @dev gets a dev_data_type key's device counters - buckets, sectors,
 /// fragmented - under RCU.
 pub(crate) fn usage_of<R>(fs: &Fs, pos: &DiskAccountingPos<Unvalidated>, d: &[u64],
-                          dev: impl FnOnce([PerCpuRef<'_, u64>; 3]) -> R) -> (bch_fs_usage_base, Option<R>)
+                          dev: impl FnOnce([PerCpuRef<'_, u64>; 3]) -> R) -> (FsUsageBase, Option<R>)
 {
     use accounting::DiskAccountingPosRef as A;
 
-    let mut usage = bch_fs_usage_base::default();
+    let mut usage = FsUsageBase::default();
     let mut ret = None;
     match pos.get() {
         Ok(A::persistent_reserved(r)) => usage.reserved =
@@ -798,7 +797,7 @@ pub(crate) fn usage_of<R>(fs: &Fs, pos: &DiskAccountingPos<Unvalidated>, d: &[u6
  */
 #[inline]
 pub(crate) fn mem_add<M: MarkHeld>(fs: &Fs, a: Delta<'_>, gc: bool, mark: &mut M)
-    -> Result<bch_fs_usage_base, BchError>
+    -> Result<FsUsageBase, BchError>
 {
     if gc && !fs.accounting_mem(mark).gc_running {
         return Ok(Default::default());
@@ -830,7 +829,7 @@ pub(crate) fn mem_add<M: MarkHeld>(fs: &Fs, a: Delta<'_>, gc: bool, mark: &mut M
     }).0)
 }
 
-fn journal_pos_to_bversion(res: &journal_res, offset: usize) -> Bversion {
+fn journal_pos_to_bversion(res: &JournalRes, offset: usize) -> Bversion {
     ebug_assert!(res.ref_);
 
     Bversion {
@@ -846,8 +845,8 @@ fn applies(flags: CommitOpts) -> bool {
 /// A committing transaction's accounting key - @k and its counters @d, @offset
 /// u64s into the transaction's accounting keys - going into journal
 /// reservation @res.
-pub(crate) fn trans_commit_hook(t: &TransAttempt<'_, '_>, mark: &mut MarkRead<'_>, res: &journal_res,
-                                k: &mut bkey, d: &[u64], offset: usize, flags: CommitOpts)
+pub(crate) fn trans_commit_hook(t: &TransAttempt<'_, '_>, mark: &mut MarkRead<'_>, res: &JournalRes,
+                                k: &mut Bkey, d: &[u64], offset: usize, flags: CommitOpts)
     -> Result<(), BchError>
 {
     k.bversion = journal_pos_to_bversion(res, offset);

@@ -17,7 +17,7 @@
 
 use bcachefs_kernel::os::kernel::HZ;
 use bcachefs_kernel::os::workqueue::Queue;
-use bcachefs_kernel::util::futex::{bch2_futex_init, EventCount};
+use bcachefs_kernel::util::futex::{futex_init, EventCount};
 use bcachefs_kernel::util::sleep::SleepError;
 use bcachefs_kernel::util::task::{self, Resume, TASKS};
 
@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 fn init() {
     static INIT: Once = Once::new();
-    INIT.call_once(bch2_futex_init);
+    INIT.call_once(futex_init);
 }
 
 /// @f as a task on the system queue, nothing joining it.

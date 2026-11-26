@@ -82,10 +82,10 @@ impl FolioSectorState {
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, TypeInfo)]
-    pub struct bch_folio_sector {
+    pub struct FolioSector {
         #[members]
         #>[bitfield(u8)]
-        pub bits: pub struct bch_folio_sector_bits {
+        pub bits: pub struct FolioSectorBits {
             /* Uncompressed, fully allocated replicas (or on disk reservation): */
             nr_replicas:       u4,
             /* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
@@ -101,12 +101,12 @@ nest! {
 }
 
 /*
- * Worst-case bytes for a per-folio bch_folio_sector snapshot: a folio can be up
+ * Worst-case bytes for a per-folio FolioSector snapshot: a folio can be up
  * to MAX_PAGECACHE_ORDER pages, each contributing PAGE_SECTORS sector entries.
  * Used to size the writepage_buf_pool reserve.
  */
 pub const BCH_WRITEPAGE_BUF_BYTES: usize =
-    ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<bch_folio_sector>();
+    ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<FolioSector>();
 
 /// A folio's sector state, under its bch_folio's lock: written by writeback
 /// completion with the folio unlocked, so the folio lock doesn't cover it.
@@ -123,7 +123,7 @@ pub struct FolioState {
      * inode's count - see Folio::reserve_writeback().
      */
     pub reserved_degraded: bool,
-    pub s: [bch_folio_sector; 0],
+    pub s: [FolioSector; 0],
 }
 
 #[repr(C)]
@@ -242,7 +242,7 @@ impl ContigFolios {
     }
 }
 
-impl bch_folio_sector {
+impl FolioSector {
     pub(crate) fn state(&self) -> SectorState {
         SectorState::from_bits(self.state.into())
     }
@@ -282,7 +282,7 @@ impl FolioPrivate for bch_folio {
 
 impl bch_folio {
     fn alloc_size(folio_size: usize) -> usize {
-        size_of::<Self>() + size_of::<bch_folio_sector>() * (folio_size >> 9)
+        size_of::<Self>() + size_of::<FolioSector>() * (folio_size >> 9)
     }
 }
 
@@ -294,7 +294,7 @@ impl FolioLocked {
 }
 
 impl Folio {
-    /* file offset (to folio offset) to bch_folio_sector index */
+    /* file offset (to folio offset) to FolioSector index */
     fn sector_index(&self, pos: u64) -> usize {
         assert!(pos >= self.pos() && pos < self.end_pos());
         ((pos - self.pos()) >> 9) as usize

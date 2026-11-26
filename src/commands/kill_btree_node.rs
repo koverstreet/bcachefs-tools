@@ -19,7 +19,7 @@
 //         validation, which is the only thing between an accepted bad-checksum
 //         bset and the btree.
 //
-// The checksum covers [sizeof(bch_csum), vstruct_end), and vstruct_end is
+// The checksum covers [sizeof(Csum), vstruct_end), and vstruct_end is
 // sizeof(btree_node) + keys.u64s * 8 - not the whole block. So the byte to flip
 // has to be one the bset actually reaches: presplit_shard_boundaries leaves
 // plenty of nodes whose first bset is empty, and on those the first key byte is
@@ -46,13 +46,13 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::sb::members::DevReadRefKind;
 use bcachefs_kernel::btree::{bkey::BkeySC, iter::{BtreeIterFlags, BtreeNodeIter}};
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use clap::Parser;
-use bcachefs_kernel::format::{Bpos, Btree, bset, btree_node, btree_node_entry};
+use bcachefs_kernel::format::{Bpos, Btree, Bset, btree_node, BtreeNodeEntry};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 
@@ -143,7 +143,7 @@ fn parse_kill_node(s: &str) -> Result<KillNode> {
 /// accept-vs-reject behaviour we're trying to exercise never runs.
 ///
 /// Layout is what node read's read_done() walks: the first bset is the
-/// btree_node itself, each later one a btree_node_entry at the running sector
+/// btree_node itself, each later one a BtreeNodeEntry at the running sector
 /// offset, each occupying vstruct_sectors i.e. round_up(header + u64s * 8,
 /// block_size).
 struct BsetLoc {
@@ -179,8 +179,8 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) ->
             let n = btree_node::<Unvalidated>::from_bytes(&node[off..]).ok()?;
             (std::mem::offset_of!(Head<btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
         } else {
-            let n = btree_node_entry::<Unvalidated>::from_bytes(&node[off..]).ok()?;
-            (off + std::mem::offset_of!(Head<btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
+            let n = BtreeNodeEntry::<Unvalidated>::from_bytes(&node[off..]).ok()?;
+            (off + std::mem::offset_of!(Head<BtreeNodeEntry>, keys), n.keys.u64s(), n.sectors(block_bits))
         };
 
         if u64s != 0 {
@@ -207,7 +207,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         .map(|s| parse_kill_node(s))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut fs_opts = bch_opts::default();
+    let mut fs_opts = Opts::default();
     fs_opts.set_read_only(true);
 
     let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;
@@ -292,13 +292,13 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                                      --error keys has nothing to corrupt"))?;
 
                             let (victim, what) = if cli.error == ErrorType::Csum {
-                                (bset.at + std::mem::offset_of!(Head<bset>, journal_seq),
+                                (bset.at + std::mem::offset_of!(Head<Bset>, journal_seq),
                                  "bset header")
                             } else {
                                 /* midway into the keys: inside the checksummed
                                  * region, and corrupts a key rather than a
                                  * header field the keys don't depend on */
-                                (bset.at + size_of::<Head<bset>>() + bset.u64s * 8 / 2,
+                                (bset.at + size_of::<Head<Bset>>() + bset.u64s * 8 / 2,
                                  "key data")
                             };
 

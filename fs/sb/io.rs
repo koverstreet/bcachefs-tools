@@ -140,25 +140,24 @@ use crate::alloc::replicas::SbReplicas;
 use crate::btree::bkey::ValidateFlags;
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::c;
-use crate::alloc::disk_groups_format::bch_sb_field_disk_groups;
-use crate::alloc::replicas_format::bch_sb_field_replicas;
+use crate::alloc::disk_groups_format::SbFieldDiskGroups;
+use crate::alloc::replicas_format::SbFieldReplicas;
 use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
-use crate::data::extents_sb_format::bch_sb_field_extent_type_u64s;
-use crate::opts::{bch_opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
-use crate::sb::counters_format::bch_sb_field_counters;
-use crate::sb::downgrade_format::bch_sb_field_downgrade;
-use crate::sb::errors_format::bch_sb_field_errors_v2;
+use crate::data::extents_sb_format::SbFieldExtentTypeU64s;
+use crate::opts::{Opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
+use crate::sb::counters_format::SbFieldCounters;
+use crate::sb::downgrade_format::SbFieldDowngrade;
+use crate::sb::errors_format::SbFieldErrorsV2;
 use crate::sb::members::DevReadRefKind;
-use crate::sb::members_format::{bch_sb_field_members_v2, BCH_SB_MEMBERS_MAX, MemberErrorType};
+use crate::sb::members_format::{SbFieldMembersV2, BCH_SB_MEMBERS_MAX, MemberErrorType};
 use crate::util::time_stats::TimeStat;
-use crate::format::{bch_sb, bch_sb_field_crypt, __uuid_t, bch_csum, bch_key,
-    BCH_SB_EXTENT_BP_SHIFT_DEFAULT, bch_sb_field, bch_sb_field_ext, bch_sb_layout,
+use crate::format::{Sb, SbFieldCrypt, __uuid_t, Csum, Key,
+    BCH_SB_EXTENT_BP_SHIFT_DEFAULT, bch_sb_field, SbFieldExt, SbLayout,
     BCH_SB_LAYOUT_SECTOR, BCH_SB_LAYOUT_SIZE_BITS_MAX, BCH_SB_SECTOR, BCH_SINGLE_DEVICE_SB_FIELDS,
     CsumType, DegradedAction, ErrorAction, SbCompat, bch_sb_field_by_tag, bch_sb_field_match,
-    bch_sb_field_ext_whole, bch_sb_head, BCH_VERSION, SbCompats, SbFeatures, SbFieldType, Btree,
+    SbFieldExtWhole, SbHead, BCH_VERSION, SbCompats, SbFeatures, SbFieldType, Btree,
     DataType, Nonce, MetadataVersion, SbFeature};
-use crate::init::dev::{bch_sb_buf, bch_sb_handle, bch_devs_mask, bch_fs_sb, bch_sb_io, SbBio,
-    SbStorage};
+use crate::init::dev::{bch_sb_buf, SbHandle, DevsMask, FsSb, SbIo, SbBio, SbStorage};
 use crate::os::{blkdev::BlockDevice, bio::{Bio, BioBox, BioOwner, BioSubmit}, kernel::NSEC_PER_SEC};
 use crate::errcode::{Errcode, BchError};
 use crate::util::refcount::{RefGuard, Refcount};
@@ -199,7 +198,7 @@ pub enum SbWriteFlags {
  */
 published! {
 #[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_sb_cpu {
+pub struct SbCpu {
     pub uuid: [Volatile<u8>; 16],
     pub user_uuid: [Volatile<u8>; 16],
 
@@ -237,7 +236,7 @@ pub struct bch_sb_cpu {
      * when encryption is turned on, running. Set once, under sb_lock; read
      * by every encrypted IO, without it.
      */
-    pub encryption_key: PublishedOnce<bch_key>,
+    pub encryption_key: PublishedOnce<Key>,
 }
 }
 
@@ -278,12 +277,12 @@ const FIELD_HEAD: usize = size_of::<Head<bch_sb_field>>();
 /// And which way it's kept in step with memory: to_cpu() where the superblock
 /// is the master copy, from_cpu() where memory is.
 pub trait SbFieldOps: SbField + InState {
-    fn validate(_sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: ValidateFlags,
+    fn validate(_sb: &Sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: ValidateFlags,
                 _err: &mut Printbuf) -> Result<(), BchError> {
         Ok(())
     }
 
-    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>) {}
+    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>, _f: &Self::In<Unvalidated>) {}
 
     /// What memory has of the section, built from it.
     fn to_cpu(_fs: &Fs, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
@@ -343,7 +342,7 @@ where
 /// with the next superblock write; unrepaired, a reader would find no
 /// section, or not all of it. The section itself doesn't move, so
 /// validate()'s walk goes on from where the next one now is.
-fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end: usize, err: &mut Printbuf) {
+fn sb_field_drop_partial(sb: &mut Sb<Unvalidated>, f: usize, len: usize, end: usize, err: &mut Printbuf) {
     let whole = end.next_multiple_of(size_of::<u64>());
     let dropped = len - whole;
 
@@ -360,14 +359,14 @@ fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end
 }
 
 /// The section at @off of @sb, as read: its extent checked.
-fn field(sb: &bch_sb<Unvalidated>, off: usize) -> &bch_sb_field<Unvalidated> {
+fn field(sb: &Sb<Unvalidated>, off: usize) -> &bch_sb_field<Unvalidated> {
     bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..]).expect("a section, its extent checked")
 }
 
 /// The section at @off of @sb validated as its type says: a partial entry at
 /// its end repaired at read, invalid at write; then its type's own checks.
 /// Nothing to do for a type this version doesn't know.
-fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: ValidateFlags, err: &mut Printbuf)
+fn validate_at(sb: &mut Sb<Unvalidated>, off: usize, flags: ValidateFlags, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let ty = field(sb, off).type_.get();
@@ -416,7 +415,7 @@ impl bch_sb_field<Unvalidated> {
     }
 
     /// Its type's validate(): None if it can't be read as one.
-    fn validate(&self, sb: &bch_sb<Unvalidated>, flags: ValidateFlags, err: &mut Printbuf)
+    fn validate(&self, sb: &Sb<Unvalidated>, flags: ValidateFlags, err: &mut Printbuf)
         -> Option<Result<(), BchError>>
     {
         let r = self.typed().ok()?;
@@ -425,7 +424,7 @@ impl bch_sb_field<Unvalidated> {
 
     /// Its type's to_text(): nothing, if it's too short to be one, or of a
     /// type this version doesn't know.
-    fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>) {
+    fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, sb: &Sb<Unvalidated>) {
         if let Ok(r) = self.typed() {
             bch_sb_field_match!(r, f: A => <A<Validated> as SbFieldOps>::to_text(out, fs, sb, f))
         }
@@ -442,7 +441,7 @@ impl SbFieldType {
 /// The section at @off validated by its type's ops - and if it's invalid,
 /// said so in @err, with what it holds. A repair made as it's read is said
 /// too.
-fn field_validate(sb: &mut bch_sb<Unvalidated>, off: usize,
+fn field_validate(sb: &mut Sb<Unvalidated>, off: usize,
                   flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
     let ty = field(sb, off).type_.get();
     let name = SbFieldType(ty).name().unwrap_or("(unknown)");
@@ -465,7 +464,7 @@ fn field_validate(sb: &mut bch_sb<Unvalidated>, off: usize,
 }
 
 /// Section @f as its type's ops print it.
-pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
+pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &Sb<Unvalidated>,
                          f: &bch_sb_field<Unvalidated>) {
     if out.nr_tabstops() == 0 {
         out.tabstop_push(32);
@@ -475,7 +474,7 @@ pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvali
 }
 
 /// Section @f: its type, its size, and what it holds.
-pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
+pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &Sb<Unvalidated>,
                      f: &bch_sb_field<Unvalidated>) {
     write!(out, "{}", SbFieldType(f.type_.get()));
     write!(out, " (size {}):", f.as_bytes().len());
@@ -486,8 +485,8 @@ pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidate
 
 // ── Validating a superblock ──────────────────────────────────────────────
 
-fn validate_layout(layout: &bch_sb_layout, out: &mut Printbuf) -> Result<(), BchError> {
-    const _: () = assert!(size_of::<bch_sb_layout>() == 512);
+fn validate_layout(layout: &SbLayout, out: &mut Printbuf) -> Result<(), BchError> {
+    const _: () = assert!(size_of::<SbLayout>() == 512);
 
     sb_err_on!(out, layout.magic.b != BCACHE_MAGIC && layout.magic.b != BCHFS_MAGIC,
                invalid_sb_layout, "Not a bcachefs superblock layout")?;
@@ -511,7 +510,7 @@ fn validate_layout(layout: &bch_sb_layout, out: &mut Printbuf) -> Result<(), Bch
     Ok(())
 }
 
-fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> {
+fn sb_compatible(sb: &Head<Sb>, out: &mut Printbuf) -> Result<(), BchError> {
     let (v, v_min) = (sb.version.get(), sb.version_min.get());
     let (min, current) = (MetadataVersion::MIN, MetadataVersion::CURRENT);
 
@@ -531,8 +530,8 @@ fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> 
 /// BCH_VALIDATE_write. Read, a few things are repaired in place: an
 /// incompat_allowed older versions didn't downgrade, a partial entry at a
 /// section's end. What passes is Validated.
-pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &bch_opts, read_offset: u64,
-                    flags: ValidateFlags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
+pub fn validate<'a>(sb: &'a mut Sb<Unvalidated>, opts: &Opts, read_offset: u64,
+                    flags: ValidateFlags, out: &mut Printbuf) -> Result<&'a mut Sb, BchError> {
     let write = flags.contains(ValidateFlags::write);
 
     sb_compatible(sb, out)?;
@@ -608,7 +607,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &bch_opts, read_offse
 
     // every section within the superblock, before any is read
     let b = sb.as_bytes();
-    let mut off = size_of::<Head<bch_sb>>();
+    let mut off = size_of::<Head<Sb>>();
     while off < b.len() {
         let Some(f) = cast_plain::<Head<bch_sb_field>>(&b[off..]) else {
             write!(out, "Invalid superblock: optional field extends past end of superblock");
@@ -632,7 +631,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &bch_opts, read_offse
 
     // each section, members_v2 again: a section's validate may shrink it, the
     // sections after moved down, so its length is read after
-    let mut off = size_of::<Head<bch_sb>>();
+    let mut off = size_of::<Head<Sb>>();
     while off < sb.as_bytes().len() {
         if field(sb, off).type_.get() != SbFieldType::members_v1.0 {
             field_validate(sb, off, flags, out)?;
@@ -652,9 +651,9 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &bch_opts, read_offse
 
 /// validate(), of the superblock at the start of @buf - read into it whole:
 /// its count saying it's longer than @buf is an error too.
-pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &bch_opts, read_offset: u64,
-                          flags: ValidateFlags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
-    let sb = bch_sb::<Unvalidated>::from_bytes_mut(buf).map_err(|e| {
+pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &Opts, read_offset: u64,
+                          flags: ValidateFlags, out: &mut Printbuf) -> Result<&'a mut Sb, BchError> {
+    let sb = Sb::<Unvalidated>::from_bytes_mut(buf).map_err(|e| {
         write!(out, "Invalid superblock: {e}");
         BchError::from(Errcode::invalid_sb_too_big)
     })?;
@@ -810,8 +809,8 @@ pub(crate) fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool
 /// of each section there is.
 pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: MetadataVersion, incompat: bool) {
     if new.major() > sb.sb().version.get().major() {
-        let empty = <bch_sb_field_downgrade as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>());
-        fs.sb_resize(sb).field_resize::<bch_sb_field_downgrade>(empty as u32);
+        let empty = <SbFieldDowngrade as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>());
+        fs.sb_resize(sb).field_resize::<SbFieldDowngrade>(empty as u32);
     }
 
     let s = sb.sb_mut();
@@ -824,7 +823,7 @@ pub(crate) fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: MetadataVersion
 
 // ── Printing ─────────────────────────────────────────────────────────────
 
-pub fn layout_to_text(out: &mut Printbuf, l: &bch_sb_layout) {
+pub fn layout_to_text(out: &mut Printbuf, l: &SbLayout) {
     prt!(out, "Type:                    {}\n", l.layout_type);
     prt!(out, "Superblock max size:     {}\n", Bytes(512 << l.sb_max_size_bits));
     prt!(out, "Nr superblocks:          {}\n", l.nr_superblocks);
@@ -836,7 +835,7 @@ pub fn layout_to_text(out: &mut Printbuf, l: &bch_sb_layout) {
 /// The superblock: its header, options, and - if @print_layout - its
 /// layout; then the sections whose types are in @fields.
 #[cold]
-pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>, print_layout: bool, fields: u32) {
+pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &Sb<Unvalidated>, print_layout: bool, fields: u32) {
     if out.nr_tabstops() == 0 {
         out.tabstop_push(44);
     }
@@ -905,7 +904,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
         field_to_text(out, fs, sb, f);
     }
 }
-impl PartialEq for bch_sb_head {
+impl PartialEq for SbHead {
     fn eq(&self, other: &Self) -> bool {
         self.magic.b == other.magic.b
             && self.user_uuid.b == other.user_uuid.b
@@ -922,7 +921,7 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
-impl bch_sb {
+impl Sb {
     /// Its section of type @F, in its state - @F names the family, in any -
     /// if it has one, over the bytes its header says are its: one written
     /// before F grew reads as zero past them.
@@ -931,13 +930,13 @@ impl bch_sb {
     }
 
     /// Its crypt section - whole, or none: validate rejects a shorter one.
-    pub fn crypt(&self) -> Option<&bch_sb_field_crypt<Validated>> {
-        self.field::<bch_sb_field_crypt>()
+    pub fn crypt(&self) -> Option<&SbFieldCrypt<Validated>> {
+        self.field::<SbFieldCrypt>()
     }
 }
 
 /// Its header's: every state's, which each derefs to.
-impl bch_sb_head {
+impl SbHead {
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
@@ -993,11 +992,11 @@ impl Fs {
 }
 
 impl bch_sb_buf {
-    pub fn sb(&self) -> &bch_sb {
+    pub fn sb(&self) -> &Sb {
         self.data.as_deref().expect("a superblock's buffer: it's read, or made")
     }
 
-    pub fn sb_mut(&mut self) -> &mut bch_sb {
+    pub fn sb_mut(&mut self) -> &mut Sb {
         self.data.as_deref_mut().expect("a superblock's buffer: it's read, or made")
     }
 
@@ -1036,15 +1035,15 @@ impl bch_sb_buf {
         self.sb().as_bytes()
     }
 
-    /// Its header - C's struct bch_sb, every field at its offset - edited as
+    /// Its header - C's struct Sb, every field at its offset - edited as
     /// bytes by @f: kvdb's sb set. Not its count, u64s, which changes only
     /// with what it counts: an error if @f changed it, the header left as it
     /// was.
     pub fn edit_header<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, &'static str> {
-        const N: usize = core::mem::size_of::<Head<bch_sb>>();
+        const N: usize = core::mem::size_of::<Head<Sb>>();
         let mut h: [u8; N] = self.sb_bytes()[..N].try_into().unwrap();
         let r = f(&mut h);
-        if read_past::<Head<bch_sb>>(&h, 0).u64s() != self.sb().u64s() {
+        if read_past::<Head<Sb>>(&h, 0).u64s() != self.sb().u64s() {
             return Err("u64s is the superblock's count: it changes with the fields it counts");
         }
         crate::util::vstructs::bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
@@ -1053,7 +1052,7 @@ impl bch_sb_buf {
 }
 
 /// The device closed, and its holder put.
-impl Drop for bch_sb_io {
+impl Drop for SbIo {
     fn drop(&mut self) {
         // the file first: its exclusive claim is the holder's
         drop(self.s_bdev_file.take());
@@ -1080,7 +1079,7 @@ fn bio_fit(bio: &mut SbBio, buf: &[u8]) -> Result<(), BchError> {
     Ok(())
 }
 
-impl bch_sb_io {
+impl SbIo {
     /// The path it was opened by
     pub fn name(&self) -> &CStr {
         self.sb_name.as_deref().map_or(c"", |n| CStr::from_bytes_with_nul(n).expect("a device's name, NUL-terminated"))
@@ -1126,7 +1125,7 @@ impl bch_sb_io {
     }
 }
 
-impl bch_sb_handle {
+impl SbHandle {
     pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
         self.io_mut().realloc(u64s)
     }
@@ -1163,7 +1162,7 @@ impl bch_sb_handle {
 
         /* Ensure sb_field_ext exists at current size before reading opts, so
          * ext opts see a fully-sized field: */
-        let ext = self.field_get_minsize::<bch_sb_field_ext>((size_of::<bch_sb_field_ext>() / size_of::<u64>()) as u32)
+        let ext = self.field_get_minsize::<SbFieldExt>((size_of::<SbFieldExt>() / size_of::<u64>()) as u32)
             .and_then(|e| e.whole_mut())
             .ok_or(BchError::from(Errcode::ENOSPC_sb))?;
         if ext.dev_readahead() == 0 {
@@ -1187,7 +1186,7 @@ impl bch_sb_handle {
     }
 }
 
-impl core::ops::Deref for bch_sb_handle {
+impl core::ops::Deref for SbHandle {
     type Target = bch_sb_buf;
 
     fn deref(&self) -> &bch_sb_buf {
@@ -1195,7 +1194,7 @@ impl core::ops::Deref for bch_sb_handle {
     }
 }
 
-impl core::ops::DerefMut for bch_sb_handle {
+impl core::ops::DerefMut for SbHandle {
     fn deref_mut(&mut self) -> &mut bch_sb_buf {
         &mut self.io_mut().buf
     }
@@ -1203,7 +1202,7 @@ impl core::ops::DerefMut for bch_sb_handle {
 
 // ── Reading a device's superblock ────────────────────────────────────────
 
-impl bch_sb_io {
+impl SbIo {
     /// The bio, set up for an IO by @opf - with the buffer it maps, and the
     /// device it's to, borrowed apart.
     fn bio(&mut self, opf: u32) -> (&mut BioBox<'static, Bio>, &mut [u8], &BlockDevice) {
@@ -1232,8 +1231,8 @@ impl bch_sb_io {
 
 /// Its checksum, of its csum_type() - never an encryption type, which would
 /// want the key that's inside it.
-impl bch_sb<Unvalidated> {
-    pub fn checksum(&self) -> bch_csum {
+impl Sb<Unvalidated> {
+    pub fn checksum(&self) -> Csum {
         let ty = self.csum_type();
         assert!(!ty.is_encryption(), "a superblock checksum of encryption type {ty}");
         crate::data::checksum::csum_vstruct(None, ty, Nonce::default(), self)
@@ -1243,7 +1242,7 @@ impl bch_sb<Unvalidated> {
 /// The superblock at @offset read into @storage - made again bigger as it
 /// needs - and checked as far as that takes: that it's one, of a version we
 /// read, whole, and its checksum. Not validated.
-fn read_one_super(io: &mut bch_sb_io, storage: &mut SbStorage, offset: u64,
+fn read_one_super(io: &mut SbIo, storage: &mut SbStorage, offset: u64,
                   err: &mut Printbuf) -> Result<(), BchError> {
     loop {
         io.read(offset, plain_bytes_mut(&mut storage[..])).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
@@ -1256,7 +1255,7 @@ fn read_one_super(io: &mut bch_sb_io, storage: &mut SbStorage, offset: u64,
 
         sb_compatible(h, err)?;
 
-        let sb = bch_sb::<Unvalidated>::from_bytes(buf);
+        let sb = Sb::<Unvalidated>::from_bytes(buf);
         let bytes = match &sb {
             Ok(sb) => sb.as_bytes().len(),
             Err(VStructError::Overrun { want, .. }) => *want,
@@ -1289,11 +1288,11 @@ fn read_one_super(io: &mut bch_sb_io, storage: &mut SbStorage, offset: u64,
 
 /// The layout, from its own sector - read through @storage, aligned for IO as
 /// one on the stack isn't - and validated.
-fn read_layout_sector(io: &mut bch_sb_io, storage: &mut SbStorage,
-                      err: &mut Printbuf) -> Result<bch_sb_layout, BchError> {
+fn read_layout_sector(io: &mut SbIo, storage: &mut SbStorage,
+                      err: &mut Printbuf) -> Result<SbLayout, BchError> {
     let buf = plain_bytes_mut(&mut storage[..]);
-    io.read(BCH_SB_LAYOUT_SECTOR.into(), &mut buf[..size_of::<bch_sb_layout>()])?;
-    let layout = read_past::<bch_sb_layout>(buf, 0);
+    io.read(BCH_SB_LAYOUT_SECTOR.into(), &mut buf[..size_of::<SbLayout>()])?;
+    let layout = read_past::<SbLayout>(buf, 0);
     validate_layout(&layout, err)?;
     Ok(layout)
 }
@@ -1312,7 +1311,7 @@ fn read_layout_sector(io: &mut bch_sb_io, storage: &mut SbStorage,
 ///
 /// The last read wins a tie, so the common case - every slot at the same
 /// seq - reads nothing again.
-fn read_backup_supers(io: &mut bch_sb_io, storage: &mut SbStorage, layout: &bch_sb_layout, primary_valid: bool,
+fn read_backup_supers(io: &mut SbIo, storage: &mut SbStorage, layout: &SbLayout, primary_valid: bool,
                       err: &mut Printbuf) -> Result<u64, BchError> {
     let primary = layout.sb_offset[0].get();
     let mut best_seq = if primary_valid { io.seq } else { 0 };
@@ -1355,7 +1354,7 @@ fn read_backup_supers(io: &mut bch_sb_io, storage: &mut SbStorage, layout: &bch_
 /// backup. The good copy goes back in slot 0 now, rather than leaving it for
 /// the next superblock write - which reads back slot 0 first, and would take
 /// a torn primary for another writer's.
-fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
+fn rewrite_primary_super(sb: &mut SbHandle) -> Result<(), BchError> {
     let block = crate::os::blkdev::logical_block_size(sb.bdev()) as usize;
     let io = sb.io_mut();
     let s = io.buf.sb_mut();
@@ -1369,7 +1368,7 @@ fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
 }
 
 /// The shim's buffered open, without direct_io: nothing, in the kernel.
-fn open_buffered(opts: &bch_opts) -> c::blk_mode_t {
+fn open_buffered(opts: &Opts) -> c::blk_mode_t {
     #[cfg(not(kernel))]
     return if !opts.direct_io_or_default() { c::BLK_OPEN_BUFFERED } else { 0 };
     #[cfg(kernel)]
@@ -1382,7 +1381,7 @@ fn open_buffered(opts: &bch_opts) -> c::blk_mode_t {
 /// For a device whose logical block is bigger than the filesystem's: in
 /// userspace, buffered IO instead - the read's to be retried, direct_io off.
 /// Whether it is.
-fn buffered_instead(opts: &mut bch_opts) -> bool {
+fn buffered_instead(opts: &mut Opts) -> bool {
     #[cfg(not(kernel))]
     {
         opts.set_direct_io(false);
@@ -1395,10 +1394,10 @@ fn buffered_instead(opts: &mut bch_opts) -> bool {
     }
 }
 
-fn read_super_and_backups(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<Holder>>,
-                          err: &mut Printbuf) -> Result<bch_sb_handle, BchError>
+fn read_super_and_backups(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>,
+                          err: &mut Printbuf) -> Result<SbHandle, BchError>
 {
-    let mut sb = bch_sb_handle::default();
+    let mut sb = SbHandle::default();
     let io = sb.io_mut();
     io.mode = c::BLK_OPEN_READ;
 
@@ -1459,7 +1458,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<
 
     // what's read goes into the superblock's room only once it's validated
     let io = sb.io_mut();
-    let mut storage = io.read_buf(size_of::<Head<bch_sb>>())?;
+    let mut storage = io.read_buf(size_of::<Head<Sb>>())?;
 
     let (sb_offset, primary_bad) = if opts.defined(OptId::sb) {
         // a superblock asked for, for recovery or debugging: that one, no
@@ -1514,8 +1513,8 @@ fn read_super_and_backups(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<
 }
 
 /// read_super_and_backups(), again with buffered IO if direct IO can't.
-fn read_super_err(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<Holder>>,
-                  err: &mut Printbuf) -> Result<bch_sb_handle, BchError> {
+fn read_super_err(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>,
+                  err: &mut Printbuf) -> Result<SbHandle, BchError> {
     loop {
         match read_super_and_backups(path, opts, holder, err) {
             Err(e) if e == BchError::from(Errcode::EINTR_sb_read_buffered_instead) => err.reset(),
@@ -1527,8 +1526,8 @@ fn read_super_err(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<Holder>>
 /// The superblock of the device at @path, opened as @opts says - why not
 /// printed, and what reading a backup instead took: bch2_read_super(). An
 /// exclusive open claims the device for @holder.
-pub fn read_super(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<Holder>>)
-    -> Result<bch_sb_handle, BchError>
+pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
+    -> Result<SbHandle, BchError>
 {
     use crate::util::log::{log_opts, LogLevel};
     use crate::util::printbuf::Msg;
@@ -1561,7 +1560,7 @@ pub fn read_super(path: &CStr, opts: &mut bch_opts, holder: Option<&Arc<Holder>>
 }
 
 /// read_super(), printing nothing: for mount.bcachefs.
-pub fn read_super_silent(path: &CStr, opts: &mut bch_opts) -> Result<bch_sb_handle, BchError> {
+pub fn read_super_silent(path: &CStr, opts: &mut Opts) -> Result<SbHandle, BchError> {
     read_super_err(path, opts, None, &mut Printbuf::new())
 }
 
@@ -1619,7 +1618,7 @@ impl<'a> SbWrite<'a> {
     /// fsck error @err silenced - expected, not damage - in the ext section,
     /// recorded: whether it wasn't already. sb_set_err_silent().
     pub fn set_err_silent(&mut self, err: SbErrorId) -> bool {
-        let ext = self.field_mut::<bch_sb_field_ext<Validated>>()
+        let ext = self.field_mut::<SbFieldExt<Validated>>()
             .expect("an ext section: a mounted filesystem's superblock has one");
         let (word, bit) = (err.0 as usize / 64, 1u64 << (err.0 % 64));
         let v = ext.errors_silent[word].get();
@@ -1636,14 +1635,14 @@ impl<'a> SbWrite<'a> {
 
     /// The ext section, all of it: mount grows it to its full size, so a
     /// mounted filesystem's has every field.
-    pub fn ext_mut(&mut self) -> &mut bch_sb_field_ext_whole {
-        self.field_mut::<bch_sb_field_ext<Validated>>().and_then(|e| e.whole_mut())
+    pub fn ext_mut(&mut self) -> &mut SbFieldExtWhole {
+        self.field_mut::<SbFieldExt<Validated>>().and_then(|e| e.whole_mut())
             .expect("a whole ext section: mount grows it to its full size")
     }
 
     /// Btree @btree flagged in an ext section bitmap, recorded: whether it
     /// wasn't already.
-    fn set_ext_btree(&mut self, bitmap: impl FnOnce(&mut bch_sb_field_ext_whole) -> &mut Le64,
+    fn set_ext_btree(&mut self, bitmap: impl FnOnce(&mut SbFieldExtWhole) -> &mut Le64,
                      btree: Btree) -> bool {
         let bitmap = bitmap(self.ext_mut());
         let (v, bit) = (bitmap.get(), 1u64 << btree.0);
@@ -1698,9 +1697,9 @@ impl Drop for SbWrite<'_> {
     }
 }
 
-// ── Sections, through a bch_sb_handle ────────────────────────────────────
+// ── Sections, through a SbHandle ────────────────────────────────────
 //
-// Resizing takes &mut bch_sb_handle - it can reallocate the superblock - so
+// Resizing takes &mut SbHandle - it can reallocate the superblock - so
 // no section borrowed from the handle outlives it.
 
 /// A superblock's state, for what reads one in either - validate reading
@@ -1709,22 +1708,22 @@ impl Drop for SbWrite<'_> {
 /// checked, and the walk ends at one that doesn't fit - which validate
 /// reports.
 pub trait SbState: InPlace + SbReplicas + Sized {
-    fn field_by_type(sb: &bch_sb<Self>, ty: SbFieldType) -> Option<&bch_sb_field<Self>>;
+    fn field_by_type(sb: &Sb<Self>, ty: SbFieldType) -> Option<&bch_sb_field<Self>>;
 
     /// Its section of type @F, F's arm in this state: F, its family, is an
     /// arm in both.
-    fn field<F: InState + ?Sized>(sb: &bch_sb<Self>) -> Option<&F::In<Self>>
+    fn field<F: InState + ?Sized>(sb: &Sb<Self>) -> Option<&F::In<Self>>
     where
         F::In<Validated>: SbField,
         F::In<Unvalidated>: SbField<Unvalidated>;
 }
 
 impl SbState for Validated {
-    fn field_by_type(sb: &bch_sb, ty: SbFieldType) -> Option<&bch_sb_field> {
+    fn field_by_type(sb: &Sb, ty: SbFieldType) -> Option<&bch_sb_field> {
         field_get_id(sb, ty)
     }
 
-    fn field<F: InState + ?Sized>(sb: &bch_sb) -> Option<&F::In<Self>>
+    fn field<F: InState + ?Sized>(sb: &Sb) -> Option<&F::In<Self>>
     where
         F::In<Validated>: SbField,
         F::In<Unvalidated>: SbField<Unvalidated>,
@@ -1734,11 +1733,11 @@ impl SbState for Validated {
 }
 
 impl SbState for Unvalidated {
-    fn field_by_type(sb: &bch_sb<Unvalidated>, ty: SbFieldType) -> Option<&bch_sb_field<Unvalidated>> {
+    fn field_by_type(sb: &Sb<Unvalidated>, ty: SbFieldType) -> Option<&bch_sb_field<Unvalidated>> {
         sb.entries().map_while(Result::ok).find(|f| f.type_.get() == ty.0)
     }
 
-    fn field<F: InState + ?Sized>(sb: &bch_sb<Unvalidated>) -> Option<&F::In<Self>>
+    fn field<F: InState + ?Sized>(sb: &Sb<Unvalidated>) -> Option<&F::In<Self>>
     where
         F::In<Validated>: SbField,
         F::In<Unvalidated>: SbField<Unvalidated>,
@@ -1749,28 +1748,28 @@ impl SbState for Unvalidated {
 
 /// The section of type @ty in @sb: the walk trusts the sections' counts, a
 /// validated superblock's.
-fn field_get_id(sb: &bch_sb, ty: SbFieldType) -> Option<&bch_sb_field<Validated>> {
+fn field_get_id(sb: &Sb, ty: SbFieldType) -> Option<&bch_sb_field<Validated>> {
     sb.entries().find(|f| f.type_.get() == ty.0)
 }
 
 /// Its length in bytes, header and all - 0 if there's none.
-fn field_bytes(sb: &bch_sb, ty: SbFieldType) -> usize {
+fn field_bytes(sb: &Sb, ty: SbFieldType) -> usize {
     field_get_id(sb, ty).map_or(0, |f| f.as_bytes().len())
 }
 
 /// Where it is, in bytes from the superblock's start.
-fn field_offset<S: SbState>(sb: &bch_sb<S>, ty: SbFieldType) -> Option<usize> {
+fn field_offset<S: SbState>(sb: &Sb<S>, ty: SbFieldType) -> Option<usize> {
     let base = core::ptr::from_ref(sb).cast::<u8>() as usize;
     S::field_by_type(sb, ty).map(|f| f.as_bytes().as_ptr() as usize - base)
 }
 
 /// A superblock of @u64s, in bytes, header and all.
 fn bytes_for(u64s: usize) -> usize {
-    size_of::<Head<bch_sb>>() + u64s * size_of::<u64>()
+    size_of::<Head<Sb>>() + u64s * size_of::<u64>()
 }
 
 /// The header at the start of @buf, a superblock read and not yet checked.
-fn head_of(buf: &[u8]) -> &Head<bch_sb> {
+fn head_of(buf: &[u8]) -> &Head<Sb> {
     cast_plain(buf).expect("a superblock buffer, holding a header")
 }
 
@@ -1844,7 +1843,7 @@ impl bch_sb_buf {
             }
         };
 
-        cast_plain_mut::<Head<bch_sb>>(buf).expect("a superblock's head")
+        cast_plain_mut::<Head<Sb>>(buf).expect("a superblock's head")
             .set_u64s(sb_u64s + new / size_of::<u64>() - old / size_of::<u64>());
         ret
     }
@@ -1858,7 +1857,7 @@ impl bch_sb_buf {
     }
 }
 
-impl Drop for bch_fs_sb {
+impl Drop for FsSb {
     fn drop(&mut self) {
         self.free();
     }
@@ -1926,16 +1925,16 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
 }
 
 /// A device's: its own limits - the logical block, the layout - and its bio.
-impl SbResize for bch_sb_handle {
+impl SbResize for SbHandle {
     fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        bch_sb_handle::sb_realloc(self, u64s)
+        SbHandle::sb_realloc(self, u64s)
     }
 }
 
 /// The filesystem's superblock, to resize: Fs::sb_resize()'s.
 pub struct FsSbResize<'a> {
     fs:      &'a Fs,
-    disk_sb: &'a mut bch_fs_sb,
+    disk_sb: &'a mut FsSb,
     devs:    members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
 }
 
@@ -1982,8 +1981,8 @@ impl SbResize for FsSbResize<'_> {
 /// A device's superblock, to edit: its shared contents only by sync(), from
 /// the filesystem's, its own directly - Fs::dev_sb_mut()'s.
 pub struct DevSbMut<'a> {
-    fs_sb:   &'a bch_sb,
-    io:      &'a mut bch_sb_io,
+    fs_sb:   &'a Sb,
+    io:      &'a mut SbIo,
     ca:      &'a Dev,
     /// ca->sb_read_scratch, what the write's read back reads into
     scratch: &'a mut [u8],
@@ -1992,7 +1991,7 @@ pub struct DevSbMut<'a> {
 impl<'a> DevSbMut<'a> {
     /// @ca's, from the split that hands each device's superblock out once,
     /// and so its scratch: None if it has none, not attached.
-    fn take(fs_sb: &'a bch_sb, devs: &mut members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
+    fn take(fs_sb: &'a Sb, devs: &mut members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
             ca: &'a Dev)
         -> Option<Self>
     {
@@ -2025,7 +2024,7 @@ impl Fs {
 }
 
 impl DevSbMut<'_> {
-    pub fn sb(&self) -> &bch_sb {
+    pub fn sb(&self) -> &Sb {
         self.io.buf.sb()
     }
 
@@ -2049,7 +2048,7 @@ impl DevSbMut<'_> {
     }
 
     /// Its layout, edited by @f - and the device's copy, sb_layout, with it.
-    pub fn edit_layout<R>(&mut self, f: impl FnOnce(&mut bch_sb_layout) -> R) -> R {
+    pub fn edit_layout<R>(&mut self, f: impl FnOnce(&mut SbLayout) -> R) -> R {
         let layout = &mut self.io.buf.sb_mut().layout;
         let ret = f(layout);
         self.ca.sb_layout.set(*layout);
@@ -2073,7 +2072,7 @@ impl DevSbMut<'_> {
 
 /// A device's superblock, resized as its own: only DevSbMut's.
 struct DevSbResize<'a> {
-    io: &'a mut bch_sb_io,
+    io: &'a mut SbIo,
 }
 
 impl core::ops::Deref for DevSbResize<'_> {
@@ -2185,7 +2184,7 @@ impl SbReadScratch {
 impl DevSbMut<'_> {
     /// Valid to be written, as validate() checks one about to be.
     fn validate_write(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
-        let opts = bch_opts::default();
+        let opts = Opts::default();
         validate_bytes(self.io.buf.buffer_mut(), &opts, 0, ValidateFlags::write, err)
             .map(drop)
     }
@@ -2240,7 +2239,7 @@ struct CopyFailed {
 /// What a write's copies did: the devices any reached, and those that
 /// failed - all of them, if there was memory to list them.
 struct Copies {
-    written:    bch_devs_mask,
+    written:    DevsMask,
     failed:     Vec<CopyFailed>,
     any_failed: bool,
 }
@@ -2250,7 +2249,7 @@ struct Copies {
 /// Read back first, to catch a write that was silently dropped, or another
 /// writer. __bch2_write_super().
 #[track_caller]
-fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&bch_devs_mask>,
+fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>,
                       flags: SbWriteFlags) -> Result<(), BchError> {
     use crate::fs::FsFlag as f;
 
@@ -2277,7 +2276,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&bch_devs_
     // we're not yet RW.
     let mut cas = Vec::new();
     for ca in fs.online_members() {
-        if devs.is_some_and(|d| !d.d.test(ca.dev_idx.into())) {
+        if devs.is_some_and(|d| !d.test(ca.dev_idx.into())) {
             continue;
         }
         if cas.push(ca).is_err() {
@@ -2408,7 +2407,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
             continue;
         }
 
-        let read = cast_plain::<Head<bch_sb>>(&*dev_sb.scratch).expect("a header's worth").seq.get();
+        let read = cast_plain::<Head<Sb>>(&*dev_sb.scratch).expect("a header's worth").seq.get();
         let expected = dev_sb.io.seq;
 
         if read != expected {
@@ -2457,7 +2456,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
             let ca = dev_sb.ca;
             match sb_io_result(fs, ca, WRITE, dev_sb.io_result()) {
                 Ok(()) => {
-                    copies.written.d.set(ca.dev_idx.into());
+                    copies.written.set(ca.dev_idx.into());
                     dev_sb.io.seq = dev_sb.io.buf.sb().seq.get();
                 }
                 Err(err) => {
@@ -2480,7 +2479,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
 /// one that reached too few to mount is an error, the filesystem going
 /// read-only.
 #[track_caller]
-fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&bch_devs_mask>, cas: &WriteDevs,
+fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &WriteDevs,
                 copies: &Copies) -> Result<(), BchError> {
     use crate::util::log::LogMsg;
 
@@ -2489,7 +2488,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&bch_devs_mask>, cas
         degraded_flags |= BCH_FORCE_IF_LOST;
     }
 
-    let nr_wrote = copies.written.d.iter().count();
+    let nr_wrote = copies.written.iter().count();
     let nr_members = match devs {
         Some(_) => cas.len(),
         None    => sb.sb().number_of_devices() as usize,
@@ -2521,14 +2520,14 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&bch_devs_mask>, cas
 
     prt!(msg, "Error writing superblock, wrote to {nr_wrote}/{nr_members} devices:\n");
 
-    let mut sb_unwritten = bch_devs_mask::default();
+    let mut sb_unwritten = DevsMask::default();
     for dev in 0..BCH_SB_MEMBERS_MAX as usize {
-        sb_unwritten.d.set(dev);
+        sb_unwritten.set(dev);
     }
 
     for ca in cas.iter() {
         let dev = u32::from(ca.dev_idx);
-        sb_unwritten.d.clear(dev as usize);
+        sb_unwritten.clear(dev as usize);
         crate::sb::members::dev_to_text_short(&mut msg, sb.sb(), dev);
 
         let mut failed = copies.failed.iter().filter(|f| f.dev == dev).peekable();
@@ -2538,7 +2537,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&bch_devs_mask>, cas
             for f in failed {
                 prt!(msg, " {}={}", f.offset, f.err);
             }
-            if copies.written.d.test(dev as usize) {
+            if copies.written.test(dev as usize) {
                 prt!(msg, " (partial success)");
             } else {
                 prt!(msg, " (all failed)");
@@ -2573,7 +2572,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&bch_devs_mask>, cas
 /// each section edited since the last write, by to_cpu() - not of what the
 /// write's from_cpu()s edited, which is memory's already.
 #[track_caller]
-fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&bch_devs_mask>,
+fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>,
                     flags: SbWriteFlags) -> Result<(), BchError> {
     let _timer = fs.times.get(TimeStat::sb_write as usize).timer();
 
@@ -2605,7 +2604,7 @@ fn sections_to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>, dirty: u64) -> Result<(), 
 /// The types this version knows of the sections @sb has that @keep passes -
 /// collected, for the walk borrows the superblock, and each type's ops are
 /// called with it.
-fn section_types(sb: &bch_sb, keep: impl Fn(&bch_sb_field) -> bool) -> ArrayVec<u32, FIELD_NR> {
+fn section_types(sb: &Sb, keep: impl Fn(&bch_sb_field) -> bool) -> ArrayVec<u32, FIELD_NR> {
     // validated: one of each type at most
     sb.entries().filter(|s| keep(s)).map(|s| s.type_.get()).filter(|&t| (t as usize) < FIELD_NR)
         .take(FIELD_NR).collect()
@@ -2660,7 +2659,7 @@ impl Fs {
     #[track_caller]
     pub fn write_super_replicas_ret(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let mut m = Vec::new();
-        let mut devs = bch_devs_mask::default();
+        let mut devs = DevsMask::default();
         let mut total = 0u64;
 
         for ca in self.online_members() {
@@ -2668,7 +2667,7 @@ impl Fs {
             if m.push((ca.dev_idx, sectors)).is_err() {
                 return self.write_super_flags(sb, SbWriteFlags::empty());
             }
-            devs.d.set(ca.dev_idx.into());
+            devs.set(ca.dev_idx.into());
             total += sectors;
         }
 
@@ -2688,7 +2687,7 @@ impl Fs {
                 break;
             }
             skipped += sectors;
-            devs.d.clear(dev.into());
+            devs.clear(dev.into());
             nr_skipped += 1;
         }
 
@@ -2721,7 +2720,7 @@ pub(crate) fn set_all<T: Copy + VolatileValue, const N: usize>(a: &[VolatileWrit
 }
 
 /// c->sb: what's read of the superblock without sb_lock.
-impl bch_sb_cpu {
+impl SbCpu {
     pub fn uuid(&self) -> __uuid_t {
         __uuid_t { b: get_all(&self.uuid) }
     }
@@ -2770,7 +2769,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     cpu.multi_device     .set(src.multi_device());
     cpu.dirents_sanitized.set(src.dirents_sanitized());
 
-    match handle.field::<bch_sb_field_ext<Validated>>() {
+    match handle.field::<SbFieldExt<Validated>>() {
         Some(e) => {
             cpu.recovery_passes_required.set(
                 crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get()));
@@ -2791,12 +2790,12 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
         None => cpu.errors_silent.iter().for_each(|w| w.set(0)),
     }
 
-    let _ = bch_sb_field_members_v2::<Validated>::to_cpu(fs, sb);
+    let _ = SbFieldMembersV2::<Validated>::to_cpu(fs, sb);
 }
 
 /// @src's header and sections into @dst - all but those each device has its
 /// own of, BCH_SINGLE_DEVICE_SB_FIELDS: __copy_super().
-fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), BchError> {
+fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &Sb) -> Result<(), BchError> {
     let d = dst.sb_mut();
     d.version        = src.version;
     d.version_min    = src.version_min;
@@ -2848,7 +2847,7 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), Bch
 
 /// The filesystem's superblock from @src, and what it derives from it:
 /// bch2_sb_to_fs().
-pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchError> {
+pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &Sb) -> Result<(), BchError> {
     let mut disk_sb = fs.sb_resize(sb);
     disk_sb.sb_realloc(0)?;
     copy_super(&mut disk_sb, src)?;
@@ -2862,29 +2861,29 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), B
         sb.field_get_minsize::<F>(F::Arm::MIN_LEN.div_ceil(size_of::<u64>()) as u32)
             .map(drop).ok_or(Errcode::ENOSPC_sb.into())
     }
-    let _ = make::<bch_sb_field_counters>(&mut disk_sb);
-    let _ = make::<bch_sb_field_errors_v2>(&mut disk_sb);
-    let _ = make::<bch_sb_field_downgrade>(&mut disk_sb);
-    if make::<bch_sb_field_extent_type_u64s>(&mut disk_sb).is_err() {
+    let _ = make::<SbFieldCounters>(&mut disk_sb);
+    let _ = make::<SbFieldErrorsV2>(&mut disk_sb);
+    let _ = make::<SbFieldDowngrade>(&mut disk_sb);
+    if make::<SbFieldExtentTypeU64s>(&mut disk_sb).is_err() {
         crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
         return fs.throw(Errcode::ENOSPC_sb_extent_type_u64s);
     }
     // nothing to read back after the first write: init reads every section
     sb.dirty = 0;
 
-    bch_sb_field_replicas::<Validated>::to_cpu(fs, sb)?;
-    bch_sb_field_disk_groups::<Validated>::to_cpu(fs, sb)?;
-    bch_sb_field_extent_type_u64s::<Validated>::to_cpu(fs, sb)?;
+    SbFieldReplicas::<Validated>::to_cpu(fs, sb)?;
+    SbFieldDiskGroups::<Validated>::to_cpu(fs, sb)?;
+    SbFieldExtentTypeU64s::<Validated>::to_cpu(fs, sb)?;
     sb_update(fs, sb);
     Ok(())
 }
 
 // ── Superblocks in byte buffers ──────────────────────────────────────────
 //
-// For device scans and recovery, without a bch_sb_handle: a superblock in a
+// For device scans and recovery, without a SbHandle: a superblock in a
 // buffer of its own - as read, Unvalidated, its count checked against its
 // bytes, and Validated only once validate() passes. A buffer can't be
-// reallocated, so resizing and deleting sections stay bch_sb_handle's.
+// reallocated, so resizing and deleting sections stay SbHandle's.
 
 pub const BCACHE_MAGIC: [u8; 16] = [
     0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
@@ -2929,21 +2928,21 @@ impl SbBuf<Unvalidated> {
     /// its count says.
     pub fn from_bytes(src: &[u8]) -> Result<Self, VStructError> {
         let mut sb = Self::copied(src);
-        let len = bch_sb::<Unvalidated>::from_bytes(sb.raw())?.as_bytes().len();
+        let len = Sb::<Unvalidated>::from_bytes(sb.raw())?.as_bytes().len();
         sb.buf.truncate(len.div_ceil(size_of::<u64>()));
         Ok(sb)
     }
 
-    pub fn sb(&self) -> &bch_sb<Unvalidated> {
-        bch_sb::<Unvalidated>::from_bytes(self.raw()).expect("its count, checked when it was made")
+    pub fn sb(&self) -> &Sb<Unvalidated> {
+        Sb::<Unvalidated>::from_bytes(self.raw()).expect("its count, checked when it was made")
     }
 
-    pub fn sb_mut(&mut self) -> &mut bch_sb<Unvalidated> {
-        bch_sb::<Unvalidated>::from_bytes_mut(self.raw_mut()).expect("its count, checked when it was made")
+    pub fn sb_mut(&mut self) -> &mut Sb<Unvalidated> {
+        Sb::<Unvalidated>::from_bytes_mut(self.raw_mut()).expect("its count, checked when it was made")
     }
 
     /// validate(), as read from @read_offset: Validated if it passes.
-    pub fn validate(mut self, opts: &bch_opts, read_offset: u64, flags: ValidateFlags,
+    pub fn validate(mut self, opts: &Opts, read_offset: u64, flags: ValidateFlags,
                     out: &mut Printbuf) -> Result<SbBuf<Validated>, BchError> {
         validate(self.sb_mut(), opts, read_offset, flags, out)?;
         Ok(SbBuf { buf: self.buf, _state: core::marker::PhantomData })
@@ -2953,18 +2952,18 @@ impl SbBuf<Unvalidated> {
 #[cfg(feature = "std")]
 impl SbBuf<Validated> {
     /// A copy of @sb: as valid as it is.
-    pub fn from_sb(sb: &bch_sb) -> Self {
+    pub fn from_sb(sb: &Sb) -> Self {
         Self::copied(sb.as_bytes())
     }
 
-    pub fn sb(&self) -> &bch_sb {
-        let sb = bch_sb::<Unvalidated>::from_bytes(self.raw()).expect("its count, validated");
+    pub fn sb(&self) -> &Sb {
+        let sb = Sb::<Unvalidated>::from_bytes(self.raw()).expect("its count, validated");
         // SAFETY: validate() passed, or it's a copy of one that did
         unsafe { sb.assume_validated() }
     }
 
-    pub fn sb_mut(&mut self) -> &mut bch_sb {
-        let sb = bch_sb::<Unvalidated>::from_bytes_mut(self.raw_mut()).expect("its count, validated");
+    pub fn sb_mut(&mut self) -> &mut Sb {
+        let sb = Sb::<Unvalidated>::from_bytes_mut(self.raw_mut()).expect("its count, validated");
         // SAFETY: as sb()'s
         unsafe { sb.assume_validated_mut() }
     }
@@ -2973,10 +2972,10 @@ impl SbBuf<Validated> {
 /// validate_at(), of @sb's section of type F, as a read or a write of it
 /// would: for tests.
 #[cfg(test)]
-pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut bch_sb_handle, flags: ValidateFlags,
+pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut SbHandle, flags: ValidateFlags,
                                                     err: &mut Printbuf) -> Result<(), BchError> {
     let off = field_offset(sb.sb(), F::FIELD_TYPE).expect("the section");
-    let s = bch_sb::<Unvalidated>::from_bytes_mut(sb.buffer_mut()).expect("a superblock within its buffer");
+    let s = Sb::<Unvalidated>::from_bytes_mut(sb.buffer_mut()).expect("a superblock within its buffer");
     validate_at(s, off, flags, err)
 }
 
@@ -2986,12 +2985,12 @@ mod tests {
     use super::{sb_field_u64s, validate_section};
     use crate::btree::bkey::ValidateFlags;
     use crate::errcode::Errcode;
-    use crate::format::{bch_sb_field, bch_sb_field_clean, bch_sb_field_crypt, bch_sb_field_ext,
+    use crate::format::{bch_sb_field, SbFieldClean, SbFieldCrypt, SbFieldExt,
         BchSbFieldRef, SbFieldType};
-    use crate::init::dev::bch_sb_handle;
-    use crate::posix::quota_format::bch_sb_field_quota;
-    use crate::sb::counters_format::bch_sb_field_counters;
-    use crate::sb::errors_format::{bch_sb_field_errors_v2, SbErrorId};
+    use crate::init::dev::SbHandle;
+    use crate::posix::quota_format::SbFieldQuota;
+    use crate::sb::counters_format::SbFieldCounters;
+    use crate::sb::errors_format::{SbFieldErrorsV2, SbErrorId};
     use crate::types::Le32;
     use crate::data_structures::dst_room::DstRoom;
     use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated, Validated, VStructError};
@@ -3032,7 +3031,7 @@ mod tests {
         use crate::util::Printbuf;
 
         fn short<F: super::SbField + ?Sized>(ty: SbFieldType, u64s: usize) -> String {
-            let mut sb = bch_sb_handle::default();
+            let mut sb = SbHandle::default();
             sb.sb_realloc(0).unwrap();
             sb.field_resize_id(ty, u64s as u32).unwrap();
 
@@ -3049,16 +3048,16 @@ mod tests {
 
         type T = SbFieldType;
         // too short for its entries to start, and for its type
-        assert_eq!(short::<bch_sb_field_clean>(T::clean, 1),
+        assert_eq!(short::<SbFieldClean>(T::clean, 1),
                    "too short (8 < 16 bytes)");
         // a grown type's floor
-        assert_eq!(short::<bch_sb_field_ext<Validated>>(T::ext, 9),
+        assert_eq!(short::<SbFieldExt<Validated>>(T::ext, 9),
                    "too short (72 < 80 bytes)");
         // a sized type's size
-        assert_eq!(short::<bch_sb_field_crypt>(T::crypt, 6),
+        assert_eq!(short::<SbFieldCrypt>(T::crypt, 6),
                    "too short (48 < 56 bytes)");
-        assert_eq!(short::<bch_sb_field_quota>(T::quota, 1),
-                   format!("too short (8 < {} bytes)", size_of::<bch_sb_field_quota>()));
+        assert_eq!(short::<SbFieldQuota>(T::quota, 1),
+                   format!("too short (8 < {} bytes)", size_of::<SbFieldQuota>()));
     }
 
     /// An ext section from before btrees_lost_data, 88 bytes - an arm of 80 -
@@ -3079,9 +3078,9 @@ mod tests {
         assert_eq!((e.as_bytes().len(), size_of_val(e)), (80, 80));
 
         // and as the one arm field() asks for
-        let e = f.arm::<bch_sb_field_ext<Validated>>().expect("an ext section");
+        let e = f.arm::<SbFieldExt<Validated>>().expect("an ext section");
         assert_eq!((e.errors_silent[0].get(), e.btrees_lost_data().get()), (0x5a, 0));
-        assert!(f.arm::<bch_sb_field_crypt>().is_none());
+        assert!(f.arm::<SbFieldCrypt>().is_none());
     }
 
     /// A clean section's arm is its fields, past the section's header, then
@@ -3120,7 +3119,7 @@ mod tests {
         assert_eq!(clean.journal_seq.get(), 42);
 
         // one arm, named in the field's state
-        assert!(f.arm::<bch_sb_field_clean<Unvalidated>>().is_some());
+        assert!(f.arm::<SbFieldClean<Unvalidated>>().is_some());
     }
 
     /// A whole ext section is all of it, every field a field; one shorter
@@ -3130,24 +3129,24 @@ mod tests {
         let mut buf = [0u64; 16];
         buf[12] = 7;                            // flags0
         let f = field(&mut buf, SbFieldType::ext, 15);
-        let e = f.arm::<bch_sb_field_ext<Validated>>().expect("an ext section");
+        let e = f.arm::<SbFieldExt<Validated>>().expect("an ext section");
         let w = e.whole().expect("all of it");
         assert_eq!((w.flags0.into_bits().get(), e.flags0().into_bits().get(), size_of_val(e)), (7, 7, 112));
 
         let mut buf = [0u64; 16];
         let f = field(&mut buf, SbFieldType::ext, 10);
-        assert!(f.arm::<bch_sb_field_ext<Validated>>().is_none());
+        assert!(f.arm::<SbFieldExt<Validated>>().is_none());
         assert!(f.typed().is_err());
     }
 
     /// A superblock with an errors_v2 section of two entries and a partial
     /// third - 8 bytes of one - then a counters section; and validate() of the
     /// errors_v2 section, as a read or a write would.
-    fn validate_partial(flags: ValidateFlags) -> (bch_sb_handle, c_int, Printbuf) {
-        type E = bch_sb_field_errors_v2;
-        type Ctrs = bch_sb_field_counters;
+    fn validate_partial(flags: ValidateFlags) -> (SbHandle, c_int, Printbuf) {
+        type E = SbFieldErrorsV2;
+        type Ctrs = SbFieldCounters;
 
-        let mut sb = bch_sb_handle::default();
+        let mut sb = SbHandle::default();
         sb.sb_realloc(0).unwrap();
         for (i, e) in sb.field_resize::<E>(sb_field_u64s::<E>(2)).unwrap().entries.iter_mut().enumerate() {
             e.v.set_id(SbErrorId(3 + i as u32));
@@ -3170,9 +3169,9 @@ mod tests {
     fn partial_entry() {
         let (sb, ret, err) = validate_partial(ValidateFlags::empty());
         assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
-        let ids: Vec<SbErrorId> = sb.field::<bch_sb_field_errors_v2>().unwrap().entries.iter().map(|e| e.v.id()).collect();
+        let ids: Vec<SbErrorId> = sb.field::<SbFieldErrorsV2>().unwrap().entries.iter().map(|e| e.v.id()).collect();
         assert_eq!(ids, [SbErrorId(3), SbErrorId(4)]);
-        let d: Vec<u64> = sb.field::<bch_sb_field_counters>().unwrap().d.iter().map(|d| d.get()).collect();
+        let d: Vec<u64> = sb.field::<SbFieldCounters>().unwrap().d.iter().map(|d| d.get()).collect();
         assert_eq!(d, [100, 101, 102]);
 
         let (_, ret, err) = validate_partial(ValidateFlags::write);

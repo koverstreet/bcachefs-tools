@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_data_args, bch_ioctl_data, bch_ioctl_data_scrub,
-    IoctlDataEventRet, bch_ioctl_data_progress, DataOp};
+use bcachefs_kernel::bcachefs_ioctl::{IoctlDataArgs, IoctlData, IoctlDataScrub,
+    IoctlDataEventRet, IoctlDataProgress, DataOp};
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
@@ -23,12 +23,12 @@ extern "C" fn sigint_handler(_: core::ffi::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
-/// bch_ioctl_data_event is blocklisted from bindgen (packed+aligned conflict),
+/// IoctlDataEvent is blocklisted from bindgen (packed+aligned conflict),
 /// so we read raw bytes and extract fields manually.
-/// Layout: u8 type, u8 ret, u8 pad[6], bch_ioctl_data_progress, padding to 128.
+/// Layout: u8 type, u8 ret, u8 pad[6], IoctlDataProgress, padding to 128.
 const DATA_EVENT_SIZE: usize = 128;
 
-fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data_progress)> {
+fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, IoctlDataProgress)> {
     let mut buf = [0u8; DATA_EVENT_SIZE];
     let n = fd.read(&mut buf)?;
     if n != DATA_EVENT_SIZE {
@@ -37,15 +37,15 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
     }
     let event_type = buf[0];
     let event_ret = buf[1];
-    let p = read_past::<bch_ioctl_data_progress>(&buf, 8);
+    let p = read_past::<IoctlDataProgress>(&buf, 8);
     Ok((event_type, event_ret, p))
 }
 
 fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
-    let cmd = bch_ioctl_data {
+    let cmd = IoctlData {
         op: DataOp::scrub.0 as u16,
-        args: bch_ioctl_data_args {
-            scrub: bch_ioctl_data_scrub { dev: dev_idx, data_types },
+        args: IoctlDataArgs {
+            scrub: IoctlDataScrub { dev: dev_idx, data_types },
         },
         ..pin_init::zeroed()
     };

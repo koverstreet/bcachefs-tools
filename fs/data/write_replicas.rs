@@ -6,10 +6,10 @@
 
 use crate::btree::{bkey::prelude::*, bkey::{pos, BkeyI, BkeySC}};
 use crate::c;
-use crate::data::extents::bch_io_failures;
-use crate::data::extents_format::bch_extent_ptr;
+use crate::data::ptrs::IoFailures;
+use crate::data::extents_format::ExtentPtr;
 use crate::errcode::{status::BLK_STS_REMOVED, BchError};
-use crate::init::dev::bch_devs_mask;
+use crate::init::dev::DevsMask;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::dev_bio::DevBio;
 use crate::data::nocow_locking::NocowKind;
@@ -37,7 +37,7 @@ const PTRS: usize = BCH_BKEY_PTRS_MAX as usize;
 #[derive(Default)]
 pub struct ReplicaErrs {
     failed:        ArrayVec<(u8, c::blk_status_t), PTRS>,
-    pub unflushed: bch_devs_mask,
+    pub unflushed: DevsMask,
 }
 
 impl ReplicaErrs {
@@ -45,8 +45,8 @@ impl ReplicaErrs {
         self.failed.iter().copied()
     }
 
-    pub fn failures(&self, fs: &Fs) -> bch_io_failures {
-        let mut failed = bch_io_failures::default();
+    pub fn failures(&self, fs: &Fs) -> IoFailures {
+        let mut failed = IoFailures::default();
         for (dev, status) in self.failed() {
             failed.set_blk_status(fs, dev.into(), status);
         }
@@ -119,7 +119,7 @@ impl<'a> InFlight<'a> {
 
         /* For nocow, bkey_get_dev_iorefs would have bailed if it hit an
          * invalid ptr, so cas_idx stays in sync with the iterator. */
-        let devs: ArrayVec<bch_extent_ptr, PTRS> = {
+        let devs: ArrayVec<ExtentPtr, PTRS> = {
             let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("writing a key with no pointers");
             ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID).copied().collect()
         };
@@ -185,7 +185,7 @@ impl<'a> InFlight<'a> {
             if let Some((bucket, unflushed)) = r.nocow {
                 fs.nocow_locks.unlock_bucket(pos(r.dev.into(), bucket), NocowKind::Update);
                 if unflushed {
-                    errs.unflushed.d.set(r.dev.into());
+                    errs.unflushed.set(r.dev.into());
                 }
             }
         }

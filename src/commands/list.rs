@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::opts::{bch_opts, FsckErrOpt};
+use bcachefs_kernel::opts::{Opts, FsckErrOpt};
 use bcachefs_kernel::btree::{bkey::prelude::*, iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter}};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::format::DegradedAction;
@@ -229,7 +229,7 @@ pub struct Cli {
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
-    let mut fs_opts = bch_opts::default();
+    let mut fs_opts = Opts::default();
 
     fs_opts.set_noexcl(true);
     fs_opts.set_nochanges(true);

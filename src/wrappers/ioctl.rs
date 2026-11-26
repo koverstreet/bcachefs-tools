@@ -177,9 +177,9 @@ pub trait FlexArrayIoctl: Plain + Copy {
     }
 }
 
-impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
+impl FlexArrayIoctl for IoctlSnapshotTreeQuery {
     type Ioc = BCH_IOCTL_SNAPSHOT_TREE;
-    type Elem = bch_ioctl_snapshot_node;
+    type Elem = IoctlSnapshotNode;
     const TAIL: usize = std::mem::offset_of!(Self, nodes);
 
     fn nr(&self) -> usize { self.nr as usize }
@@ -187,9 +187,9 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
     fn total(&self) -> u32 { self.total }
 }
 
-impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
+impl FlexArrayIoctl for IoctlSnapshotTreeQueryV2 {
     type Ioc = BCH_IOCTL_SNAPSHOT_TREE_v2;
-    type Elem = bch_ioctl_snapshot_node_v2;
+    type Elem = IoctlSnapshotNodeV2;
     const TAIL: usize = std::mem::offset_of!(Self, nodes);
 
     fn nr(&self) -> usize { self.nr as usize }
@@ -253,7 +253,7 @@ where
 mod tests {
     use super::*;
 
-    type Query = bch_ioctl_snapshot_tree_query_v2;
+    type Query = IoctlSnapshotTreeQueryV2;
 
     /// A reply of @nr snapshot nodes @stride bytes apart, as a kernel whose
     /// nodes are that size writes it: node i's id i + 1, every other byte of
@@ -280,29 +280,29 @@ mod tests {
 
         // stepping by our size instead, the second is read from the middle of
         // the second and third
-        let ours = std::mem::size_of::<bch_ioctl_snapshot_node_v2>();
+        let ours = std::mem::size_of::<IoctlSnapshotNodeV2>();
         assert_ne!(reply(3, 40).tail_strided(ours).unwrap()[1].id, 2);
     }
 
     /// At our own size, it's the array as it is.
     #[test]
     fn tail_strided_our_nodes() {
-        let stride = std::mem::size_of::<bch_ioctl_snapshot_node_v2>();
+        let stride = std::mem::size_of::<IoctlSnapshotNodeV2>();
         let buf = reply(3, stride);
-        let ids = |ns: &[bch_ioctl_snapshot_node_v2]| ns.iter().map(|n| n.id).collect::<Vec<_>>();
+        let ids = |ns: &[IoctlSnapshotNodeV2]| ns.iter().map(|n| n.id).collect::<Vec<_>>();
         assert_eq!(ids(&buf.tail_strided(stride).unwrap()), [1, 2, 3]);
     }
 
     /// A count past the buffer is an error, not a read past it.
     #[test]
     fn tail_strided_overrun() {
-        let stride = std::mem::size_of::<bch_ioctl_snapshot_node_v2>();
+        let stride = std::mem::size_of::<IoctlSnapshotNodeV2>();
         let mut buf = reply(1, stride);
         buf.hdr_mut().nr = 5;
         assert!(matches!(buf.tail_strided(stride), Err(VStructError::Overrun { .. })));
     }
 
-    type Counters = bcachefs_kernel::util::vstructs::Head<bch_ioctl_query_counters>;
+    type Counters = bcachefs_kernel::util::vstructs::Head<IoctlQueryCounters>;
 
     /// get() is the array as long as the header's count says, not as long as
     /// the buffer.

@@ -3,14 +3,14 @@
 #![allow(non_camel_case_types)]
 
 use crate::data::extents_format::{bch_extent_entry, InlineDataCsum};
-use crate::format::bch_val;
+use crate::format::Val;
 use crate::types::{Le32, Le64};
 use cstruct_macros::{bitfield, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers)]
 pub struct ReflinkP {
-    pub v: bch_val,
+    pub v: Val,
     #[members]
     pub idx_flags: ReflinkPIdxFlags,
     /*
@@ -37,7 +37,7 @@ pub struct ReflinkPIdxFlags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct ReflinkV {
-    pub v: bch_val,
+    pub v: Val,
     pub refcount: Le64,
     pub start: [bch_extent_entry; 0],
     pub _data: [u64; 0],
@@ -47,7 +47,7 @@ pub struct ReflinkV {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct IndirectInlineData {
-    pub v: bch_val,
+    pub v: Val,
     pub refcount: Le64,
     pub data: [u8; 0],
 }
@@ -56,7 +56,7 @@ pub struct IndirectInlineData {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct IndirectInlineDataV2 {
-    pub v: bch_val,
+    pub v: Val,
     pub refcount: Le64,
     pub csum: InlineDataCsum,
     pub data: [u8; 0],

@@ -27,7 +27,7 @@ use crate::posix::{acl, inode};
 use crate::os::{inode_ops::InodeAttrs, posix_acl::{AclType, PosixAcl}};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::inode_format::InodeOptId;
 use crate::posix::quota_format::QuotaType;
 use crate::errcode::{Errcode, ret_to_c, BchError};
@@ -74,7 +74,7 @@ struct FileattrSet {
 }
 
 impl FileattrSet {
-    fn apply(&self, t: &TransAttempt<'_, '_>, inode: &InodeInfo, bi: &mut bch_inode_unpacked)
+    fn apply(&self, t: &TransAttempt<'_, '_>, inode: &InodeInfo, bi: &mut InodeUnpacked)
         -> Result<(), BchError>
     {
         let fs = t.fs();
@@ -243,7 +243,7 @@ impl InodeInfo {
     /// What @attr changes, into @bi: @uid as stored, @kgid as the
     /// filesystem has it.
     fn setattr_copy(&self, idmap: MntIdmap<'_>, attr: &Iattr, uid: Option<u32>,
-                    kgid: Option<c::kgid_t>, bi: &mut bch_inode_unpacked) {
+                    kgid: Option<c::kgid_t>, bi: &mut InodeUnpacked) {
         let fs = self.fs();
         let v = self.vfs();
 

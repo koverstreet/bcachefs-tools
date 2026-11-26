@@ -29,13 +29,13 @@ use core::ffi::{c_int, CStr};
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::format::{BCACHEFS_STATFS_MAGIC, bch_key};
-use crate::opts::bch_opts;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::format::{BCACHEFS_STATFS_MAGIC, Key};
+use crate::opts::Opts;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, Claimed, OpenFs, FsFlag};
 use crate::util::{refcount::RefGuard, alloc::Vec, printbuf::Printbuf, vstructs::plain_bytes_mut};
-use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
+use crate::init::registry::{self, Claim, FsHandle, FsKey, Opener, Opening};
 use crate::OptId;
 use crate::os::fs_context::{FsContext, FsParam, ParamValue};
 use crate::os::fs_type::{FsType, FsTypeTable, SuperData};
@@ -67,7 +67,7 @@ impl SuperData for OpenFs {
 /// A mount's or reconfigure's parameters, as parse_param has them so far:
 /// fc->fs_private, from new_context() until the context's free.
 pub(crate) struct MountParams {
-    opts:        bch_opts,
+    opts:        Opts,
     /// The options that can't be parsed until the filesystem is open: start()
     /// parses them, after Claimed::open().
     parse_later: Printbuf,
@@ -77,8 +77,8 @@ pub(crate) struct MountParams {
     /// there: see start() and status_fd.rs.
     status:      Option<StatusFile>,
     /// "user_key"'s key, made in place, so no copy of it is left behind: a
-    /// bch_key wipes itself when it's dropped.
-    user_key:    Option<bch_key>,
+    /// Key wipes itself when it's dropped.
+    user_key:    Option<Key>,
 }
 
 /// A device's path, NUL-terminated.
@@ -98,7 +98,7 @@ impl DevPath {
 }
 
 /// @opts' defined options, as the mount's.
-fn set_mount_opts(fs: &Fs, opts: &bch_opts) {
+fn set_mount_opts(fs: &Fs, opts: &Opts) {
     for id in (0..crate::opts::NR).filter(|&id| opts.defined(OptId(id as u32))) {
         fs.mount_opts.set(id);
     }
@@ -107,7 +107,7 @@ fn set_mount_opts(fs: &Fs, opts: &bch_opts) {
 impl Bcachefs {
     /// Mount @fs, already open, through its superblock; None if @fs has gone
     /// away and @key should be looked up again.
-    fn mounted(fc: &mut FsContext<Self>, fs: NonNull<Fs>, key: Key<'_>)
+    fn mounted(fc: &mut FsContext<Self>, fs: NonNull<Fs>, key: FsKey<'_>)
         -> Result<Option<Root<Self>>, BchError>
     {
         // @fs isn't pinned until we have its superblock: it may have been
@@ -137,7 +137,7 @@ impl Bcachefs {
         opts.set_nostart(true);
 
         match opening.claim(fc.ctx().devs.iter().map(DevPath::as_cstr), &mut opts)? {
-            Claim::Open(fs, uuid) => Self::mounted(fc, fs, Key::Uuid(uuid)),
+            Claim::Open(fs, uuid) => Self::mounted(fc, fs, FsKey::Uuid(uuid)),
             Claim::Retry => Ok(None),
             // the Opening held until the superblock exists, for other mounts to share
             Claim::Ours(_opening, claimed) => {
@@ -152,7 +152,7 @@ impl Bcachefs {
     // Out of line: @later is a bch_opts, which inlined would stay in the frame
     // under all of recovery
     #[inline(never)]
-    fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut bch_opts) -> Result<OpenFs, BchError> {
+    fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut Opts) -> Result<OpenFs, BchError> {
         let fs = claimed.open(opts, p.user_key.as_ref())?;
 
         if opts.defined(OptId::discard) {
@@ -161,7 +161,7 @@ impl Bcachefs {
         set_mount_opts(&fs, opts);
 
         // Some options can't be parsed until after the fs is started:
-        let mut later: bch_opts = Default::default();
+        let mut later: Opts = Default::default();
         crate::opts::parse_mount_opts_into(Some(&fs), &mut later, None, p.parse_later.as_bytes(), false)?;
         fs.opts_writer(&mut fs.sb_lock()).apply(&later);
         set_mount_opts(&fs, &later);
@@ -169,7 +169,7 @@ impl Bcachefs {
     }
 
     /// Open and start the filesystem, no superblock existing yet.
-    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut bch_opts) -> Result<OpenFs, BchError> {
+    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut Opts) -> Result<OpenFs, BchError> {
         let p = fc.ctx();
         let fs = Self::open_opts(p, claimed, opts)?;
 
@@ -241,7 +241,7 @@ impl Bcachefs {
             #[cfg(CONFIG_UNICODE)]
             sb.set_encoding(|fs| fs.cf_encoding.as_ref());
 
-            let root = InodeInfo::get_warn(fs, subvol_inum::ROOT, c"bch2_fs_get_tree")
+            let root = InodeInfo::get_warn(fs, SubvolInum::ROOT, c"bch2_fs_get_tree")
                 .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
 
             Ok(sb.fill(root)
@@ -358,7 +358,7 @@ impl FsType for Bcachefs {
                 if !ok {
                     fc.ctx().user_key = None;
                     return Err(fc.invalf(format_args!("user_key: expected {} hex digits",
-                                                      size_of::<bch_key>() * 2)));
+                                                      size_of::<Key>() * 2)));
                 }
                 Ok(0)
             }
@@ -394,7 +394,7 @@ impl FsType for Bcachefs {
 
         let ret = registry::devs(fc.ctx().devs.iter().map(DevPath::as_cstr)).and_then(|devs| loop {
             let mounted = FsHandle::get(&devs, Opener::Mount).and_then(|handle| match handle {
-                FsHandle::Open(fs) => Self::mounted(fc, fs, Key::Devs(&devs)),
+                FsHandle::Open(fs) => Self::mounted(fc, fs, FsKey::Devs(&devs)),
                 FsHandle::Opening(opening) => Self::open(fc, opening),
             });
             if let Some(ret) = mounted.transpose() {
@@ -510,10 +510,10 @@ fn hex2bin(dst: &mut [u8], hex: &[u8]) -> bool {
 
 static BCACHEFS_TYPE: FsTypeTable<Bcachefs> = FsTypeTable::new();
 
-pub fn bch2_fs_type_register() -> c_int {
+pub fn fs_type_register() -> c_int {
     BCACHEFS_TYPE.register().map_or_else(|e| e.to_errno(), |()| 0)
 }
 
-pub fn bch2_fs_type_unregister() {
+pub fn fs_type_unregister() {
     BCACHEFS_TYPE.unregister()
 }

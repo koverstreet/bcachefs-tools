@@ -25,7 +25,7 @@ use crate::c;
 use crate::btree::cache::BtreeNodeCacheState;
 use crate::data::extents_format::BtreePtrV2;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Bpos, Btree, bkey, BTREE_MAX_DEPTH};
+use crate::format::{BkeyType, Bpos, Btree, Bkey, BTREE_MAX_DEPTH};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::{error::id, recovery::btree_lost_data};
 use crate::sb::errors::FsckFlags;
@@ -46,7 +46,7 @@ enum Repair {
 
 /// @b's key as a btree_ptr_v2 - a v1's converted - with its header and
 /// value's head as @f leaves them.
-fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut bkey, &mut BtreePtrV2)) -> DownKey {
+fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut Bkey, &mut BtreePtrV2)) -> DownKey {
     let contents = b.contents();
     let src = BkeySC::from(b.key());
     let val = src.val_bytes();
@@ -66,7 +66,7 @@ fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut bkey, &mut BtreePtrV2)) -> D
         _ => unreachable!("a btree node's key is a btree pointer"),
     };
 
-    let mut k = bkey::new();
+    let mut k = Bkey::new();
     k.set_key_type(BkeyType::btree_ptr_v2);
     k.p = src.k.p;
     k.set_val_bytes(size_of::<BtreePtrV2>() + ptrs.len());
@@ -74,7 +74,7 @@ fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut bkey, &mut BtreePtrV2)) -> D
     f(&mut k, &mut v);
 
     let mut dst = DownKey::default();
-    let (hdr, val) = plain_bytes_mut(dst.elems_mut()).split_at_mut(size_of::<bkey>());
+    let (hdr, val) = plain_bytes_mut(dst.elems_mut()).split_at_mut(size_of::<Bkey>());
     let (head, rest) = val.split_at_mut(size_of::<BtreePtrV2>());
     hdr.copy_from_slice(plain_bytes(&k));
     head.copy_from_slice(plain_bytes(&v));

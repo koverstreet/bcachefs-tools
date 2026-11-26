@@ -2,7 +2,7 @@
 
 //! The open filesystems - C's bch2_fs_list - and the ones being opened.
 //!
-//! - Key: what a filesystem is found by: the devices an opener names, or -
+//! - FsKey: what a filesystem is found by: the devices an opener names, or -
 //!   once their superblocks are read - a multi-device filesystem's UUID.
 //!   Copies of a single-device image share a UUID, and may be open at once.
 //! - Opening: a filesystem being opened, by a mount or an offline fsck: the
@@ -19,7 +19,7 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::format::__uuid_t;
-use crate::opts::bch_opts;
+use crate::opts::Opts;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::{ByteLock, Locked};
@@ -54,7 +54,7 @@ impl Opener {
 }
 
 #[derive(Clone, Copy)]
-pub enum Key<'a> {
+pub enum FsKey<'a> {
     Devs(&'a [c::dev_t]),
     Uuid([u8; 16]),
 }
@@ -75,21 +75,21 @@ pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<c::dev_t>, 
     Ok(devs)
 }
 
-impl ToText for Key<'_> {
+impl ToText for FsKey<'_> {
     fn to_text(&self, out: &mut Printbuf) {
         match *self {
-            Key::Devs(devs) => {
+            FsKey::Devs(devs) => {
                 prt!(out, "on device{}", if devs.len() > 1 { "s" } else { "" });
                 for (i, dev) in devs.iter().enumerate() {
                     prt!(out, "{}{}:{}", if i > 0 { ", " } else { " " },
                          dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1));
                 }
             }
-            Key::Uuid(b) => __uuid_t { b }.to_text(out),
+            FsKey::Uuid(b) => __uuid_t { b }.to_text(out),
         }
     }
 }
-crate::display_via_to_text!(impl['a] Key<'a>);
+crate::display_via_to_text!(impl['a] FsKey<'a>);
 
 struct OpeningEntry {
     holder: Arc<Holder>,
@@ -121,24 +121,24 @@ enum Found {
 }
 
 impl Registry {
-    fn find(&self, key: Key<'_>) -> Option<NonNull<Fs>> {
+    fn find(&self, key: FsKey<'_>) -> Option<NonNull<Fs>> {
         let rcu = read_lock();
         let fs = self.open.iter().find(|fs| match key {
-            Key::Devs(devs) => devs.iter().all(|&dev| {
+            FsKey::Devs(devs) => devs.iter().all(|&dev| {
                 fs.devs_rcu(&rcu).any(|ca| !ca.disk_sb.bdev.get().is_null() && ca.dev.get() == dev)
             }),
-            Key::Uuid(uuid) => fs.sb.multi_device.get() && fs_uuid(fs) == uuid,
+            FsKey::Uuid(uuid) => fs.sb.multi_device.get() && fs_uuid(fs) == uuid,
         });
         fs.map(|fs| NonNull::from(&**fs))
     }
 
     /// What @key finds for @by, but @ours - or EBUSY
-    fn lookup(&self, key: Key<'_>, by: Opener, ours: Option<&Arc<Holder>>) -> Result<Found, BchError> {
+    fn lookup(&self, key: FsKey<'_>, by: Opener, ours: Option<&Arc<Holder>>) -> Result<Found, BchError> {
         let other = self.opening.iter()
             .filter(|o| ours.is_none_or(|h| !Arc::ptr_eq(&o.holder, h)))
             .find(|o| match key {
-                Key::Devs(devs) => o.devs.iter().any(|d| devs.contains(d)),
-                Key::Uuid(uuid) => o.uuid == Some(uuid),
+                FsKey::Devs(devs) => o.devs.iter().any(|d| devs.contains(d)),
+                FsKey::Uuid(uuid) => o.uuid == Some(uuid),
             });
         if let Some(other) = other {
             if !(by.shares() && other.by.shares()) {
@@ -190,7 +190,7 @@ impl FsHandle {
             let seen = OPENING_DONE.snapshot();
             let mut registry = REGISTRY.lock();
 
-            match registry.lookup(Key::Devs(devs), by, None)? {
+            match registry.lookup(FsKey::Devs(devs), by, None)? {
                 Found::Open(fs) => return Ok(FsHandle::Open(fs)),
                 Found::Busy => {
                     drop(registry);
@@ -221,7 +221,7 @@ pub enum Claim {
 impl Opening {
     /// Its devices claimed and read: a multi-device filesystem is then found
     /// by its UUID too
-    pub fn claim<'a>(self, devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut bch_opts)
+    pub fn claim<'a>(self, devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut Opts)
         -> Result<Claim, BchError>
     {
         let claimed = OpenFs::claim(devs, opts, &self.holder)?;
@@ -229,7 +229,7 @@ impl Opening {
 
         let seen = OPENING_DONE.snapshot();
         let mut registry = REGISTRY.lock();
-        match registry.lookup(Key::Uuid(uuid), self.by, Some(&self.holder))? {
+        match registry.lookup(FsKey::Uuid(uuid), self.by, Some(&self.holder))? {
             Found::Open(fs) => Ok(Claim::Open(fs, uuid)),
             Found::Busy => {
                 drop(registry);
@@ -248,7 +248,7 @@ impl Opening {
 }
 
 /// Not pinned, as FsHandle::Open
-pub fn find(key: Key<'_>) -> Option<NonNull<Fs>> {
+pub fn find(key: FsKey<'_>) -> Option<NonNull<Fs>> {
     REGISTRY.lock().find(key)
 }
 

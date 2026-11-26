@@ -28,22 +28,22 @@ use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, Wa
 use anyhow::Result;
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::format::DegradedAction;
-use bcachefs_kernel::opts::{bch_opts, OptId};
-use bcachefs_kernel::init::dev::bch_sb_handle;
+use bcachefs_kernel::opts::{Opts, OptId};
+use bcachefs_kernel::init::dev::SbHandle;
 use log::{info, warn};
 use uuid::Uuid;
 
 use crate::device_scan;
 
-fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
-    let mut opts: bch_opts = Default::default();
+fn sb_opts(sb: &SbHandle) -> Opts {
+    let mut opts: Opts = Default::default();
     bcachefs_kernel::opts::opts_from_sb(&mut opts, sb.sb().as_unvalidated());
     opts
 }
 
 /// What the filesystem says to do about a missing device, unless the caller
 /// said otherwise on the command line.
-fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> DegradedAction {
+fn degraded_action(sbs: &[(PathBuf, SbHandle)], cli_opts: &Opts) -> DegradedAction {
     if cli_opts.defined(OptId::degraded) {
         return cli_opts.degraded();
     }
@@ -143,14 +143,14 @@ pub enum Outcome {
 /// superblocks are closed.
 ///
 /// Held across the mount attempt that provokes it, which is why it holds no
-/// `bch_sb_handle`: those are open block devices, and the kernel wants to open
+/// `SbHandle`: those are open block devices, and the kernel wants to open
 /// them itself.
 pub struct Ask {
     name:     String,
     uuid:     Uuid,
     missing:  usize,
     expected: usize,
-    opts:     bch_opts,
+    opts:     Opts,
     use_udev: bool,
 }
 
@@ -159,7 +159,7 @@ impl Ask {
     /// present, or the filesystem's degraded action is not `ask`, in which case
     /// the kernel acts on it itself and an explicit `-o degraded=` is the
     /// user's decision already.
-    pub fn new(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> Option<Ask> {
+    pub fn new(sbs: &[(PathBuf, SbHandle)], cli_opts: &Opts) -> Option<Ask> {
         let (_, first) = sbs.first()?;
 
         // By device, not by path: see device_scan::present_devices(). A member

@@ -12,9 +12,9 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode::InodeUnpacked;
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::{check, inode, inode_opts, namei, str_hash};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::{Fs, FsFlag};
@@ -30,11 +30,11 @@ use crate::format::{Bpos, Btree, BkeyType};
 struct CheckInodes {
     /// The oldest version the current key sees: every version takes its hash
     /// info from it.
-    snapshot_root: bch_inode_unpacked,
+    snapshot_root: InodeUnpacked,
 }
 
 /// The dirent @u names must exist and name @u back. Whether @u changed.
-fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut bch_inode_unpacked) -> Result<bool, BchError> {
+fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut InodeUnpacked) -> Result<bool, BchError> {
     let fs = t.fs();
     let pos = spos(0, u.bi_inum, u.bi_snapshot);
 
@@ -91,7 +91,7 @@ fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError
 }
 
 /// What the has_*_acl flags record.
-fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &bch_inode_unpacked, ty: XattrType)
+fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &InodeUnpacked, ty: XattrType)
     -> Result<bool, BchError>
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;
@@ -99,7 +99,7 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &bch_inode_unpacked, ty: XattrTyp
     let mut iter = BtreeIter::uninit(t.trans());
 
     Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
-                                              subvol_inum { subvol: 0, inum: u.bi_inum },
+                                              SubvolInum { subvol: 0, inum: u.bi_inum },
                                               &key, BtreeIterFlags::empty(), u.bi_snapshot)
        .found()?.is_some())
 }
@@ -140,7 +140,7 @@ enum SubvolCheck {
 fn check_inode_subvol(
     t:     &TransAttempt<'_, '_>,
     pos:   Bpos,
-    u:     &mut bch_inode_unpacked,
+    u:     &mut InodeUnpacked,
 ) -> Result<SubvolCheck, BchError> {
     let fs = t.fs();
 
@@ -205,7 +205,7 @@ fn check_inode_subvol(
 fn check_unlinked_dir(
     t:     &TransAttempt<'_, '_>,
     pos:   Bpos,
-    u:     &mut bch_inode_unpacked,
+    u:     &mut InodeUnpacked,
 ) -> Result<bool, BchError> {
     if u.is_subvolume_root() && subvolume::is_unlinked(t, u.bi_subvol)? {
         return Ok(false);
@@ -228,7 +228,7 @@ fn check_unlinked_dir(
 
 fn write_if_changed(
     t:       &TransAttempt<'_, '_>,
-    u:       &mut bch_inode_unpacked,
+    u:       &mut InodeUnpacked,
     changed: bool,
 ) -> Result<(), BchError> {
     if !changed {

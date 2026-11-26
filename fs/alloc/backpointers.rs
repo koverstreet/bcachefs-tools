@@ -44,8 +44,8 @@ use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbFlush;
 use crate::data::ec::format::Stripe;
-use crate::btree::bbpos::bbpos;
-use crate::data::extents::extent_ptr_decoded;
+use crate::btree::bbpos::Bbpos;
+use crate::data::extents::ExtentPtrDecoded;
 use crate::data::reconcile::format::ReconcileWorkId;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
@@ -190,8 +190,8 @@ impl Backpointer {
     }
 
     /// What it points to.
-    pub fn target(&self) -> bbpos {
-        bbpos { btree: Btree(self.btree_id.into()), pos: self.pos }
+    pub fn target(&self) -> Bbpos {
+        Bbpos { btree: Btree(self.btree_id.into()), pos: self.pos }
     }
 }
 
@@ -218,7 +218,7 @@ pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> Reconc
 /// old stripe's block both reference it, and without the index, deleting the
 /// old stripe deletes the new one's backpointer. Stripe indices are below
 /// U32_MAX, so they fit.
-fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &extent_ptr_decoded) -> Bpos {
+fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &ExtentPtrDecoded) -> Bpos {
     let shift = fs.sb.extent_bp_shift.get();
     let dev = u64::from(p.ptr.dev());
 

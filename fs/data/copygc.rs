@@ -58,7 +58,7 @@ use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::accounting;
 use crate::alloc::accounting_mem::MarkHeld;
 use crate::alloc::background::alloc_to_v4;
-use crate::alloc::buckets::{u64_to_bucket, bch_dev_usage};
+use crate::alloc::buckets::{u64_to_bucket, DevUsage};
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
@@ -66,13 +66,13 @@ use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::alloc::foreground::Watermark;
-use crate::alloc::write_point::{write_point, write_point_specifier};
+use crate::alloc::write_point::{WritePoint, WritePointSpecifier};
 use crate::btree::update::TransCommitFlags;
-use crate::data::update::{data_update_opts, DataUpdateType};
+use crate::data::update::{DataUpdateOpts, DataUpdateType};
 use crate::init::dev::{AtomicDevsMask, DevsMask};
 use crate::errcode::{Errcode, BchError};
 use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
-use crate::data::moving::{BucketMoves, MoveStats, MovingCtxt, move_bucket_key};
+use crate::data::moving::{BucketMoves, MoveStats, MovingCtxt, MoveBucketKey};
 use crate::util::gather::Gather;
 use crate::debug::trace::events;
 use crate::data_structures::fifo::FifoRead;
@@ -102,14 +102,14 @@ use crate::format::{Bpos, Btree, DataType};
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
-pub struct bch_fs_copygc {
+pub struct FsCopygc {
     /* The thread, from start to stop: data/copygc.rs */
     #[pin]
     #[init(Daemon::new())]
     pub(crate) thread: Daemon,
     #[pin]
-    #[init(write_point::init(DataType::user))]
-    pub write_point: write_point,
+    #[init(WritePoint::init(DataType::user))]
+    pub write_point: WritePoint,
     /* The thread's, read unlocked - foreground.c's to_text, move.c: */
     pub wait_at: Volatile<i64>,
     pub wait: Volatile<i64>,
@@ -175,7 +175,7 @@ impl Drop for DevInFlight<'_> {
 #[derive(Detach)]
 struct InFlight<'f> {
     #[pin]
-    reg:  Registration<move_bucket_key, InFlight<'f>, SipHash13Key, 2, Private>,
+    reg:  Registration<MoveBucketKey, InFlight<'f>, SipHash13Key, 2, Private>,
     _dev: DevInFlight<'f>,
     /// The moves off it, each with a ref
     #[pin]
@@ -194,7 +194,7 @@ impl PinnedDrop for InFlight<'_> {
 type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>, SipHash13Key, 2, Private>;
 
 impl<'f> InFlight<'f> {
-    fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: move_bucket_key)
+    fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: MoveBucketKey)
         -> impl PinInit<Self, RegisterError> + use<'f, 'w>
     {
         pin_init!(&this in InFlight::<'f> {
@@ -208,7 +208,7 @@ impl<'f> InFlight<'f> {
         }? RegisterError)
     }
 
-    fn key(&self) -> &move_bucket_key {
+    fn key(&self) -> &MoveBucketKey {
         self.reg.key()
     }
 
@@ -217,7 +217,7 @@ impl<'f> InFlight<'f> {
     }
 }
 
-crate::keyed_by!(InFlight<'_>, |f| f.key() => move_bucket_key);
+crate::keyed_by!(InFlight<'_>, |f| f.key() => MoveBucketKey);
 
 type Batch<'f> = Vec<Pin<KBox<InFlight<'f>>>>;
 
@@ -258,7 +258,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
     let fs = ca.fs();
     let usage_full = ca.usage_full_read_fast();
-    let mut usage = bch_dev_usage::default();
+    let mut usage = DevUsage::default();
     for (b, d) in usage.buckets.iter_mut().zip(&usage_full.d) {
         *b = d.buckets;
     }
@@ -456,7 +456,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         -> Result<bool, BchError>
     {
         let Some(generation) = Self::bucket_is_movable(t, bucket, time)? else { return Ok(false) };
-        let key = move_bucket_key { bucket, generation };
+        let key = MoveBucketKey { bucket, generation };
 
         batch.reserve(1)?;
         let b = match kbox_pin_init(InFlight::new(self.fs, self.set, key)) {
@@ -651,7 +651,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut Vec<CopygcDev>)
         -> Result<(), BchError>
     {
-        let data_opts = data_update_opts {
+        let data_opts = DataUpdateOpts {
             type_:        DataUpdateType::copygc,
             commit_flags: TransCommitFlags::from_bits_retain(Watermark::copygc as u32),
             ..::pin_init::zeroed()
@@ -759,7 +759,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 
     let stats = MoveStats::default();
     stats.reset();
-    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, write_point_specifier::COPYGC, false),
+    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, WritePointSpecifier::COPYGC, false),
                             "allocating copygc's moving context")?;
     let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
     let clock = &fs.io_clock[WRITE];

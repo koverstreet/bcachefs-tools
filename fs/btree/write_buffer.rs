@@ -22,7 +22,7 @@ use keys::{KeysLive, WbKeys};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
-use crate::btree::bch_fs_btree;
+use crate::btree::FsBtree;
 use crate::util::time_stats::TimeStat;
 use crate::fs::{FsFlag as Flag, Fs};
 use crate::journal::{pins::JournalPinType::JOURNAL_PIN_TYPE_other, pins::{Pin, PinHolder}};
@@ -30,7 +30,7 @@ use self::WbFlushCaller as Caller;
 use crate::data_structures::dst_room::DstRoom;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BtreeFlags, bkey};
+use crate::format::{Bpos, Btree, BtreeFlags, Bkey};
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
 use crate::util::alloc::{flags, Flags, AllocError, Vec};
 use crate::util::place::{Contained, FieldPath};
@@ -80,7 +80,7 @@ const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() 
 pub const BTREE_WRITE_BUFERED_VAL_U64s_MAX: u32 = 4;
 
 /*
- * Each bch_fs_btree_write_buffer is per-btree, so individual key entries don't
+ * Each FsBtreeWriteBuffer is per-btree, so individual key entries don't
  * need to carry a btree id — it's implicit in the containing buffer.
  */
 /// A key's ref in a flush's sort: its pos's bytes and its index, laid over
@@ -88,7 +88,7 @@ pub const BTREE_WRITE_BUFERED_VAL_U64s_MAX: u32 = 4;
 /// then index, the index the low 32 bits of lo.
 #[derive(Clone, Copy, MaybeZeroable)]
 #[repr(C)]
-pub struct wb_key_ref {
+pub struct WbKeyRef {
     words: [u64; 3],
 }
 
@@ -108,11 +108,11 @@ const REF_IDX: core::ops::Range<usize> = size_of::<Bpos>()..size_of::<Bpos>() + 
 const REF_HI_MI_LO: [usize; 3] = [0, 1, 2];
 
 const _: () = assert!(REF_IDX.end - REF_IDX.start == size_of::<u32>() &&
-                      REF_IDX.end - REF_IDX.start + REF_POS.end - REF_POS.start == size_of::<wb_key_ref>());
+                      REF_IDX.end - REF_IDX.start + REF_POS.end - REF_POS.start == size_of::<WbKeyRef>());
 
 #[repr(C)]
 #[derive(SelfSized)]
-pub struct btree_write_buffered_key {
+pub struct BtreeWriteBufferedKey {
     pub journal_seq: u64,
     pub k: BkeyI,
 }
@@ -122,19 +122,19 @@ pub struct btree_write_buffered_key {
 #[derive(Clone, Copy, Default, Plain)]
 pub struct WbKeyHead {
     pub journal_seq: u64,
-    pub k: bkey,
+    pub k: Bkey,
 }
 
-impl DstHead for btree_write_buffered_key {
+impl DstHead for BtreeWriteBufferedKey {
     type Head = WbKeyHead;
 }
 
-const SEQ_U64S: usize = btree_write_buffered_key::K_AT / size_of::<u64>();
+const SEQ_U64S: usize = BtreeWriteBufferedKey::K_AT / size_of::<u64>();
 const _: () = assert!(SEQ_U64S == 1);
 
 /* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
 type AccountingKey =
-    DstRoom<btree_write_buffered_key, [u64; SEQ_U64S + BKEY_U64S + BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize]>;
+    DstRoom<BtreeWriteBufferedKey, [u64; SEQ_U64S + BKEY_U64S + BTREE_WRITE_BUFERED_VAL_U64s_MAX as usize]>;
 
 #[bch_enum(closed)]
 #[nr]
@@ -159,7 +159,7 @@ pub struct Inc {
 #[derive(Default)]
 pub struct Flushing {
     keys:   WbKeys,
-    sorted: Vec<wb_key_ref>,
+    sorted: Vec<WbKeyRef>,
 }
 
 crate::published! {
@@ -181,11 +181,11 @@ crate::published! {
 type IncGuard<'a> = ExclusiveGuard<'a, Mutex, Inc, KeysLive>;
 type FlushingGuard<'a> = ExclusiveGuard<'a, Mutex, Flushing, FlushingLive>;
 
-#[placed(bch_fs_btree.write_buffer[], index = idx: u32)]
+#[placed(FsBtree.write_buffer[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
 #[derive(TypeInfo, Init)]
-pub struct bch_fs_btree_write_buffer {
+pub struct FsBtreeWriteBuffer {
     #[pin]
     #[init(new_lock!(Inc::default(), ::pin_init::zeroed(), "&wb->inc.lock"))]
     pub inc: Locked<Mutex, Inc, KeysLive>,
@@ -232,7 +232,7 @@ enum Buf {
     Flushing,
 }
 
-impl bch_fs_btree_write_buffer {
+impl FsBtreeWriteBuffer {
     fn fs(&self) -> &Fs {
         self.container().container()
     }
@@ -340,7 +340,7 @@ pub fn insert_checks(fs: &Fs, btree: Btree, k: &BkeyI) -> Result<(), BchError> {
     Ok(())
 }
 
-fn wb_pin_le(wb: &bch_fs_btree_write_buffer, max_seq: u64) -> bool {
+fn wb_pin_le(wb: &FsBtreeWriteBuffer, max_seq: u64) -> bool {
     /*
      * move_keys_from_inc_to_flushing writes flushing.pin.seq (set), then
      * drops inc.pin.seq (clear).  Read inc first so that observing inc=0
@@ -410,7 +410,7 @@ fn flush_seq(trans: &BtreeTrans<'_>, max_seq: u64, did_work: &mut bool, caller: 
  * stops re-picking it; the worker's pin_drop removes it from the list when
  * the keys are actually written. No wait, no journal fetch needed.
  */
-impl<P: FieldPath<Self, To = Pin>> PinHolder<P> for bch_fs_btree_write_buffer {
+impl<P: FieldPath<Self, To = Pin>> PinHolder<P> for FsBtreeWriteBuffer {
     fn journal_flush(&self, _fs: &Fs, _seq: u64) -> Result<(), BchError> {
         self.queue_flush(Caller::journal_pin);
         Ok(())
@@ -494,7 +494,7 @@ impl Fs {
  * After draining, wake the dispatcher's waitlist (sync flushers block here
  * waiting for pins ≤ their target seq to drain).
  */
-fn flush_work_fn(wb: &bch_fs_btree_write_buffer) {
+fn flush_work_fn(wb: &FsBtreeWriteBuffer) {
     let fs = wb.fs();
     let caller = WbFlushCaller::from_bits(wb.flush_work_caller.get());
 

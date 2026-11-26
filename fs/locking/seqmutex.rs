@@ -16,13 +16,13 @@ use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct seqmutex {
+pub struct Seqmutex {
     pub lock: Mutex,
     /* C writes it under the mutex */
     pub seq:  AtomicU32,
 }
 
-impl RawLockBase for seqmutex {
+impl RawLockBase for Seqmutex {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -34,7 +34,7 @@ impl RawLockBase for seqmutex {
     }
 }
 
-impl RawLock for seqmutex {
+impl RawLock for Seqmutex {
     fn lock(&self) {
         self.lock.lock();
         self.seq.fetch_add(1, Ordering::Relaxed);
@@ -52,9 +52,9 @@ impl RawLock for seqmutex {
 /// What relock() takes: the count at an unlock.
 pub struct SeqMutexSeq(u32);
 
-impl<G, P> Locked<seqmutex, G, P> {
+impl<G, P> Locked<Seqmutex, G, P> {
     /// Held again, if no one has taken it since the unlock that gave @at.
-    pub fn relock(&self, at: SeqMutexSeq) -> Option<ExclusiveGuard<'_, seqmutex, G, P>> {
+    pub fn relock(&self, at: SeqMutexSeq) -> Option<ExclusiveGuard<'_, Seqmutex, G, P>> {
         let l = self.raw();
         if l.seq.load(Ordering::Relaxed) != at.0 {
             return None;
@@ -71,7 +71,7 @@ impl<G, P> Locked<seqmutex, G, P> {
     }
 }
 
-impl<G, P> ExclusiveGuard<'_, seqmutex, G, P> {
+impl<G, P> ExclusiveGuard<'_, Seqmutex, G, P> {
     /// Released, with the count relock() takes.
     pub fn unlock(self) -> SeqMutexSeq {
         SeqMutexSeq(self.lock().raw().seq.load(Ordering::Relaxed))

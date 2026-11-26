@@ -20,7 +20,7 @@
 
 use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketRef, alloc_request};
 use crate::btree::iter::{is_restart, TransAttempt};
-use crate::alloc::dev_select::dev_stripe_state;
+use crate::alloc::dev_select::DevStripeState;
 use crate::alloc::write_point::WritePointLocked;
 use crate::data::{write::WriteFlags, ec::head::{head_get, stripe_head_put}};
 use crate::format::BCH_REPLICAS_MAX;
@@ -49,8 +49,8 @@ impl alloc_request<'_, '_> {
 
         let dev = usize::from(ob.id().dev());
         let ec = !ob.ec.load(Relaxed).is_null();
-        self.devs_may_alloc.d.clear(dev);
-        self.devs_chosen.d.set(dev);
+        self.devs_may_alloc.clear(dev);
+        self.devs_chosen.set(dev);
         self.nr_effective += durability;
         self.ptrs.push(ob);
 
@@ -62,7 +62,7 @@ impl alloc_request<'_, '_> {
     /// - will do for it: on a device it may use, of its data type, erasure
     /// coded as it is.
     fn want_bucket(&self, ob: &OpenBucketRef) -> bool {
-        self.devs_may_alloc.d.test(ob.id().dev().into()) &&
+        self.devs_may_alloc.test(ob.id().dev().into()) &&
             ob.data_type.get() == self.data_type.0 as u8 &&
             self.bits.ec() == !ob.ec.load(Relaxed).is_null()
     }
@@ -171,7 +171,7 @@ impl TransAttempt<'_, '_> {
     /// it got before an error. Running out of devices, the last one's error,
     /// or insufficient_devices, traced. A restart, a blocked allocation or no
     /// open buckets end it at once: no other device will do better.
-    pub fn bucket_alloc_set(&self, req: &mut alloc_request, stripe: &mut dev_stripe_state)
+    pub fn bucket_alloc_set(&self, req: &mut alloc_request, stripe: &mut DevStripeState)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -263,7 +263,7 @@ impl TransAttempt<'_, '_> {
     {
         let fs = self.fs();
 
-        let mine = wp.ptrs.iter(fs).position(|ob| req.devs_may_alloc.d.test(ob.id().dev().into()));
+        let mine = wp.ptrs.iter(fs).position(|ob| req.devs_may_alloc.test(ob.id().dev().into()));
         if let Some(i) = mine {
             req.add_new_bucket(wp.ptrs.remove(fs, i));
             return Ok(());
@@ -275,7 +275,7 @@ impl TransAttempt<'_, '_> {
             let found = {
                 let mut g = a.freelist_lock.lock();
                 let i = a.partial(&g).position(|ob| ob.data_type.get() == req.data_type.0 as u8 &&
-                                                    req.devs_may_alloc.d.test(ob.id().dev().into()));
+                                                    req.devs_may_alloc.test(ob.id().dev().into()));
                 if let Some(i) = i {
                     fs.partial_bucket_alloc(&mut g, req, i, &mut restricted);
                 }

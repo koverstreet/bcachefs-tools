@@ -15,7 +15,7 @@ use crate::os::ops::IntoRaw;
 use super::file::InodeFile;
 use crate::c;
 use crate::data::{extents::ReadFlags, read::{self, ReadErrReport, Rbio}};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::vfs::inode::PagecacheAdd;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -141,7 +141,7 @@ fn set_up<P: UserPage>(b: &mut Bio<Holds<P>>, iter: &mut IovIter<'_>, offset: &m
 }
 
 #[in_place(SplitFut)]
-async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h Fs, inum: subvol_inum,
+async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h Fs, inum: SubvolInum,
                                      flags: F, should_dirty: bool) -> Result<(), BchError> {
     let ret = read::read(fs, split.rbio.erased(), inum, flags).await;
     split.as_mut().pages().release_user_pages(should_dirty).await;
@@ -152,7 +152,7 @@ async fn split_task<'h, P: UserPage>(mut split: Pin<&'h mut DioBio<P>>, fs: &'h 
 #[inline(never)]
 #[args_stored_once]
 async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, mut offset: u64,
-                                  inum: subvol_inum, flags: F, should_dirty: bool) -> Result<(), BchError> {
+                                  inum: SubvolInum, flags: F, should_dirty: bool) -> Result<(), BchError> {
     stack_pin_init!(let gather = Gather::new());
     let splits: Splits<'_> = Scope::new(&gather);
 
@@ -182,7 +182,7 @@ async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, 
 #[in_place(DioFut)]
 #[allow(clippy::too_many_arguments)]
 async fn dio_task<'h, P: UserPage>(mut dio: Pin<&'h mut DioBio<P>>, end: End, mut iter: CallersIter,
-                                   mut offset: u64, inum: subvol_inum, flags: F, count: usize) {
+                                   mut offset: u64, inum: SubvolInum, flags: F, count: usize) {
     let fs = end.inode().fs();
     let should_dirty = iter.get().user_backed();
 

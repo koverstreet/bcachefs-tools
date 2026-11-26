@@ -12,10 +12,10 @@
 //! points, ->swab and ->compat, should take Unvalidated keys. XXX: they don't
 //! yet - Rust has no unvalidated keys to give them.
 
+use crate::btree::bkey::BkeyI;
 use crate::btree::bkey::{AllTypes, BkeyP, BkeyS, FamilyVal};
 use crate::fs::Fs;
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, bch_val, bkey_format, bkey_i,
-    bkey_packed};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, Val, BkeyFormat, BkeyPacked};
 use crate::util::vstructs::Unvalidated;
 
 impl Bpos {
@@ -27,7 +27,7 @@ impl Bpos {
     }
 }
 
-unsafe fn bkey_swab_key(f: Option<&bkey_format>, k: *mut bkey_packed) {
+unsafe fn bkey_swab_key(f: Option<&BkeyFormat>, k: *mut BkeyPacked) {
     let f = if unsafe { (*BkeyP::from_raw(k)).is_packed() } {
         f.expect("a packed key to swab, with no format")
     } else {
@@ -35,7 +35,7 @@ unsafe fn bkey_swab_key(f: Option<&bkey_format>, k: *mut bkey_packed) {
     };
 
     let words = unsafe { core::slice::from_raw_parts_mut(k.cast::<u64>(), f.key_u64s as usize) };
-    crate::util::vstructs::plain_bytes_mut(words)[core::mem::offset_of!(bkey_packed, key_start)..].reverse();
+    crate::util::vstructs::plain_bytes_mut(words)[core::mem::offset_of!(BkeyPacked, key_start)..].reverse();
 }
 
 /// @k, in a node of @btree that @version on a machine @big_endian or not
@@ -46,10 +46,10 @@ unsafe fn bkey_swab_key(f: Option<&bkey_format>, k: *mut bkey_packed) {
 /// @k is a key in @f's node - None for a journal key's, never packed - not
 /// yet validated: too short to be a key, it's left for validate.
 pub unsafe fn bkey_compat(fs: Option<&Fs>, btree: Btree, version: MetadataVersion, big_endian: bool,
-                          write: bool, f: Option<&bkey_format>,
+                          write: bool, f: Option<&BkeyFormat>,
                           k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
-    let k = core::ptr::from_mut(k).cast::<bkey_packed>();
-    let packed = |k: *mut bkey_packed| unsafe { (*BkeyP::from_raw(k)).is_packed() };
+    let k = core::ptr::from_mut(k).cast::<BkeyPacked>();
+    let packed = |k: *mut BkeyPacked| unsafe { (*BkeyP::from_raw(k)).is_packed() };
     // a journal key's has none: it's never packed
     let fmt = || f.expect("a packed key, with no format");
 
@@ -75,11 +75,11 @@ pub unsafe fn bkey_compat(fs: Option<&Fs>, btree: Btree, version: MetadataVersio
             1 => {
                 let mut uk;
                 let u = if !packed(k) {
-                    let u = unsafe { &mut *k.cast::<bkey_i>() };
+                    let u = unsafe { &mut *k.cast::<BkeyI<Val>>() };
                     unsafe { BkeyS::from_parts(&mut u.k, &mut u.v) }
                 } else {
                     uk = fmt().unpack_key(unsafe { &*BkeyP::from_raw(k) });
-                    let v = unsafe { k.cast::<u64>().add(fmt().key_u64s.into()) }.cast::<bch_val>();
+                    let v = unsafe { k.cast::<u64>().add(fmt().key_u64s.into()) }.cast::<Val>();
                     unsafe { BkeyS::from_parts(&mut uk, v) }
                 };
                 let ops = BkeyType(unsafe { (*k).type_ }.into()).ops();

@@ -28,13 +28,13 @@ use zeroize::Zeroizing;
 
 use super::{Question, Reply, UNANSWERED, US};
 use crate::util::Printbuf;
-use crate::format::bch_sb;
+use crate::format::Sb;
 
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
 
 /// Its label, or its UUID - several filesystems come up at once at boot, and
 /// someone facing two questions needs to see whether they are the same disk.
-pub fn fs_name(sb: &bch_sb) -> String {
+pub fn fs_name(sb: &Sb) -> String {
     let label = String::from_utf8_lossy(sb.label());
 
     if label.is_empty() {
@@ -408,7 +408,7 @@ pub enum Given<T> {
 /// passphrase given for one disk at boot is tried for the next. A watch is the
 /// terminal's.
 pub fn read_passphrase<T>(
-    sb: &bch_sb,
+    sb: &Sb,
     mut watch: Option<&mut dyn Watch>,
     mut accept: impl FnMut(&[u8]) -> Option<T>,
 ) -> Result<Given<T>> {
@@ -515,7 +515,7 @@ pub fn read_secret_line(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<G
 }
 
 /// What an agent was given, NUL-separated, or None: it was declined.
-fn ask_agent_for_passphrase(sb: &bch_sb, first: bool) -> Result<Option<Zeroizing<Vec<u8>>>> {
+fn ask_agent_for_passphrase(sb: &Sb, first: bool) -> Result<Option<Zeroizing<Vec<u8>>>> {
     let mut command = ask_password(&format!("cryptsetup:UUID={}", sb.uuid().as_hyphenated()), None);
     command.args(["--multiple", "--keyname=cryptsetup", "--credential=cryptsetup.passphrase"]);
     if first {

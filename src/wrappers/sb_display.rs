@@ -12,25 +12,25 @@
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
-use bcachefs_kernel::format::bch_sb;
-use bcachefs_kernel::sb::{members_format::bch_member, self, SbFieldType, io::SbState};
+use bcachefs_kernel::format::Sb;
+use bcachefs_kernel::sb::{members_format::Member, self, SbFieldType, io::SbState};
 use bcachefs_kernel::util::{printbuf::Printbuf, vstructs::Unvalidated};
-use bcachefs_kernel::init::dev::bch_sb_handle;
+use bcachefs_kernel::init::dev::SbHandle;
 use bcachefs_kernel::fs::Fs;
 
 use crate::device_scan;
 
 /// Find a scanned device by its superblock dev_idx.
-fn find_dev(sbs: &[(PathBuf, bch_sb_handle)], idx: u32) -> Option<&(PathBuf, bch_sb_handle)> {
+fn find_dev(sbs: &[(PathBuf, SbHandle)], idx: u32) -> Option<&(PathBuf, SbHandle)> {
     sbs.iter().find(|(_, sb_handle)| sb_handle.sb().dev_idx as u32 == idx)
 }
 
 /// Print one member device's info: name, model, and detailed member text.
 fn print_one_member(
     out: &mut Printbuf,
-    sbs: &[(PathBuf, bch_sb_handle)],
-    sb: &bch_sb,
-    m: &bch_member,
+    sbs: &[(PathBuf, SbHandle)],
+    sb: &Sb,
+    m: &Member,
     idx: u32,
 ) {
     if !m.alive() {
@@ -66,7 +66,7 @@ fn print_one_member(
 pub fn sb_to_text_with_names(
     out: &mut Printbuf,
     fs: Option<&Fs>,
-    sb: &bch_sb,
+    sb: &Sb,
     print_layout: bool,
     fields: u32,
     field_only: Option<SbFieldType>,
@@ -114,6 +114,6 @@ pub fn sb_to_text_with_names(
         }
     }
 
-    // sbs (Vec<(PathBuf, bch_sb_handle)>) is dropped here — freed by
+    // sbs (Vec<(PathBuf, SbHandle)>) is dropped here — freed by
     // Rust's allocator, not kvfree. This is the whole point.
 }

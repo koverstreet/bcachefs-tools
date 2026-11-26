@@ -39,7 +39,7 @@ use subvolume::delete_unlinked;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_snapshots {
+pub struct FsSnapshots {
     pub table: SnapshotTable,
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]

@@ -114,10 +114,10 @@ fn may_reuse_stripe(s: &Internal, old: &Stripe<Validated>, b: StripeBlocks) -> b
 
     let mut devs = s.devs;
     for i in blocks_in(b.live & !b.bad) {
-        devs.d.clear(old.block_ptrs()[i].dev().into());
+        devs.clear(old.block_ptrs()[i].dev().into());
     }
 
-    b.live.count_ones() < new.nr_data() && devs.d.weight() > new.nr_redundant.into()
+    b.live.count_ones() < new.nr_data() && devs.weight() > new.nr_redundant.into()
 }
 
 /// Stripe @idx, if @s may be packed into it: opened, with its key, as @s's
@@ -236,6 +236,6 @@ pub(crate) fn try_stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 /// work - work made of the half-empty stripes we would not have cut.
 pub(crate) fn should_reuse_stripe(fs: &Fs, s: &Internal) -> bool {
     let mut avail = s.devs;
-    avail.d.andnot(&fs.copygc.low_on_space.load());
-    avail.d.weight() < s.new_stripe.stripe().v().nr_blocks.into()
+    avail.andnot(&fs.copygc.low_on_space.load());
+    avail.weight() < s.new_stripe.stripe().v().nr_blocks.into()
 }

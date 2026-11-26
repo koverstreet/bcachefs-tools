@@ -9,7 +9,7 @@
 // the file is what keeps the old filesystem's allocator away from blocks
 // bcachefs is using, and removing it would corrupt both filesystems.
 
-use bcachefs_kernel::format::{SbFeatures, bch_sb, bch_sb_layout, BCH_SB_SECTOR};
+use bcachefs_kernel::format::{SbFeatures, Sb, SbLayout, BCH_SB_SECTOR};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Dev, FsFlag};
 use std::ffi::CString;
@@ -19,14 +19,14 @@ use std::os::fd::{AsFd, BorrowedFd};
 use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
-use bcachefs_kernel::opts::{bch_opts, OptFlags, OptId};
+use bcachefs_kernel::opts::{Opts, OptFlags, OptId};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::data_structures::bitmap::AtomicBitmap;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
 use crate::commands::format::take_opt_value;
-use crate::commands::opts::{bch_opt_lookup_negated, parse_opt_val};
+use crate::commands::opts::{find_opt_negated, parse_opt_val};
 use crate::key::{KeyHandle, Keyring, Passphrase};
 use crate::commands::format_util::{format_opts_default, DevOpts, FormatOpts};
 use crate::util::fmt_bytes_human;
@@ -293,7 +293,7 @@ fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_bytes: u32) ->
 
 /// Add default superblock layout entries (sector 8 and sector 8+sb_size).
 /// Returns the sb_size.
-fn add_default_sb_layout(layout: &mut bch_sb_layout) -> Result<u32> {
+fn add_default_sb_layout(layout: &mut SbLayout) -> Result<u32> {
     let sb_size = 1u32 << layout.sb_max_size_bits;
     let bch_sb_sector = BCH_SB_SECTOR as u64;
 
@@ -339,7 +339,7 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 fn migrate_fs(
     fs_path: &str,
     fs_opt_strs: &[(OptId, String)],
-    mut fs_opts: bch_opts,
+    mut fs_opts: Opts,
     format_opts: FormatOpts<'_>,
     force: bool,
 ) -> Result<()> {
@@ -429,7 +429,7 @@ fn migrate_fs(
 
     // Open the new filesystem
     let dev_path_pb = std::path::PathBuf::from(&dev_path);
-    let mut opts: bch_opts = Default::default();
+    let mut opts: Opts = Default::default();
     opts.set_sb(sb_offset_val);
     opts.set_nostart(true);
     opts.set_noexcl(true);
@@ -484,7 +484,7 @@ fn migrate_fs(
 
     // Run fsck on the new filesystem
     println!("Migrate complete, running fsck:");
-    let mut fsck_opts: bch_opts = Default::default();
+    let mut fsck_opts: Opts = Default::default();
     fsck_opts.set_sb(sb_offset_val);
     fsck_opts.set_noexcl(true);
     fsck_opts.set_nochanges(true);
@@ -519,7 +519,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
     // Read the existing superblock
-    let mut sb_opts: bch_opts = Default::default();
+    let mut sb_opts: Opts = Default::default();
     sb_opts.set_sb(sb_offset);
     let dev_cstr = CString::new(dev_path)?;
     let mut sb = bcachefs_kernel::sb::io::read_super(&dev_cstr, &mut sb_opts, None)
@@ -537,7 +537,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .map_err(|e| anyhow!("Error opening {}: {}", dev_path, e))?;
 
     // Zero the start of the disk to blow away the old superblock
-    let zeroes_len = ((BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Head<bch_sb>>();
+    let zeroes_len = ((BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Head<Sb>>();
     let zeroes = vec![0u8; zeroes_len];
     {
         use std::os::unix::fs::FileExt;
@@ -548,7 +548,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
     // Open the filesystem with nostart + sb offset
     let dev_path_pb = std::path::PathBuf::from(dev_path);
-    let mut opts: bch_opts = Default::default();
+    let mut opts: Opts = Default::default();
     opts.set_nostart(true);
     opts.set_sb(sb_offset);
     opts.set_reconcile_enabled(false);
@@ -614,7 +614,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let mut no_passphrase = false;
     let mut force = false;
 
-    let mut fs_opts: bch_opts = Default::default();
+    let mut fs_opts: Opts = Default::default();
     let mut deferred_opts: Vec<(OptId, String)> = Vec::new();
 
     let mut i = 1;
@@ -629,7 +629,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
             };
             let name = raw_name.replace('-', "_");
 
-            if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
+            if let Some((opt_id, opt, negated)) = find_opt_negated(&name) {
                 if opt.flags.bits() & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()

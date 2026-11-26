@@ -5,12 +5,12 @@ use super::keys::{wb_key_u64s, KeysLiveWriter, WbKeys};
 use super::{insert_checks, resize_gfp, wb_btree_idx, AccountingKey, Buf, FlushingGuard, IncGuard, SEQ_U64S, WB_RESIZE_GFP};
 use crate::alloc::accounting::{self, DiskAccountingPos};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
-use crate::btree::write_buffer::{bch_fs_btree_write_buffer, WbBtree, WbFlushCaller as Caller};
+use crate::btree::write_buffer::{FsBtreeWriteBuffer, WbBtree, WbFlushCaller as Caller};
 use crate::data_structures::{dst_room::DstRoom, eytzinger::Eytzinger0};
 use crate::locking::Guard as _;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
-use crate::format::{jset_entry, BkeyType, Btree, bkey, jset_entry_write_buffer_keys, JsetEntryType};
+use crate::format::{JsetEntry, BkeyType, Btree, Bkey, jset_entry_write_buffer_keys, JsetEntryType};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::{alloc::{Flags, AllocError}, vstructs::{Validated, ValidatedEntriesMut}};
@@ -29,14 +29,14 @@ crate::module_param! {
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 static TEST_WB_PIN_STATE: AtomicI32 = AtomicI32::new(0);
 
-fn is_accounting_mem(k: &bkey) -> bool {
+fn is_accounting_mem(k: &Bkey) -> bool {
     k.key_type() == BkeyType::accounting && accounting::is_mem(&DiskAccountingPos::from_bpos(k.p))
 }
 
 /// A write buffered btree's part of a journal intake: its inc locked, and
 /// its flushing too while its keys go straight there.
 struct IntakeBtree<'a> {
-    wb:       &'a bch_fs_btree_write_buffer,
+    wb:       &'a FsBtreeWriteBuffer,
     inc:      IncGuard<'a>,
     flushing: Option<FlushingGuard<'a>>,
     room:     usize,
@@ -53,7 +53,7 @@ impl<'a> IntakeBtree<'a> {
      * Takes inc.lock (always), and flushing.lock (opportunistically, to let us
      * skip staging via inc if flushing has room).
      */
-    fn lock(wb: &'a bch_fs_btree_write_buffer) -> Self {
+    fn lock(wb: &'a FsBtreeWriteBuffer) -> Self {
         let (inc, flushing) = match wb.flushing.try_lock() {
             Some(mut flushing) => {
                 let mut inc = wb.inc.lock();
@@ -374,7 +374,7 @@ impl<'a> Intake<'a> {
         // closed - blocked, if it was the open one - and its reservations
         // released: every one's entries whole, not written yet, so not
         // encrypted
-        for i in unsafe { ValidatedEntriesMut::<jset_entry>::of_bytes(entries) } {
+        for i in unsafe { ValidatedEntriesMut::<JsetEntry>::of_bytes(entries) } {
             if JsetEntryType(i.type_.into()) == JsetEntryType::write_buffer_keys {
                 self.entry(i)?;
             }
@@ -385,7 +385,7 @@ impl<'a> Intake<'a> {
 
     /// A write_buffer_keys entry's keys into the write buffer, and the entry
     /// retyped to btree keys.
-    pub fn entry(&mut self, i: &mut jset_entry) -> Result<(), BchError> {
+    pub fn entry(&mut self, i: &mut JsetEntry) -> Result<(), BchError> {
         let btree = Btree(i.btree_id.into());
         let keys = i.arm::<jset_entry_write_buffer_keys<Validated>>().expect("a write buffer keys entry");
         for k in keys.entries() {

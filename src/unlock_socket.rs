@@ -30,7 +30,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use bcachefs_kernel::init::dev::bch_sb_handle;
+use bcachefs_kernel::init::dev::SbHandle;
 use log::{debug, info};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -43,7 +43,7 @@ const DIR: &str = "/run/bcachefs/unlock";
 pub struct UnlockSocket<'a> {
     listener: UnixListener,
     path:     PathBuf,
-    sb:       &'a bch_sb_handle,
+    sb:       &'a SbHandle,
     /// The one that checked out, waiting for [`UnlockSocket::take`].
     got:      Option<PassphraseCorrect>,
 }
@@ -61,7 +61,7 @@ impl UnlockSocket<'_> {
     /// Not a warning. Nothing is wrong: an encrypted filesystem mounted
     /// somewhere /run is absent or read-only would otherwise say so on every
     /// mount, about a facility whoever is mounting never asked for.
-    pub fn open(sb: &bch_sb_handle) -> Option<UnlockSocket<'_>> {
+    pub fn open(sb: &SbHandle) -> Option<UnlockSocket<'_>> {
         match Self::try_open(sb) {
             Ok(s)  => Some(s),
             Err(e) => {
@@ -71,7 +71,7 @@ impl UnlockSocket<'_> {
         }
     }
 
-    fn try_open(sb: &bch_sb_handle) -> Result<UnlockSocket<'_>> {
+    fn try_open(sb: &SbHandle) -> Result<UnlockSocket<'_>> {
         let path = Self::path(&sb.sb().uuid());
 
         std::fs::create_dir_all(DIR).with_context(|| format!("creating {DIR}"))?;

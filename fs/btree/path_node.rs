@@ -12,7 +12,7 @@ use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::traverse::level_init_iter;
-use crate::btree::update::btree_insert_entry;
+use crate::btree::update::BtreeInsertEntry;
 use crate::errcode::Errcode;
 use crate::format::{Btree, BTREE_MAX_DEPTH};
 use crate::locking::six::SixHold;
@@ -76,7 +76,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>,
-                                                       updates: &mut [btree_insert_entry],
+                                                       updates: &mut [BtreeInsertEntry],
                                                        b: LockedNode<'_, BtreeNode>) {
         let data = b.contents().data();
         let btree = Btree(b.c.btree_id.get().into());

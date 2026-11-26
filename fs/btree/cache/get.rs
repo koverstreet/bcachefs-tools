@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedNode};
+use super::{btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedNode};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::BtreeNodeLockedType;
 use crate::btree::node::{BtreeNode, BtreeWriteType};
-use crate::btree::path::{bch2_btree_path_to_text, LockedNode, NodePtr, PathIdx, Paths};
-use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
+use crate::btree::path::{btree_path_to_text, LockedNode, NodePtr, PathIdx, Paths};
+use crate::btree::read::{btree_node_wait_on_read, btree_node_wait_on_write};
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
@@ -37,12 +37,12 @@ fn btree_bad_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
     let data = contents.data();
     let mut msg = LogMsg::new(fs);
     prt!(msg, "cached btree node header doesn't match expected (memory corruption?)\nexpected: ");
-    bch2_btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.get().into()), b.c.level.get().into());
+    btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.get().into()), b.c.level.get().into());
     prt!(msg, "\nptr: ");
     bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(b.key()));
 
     prt!(msg, "\ngot: ");
-    bch2_btree_id_level_to_text(&mut msg, data.btree_id(), data.level() as u32);
+    btree_id_level_to_text(&mut msg, data.btree_id(), data.level() as u32);
     prt!(msg, "\nmin {}", data.min_key);
     prt!(msg, "\nmax {}", data.max_key);
 
@@ -83,7 +83,7 @@ impl BtreeTrans<'_> {
     fn btree_node_reused(&self, paths: &Paths<'_>, idx: PathIdx) -> BchError {
         self.fs().event_inc_trace(events::trans_restart_btree_node_reused, |out| {
             prt!(out, "{}\n", self.fn_name());
-            bch2_btree_path_to_text(out, self, idx, &paths[idx]);
+            btree_path_to_text(out, self, idx, &paths[idx]);
         });
         self.restart(Errcode::transaction_restart_lock_node_reused)
     }
@@ -186,7 +186,7 @@ impl BtreeTrans<'_> {
                 drop(held);
                 self.unlock_from(paths, crate::ret_ip!());
 
-                bch2_btree_node_wait_on_read(self, paths, b);
+                btree_node_wait_on_read(self, paths, b);
 
                 self.relock_from(paths)?;
                 self.path_relock(paths, idx)?;
@@ -350,8 +350,8 @@ impl BtreeTrans<'_> {
 
             /* not allowed to wait on io with btree locks held: */
             self.unlock_from(paths, crate::ret_ip!());
-            bch2_btree_node_wait_on_read(self, paths, b);
-            bch2_btree_node_wait_on_write(self, paths, b);
+            btree_node_wait_on_read(self, paths, b);
+            btree_node_wait_on_write(self, paths, b);
             self.relock_from(paths)?;
         };
 

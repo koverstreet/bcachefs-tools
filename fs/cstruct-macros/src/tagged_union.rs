@@ -21,11 +21,11 @@
 //!
 //!   tagged_union! {
 //!       in crate::format;
-//!       #[storage(crate::format::jset_entry)]
+//!       #[storage(crate::format::JsetEntry)]
 //!       #[tag(type_: u8)]
 //!       #[tag_enum(JsetEntryType: u32, nr)]
 //!       #[size(header)]
-//!       pub enum jset_entry {
+//!       pub enum JsetEntry {
 //!           /// Btree key updates
 //!           btree_keys(c::jset_entry_btree_keys) = 0,
 //!           ...

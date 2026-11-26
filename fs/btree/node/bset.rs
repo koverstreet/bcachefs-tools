@@ -7,7 +7,7 @@ use super::keys::{key_at, Keys, KeysMut};
 use super::{check_lookups, BtreeNode, BtreeNrKeys, NodeContents};
 use crate::btree::bkey::{BkeyI, BkeyP, BkeyV, BKEY_U64S};
 use crate::debug::params::debug_check_btree_accounting;
-use crate::format::{Bpos, bkey, bkey_format, bkey_packed, bset, btree_node, btree_node_entry};
+use crate::format::{Bpos, Bkey, BkeyFormat, BkeyPacked, Bset, btree_node, BtreeNodeEntry};
 use crate::fs::Fs;
 use crate::prt;
 use crate::types::Le64;
@@ -228,7 +228,7 @@ impl BsetTree {
 
     /// Its first key's offset in the node.
     pub fn first_offset(&self) -> u16 {
-        let first = self.data_offset as usize + offset_of!(Head<bset>, _data) / size_of::<u64>();
+        let first = self.data_offset as usize + offset_of!(Head<Bset>, _data) / size_of::<u64>();
 
         invariant!(first <= u16::MAX as usize);
         u16::try_from(first).unwrap_or_else(|_| crate::invariant_failed("a bset past the last offset"))
@@ -287,7 +287,7 @@ impl Keys<'_> {
 
             let _k = self.key_at(k);
             let n = k + _k.u64s() as u16;
-            let mut uk = bkey::new();
+            let mut uk = Bkey::new();
             let sc = _k.disassemble(b, &mut uk);
 
             prt!(out, "block {set} key {:5}: ", k - start);
@@ -517,7 +517,7 @@ impl KeysMut<'_> {
         self.contents.nr = BtreeNrKeys::default();
     }
 
-    pub(crate) fn bset_head_mut(&mut self, offset: u16) -> &mut Head<bset> {
+    pub(crate) fn bset_head_mut(&mut self, offset: u16) -> &mut Head<Bset> {
         let len = self.buf.len();
         cast_plain_mut(plain_bytes_mut(&mut self.buf[offset as usize..]))
             .unwrap_or_else(|| panic!("no room for a bset at offset {offset} of a {len} u64 node"))
@@ -573,7 +573,7 @@ impl KeysMut<'_> {
         self.bset_init(offset as u16, Le64::new(random_u64()));
     }
 
-    /// @bne the offset of a btree_node_entry, its bset after its csum.
+    /// @bne the offset of a BtreeNodeEntry, its bset after its csum.
     pub fn bset_init_next(&mut self, bne: u16) {
         let last_end = self.contents.sets().last().expect("a btree node with no bsets").end_offset;
 
@@ -582,7 +582,7 @@ impl KeysMut<'_> {
         assert!(self.contents.sets().len() < MAX_BSETS as usize, "a btree node's {} bsets, full", self.contents.sets().len());
 
         let seq = self.as_keys().bset(&self.contents.sets()[0]).seq;
-        let keys = offset_of!(Head<btree_node_entry>, keys) / size_of::<u64>();
+        let keys = offset_of!(Head<BtreeNodeEntry>, keys) / size_of::<u64>();
         self.bset_init(bne + keys as u16, seq);
     }
 
@@ -590,7 +590,7 @@ impl KeysMut<'_> {
         let f = &self.contents.format;
         let set = self.contents.sets().len() - 1;
         let insert_p: &BkeyP = insert.into();
-        let mut packed = ::pin_init::zeroed::<bkey_packed>();
+        let mut packed = ::pin_init::zeroed::<BkeyPacked>();
 
         self.as_keys().bset_verify_rw_aux_tree(&self.contents.sets()[set]);
         self.as_keys().verify_insert_pos(where_, insert_p, clobber_u64s);
@@ -697,7 +697,7 @@ impl NodeContents {
 
 impl Keys<'_> {
     pub(super) fn __bset_search(&self, t: &BsetTree, search: &Bpos,
-                                     lossy_packed_search: &bkey_packed) -> u16 {
+                                     lossy_packed_search: &BkeyPacked) -> u16 {
         /*
          * First, we search for a cacheline, then lastly we do a linear search
          * within that cacheline.
@@ -749,7 +749,7 @@ impl Keys<'_> {
 impl NodeContents {
     /// The format, and what's derived from it: the key bits and the unpack
     /// constants; the aux trees, built for the old one, go.
-    pub fn set_format(&mut self, f: bkey_format) {
+    pub fn set_format(&mut self, f: BkeyFormat) {
         self.format      = f;
         self.nr_key_bits = f.key_bits() as u8;
 

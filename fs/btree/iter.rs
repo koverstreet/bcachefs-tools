@@ -139,6 +139,7 @@
  * resume from where it left off.
  */
 
+use crate::btree::bkey::BkeyI;
 use super::bkey::*;
 pub use super::trans::BtreeTrans;
 pub use super::for_each::*;
@@ -148,7 +149,7 @@ use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, PathIdx, Paths};
 use crate::btree::update::TransCommitFlags;
-use crate::data::{extents::{bch2_cut_back_s, bch2_cut_front_s}, ptrs::BtreePtrs};
+use crate::data::{extents::{cut_back_s, cut_front_s}, ptrs::BtreePtrs};
 use crate::debug::{params::debug_check_iterators, trace::events};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
@@ -161,7 +162,7 @@ use core::ffi::{c_ulong, c_uint};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use cstruct_macros::{MaybeZeroable, bch_enum, bitfield, BitfieldMembers};
-use crate::format::{Bpos, Btree, BkeyType, bch_val, bkey, bkey_i, BTREE_MAX_DEPTH};
+use crate::format::{Bpos, Btree, BkeyType, Val, Bkey, BTREE_MAX_DEPTH};
 use nestify::nest;
 
 #[bch_enum(closed)]
@@ -248,7 +249,7 @@ nest! {
 
         #[members]
         #>[bitfield(u8)]
-        pub(in crate::btree) bits: pub struct btree_iter_bits {
+        pub(in crate::btree) bits: pub struct BtreeIterBits {
             #[bits(8)] pub(self) btree_id: Btree,
         },
         pub(in crate::btree) min_depth: u8,
@@ -264,7 +265,7 @@ nest! {
          * Current unpacked key - so that advancing the iterator can
          * correctly advance pos.
          */
-        pub(in crate::btree) k: bkey,
+        pub(in crate::btree) k: Bkey,
 
         /* BTREE_ITER_with_journal: */
         pub(in crate::btree) journal_idx: usize,
@@ -473,7 +474,7 @@ pub(super) type Peeked = Result<Option<KeyVal>, BchError>;
 
 /// # Safety
 /// @v is @k's value - NULL for a hole - valid for 'k.
-unsafe fn key_from_parts<'k>(k: &'k bkey, v: *const bch_val) -> BkeySC<'k> {
+unsafe fn key_from_parts<'k>(k: &'k Bkey, v: *const Val) -> BkeySC<'k> {
     BkeySC {
         k,
         // a hole's NULL value: a dangling, aligned one instead, as val_bytes()
@@ -756,7 +757,7 @@ impl<'t> BtreeIter<'t> {
             assert!(max_key >= self.pos, "node ending at {}, before the iterator's position {}", max_key, self.pos);
 
             let min_key = min_key.unwrap_or(self.pos);
-            self.k = bkey::new();
+            self.k = Bkey::new();
             self.k.p = min_key;
             self.pos = min_key;
 
@@ -964,7 +965,7 @@ impl<'t> BtreeIter<'t> {
             return Err(e);
         }
 
-        let mut u = bkey::new();
+        let mut u = Bkey::new();
         let Some(k2) = paths[self.key_cache_path.get()].peek_slot(&mut u) else {
             return Ok(());
         };
@@ -1193,15 +1194,15 @@ impl<'t> BtreeIter<'t> {
         }
 
         let trans = self.trans;
-        let t = trans.kmalloc_in(self.k.bytes())?.cast::<bkey_i>();
+        let t = trans.kmalloc_in(self.k.bytes())?.cast::<BkeyI<Val>>();
 
         let t = unsafe {
             (*t).k = self.k;
             ptr::copy_nonoverlapping(v.0.cast::<u8>(), (&raw mut (*t).v).cast::<u8>(), self.k.val_bytes());
             &mut *BkeyI::from_raw_mut(t)
         };
-        bch2_cut_front_s(trans.fs(), start, BkeyS::from(&mut *t));
-        bch2_cut_back_s(end, BkeyS::from(&mut *t));
+        cut_front_s(trans.fs(), start, BkeyS::from(&mut *t));
+        cut_back_s(end, BkeyS::from(&mut *t));
         Ok(self.found_i(t))
     }
 
@@ -1739,7 +1740,7 @@ impl<'t> BtreeIter<'t> {
                     }
 
                     if bkey_lt(self.pos, next) {
-                        self.k = bkey::new();
+                        self.k = Bkey::new();
                         self.k.p = self.pos;
 
                         if flags.contains(BtreeIterFlags::IS_EXTENTS) {
@@ -1854,7 +1855,7 @@ impl<'t> BtreeIter<'t> {
         iter.flags = flags.bits();
         iter.snapshot = pos.snapshot;
         iter.pos = pos;
-        iter.k = bkey { p: pos, ..bkey::new() };
+        iter.k = Bkey { p: pos, ..Bkey::new() };
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
         {
             iter.ip_allocated = ip;
@@ -2050,7 +2051,7 @@ pub fn btree_iter_params_valid(btree: Btree, level: u32, start: Bpos, end: Bpos,
 /// The iterator @k borrows mustn't be touched again before the caller
 /// returns @k - which ends its use of it.
 pub(crate) unsafe fn polonius_key<'i, V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> BkeySC<'i, V> {
-    BkeySC { k: unsafe { &*(k.k as *const bkey) }, v: k.v, iter: PhantomData, val: PhantomData }
+    BkeySC { k: unsafe { &*(k.k as *const Bkey) }, v: k.v, iter: PhantomData, val: PhantomData }
 }
 
 /// Btrees walked in parallel, by position: each of @iters peeked from where it
@@ -2095,7 +2096,7 @@ impl<'t> BtreeIter<'t> {
             flags:          0,
             snapshot:       0,
             pos:            Default::default(),
-            k:              bkey::new(),
+            k:              Bkey::new(),
             journal_idx:    0,
             #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
             ip_allocated:   0,
@@ -2133,7 +2134,7 @@ impl<'t> BtreeIter<'t> {
 
     /// The btree's key at the iterator's path's position - not the journal
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
-    pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut bkey) -> BkeySC<'k> {
+    pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut Bkey) -> BkeySC<'k> {
         let paths = t.trans().paths();
         let KeyVal(v) = paths[self.path].peek_slot(u).expect("a slot always has a key");
         unsafe { key_from_parts(u, v) }

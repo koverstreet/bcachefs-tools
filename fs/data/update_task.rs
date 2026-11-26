@@ -20,24 +20,24 @@
 //! - The task's future is made as it starts, by its body, from a Body: the
 //!   update, as the task's own, and what init() took, which exit() gives back.
 //!
-//! Body derefs to the data_update. While its IO is in flight the IO writes the
+//! Body derefs to the DataUpdate. While its IO is in flight the IO writes the
 //! update, so no other reference to it may be live then: write() takes the
 //! Body by &mut until the IO is done - lending the op to the write path's
 //! write(), awaited as a mover's read() is.
 //!
-//! An update in flight is on the data_update async object list, which
+//! An update in flight is on the DataUpdate async object list, which
 //! debugfs walks under RCU, reading it racily: so the task's memory is freed
 //! a grace period after it's done, as every task's is, and the Update dropped
 //! then too, its key buffer with it - an RcuDropMember's.
 
 use crate::btree::{bkey::BkeySC, iter::{BtreeIter, TransAttempt}};
 use crate::c;
-use crate::alloc::write_point::write_point_specifier;
-use crate::opts::bch_inode_opts;
+use crate::alloc::write_point::WritePointSpecifier;
+use crate::opts::InodeOpts;
 use crate::data::moving::Moving;
 use crate::data::read::{Rbio, ReadDone};
 use crate::data::scrub_journal::BadRef;
-use crate::data::update::{Held, data_update, data_update_opts};
+use crate::data::update::{Held, DataUpdate, DataUpdateOpts};
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot, AsyncObjKind};
 use crate::errcode::{ret_to_result_void, BchError, Errcode};
 use crate::data::promote::InFlight;
@@ -60,7 +60,7 @@ use crate::format::Btree;
 
 // SAFETY: its pointers - to the filesystem, its devices, its read - are good
 // on any thread, and an update runs on whichever thread its IO completes on
-unsafe impl Send for data_update {}
+unsafe impl Send for DataUpdate {}
 
 #[pin_data(PinnedDrop)]
 pub(crate) struct Update {
@@ -74,18 +74,18 @@ pub(crate) struct Update {
     /// its place under the limit
     promote:   Option<InFlight>,
     /// Zeroed until init(), which expects that; read by the listing's walk
-    u:         UnsafeCell<MaybeUninit<data_update>>,
+    u:         UnsafeCell<MaybeUninit<DataUpdate>>,
     /// The listing's walk may be reading its key
     rcu:       RcuDropMember,
 }
 
 impl Update {
-    /// Its data_update, init()ed: every Update but alloc()'s and init()'s is.
-    fn data(&self) -> &data_update {
+    /// Its DataUpdate, init()ed: every Update but alloc()'s and init()'s is.
+    fn data(&self) -> &DataUpdate {
         unsafe { (*self.u.get()).assume_init_ref() }
     }
 
-    fn data_mut(self: Pin<&mut Self>) -> &mut data_update {
+    fn data_mut(self: Pin<&mut Self>) -> &mut DataUpdate {
         unsafe { self.project().u.get_mut().assume_init_mut() }
     }
 }
@@ -148,11 +148,11 @@ pub struct Spawned<'q, F, K = Borrowed<'q>> {
 }
 
 impl<'q, F: Future + Send, K> Spawned<'q, F, K> {
-    /// Sets the update up with data_update::init() and readies it for its
+    /// Sets the update up with DataUpdate::init() and readies it for its
     /// read: lists it. On error the box is dropped.
     #[allow(clippy::too_many_arguments)]
     pub fn init(mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
-                wp: write_point_specifier, io_opts: &bch_inode_opts, data_opts: data_update_opts,
+                wp: WritePointSpecifier, io_opts: &InodeOpts, data_opts: DataUpdateOpts,
                 btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, F, K>, BchError> {
         let mut up = self.slot.home();
         // SAFETY: zeroed, and pinned in the box
@@ -211,15 +211,15 @@ impl<F: Future + Send> Ready<'static, F, WriteHeld> {
 }
 
 impl<F: Future + Send, K> Deref for Ready<'_, F, K> {
-    type Target = data_update;
+    type Target = DataUpdate;
 
-    fn deref(&self) -> &data_update {
+    fn deref(&self) -> &DataUpdate {
         self.slot.data()
     }
 }
 
 impl<F: Future + Send, K> DerefMut for Ready<'_, F, K> {
-    fn deref_mut(&mut self) -> &mut data_update {
+    fn deref_mut(&mut self) -> &mut DataUpdate {
         self.slot.home().data_mut()
     }
 }
@@ -264,7 +264,7 @@ impl PinnedDrop for Update {
     fn drop(self: Pin<&mut Self>) {
         // the key buffer, dropped a grace period on, past the list's walk.
         // Zeroed, for an update never init()ed, it's valid too
-        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<data_update>()).index.k) };
+        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<DataUpdate>()).index.k) };
     }
 }
 
@@ -327,15 +327,15 @@ impl Body<'_> {
 }
 
 impl Deref for Body<'_> {
-    type Target = data_update;
+    type Target = DataUpdate;
 
-    fn deref(&self) -> &data_update {
+    fn deref(&self) -> &DataUpdate {
         self.up.data()
     }
 }
 
 impl DerefMut for Body<'_> {
-    fn deref_mut(&mut self) -> &mut data_update {
+    fn deref_mut(&mut self) -> &mut DataUpdate {
         self.up.as_mut().data_mut()
     }
 }

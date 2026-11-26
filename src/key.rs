@@ -8,8 +8,8 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
-use bcachefs_kernel::format::{bch_key, bch_encrypted_key};
-use bcachefs_kernel::init::dev::{bch_sb_handle, bch_sb_buf};
+use bcachefs_kernel::format::{Key, EncryptedKey};
+use bcachefs_kernel::init::dev::{SbHandle, bch_sb_buf};
 use bcachefs_kernel::data::checksum::key_description;
 use bcachefs_kernel::os::keyring::request_key;
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
@@ -79,7 +79,7 @@ impl Unlocked {
     /// it to give.
     ///
     /// The same bytes add_key() would have put in a keyring: both ends treat a
-    /// struct bch_key as an opaque block, so there is no byte order here to get
+    /// struct Key as an opaque block, so there is no byte order here to get
     /// wrong.
     pub fn hex(&self) -> Option<Zeroizing<String>> {
         let Self::Key(k) = self else { return None };
@@ -121,7 +121,7 @@ impl std::fmt::Display for UnlockPolicy {
 }
 
 impl UnlockPolicy {
-    pub fn apply(&self, sb: &bch_sb_handle) -> Result<Unlocked> {
+    pub fn apply(&self, sb: &SbHandle) -> Result<Unlocked> {
         let uuid = sb.sb().uuid();
 
         info!("Using filesystem unlock policy '{self}' on {uuid}");
@@ -190,7 +190,7 @@ impl Passphrase {
     /// does, because whoever is booting the machine may not be at it. It has
     /// already checked what it was given, so a passphrase it holds is right.
     pub fn ask_and_check(
-        sb: &bch_sb_handle,
+        sb: &SbHandle,
         mut socket: Option<&mut UnlockSocket<'_>>,
     ) -> Result<PassphraseCorrect> {
         match read_passphrase(
@@ -246,10 +246,10 @@ impl Passphrase {
     pub fn encrypt_key(
         &self,
         sb: &bch_sb_buf,
-        key: bch_key,
-    ) -> Result<bch_encrypted_key> {
+        key: Key,
+    ) -> Result<EncryptedKey> {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
-        let mut new_key = bch_encrypted_key::new_unencrypted(key);
+        let mut new_key = EncryptedKey::new_unencrypted(key);
 
         let passphrase_key = crypt.derive_passphrase(self.get())
             .map_err(|e| anyhow!("deriving key from passphrase: {e}"))?;
@@ -291,6 +291,6 @@ impl Passphrase {
 
 pub struct PassphraseCorrect {
     pub fs_uuid:          Uuid,
-    pub passphrase_key:   bch_key,
-    pub cleartext_sb_key: bch_encrypted_key,
+    pub passphrase_key:   Key,
+    pub cleartext_sb_key: EncryptedKey,
 }

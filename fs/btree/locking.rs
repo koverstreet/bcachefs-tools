@@ -8,24 +8,23 @@
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::util::alloc::Flags;
-use crate::btree::lock_graph::bch2_six_check_for_deadlock;
+use crate::btree::lock_graph::six_check_for_deadlock;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathNode, PathSnapshot, Paths};
 use crate::c;
-use crate::btree::bbpos::bbpos;
-use crate::btree::key_cache::bkey_cached;
-use crate::init::dev::bch_devs_mask;
+use crate::btree::bbpos::Bbpos;
+use crate::btree::key_cache::BkeyCached;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::btree::trans::BCH_TRANSACTIONS_NR;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::util::time_stats::bch2_time_stats;
+use crate::util::time_stats::TimeStats;
 use crate::btree::node::BtreeNodeFlags;
 use crate::debug::{params::debug_check_btree_locking, trace::{events, TraceEvent}};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
-use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold, six_lock, six_lock_count,
-    six_lock_waiter, SixLockInitFlags, SixLockType};
+use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold, SixLock, SixLockCount,
+    SixLockWaiter, SixLockInitFlags, SixLockType};
 use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, Mutex, RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::util::place::Placed;
 use crate::prt;
@@ -40,8 +39,8 @@ use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct btree_bkey_cached_common {
-    pub lock: Locked<six_lock>,
+pub struct BtreeBkeyCachedCommon {
+    pub lock: Locked<SixLock>,
     /* set write locked, on a reused node or entry that others may still be reading */
     pub level: Volatile<u8>,
     pub btree_id: Volatile<u8>,
@@ -174,8 +173,8 @@ impl BtreeTrans<'_> {
     /// This transaction's function's, of @stats - one of the btree.trans
     /// time stats arrays - if it has one.
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-    fn fn_time_stats<'a>(&self, stats: &'a TimeStatsArray<bch2_time_stats, { BCH_TRANSACTIONS_NR as usize }>)
-        -> Option<TimeStatsRef<'a, bch2_time_stats>> {
+    fn fn_time_stats<'a>(&self, stats: &'a TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>)
+        -> Option<TimeStatsRef<'a, TimeStats>> {
         let idx = self.fn_idx.get();
         (u32::from(idx) < BCH_TRANSACTIONS_NR).then(|| stats.get(idx.into()))
     }
@@ -249,10 +248,10 @@ impl BtreeTrans<'_> {
     }
 }
 
-pub(crate) fn btree_node_pos(b: &btree_bkey_cached_common) -> Bpos {
+pub(crate) fn btree_node_pos(b: &BtreeBkeyCachedCommon) -> Bpos {
     match BtreeNode::from_common(b) {
         Some(b) => b.key_peek().k.p,
-        None    => bkey_cached::from_common(b).expect("a path node, neither btree node nor key cache entry").key.get().pos,
+        None    => BkeyCached::from_common(b).expect("a path node, neither btree node nor key cache entry").key.get().pos,
     }
 }
 
@@ -260,22 +259,22 @@ struct GetLocksFail {
     l:    usize,
     /// the node, and its lock's seq and counts when it failed - the level
     /// loses its node right after - or why there was none
-    node: Result<Option<(NonNull<btree_bkey_cached_common>, u32, six_lock_count)>, BchError>,
+    node: Result<Option<(NonNull<BtreeBkeyCachedCommon>, u32, SixLockCount)>, BchError>,
 }
 
 /* Btree node locking: */
 
 /// @lock's seq, for the paths that have its node, as its write lock goes: none
 /// if it's held for write again inside.
-fn write_unlock_seq(lock: &six_lock) -> Option<u32> {
+fn write_unlock_seq(lock: &SixLock) -> Option<u32> {
     (lock.write_lock_recurse.get() == 0).then(|| lock.seq.get())
 }
 
 impl BtreeTrans<'_> {
     /// How the transaction's paths - but @skip - hold @b, at @level.
     pub(crate) fn node_lock_counts(&self, paths: &Paths<'_>, skip: Option<PathIdx>,
-                                   b: NonNull<btree_bkey_cached_common>, level: usize) -> six_lock_count {
-        let mut ret = six_lock_count::default();
+                                   b: NonNull<BtreeBkeyCachedCommon>, level: usize) -> SixLockCount {
+        let mut ret = SixLockCount::default();
 
         for i in self.path_idxs().filter(|&i| Some(i) != skip) {
             let path = &paths[i];
@@ -317,7 +316,7 @@ impl BtreeTrans<'_> {
     /// The lock seqs of the paths that have @b at @level, as of @seq, advanced
     /// as its write lock goes: none if it's held for write again inside.
     #[inline]
-    fn node_write_unlock_seqs(&self, paths: &mut Paths<'_>, b: *const btree_bkey_cached_common, level: usize,
+    fn node_write_unlock_seqs(&self, paths: &mut Paths<'_>, b: *const BtreeBkeyCachedCommon, level: usize,
                               seq: Option<u32>) {
         let Some(seq) = seq else { return };
 
@@ -354,7 +353,7 @@ impl BtreeTrans<'_> {
      * Lock a btree node if we already have it locked on one of our linked
      * iterators:
      */
-    fn node_lock_holder(&self, paths: &Paths<'_>, idx: PathIdx, b: *const btree_bkey_cached_common, level: usize,
+    fn node_lock_holder(&self, paths: &Paths<'_>, idx: PathIdx, b: *const BtreeBkeyCachedCommon, level: usize,
                         want: SixLockType) -> Option<PathIdx> {
         self.path_idxs().find(|&i| {
             i != idx && paths[i].l[level].b.is(b) && paths[i].locked_type(level) as i32 >= want as i32
@@ -363,7 +362,7 @@ impl BtreeTrans<'_> {
 
     /// Path @idx's level, locked as @want by another hold on @b from a path of
     /// ours that has it: what the level held before dropped.
-    fn level_lock_from(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, b: *const btree_bkey_cached_common,
+    fn level_lock_from(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize, b: *const BtreeBkeyCachedCommon,
                        want: SixLockType) -> bool {
         let Some(i) = self.node_lock_holder(paths, idx, b, level, want) else { return false };
         let (src, dst) = paths.pair(i, idx);
@@ -386,8 +385,8 @@ impl BtreeTrans<'_> {
 
     /// @b's lock, by @lock: given the transaction's waiter, which the cycle
     /// detector reads, and the cycle detector to call.
-    fn node_lock_nopath<H>(&self, b: &btree_bkey_cached_common, lock_may_not_fail: bool,
-                           lock: impl FnOnce(&six_lock_waiter, &mut dyn FnMut() -> c_int) -> Result<H, c_int>)
+    fn node_lock_nopath<H>(&self, b: &BtreeBkeyCachedCommon, lock_may_not_fail: bool,
+                           lock: impl FnOnce(&SixLockWaiter, &mut dyn FnMut() -> c_int) -> Result<H, c_int>)
                            -> Result<H, BchError> {
         self.set_lock_may_not_fail(lock_may_not_fail);
         self.lock_must_abort.store(0, Relaxed);
@@ -395,11 +394,11 @@ impl BtreeTrans<'_> {
 
         /* trans->locking_hash_val is set by the caller; it must be the
          * hash of the key used to look up this node (not the node's
-         * current hash_val), so that bch2_six_check_for_deadlock catches
+         * current hash_val), so that six_check_for_deadlock catches
          * the case where the node was reclaimed AND re-hashed to a new
          * identity. 0 disables the check (lock_root, cached, relock). */
 
-        let ret = lock(&self.locking_wait, &mut || bch2_six_check_for_deadlock(self, b)).map_err(|e| {
+        let ret = lock(&self.locking_wait, &mut || six_check_for_deadlock(self, b)).map_err(|e| {
             assert!(!lock_may_not_fail, "a lock that may not fail failed: {}", BchError::from_raw(e).msg());
             if e == -(c::ENOMEM as c_int) {
                 self.restart(Errcode::transaction_restart_lock_waitlist_alloc)
@@ -421,7 +420,7 @@ impl BtreeTrans<'_> {
         ret
     }
 
-    pub(crate) fn node_lock<'b>(&self, paths: &Paths<'_>, idx: PathIdx, b: &'b btree_bkey_cached_common,
+    pub(crate) fn node_lock<'b>(&self, paths: &Paths<'_>, idx: PathIdx, b: &'b BtreeBkeyCachedCommon,
                                 level: usize, ty: SixLockType) -> Result<SixHold<'b>, BchError> {
         ebug_assert!(level < BTREE_MAX_DEPTH as usize, "locking level {level}");
         self.verify_not_unlocked_or_in_restart();
@@ -434,7 +433,7 @@ impl BtreeTrans<'_> {
 
     /// @b's lock, past the trylock: another hold from a path of ours that has
     /// it, or waited for.
-    fn node_lock_slowpath<'b>(&self, paths: &Paths<'_>, idx: PathIdx, b: &'b btree_bkey_cached_common,
+    fn node_lock_slowpath<'b>(&self, paths: &Paths<'_>, idx: PathIdx, b: &'b BtreeBkeyCachedCommon,
                               level: usize, ty: SixLockType) -> Result<SixHold<'b>, BchError> {
         match self.node_lock_holder(paths, idx, b, level, ty).and_then(|i| paths[i].hold(level)) {
             Some((_, held)) => Ok(held.increment_on(&b.lock, ty)),
@@ -443,7 +442,7 @@ impl BtreeTrans<'_> {
     }
 
     /// @ip is lockdep's: the path's ip_allocated().
-    fn node_lock_contended<'b>(&self, b: &'b btree_bkey_cached_common, ty: SixLockType,
+    fn node_lock_contended<'b>(&self, b: &'b BtreeBkeyCachedCommon, ty: SixLockType,
                                ip: c_ulong) -> Result<SixHold<'b>, BchError> {
         #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
         let contended_start = local_clock();
@@ -531,7 +530,7 @@ impl BtreeTrans<'_> {
      * @hash_val is the node's expected identity — btree_ptr_hash_val() of the key
      * it was found under, or a snapshot of b->hash_val taken while the pointer
      * was known valid. It arms the node-reuse check in
-     * bch2_six_check_for_deadlock(): if the identity is gone by the time we'd
+     * six_check_for_deadlock(): if the identity is gone by the time we'd
      * sleep, the lock attempt aborts with no_btree_node_reused rather than
      * parking behind an off-path holder (btree_node_reclaim's trylocks) that may
      * hold the reused node's lock indefinitely.
@@ -546,7 +545,7 @@ impl BtreeTrans<'_> {
      *
      * May return a transaction_restart; wrap in lockrestart_do().
      */
-    pub(crate) fn node_lock_with_path(&self, paths: &mut Paths<'_>, b: &btree_bkey_cached_common, ty: SixLockType,
+    pub(crate) fn node_lock_with_path(&self, paths: &mut Paths<'_>, b: &BtreeBkeyCachedCommon, ty: SixLockType,
                                       hash_val: u64) -> Result<PathIdx, BchError> {
         let path_idx = self.path_get_unlocked_mut(paths, Btree(b.btree_id.get().into()), b.level.get().into(), btree_node_pos(b),
                                                   b.cached, crate::ret_ip!());
@@ -583,7 +582,7 @@ impl BtreeTrans<'_> {
 
     /// @f on @b, locked by node_lock_with_path(), and unlocked after, its path
     /// put: retried on a transaction restart, @f's included.
-    pub(crate) fn node_locked_do<T>(&self, b: &btree_bkey_cached_common, ty: SixLockType, hash_val: u64,
+    pub(crate) fn node_locked_do<T>(&self, b: &BtreeBkeyCachedCommon, ty: SixLockType, hash_val: u64,
                                     mut f: impl FnMut(&mut Paths<'_>, PathIdx) -> Result<T, BchError>)
         -> Result<T, BchError>
     {
@@ -903,7 +902,7 @@ impl BtreeTrans<'_> {
             prt!(out, "{} ", self.fn_name());
             prt_symbol(out, ip);
             out.newline();
-            prt!(out, "{}", bbpos { btree: path.btree_id(), pos: path.pos });
+            prt!(out, "{}", Bbpos { btree: path.btree_id(), pos: path.pos });
             out.newline();
             prt!(out, "locks want {} -> {} level {}\n", old_locks_want, new_locks_want, f.l);
             prt!(out, "nodes_locked {:x} -> {:x}\n", old_locks, path.nodes_locked);
@@ -1350,11 +1349,11 @@ impl BtreeTrans<'_> {
  * so that's the latency we key off.
  */
 fn srcu_hold_warn_thresh(fs: &Fs) -> c_ulong {
-    let online = bch_devs_mask { d: fs.devs_online.load() };
+    let online = fs.devs_online.load();
     (fs.dev_latency_max(&online, READ as c_int) * 2).max(HZ * 10)
 }
 
-impl btree_bkey_cached_common {
+impl BtreeBkeyCachedCommon {
     /// A btree node's, or a key cache entry's - @cached: its lock initialized,
     /// with @flags - its percpu read counts allocated with @gfp - and the rest
     /// zeroed.
@@ -1362,7 +1361,7 @@ impl btree_bkey_cached_common {
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
                 slot.write_bytes(0, 1);
-                let lock = (&raw mut (*slot).lock).cast::<six_lock>();
+                let lock = (&raw mut (*slot).lock).cast::<SixLock>();
                 __six_lock_init(lock.cast(), c"b->c.lock".as_ptr().cast(), crate::new_lock!(@key), flags, gfp);
                 (*lock).dep_map.set_notrack_class();
                 (*slot).cached = cached;

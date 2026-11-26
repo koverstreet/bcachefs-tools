@@ -498,7 +498,7 @@ use crate::util::backtrace::prt_current_backtrace;
 use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
-use crate::format::{Bpos, Btree, DataType, MetadataVersion, Backpointer, bkey, BKEY_U64s,
+use crate::format::{Bpos, Btree, DataType, MetadataVersion, Backpointer, Bkey, BKEY_U64s,
     JSET_KEYS_U64s};
 
 /// How far a bucket's generation may get past its oldest pointer's before
@@ -706,7 +706,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             // alloc_to_v4_mut() made it, all of an alloc_v4 or longer; by its
             // value, as C's container_of(): the header @k has may be a copy
             let u64s = u32::from(a.k.u64s).max((size_of::<BkeyI<AllocV4>>() / size_of::<u64>()) as u32);
-            let key = k.v.cast::<u8>().wrapping_sub(size_of::<bkey>()).cast_mut();
+            let key = k.v.cast::<u8>().wrapping_sub(size_of::<Bkey>()).cast_mut();
             // SAFETY: a key in our memory, its value at @k.v, with @u64s u64s of room
             let a = unsafe { TransBkey::from_raw_room(self, key.cast(), u64s) };
             // SAFETY: all of an alloc_v4
@@ -1293,7 +1293,7 @@ fn alloc_v4_whole_mut(k: BkeyS<'_>) -> Option<&mut AllocV4> {
 
 /// A copy of the trigger's new key as it's been edited, header @k and value
 /// @a, for what reads it whole - to print it, or find its place.
-fn alloc_key(k: &bkey, a: &AllocV4) -> BkeyI<AllocV4> {
+fn alloc_key(k: &Bkey, a: &AllocV4) -> BkeyI<AllocV4> {
     BkeyI { k: *k, v: *a }
 }
 

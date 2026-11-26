@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::opts::{bch_opts, OptFlags};
+use bcachefs_kernel::opts::{Opts, OptFlags};
 use bcachefs_kernel::format::{DegradedAction, MetadataVersion};
 use bcachefs_kernel::bcachefs_ioctl::{BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
 use bcachefs_kernel::os::blkdev;
@@ -15,7 +15,7 @@ use bcachefs_kernel::sb::members_format;
 use bcachefs_kernel::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
-use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
+use crate::commands::opts::{find_opt, option_args, options_from_matches, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::device_scan::OpenedFs;
 use crate::util::{fmt_bytes_human, fmt_duration_human, fmt_sectors_human, parse_human_size};
@@ -29,7 +29,7 @@ fn device_add_opt_flags() -> u32 {
 fn device_add_cmd() -> Command {
     Command::new("add")
         .about("Add a new device to an existing filesystem")
-        .args(bch_option_args(device_add_opt_flags(), false).into_iter()
+        .args(option_args(device_add_opt_flags(), false).into_iter()
             .map(|a| if a.get_id() == "label" { a.short('l') } else { a }))
         .arg(Arg::new("force")
             .short('f')
@@ -54,7 +54,7 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     // Open the filesystem without starting it if it isn't mounted - same
     // approach as 'bcachefs image update'; works even when the allocator
     // is stuck and the filesystem can't mount normally:
-    let mut offline_opts: bch_opts = Default::default();
+    let mut offline_opts: Opts = Default::default();
     offline_opts.set_nostart(true);
     offline_opts.set_copygc_enabled(false);
     offline_opts.set_reconcile_enabled(false);
@@ -124,9 +124,9 @@ fn device_add_format(
 
     let mut dev_opts = DevOpts::new(CString::new(dev_path)?);
 
-    let bch_opts = bch_options_from_matches(matches, device_add_opt_flags());
+    let bch_opts = options_from_matches(matches, device_add_opt_flags());
     for (name, value) in &bch_opts {
-        let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
+        let Some((opt_id, opt)) = find_opt(name) else { continue };
         match parse_opt_val(opt, value)? {
             Some(val) => dev_opts.opts.set(opt_id, val),
             // Values that resolve against a superblock (labels) - the
@@ -352,7 +352,7 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 
 fn set_state_offline(device: &str, new_state: members_format::MemberState) -> Result<()> {
 
-    let mut opts: bch_opts = Default::default();
+    let mut opts: Opts = Default::default();
     opts.set_nostart(true);
     opts.set_will_not_start(true);
     opts.set_degraded(DegradedAction::very);
@@ -441,7 +441,7 @@ fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
 fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
     use bcachefs_kernel::util::printbuf::Printbuf;
 
-    let opts: bch_opts = Default::default();
+    let opts: Opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
@@ -499,7 +499,7 @@ fn cmd_device_resize_journal(cli: ResizeJournalCli) -> Result<()> {
 }
 
 fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
-    let opts: bch_opts = Default::default();
+    let opts: Opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 

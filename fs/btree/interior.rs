@@ -13,7 +13,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
 use cstruct_macros::{placed, MaybeZeroable, Init, Late, TypeInfo, bch_enum};
-use crate::alloc::{capacity::DiskReservation, foreground::{OpenBucket, open_buckets}};
+use crate::alloc::{capacity::DiskReservation, foreground::{OpenBucket, OpenBuckets}};
 use crate::data_structures::fifo::FifoRead;
 use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeNodeRef, BtreeTrans, CommitOpts, TransAttempt, Watermark};
@@ -21,7 +21,7 @@ use crate::btree::node::BtreeNode;
 use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
-use crate::btree::bch_fs_btree;
+use crate::btree::FsBtree;
 use crate::btree::update::TransCommitFlags;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BKEY_BTREE_PTR_VAL_U64s_MAX};
 use crate::data::write::WriteFlags;
@@ -73,15 +73,15 @@ mod root;
 mod split_merge;
 mod update_key;
 pub(crate) use root::root_alloc_fake_trans;
-pub use root::{btree_root, BtreeRoots, BtreeRootsGuard, BtreeRootsLive, BtreeRootsLiveWriter, BTREE_ROOT_LEVEL_BITS};
+pub use root::{BtreeRoot, BtreeRoots, BtreeRootsGuard, BtreeRootsLive, BtreeRootsLiveWriter, BTREE_ROOT_LEVEL_BITS};
 pub use split_merge::BtreeNodeSibling;
 pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_maybe_merge, increase_depth, merge,
                              node_rewrite, split_leaf};
 
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]
-pub struct btree_alloc {
-    pub ob: open_buckets,
+pub struct BtreeAlloc {
+    pub ob: OpenBuckets,
     pub k: DstRoom<BkeyI, [u64; BKEY_U64S + BKEY_BTREE_PTR_VAL_U64s_MAX]>,
 }
 
@@ -100,7 +100,7 @@ pub const BTREE_NODE_RESERVE: u32 = BTREE_RESERVE_MAX * 4;
 #[repr(C)]
 pub struct BtreeReserveCache {
     pub nr: c_uint,
-    pub data: [btree_alloc; BTREE_NODE_RESERVE as usize * 2],
+    pub data: [BtreeAlloc; BTREE_NODE_RESERVE as usize * 2],
 }
 
 impl BtreeReserveCache {
@@ -108,7 +108,7 @@ impl BtreeReserveCache {
     fn init() -> impl ::pin_init::Init<Self> {
         ::pin_init::init!(BtreeReserveCache {
             nr: 0,
-            data <- ::pin_init::init_array_from_fn(|_| btree_alloc::default()),
+            data <- ::pin_init::init_array_from_fn(|_| BtreeAlloc::default()),
         })
     }
 }
@@ -116,7 +116,7 @@ impl BtreeReserveCache {
 #[pin_data]
 #[repr(C)]
 #[derive(TypeInfo, Init)]
-pub struct bch_fs_btree_reserve_cache {
+pub struct FsBtreeReserveCache {
     #[pin]
     #[init(new_lock!(<- BtreeReserveCache::init(), (), "&c->btree.reserve_cache.lock"))]
     pub lock: Locked<Mutex, BtreeReserveCache>,
@@ -170,19 +170,19 @@ pub(crate) type UpdatesGuard<'a> = ExclusiveGuard<'a, Mutex, Updates, (), Exclus
 pub(crate) type CommitGuard<'a> = ExclusiveGuard<'a, Mutex, (), (), Exclusive, CommitLockAt>;
 
 /// The two locks' places, for what they cover to name.
-pub(crate) type UpdatesLockAt = crate::at!(bch_fs_btree_interior_updates.lock);
-pub(crate) type CommitLockAt = crate::at!(bch_fs_btree_interior_updates.commit_lock);
+pub(crate) type UpdatesLockAt = crate::at!(FsBtreeInteriorUpdates.lock);
+pub(crate) type CommitLockAt = crate::at!(FsBtreeInteriorUpdates.commit_lock);
 
 /// @b's updates blocking the write in writes[@slot].
 fn write_blocked<'a>(b: &'a BtreeNode, slot: u8, updates: &'a mut UpdatesGuard<'_>) -> &'a mut WriteBlocked {
     &mut updates.get_mut_of(&b.write_blocked)[usize::from(slot)]
 }
 
-#[placed(bch_fs_btree.interior_updates)]
+#[placed(FsBtree.interior_updates)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
-pub struct bch_fs_btree_interior_updates {
+pub struct FsBtreeInteriorUpdates {
     #[late(Mempool::new(1, size_of::<BtreeUpdate>()), ENOMEM_btree_interior_update_pool_init)]
     pub pool: Late<Mempool>,
     #[pin]
@@ -204,11 +204,11 @@ pub struct bch_fs_btree_interior_updates {
     pub(crate) work: ReffedWork<updates_work, OnQueue<crate::field!(worker)>>,
 }
 
-fn updates_work(u: &bch_fs_btree_interior_updates) {
+fn updates_work(u: &FsBtreeInteriorUpdates) {
     completion::worker(u.container().container())
 }
 
-impl bch_fs_btree_interior_updates {
+impl FsBtreeInteriorUpdates {
     fn kick(&self) {
         self.work.queue(Own);
     }
@@ -308,7 +308,7 @@ fn gc_read_lock(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, fs: &'static Fs) 
 /// reserve cache's if it's not used.
 struct Reserved {
     node: OwnedNode,
-    ob:   open_buckets,
+    ob:   OpenBuckets,
 }
 
 /// The update's own, in its foreground phase and then its completion's: never
@@ -581,7 +581,7 @@ impl Deref for InteriorUpdate<'_> {
 pub(crate) struct NewNode<'u> {
     update: &'u BtreeUpdate,
     node:   Option<OwnedNode>,
-    ob:     open_buckets,
+    ob:     OpenBuckets,
 }
 
 impl<'u> NewNode<'u> {
@@ -606,7 +606,7 @@ pub(crate) struct TakenNode {
 
 struct Taken {
     at: TakenNode,
-    ob: open_buckets,
+    ob: OpenBuckets,
 }
 
 impl Deref for NewNode<'_> {
@@ -1057,7 +1057,7 @@ type RootsGuard<'a> = ExclusiveGuard<'a, Mutex, BtreeRoots, BtreeRootsLive>;
 /// can't be. Under root_lock, which owns their on-disk fields: key, level,
 /// alive.
 fn roots<'a>(fs: &'a Fs, root_lock: &'a RootsGuard<'_>, skip: u64)
-    -> impl Iterator<Item = (u32, &'a btree_root)>
+    -> impl Iterator<Item = (u32, &'a BtreeRoot)>
 {
     (0..fs.btree_id_nr_alive())
         .filter(move |&id| id >= u64::BITS || skip & (1 << id) == 0)

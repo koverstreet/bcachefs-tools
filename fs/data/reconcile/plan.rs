@@ -4,7 +4,7 @@
 //! options it should be in line with, and need_rb, which of them it isn't. Its
 //! plan is one of:
 //!
-//! - Move: a data update, its data_update_opts saying which pointers to kill
+//! - Move: a data update, its DataUpdateOpts saying which pointers to kill
 //!   - ptrs_kill: the replica goes; ptrs_kill_ec: the pointer stays, its
 //!   stripe pointer goes - and whether to write a replica for a stripe to
 //!   take in (extra_replicas, must_ec).
@@ -49,7 +49,7 @@
 //!
 //! ptrs_kill and ptrs_kill_ec are PtrMasks of the key planned for, made and
 //! combined under its brand, the drop simulation's copies adopted as it
-//! (ptrs/mask.rs), and erased into data_update_opts.
+//! (ptrs/mask.rs), and erased into DataUpdateOpts.
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
@@ -57,13 +57,13 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::compress::bch_compression_opt;
-use crate::data::extents::bkey_durability;
+use crate::data::extents::BkeyDurability;
 use crate::data::extents_format::{BKEY_EXTENT_U64s_MAX, BtreePtrV2};
-use crate::data::reconcile::format::{bch_extent_reconcile, ReconcileWorkId};
+use crate::data::reconcile::format::{ExtentReconcile, ReconcileWorkId};
 use crate::data::reconcile::work::ReconcileScan;
-use crate::data::update::{data_update_opts, DataUpdateType};
-use crate::init::dev::bch_devs_mask;
-use crate::opts::bch_inode_opts;
+use crate::data::update::{DataUpdateOpts, DataUpdateType};
+use crate::init::dev::DevsMask;
+use crate::opts::InodeOpts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
@@ -87,22 +87,22 @@ pub enum ParkReason<'a> {
     Replicas(u32),
     /// Its move, with @opts and @data_opts, failed to start with @err, which
     /// move_err_parks(): the trace says why, as can_do_data_update() does.
-    MoveFailed { err: BchError, opts: &'a bch_inode_opts, data_opts: &'a data_update_opts },
+    MoveFailed { err: BchError, opts: &'a InodeOpts, data_opts: &'a DataUpdateOpts },
     /// Its data update, with @opts and @data_opts, ran and failed with @err.
-    UpdateFailed { err: BchError, opts: &'a bch_inode_opts, data_opts: &'a data_update_opts },
+    UpdateFailed { err: BchError, opts: &'a InodeOpts, data_opts: &'a DataUpdateOpts },
     /// It can't be read until a device in the mask, offline, is back:
     /// park_for_devs().
-    DevsOffline(bch_devs_mask),
+    DevsOffline(DevsMask),
 }
 
 pub enum Plan {
-    Move(data_update_opts),
+    Move(DataUpdateOpts),
     Park(ParkReason<'static>),
     Nothing,
 }
 
 /// The plan for @k, its io options @opts: reconcile_set_data_opts().
-pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &bch_inode_opts) -> Result<Plan, BchError> {
+pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &InodeOpts) -> Result<Plan, BchError> {
     use crate::data::reconcile::format::ReconcileOpt as o;
     use crate::data::write::WriteFlags as w;
     let fs = t.fs();
@@ -113,7 +113,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &bch_inode_opts) -> R
     let need = |opt| r.need_rb() & rb_bit(opt) != 0;
     let only = |opt| r.need_rb() == rb_bit(opt);
 
-    let mut d = data_update_opts {
+    let mut d = DataUpdateOpts {
         type_: DataUpdateType::reconcile,
         target: r.background_target(),
         // Never wait on the allocator mid-write: a blocked data update holds
@@ -227,7 +227,7 @@ fn ec_pending(fs: &Fs, k: &impl BkeyVPtrs) -> bool {
 /// @k's pointers to drop for data_replicas @r: kill and kill_ec, as masks.
 /// At or under: those on bad or evacuating devices. Over: the drop
 /// simulation, at the top of the file.
-fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>>, r: &bch_extent_reconcile)
+fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>>, r: &ExtentReconcile)
     -> Result<(PtrMask<'id>, PtrMask<'id>), BchError>
 {
     let fs = t.fs();
@@ -251,7 +251,7 @@ fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>
         if !online_floor && cur.total == cur.online {
             continue;
         }
-        let floor = |d: &bkey_durability| u32::from(if online_floor { d.online } else { d.total });
+        let floor = |d: &BkeyDurability| u32::from(if online_floor { d.online } else { d.total });
 
         for (i, bit) in n.all(fs).iter() {
             let ptr = *n.key().ptrs(fs).nth(i).expect("a pointer of the copy's");
@@ -336,7 +336,7 @@ pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeyS
         }
         ParkReason::DevsOffline(devs) => {
             write!(out, "no device to read from, till one of");
-            for d in devs.d.iter() {
+            for d in devs.iter() {
                 write!(out, " {d}");
             }
             write!(out, " is online\n{}", k.to_text(fs));
@@ -349,12 +349,12 @@ pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeyS
 }
 
 /// The devices @k has pointers on that are offline.
-pub fn offline_devs(fs: &Fs, k: BkeySC<'_>) -> bch_devs_mask {
-    let mut devs = bch_devs_mask::default();
+pub fn offline_devs(fs: &Fs, k: BkeySC<'_>) -> DevsMask {
+    let mut devs = DevsMask::default();
     if let Some(kp) = k.arm::<Ptrs>() {
         for d in kp.ptrs(fs).map(|p| u32::from(p.dev())) {
             if d != BCH_SB_MEMBER_INVALID && !fs.devs_online.test(d as usize) {
-                devs.d.set(d as usize);
+                devs.set(d as usize);
             }
         }
     }
@@ -369,20 +369,20 @@ impl Fs {
     /// says whether it parked anything. Then, if one's back already, the
     /// pending scan its coming online requested may have run before the park
     /// committed: it's requested again.
-    pub fn park_for_devs(&self, devs: &bch_devs_mask, park: impl FnOnce() -> Result<bool, BchError>)
+    pub fn park_for_devs(&self, devs: &DevsMask, park: impl FnOnce() -> Result<bool, BchError>)
         -> Result<(), BchError>
     {
         self.unpark_mark(devs);
-        if park()? && devs.d.iter().any(|d| self.devs_online.test(d)) {
+        if park()? && devs.iter().any(|d| self.devs_online.test(d)) {
             self.request_scan(ReconcileScan::pending, true)?;
         }
         Ok(())
     }
 
-    fn unpark_mark(&self, devs: &bch_devs_mask) {
+    fn unpark_mark(&self, devs: &DevsMask) {
         let mut sb = self.sb_lock();
         let mut marked = false;
-        for d in devs.d.iter() {
+        for d in devs.iter() {
             if let Some(m) = sb.member_mut(d as u32).filter(|m| !m.unpark_on_online()) {
                 m.set_unpark_on_online(true);
                 marked = true;

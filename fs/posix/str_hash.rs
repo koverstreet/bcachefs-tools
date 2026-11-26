@@ -10,8 +10,8 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::inode::bch_inode_unpacked;
-use crate::snapshots::{subvolume::subvol_inum, snapshot, subvolume};
+use crate::posix::inode::InodeUnpacked;
+use crate::snapshots::{subvolume::SubvolInum, snapshot, subvolume};
 use crate::posix::check::{self, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
@@ -33,7 +33,7 @@ use crate::format::{Bpos, Btree, BkeyType, SbFeature, Deleted, HashWhiteout, Str
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
-pub struct bch_hash_info<'f> {
+pub struct HashInfo<'f> {
     pub inum_snapshot: u32,
     pub type_: StrHashKind,
     pub is_31bit: bool,
@@ -57,16 +57,16 @@ pub trait HashTable {
 
     const BTREE: Btree;
 
-    fn hash_key(info: &bch_hash_info, key: &Self::Key<'_>) -> u64;
+    fn hash_key(info: &HashInfo, key: &Self::Key<'_>) -> u64;
 
-    fn hash_bkey(info: &bch_hash_info, k: TableKey<'_, Self>) -> u64;
+    fn hash_bkey(info: &HashInfo, k: TableKey<'_, Self>) -> u64;
 
     fn matches(k: TableKey<'_, Self>, key: &Self::Key<'_>) -> bool;
 
     fn same_name(a: TableKey<'_, Self>, b: TableKey<'_, Self>) -> bool;
 
     /// Whether @k is in the table as subvolume @inum.subvol sees it.
-    fn is_visible(_inum: subvol_inum, _k: TableKey<'_, Self>) -> bool {
+    fn is_visible(_inum: SubvolInum, _k: TableKey<'_, Self>) -> bool {
         true
     }
 }
@@ -86,7 +86,7 @@ enum StrHash {
 }
 
 impl StrHash {
-    fn new(info: &bch_hash_info) -> Self {
+    fn new(info: &HashInfo) -> Self {
         use crate::format::StrHashKind as T;
 
         let k0 = info.siphash_key.k0.get().to_le_bytes();
@@ -122,7 +122,7 @@ impl StrHash {
 
 /// @parts, one after another, hashed under @info. With @maybe_31bit, the hash
 /// is cut to fit a directory with 31 bit offsets.
-pub fn hash_parts(info: &bch_hash_info, parts: &[&[u8]], maybe_31bit: bool) -> u64 {
+pub fn hash_parts(info: &HashInfo, parts: &[&[u8]], maybe_31bit: bool) -> u64 {
     let mut h = StrHash::new(info);
     for p in parts {
         h.update(p);
@@ -139,7 +139,7 @@ pub fn hash_parts(info: &bch_hash_info, parts: &[&[u8]], maybe_31bit: bool) -> u
 
 /// @k, if it's one of @T's keys, visible to subvolume @inum.subvol - all of
 /// them are, with no inode number.
-fn visible_key<T: HashTable>(inum: subvol_inum, k: BkeySC<'_>) -> Option<TableKey<'_, T>> {
+fn visible_key<T: HashTable>(inum: SubvolInum, k: BkeySC<'_>) -> Option<TableKey<'_, T>> {
     k.arm::<T::Val>().filter(|&k| inum.inum == 0 || T::is_visible(inum, k))
 }
 
@@ -148,8 +148,8 @@ fn visible_key<T: HashTable>(inum: subvol_inum, k: BkeySC<'_>) -> Option<TableKe
 pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
     t:         &'i TransAttempt<'a, '_>,
     iter:      &'i mut BtreeIter<'a>,
-    hash_info: &bch_hash_info,
-    inum:      subvol_inum,
+    hash_info: &HashInfo,
+    inum:      SubvolInum,
     key:       &T::Key<'_>,
     flags:     BtreeIterFlags,
     snapshot:  u32,
@@ -174,8 +174,8 @@ pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
 pub fn lookup<'i, 'a, T: HashTable>(
     t:         &'i TransAttempt<'a, '_>,
     iter:      &'i mut BtreeIter<'a>,
-    hash_info: &bch_hash_info,
-    inum:      subvol_inum,
+    hash_info: &HashInfo,
+    inum:      SubvolInum,
     key:       &T::Key<'_>,
     flags:     BtreeIterFlags,
 ) -> Result<TableKey<'i, T>, BchError> {
@@ -189,8 +189,8 @@ pub fn lookup<'i, 'a, T: HashTable>(
 pub fn hole<'a, T: HashTable>(
     t:         &TransAttempt<'a, '_>,
     iter:      &mut BtreeIter<'a>,
-    hash_info: &bch_hash_info,
-    inum:      subvol_inum,
+    hash_info: &HashInfo,
+    inum:      SubvolInum,
     key:       &T::Key<'_>,
 ) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
@@ -209,7 +209,7 @@ pub fn hole<'a, T: HashTable>(
 /// later key in the same probe sequence would be cut off without one.
 pub fn needs_whiteout<'t, T: HashTable>(
     t:         &TransAttempt<'_, 't>,
-    hash_info: &bch_hash_info,
+    hash_info: &HashInfo,
     start:     &BtreeIter<'t>,
 ) -> Result<bool, BchError> {
     let mut iter = start.copy();
@@ -247,8 +247,8 @@ bitflags! {
 fn slot_in_snapshot<'i, 'a, 't, T: HashTable>(
     t:            &'i TransAttempt<'a, 't>,
     iter:         &'i mut BtreeIter<'a>,
-    hash_info:    &bch_hash_info,
-    inum:         subvol_inum,
+    hash_info:    &HashInfo,
+    inum:         SubvolInum,
     snapshot:     u32,
     insert:       &mut TransBkey<'_, 't, TableVal<T>>,
     set_flags:    SetFlags,
@@ -303,8 +303,8 @@ fn slot_in_snapshot<'i, 'a, 't, T: HashTable>(
 /// its name is taken.
 pub fn set_in_snapshot<'a, 't, T: HashTable>(
     t:            &TransAttempt<'a, 't>,
-    hash_info:    &bch_hash_info,
-    inum:         subvol_inum,
+    hash_info:    &HashInfo,
+    inum:         SubvolInum,
     snapshot:     u32,
     mut insert:   TransBkey<'a, 't, TableVal<T>>,
     set_flags:    SetFlags,
@@ -324,8 +324,8 @@ pub fn set_in_snapshot<'a, 't, T: HashTable>(
 /// name is taken.
 pub fn set<'a, 't, T: HashTable>(
     t:            &TransAttempt<'a, 't>,
-    hash_info:    &bch_hash_info,
-    inum:         subvol_inum,
+    hash_info:    &HashInfo,
+    inum:         SubvolInum,
     mut insert:   TransBkey<'a, 't, TableVal<T>>,
     set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
@@ -339,7 +339,7 @@ pub fn set<'a, 't, T: HashTable>(
 /// Leaves a whiteout if a later key in the same probe sequence needs one.
 pub fn delete_at<'t, T: HashTable>(
     t:         &TransAttempt<'_, 't>,
-    hash_info: &bch_hash_info,
+    hash_info: &HashInfo,
     iter:      &mut BtreeIter<'t>,
     flags:     UpdateTriggerFlags,
 ) -> Result<(), BchError> {
@@ -362,8 +362,8 @@ pub fn deletion<'a, 't>(t: &TransAttempt<'a, 't>, pos: Bpos, whiteout: bool)
 /// In subvolume and inode @inum. ENOENT_str_hash_lookup if it isn't there.
 pub fn delete<T: HashTable>(
     t:         &TransAttempt<'_, '_>,
-    hash_info: &bch_hash_info,
-    inum:      subvol_inum,
+    hash_info: &HashInfo,
+    inum:      SubvolInum,
     key:       &T::Key<'_>,
 ) -> Result<(), BchError> {
     let mut iter = BtreeIter::uninit(t.trans());
@@ -390,8 +390,8 @@ pub fn new_inode_type(fs: &Fs) -> StrHashKind {
 
 /// Without hash_info_init()'s check that casefolding is enabled: for comparing
 /// hash info, not hashing with it.
-pub fn hash_info_init_unchecked<'f>(fs: &'f Fs, inode: &bch_inode_unpacked) -> bch_hash_info<'f> {
-    let mut info = bch_hash_info {
+pub fn hash_info_init_unchecked<'f>(fs: &'f Fs, inode: &InodeUnpacked) -> HashInfo<'f> {
+    let mut info = HashInfo {
         inum_snapshot: inode.bi_snapshot,
         type_:         inode.str_hash(),
         is_31bit:      inode.flag(InodeFlags::dirent_offset_31bit),
@@ -415,7 +415,7 @@ impl PartialEq for SIPHASH_KEY {
 }
 
 /// Field by field: memcmp() would compare padding.
-impl PartialEq for bch_hash_info<'_> {
+impl PartialEq for HashInfo<'_> {
     fn eq(&self, other: &Self) -> bool {
         let map = |i: &Self| i.cf_encoding.map(core::ptr::from_ref);
 
@@ -432,8 +432,8 @@ impl PartialEq for bch_hash_info<'_> {
 /// have.
 pub fn hash_info_init<'f>(
     fs:    &'f Fs,
-    inode: &bch_inode_unpacked,
-) -> Result<bch_hash_info<'f>, BchError> {
+    inode: &InodeUnpacked,
+) -> Result<HashInfo<'f>, BchError> {
     if inode.casefold(fs) && fs.cf_encoding.as_ref().is_none() {
         return fs.throw(Errcode::casefold_dir_but_disabled);
     }
@@ -451,7 +451,7 @@ pub fn hash_info_init<'f>(
 pub fn check_key<T: HashTable>(
     t:                   &TransAttempt<'_, '_>,
     s:                   Option<&mut SnapshotsSeen>,
-    hash_info:           &mut bch_hash_info,
+    hash_info:           &mut HashInfo,
     k:                   BkeySC<'_>,
     updated_before_k_pos: &mut bool,
 ) -> Result<(), BchError> {
@@ -477,7 +477,7 @@ pub fn check_key<T: HashTable>(
 
 /// The cheap test, before walking anything: @k, if it's @T's and not at the
 /// offset it hashes to, or for a dirent, not casefolded as its directory is.
-fn needs_check<'k, T: HashTable>(hash_info: &bch_hash_info, k: BkeySC<'k>)
+fn needs_check<'k, T: HashTable>(hash_info: &HashInfo, k: BkeySC<'k>)
     -> Option<TableKey<'k, T>>
 {
     let k = k.arm::<T::Val>()?;
@@ -498,8 +498,8 @@ fn needs_check<'k, T: HashTable>(hash_info: &bch_hash_info, k: BkeySC<'k>)
 /// @bad_inode's match @snapshot_root's.
 pub fn repair_inode_hash_info(
     t:             &TransAttempt<'_, '_>,
-    bad_inode:     &mut bch_inode_unpacked,
-    snapshot_root: &bch_inode_unpacked,
+    bad_inode:     &mut InodeUnpacked,
+    snapshot_root: &InodeUnpacked,
 ) -> Result<(), BchError> {
     assert_eq!(bad_inode.bi_inum, snapshot_root.bi_inum);
     assert!(snapshot::is_ancestor(t, bad_inode.bi_snapshot, snapshot_root.bi_snapshot));
@@ -592,7 +592,7 @@ impl Seen<'_> {
 /// What the repairs for one key share.
 struct Repair<'r, 'f> {
     s:                    Seen<'r>,
-    hash_info:            &'r mut bch_hash_info<'f>,
+    hash_info:            &'r mut HashInfo<'f>,
     updated_before_k_pos: &'r mut bool,
 }
 
@@ -638,7 +638,7 @@ impl Repair<'_, '_> {
         let fs = t.fs();
         let old_d = Dirent::new(old).expect("a dirent");
         let old_name = old_d.name();
-        let dir = subvol_inum { subvol: 0, inum: old.k.p.inode };
+        let dir = SubvolInum { subvol: 0, inum: old.k.p.inode };
 
         let mut new = dirent::alloc_max(t, old.k.p)?;
         dirent::copy_target(&mut new, old_d);
@@ -736,7 +736,7 @@ impl Repair<'_, '_> {
 
         let mut new = t.bkey_make_mut_noupdate(k)?;
         let mut iter = BtreeIter::uninit(t.trans());
-        let dir = subvol_inum { subvol: 0, inum: k.k.p.inode };
+        let dir = SubvolInum { subvol: 0, inum: k.k.p.inode };
 
         if let Some(dup) = slot_in_snapshot::<T>(t, &mut iter, self.hash_info, dir,
                                                  k.k.p.snapshot, &mut new,
@@ -789,9 +789,9 @@ impl Repair<'_, '_> {
 
         let (dir, target) = match d.target() {
             DirentTarget::Subvol { child, parent } =>
-                (subvol_inum { subvol: parent as u64, inum: 0 }, child as u64),
+                (SubvolInum { subvol: parent as u64, inum: 0 }, child as u64),
             DirentTarget::Inode(inum) =>
-                (subvol_inum { subvol: 0, inum: 0 }, inum),
+                (SubvolInum { subvol: 0, inum: 0 }, inum),
         };
 
         let mut new = dirent::create_key(t, self.hash_info, dir, d.d_type(),

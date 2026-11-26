@@ -10,12 +10,12 @@ use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllType
     AnyKeySC, BkeyI, BkeyOps};
 use crate::btree::trigger::Trigger;
 use crate::btree::iter::NoRoom;
-use crate::data::extents_format::{bch_extent_ptr, bch_extent_stripe_ptr, CRC128_SIZE_MAX,
+use crate::data::extents_format::{ExtentPtr, ExtentStripePtr, CRC128_SIZE_MAX,
     CRC32_SIZE_MAX, CRC64_SIZE_MAX, Reservation};
 use crate::data::reflink_format::ReflinkP;
 use crate::data::inline_data::{InlineDataMut, InlineDataRef};
 use crate::data_structures::dst_room::DstRoom;
-use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, IoFailures, Ptrs, PtrsMut};
+use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -23,8 +23,8 @@ use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::Le8;
-use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, BCH_BKEY_PTRS_MAX,
-    bch_csum, BCH_REPLICAS_MAX, bkey, CompressionType, CsumType};
+use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits,
+    Csum, BCH_REPLICAS_MAX, Bkey, CompressionType, CsumType};
 
 /*
  * Everything one walk of a key's pointer list can say about its replication.
@@ -49,7 +49,7 @@ use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, BC
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct bkey_durability {
+pub struct BkeyDurability {
     pub online: u8,
     pub total: u8,
     pub acct: u8,
@@ -88,7 +88,7 @@ pub struct bkey_durability {
 #[repr(C)]
 /// Equal as bch2_crc_unpacked_cmp() says: every field.
 #[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, TypeInfo)]
-pub struct bch_extent_crc_unpacked {
+pub struct ExtentCrcUnpacked {
     pub compressed_size: u32,
     pub uncompressed_size: u32,
     pub live_size: u32,
@@ -100,26 +100,18 @@ pub struct bch_extent_crc_unpacked {
 
     pub nonce: u16,
 
-    pub csum: bch_csum,
+    pub csum: Csum,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct extent_ptr_decoded {
+pub struct ExtentPtrDecoded {
     pub has_ec: bool,
     pub do_ec_reconstruct: bool,
     pub crc_retry_nr: u8,
-    pub crc: bch_extent_crc_unpacked,
-    pub ptr: bch_extent_ptr,
-    pub ec: bch_extent_stripe_ptr,
-}
-
-/// What failed reading or writing a key's pointers, for C: its size, not its
-/// layout - C asks it what it holds.
-#[repr(C)]
-#[derive(Default, MaybeZeroable, TypeInfo)]
-pub struct bch_io_failures {
-    pub(crate) failures: IoFailures<{ BCH_BKEY_PTRS_MAX as usize }>,
+    pub crc: ExtentCrcUnpacked,
+    pub ptr: ExtentPtr,
+    pub ec: ExtentStripePtr,
 }
 
 #[bch_enum(closed)]
@@ -161,7 +153,7 @@ pub type Extents = FamilyVal<ExtentsTypes>;
 pub enum ExtentsTypes {}
 
 impl FamilyTypes for ExtentsTypes {
-    fn contains(k: &bkey) -> bool {
+    fn contains(k: &Bkey) -> bool {
         ByFlag::<{ BkeyTypeFlags_bits::extent }>::contains(k) && k.size != 0
     }
 }
@@ -180,7 +172,7 @@ pub type Data = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::data }>>;
 /// BkeyTypeFlags::user_data.
 pub type UserData = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::user_data }>>;
 
-impl bkey {
+impl Bkey {
     pub fn extent_is_allocation(&self) -> bool {
         <Allocation as BkeyFamily>::contains(self)
     }
@@ -226,7 +218,7 @@ pub trait BkeyVExtents: BkeyV {
         self.k().key_type() == BkeyType::reservation || self.extent_is_unwritten(fs)
     }
 
-    /// Cut to start at @where_: bch2_cut_front_s().
+    /// Cut to start at @where_: cut_front_s().
     fn cut_front(mut self, fs: &Fs, where_: Bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>
     {
@@ -234,7 +226,7 @@ pub trait BkeyVExtents: BkeyV {
         (self.k().size != 0).then_some(self)
     }
 
-    /// Cut to end at @where_: bch2_cut_back_s().
+    /// Cut to end at @where_: cut_back_s().
     fn cut_back(mut self, where_: Bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>
     {
@@ -246,7 +238,7 @@ pub trait BkeyVExtents: BkeyV {
     /// skipped in its value too - a pointer's offset moved on, or a crc's
     /// into its data, a reflink_p's idx, inline data dropped - and a cut that
     /// leaves nothing makes it a deletion. The u64s its value gives up are
-    /// zeroed. bch2_cut_front_s().
+    /// zeroed. cut_front_s().
     fn cut_front_in_place(&mut self, fs: &Fs, where_: Bpos)
     where Self: BkeyVMut<V = Extents>
     {
@@ -321,7 +313,7 @@ pub trait BkeyVExtents: BkeyV {
 
     /// Cut to end at @where_, if it ends after it - inline data past it
     /// dropped - and a cut that leaves nothing makes it a deletion. The u64s
-    /// its value gives up are zeroed. bch2_cut_back_s().
+    /// its value gives up are zeroed. cut_back_s().
     fn cut_back_in_place(&mut self, where_: Bpos)
     where Self: BkeyVMut<V = Extents>
     {
@@ -365,7 +357,7 @@ fn shrink_val(mut k: BkeyS<'_>, val_u64s: usize) {
 }
 
 /// The change in @k's u64s, never above 0.
-pub fn bch2_cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
+pub fn cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
     let u64s = c_int::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
     k.cut_front_in_place(c, where_);
@@ -373,7 +365,7 @@ pub fn bch2_cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
 }
 
 /// The change in @k's u64s, never above 0.
-pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
+pub fn cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
     let u64s = c_int::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
     k.cut_back_in_place(where_);
@@ -385,7 +377,7 @@ pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
 /// @ptr after @k's value - its last entry - and @k a u64 longer: @k a key
 /// with pointers - btree_ptr, btree_ptr_v2, extent - and @ptr to a device it
 /// has none on.
-pub fn bkey_append_ptr(k: &mut DstRoom<BkeyI>, ptr: bch_extent_ptr) -> Result<(), NoRoom> {
+pub fn bkey_append_ptr(k: &mut DstRoom<BkeyI>, ptr: ExtentPtr) -> Result<(), NoRoom> {
     let t = k.k.key_type();
     assert!(matches!(t, BkeyType::btree_ptr | BkeyType::btree_ptr_v2 | BkeyType::extent),
             "a pointer appended to a key of type {}", t.0);
@@ -404,7 +396,7 @@ enum CrcMerge {
     Both,
 }
 
-fn crc_merge(l: &bch_extent_crc_unpacked, r: &bch_extent_crc_unpacked) -> CrcMerge {
+fn crc_merge(l: &ExtentCrcUnpacked, r: &ExtentCrcUnpacked) -> CrcMerge {
     if u32::from(l.offset) + l.live_size + r.live_size <= l.uncompressed_size {
         CrcMerge::Left
     } else if l.live_size <= u32::from(r.offset) {
@@ -416,7 +408,7 @@ fn crc_merge(l: &bch_extent_crc_unpacked, r: &bch_extent_crc_unpacked) -> CrcMer
 
 /// Whether @r continues @l on disk, so the two can be one pointer of the
 /// merged extent.
-fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &extent_ptr_decoded, r: &extent_ptr_decoded) -> bool {
+fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &ExtentPtrDecoded, r: &ExtentPtrDecoded) -> bool {
     let (lc, rc) = (&l.crc, &r.crc);
 
     if l.ptr.offset() + u64::from(lc.offset) + u64::from(lc.live_size) != r.ptr.offset() + u64::from(rc.offset) ||
@@ -509,7 +501,7 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     // Each crc entry pair's data, summed, must fit their type - whichever crc
     // the pair takes:
     let (lk, rk) = (*l.k(), *r.k());
-    let size = |k: &bkey, e: ExtentEntry<'_>| crc_unpack(k, e).expect("a crc entry pair: their types matched").uncompressed_size;
+    let size = |k: &Bkey, e: ExtentEntry<'_>| crc_unpack(k, e).expect("a crc entry pair: their types matched").uncompressed_size;
     for (el, er) in l.extent_entries(fs).zip(r.extent_entries(fs)) {
         if crc_size_max(el).is_some_and(|max| size(&lk, el) + size(&rk, er) > max) {
             return false;

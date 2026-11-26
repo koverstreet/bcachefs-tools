@@ -17,11 +17,11 @@ use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, Btree
 use crate::btree::trans::TransGuard;
 use crate::data::ec::format::Stripe;
 use crate::alloc::buckets::ReservationFlags;
-use crate::data::extents::extent_ptr_decoded;
+use crate::data::extents::ExtentPtrDecoded;
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::write::WriteFlags;
-use crate::init::{dev::bch_devs_mask, damage};
+use crate::init::{dev::DevsMask, damage};
 use crate::sb::{members_format::BCH_SB_MEMBER_INVALID, errors::SbErrorId};
 use crate::data::copygc;
 use crate::data::ec::buf::{blocks_good, blocks_in, validate_msg, MemWait, StripeBuf, PRE};
@@ -147,7 +147,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
     let Some((iter, k)) = ext else { return Ok(()) };
     let Some(kp) = k.arm::<Ptrs>() else { return Ok(()) };
 
-    let ours = |p: &extent_ptr_decoded| p.has_ec && p.ec.idx() == idx && u32::from(p.ec.block()) == block;
+    let ours = |p: &ExtentPtrDecoded| p.has_ec && p.ec.idx() == idx && u32::from(p.ec.block()) == block;
     let Some(dev) = kp.ptrs_decoded(fs).find(|d| ours(&d.p)).map(|d| u32::from(d.p.ptr.dev())) else {
         return Ok(());
     };
@@ -268,23 +268,23 @@ impl StripeBlocks {
 /// had devices enough, skip narrowing, and fail in the allocator with
 /// bucket_alloc_no_progress - every pass, forever.
 fn stripe_repair_usable_devs(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, b: StripeBlocks,
-                             devs: &mut bch_devs_mask) {
-    let mut carried = bch_devs_mask::default();
+                             devs: &mut DevsMask) {
+    let mut carried = DevsMask::default();
     for i in blocks_in(b.live & !b.bad) {
-        carried.d.set(s.v().block_ptrs()[i].dev().into());
+        carried.set(s.v().block_ptrs()[i].dev().into());
     }
 
     let mark = fs.mark_lock().read();
     let rcu = read_lock();
 
     let all = *devs;
-    for i in all.d.iter().filter(|&i| !carried.d.test(i)) {
+    for i in all.iter().filter(|&i| !carried.test(i)) {
         let usable = fs.dev_rcu(i as u32, &rcu).is_some_and(|ca| {
             ca.free_buckets_at(&ca.usage_read_fast(), Watermark::normal) != 0 ||
                 copygc::can_make_progress(ca, &mark)
         });
         if !usable {
-            devs.d.clear(i);
+            devs.clear(i);
         }
     }
 }
@@ -293,7 +293,7 @@ fn stripe_repair_usable_devs(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, b: Strip
 /// fits on the devices a repair can use - 0 if it can be rebuilt at its width
 /// - and those devices.
 fn stripe_repair_need_evacuate(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, b: StripeBlocks)
-    -> (u32, bch_devs_mask)
+    -> (u32, DevsMask)
 {
     let v = s.v();
     let (mut devs, _) = fs.disk_label_ec_devs(v.disk_label.into(), v.sectors.get().into());
@@ -301,7 +301,7 @@ fn stripe_repair_need_evacuate(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, b: Str
 
     // the allocator puts at most one block of a stripe in a failure domain,
     // so devices sharing one can't each take a block
-    let nr_usable = devs.d.weight().min(fs.target_nr_domains(&devs));
+    let nr_usable = devs.weight().min(fs.target_nr_domains(&devs));
 
     ((b.live.count_ones() + u32::from(v.nr_redundant)).saturating_sub(nr_usable), devs)
 }
@@ -622,7 +622,7 @@ pub(crate) fn repair_read(trans: &TransGuard<'_>, s: BkeySC<'_, Stripe<Validated
 /// init_new_stripe_from_old() - taking over the caller's claim @h and its
 /// read of the stripe, @read; its task does the writes.
 fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, Stripe<Validated>>, h: OpenStripe<'_>,
-                  mut read: KBox<StripeBuf>, devs: bch_devs_mask, carry: u32, move_: u32)
+                  mut read: KBox<StripeBuf>, devs: DevsMask, carry: u32, move_: u32)
     -> Result<StripeRepair, BchError>
 {
     let trans = ctxt.trans();

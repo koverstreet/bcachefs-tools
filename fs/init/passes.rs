@@ -12,7 +12,7 @@
 //! passes it needs run, and in the recovery_passes section, when each last ran
 //! and for how long - which ratelimits expensive repairs.
 //!
-//! The runner's state is bch_fs_recovery's, its runs serialized by run_lock:
+//! The runner's state is FsRecovery's, its runs serialized by run_lock:
 //! recovery.runner, a spinlock - taken with interrupts off, as scheduling can
 //! come from where they are - over what only the runner reads, publishing
 //! what others read unlocked, a word at a time.
@@ -25,7 +25,7 @@ use crate::util::projections::Volatile;
 use crate::os::workqueue::ReffedWork;
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
 use pin_init::pin_data;
-use crate::format::{Btree, SbFeature, bch_sb, bch_sb_field_ext};
+use crate::format::{Btree, SbFeature, Sb, SbFieldExt};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -52,7 +52,7 @@ pub enum RunRecoveryPassFlags {
 /// scheduling can come from where they are. Nothing else reads it.
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
-pub struct bch_recovery_runner {
+pub struct RecoveryRunner {
     /*
      * When current_pass started, monotonic, for recovery_status to print
      * how long it's been going. A poller can time passes by watching
@@ -75,11 +75,11 @@ pub struct bch_recovery_runner {
     pub passes_ratelimiting: u64,
     /*
      * Cost-model retry ratelimit for the passes in passes_failing, kept in
-     * memory only: a failing pass must not write the sb recovery_pass_entry,
+     * memory only: a failing pass must not write the sb RecoveryPassEntry,
      * but we still want the same last_run/last_runtime throttle so automatic
      * recovery doesn't hammer a pass that keeps failing.
      */
-    pub passes_failing_ratelimit: [recovery_pass_entry; RecoveryPass::NR as usize],
+    pub passes_failing_ratelimit: [RecoveryPassEntry; RecoveryPass::NR as usize],
     /* Consecutive failures, for exponential backoff; zeroed on success */
     pub passes_failing_nr: [u8; RecoveryPass::NR as usize],
 }
@@ -105,18 +105,18 @@ published! {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_recovery {
+pub struct FsRecovery {
     /*
      * The running pass's progress, for recovery_status to read. One
      * indicator rather than a stack because no pass has two live at once -
      * which is what check_reconcile_work_data_btrees() exists to keep true.
      */
-    pub progress: progress_indicator,
+    pub progress: ProgressIndicator,
 
     /* the runner's state, under its lock, and what it publishes */
     #[pin]
     #[init(new_lock!(::pin_init::zeroed(), ::pin_init::zeroed(), "&c->recovery.lock"))]
-    pub runner: Locked<SpinLockIrq, bch_recovery_runner, RecoveryWords>,
+    pub runner: Locked<SpinLockIrq, RecoveryRunner, RecoveryWords>,
 
     /* passes run under it - and what runs as a pass, it serializes */
     #[pin]
@@ -150,11 +150,11 @@ pub trait Run {
 }
 
 use crate::btree::iter::lockrestart_do;
-use crate::init::passes_format::{bch_sb_field_recovery_passes, recovery_pass_entry};
-use crate::init::progress::progress_indicator;
+use crate::init::passes_format::{SbFieldRecoveryPasses, RecoveryPassEntry};
+use crate::init::progress::ProgressIndicator;
 use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
-use crate::snapshots::{format::BCACHEFS_ROOT_SUBVOL, subvolume::subvol_inum, subvolume};
-use self::bch_recovery_runner as Runner;
+use crate::snapshots::{format::BCACHEFS_ROOT_SUBVOL, subvolume::SubvolInum, subvolume};
+use self::RecoveryRunner as Runner;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard, FsFlag};
 use crate::locking::ExclusiveGuard;
@@ -248,7 +248,7 @@ crate::recovery_pass!(recovery_pass_empty => recovery_pass_empty);
 /// That the root inode can be read, while recovery can still rewind to
 /// repair it.
 fn lookup_root_inode(fs: &Fs) -> Result<(), BchError> {
-    let inum = subvol_inum { subvol: BCACHEFS_ROOT_SUBVOL.into(), inum: BCACHEFS_ROOT_INO.into() };
+    let inum = SubvolInum { subvol: BCACHEFS_ROOT_SUBVOL.into(), inum: BCACHEFS_ROOT_INO.into() };
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
         subvolume::get(t, BCACHEFS_ROOT_SUBVOL, true)?;
@@ -320,9 +320,9 @@ pub fn prt_stable(out: &mut Printbuf, stable: u64) {
 
 /// When each pass last ran and how long it took, by stable id: what
 /// ratelimiting a pass goes by.
-impl SbFieldOps for bch_sb_field_recovery_passes<Validated> {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                r: &bch_sb_field_recovery_passes<Unvalidated>) {
+impl SbFieldOps for SbFieldRecoveryPasses<Validated> {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                r: &SbFieldRecoveryPasses<Unvalidated>) {
         while out.nr_tabstops() < 2 {
             out.tabstop_push(32);
         }
@@ -339,7 +339,7 @@ impl SbFieldOps for bch_sb_field_recovery_passes<Validated> {
 
 // ── Its entries ──────────────────────────────────────────────────────────────
 
-type Section = bch_sb_field_recovery_passes<Validated>;
+type Section = SbFieldRecoveryPasses<Validated>;
 
 /// For self healing - e.g. missing backpointers - that would otherwise keep
 /// scheduling an expensive repair pass that can wait: run it at most once per
@@ -348,15 +348,15 @@ type Section = bch_sb_field_recovery_passes<Validated>;
 const SELF_HEAL_RATELIMIT: u32 = 100;
 
 /// @pass's entry, if the section has one.
-fn entry(sb: &bch_sb, pass: Pass) -> Option<recovery_pass_entry> {
+fn entry(sb: &Sb, pass: Pass) -> Option<RecoveryPassEntry> {
     sb.field::<Section>()?.start.get(pass.stable().0 as usize).copied()
 }
 
 /// @pass's entry, the section made or grown to hold it: None if there's no
 /// room in the superblock.
-fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut recovery_pass_entry> {
+fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut RecoveryPassEntry> {
     let stable = pass.stable().0 as usize;
-    let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<recovery_pass_entry>();
+    let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<RecoveryPassEntry>();
     if fs.sb_resize(sb).field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32).is_none() {
         bch_err!(fs, "error creating recovery_passes sb section");
         return None;
@@ -368,13 +368,13 @@ fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a
 /// was more than 1/@runtime_fraction of the time since, and it isn't marked
 /// never to be. Both ratelimits go by it: the superblock's, of expensive
 /// passes, and the in-memory one of failing passes, each with its own entries.
-pub fn entry_ratelimited(e: &recovery_pass_entry, runtime_fraction: u32) -> bool {
+pub fn entry_ratelimited(e: &RecoveryPassEntry, runtime_fraction: u32) -> bool {
     let now = ktime_get_real_seconds() as u64;
     !e.no_ratelimit() &&
         u64::from(e.last_runtime.get()) * u64::from(runtime_fraction) > now.wrapping_sub(e.last_run.get())
 }
 
-fn want_ratelimit_locked(sb: &bch_sb, pass: Pass, runtime_fraction: u32) -> bool {
+fn want_ratelimit_locked(sb: &Sb, pass: Pass, runtime_fraction: u32) -> bool {
     entry(sb, pass).is_some_and(|e| entry_ratelimited(&e, runtime_fraction))
 }
 
@@ -400,7 +400,7 @@ pub fn set_no_ratelimit(fs: &Fs, pass: Pass) {
 /// with the passes required - are done with too.
 fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
     let mut sb = fs.sb_lock();
-    let ext = sb.field_mut::<bch_sb_field_ext<Validated>>().expect("an ext section");
+    let ext = sb.field_mut::<SbFieldExt<Validated>>().expect("an ext section");
     LeBitmap::from_words_mut(&mut ext.recovery_passes_required).clear(pass.stable().0 as usize);
     // the runner takes each pass off current_passes before running it: none
     // left, this was the last
@@ -553,7 +553,7 @@ fn is_persistent(pass: Pass) -> bool {
 /// Whether scheduling @pass would do anything. With ratelimit
 /// in @flags, the superblock - @sb, under sb_lock - decides whether it's to be
 /// ratelimited, and if not it's taken out of @flags.
-fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Option<&bch_sb>) -> bool {
+fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Option<&Sb>) -> bool {
     if flags.contains(Flags::skip_if_complete) &&
        fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return false;
@@ -630,7 +630,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
         *r.published().scheduled_passes_ephemeral.place() |= bit(pass);
     } else {
         let w = w.expect("not ephemeral: an sb_write");
-        let ext = w.field_mut::<bch_sb_field_ext<Validated>>().expect("an ext section");
+        let ext = w.field_mut::<SbFieldExt<Validated>>().expect("an ext section");
         let required = LeBitmap::from_words_mut(&mut ext.recovery_passes_required);
         let new = !required.test_and_set(pass.stable().0 as usize);
         w.record(new);
@@ -819,7 +819,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
              * to passes the sb marks NO_RATELIMIT: that flag is about not
              * throttling successful reruns, not about hammering failures.
              */
-            r.passes_failing_ratelimit[p] = recovery_pass_entry {
+            r.passes_failing_ratelimit[p] = RecoveryPassEntry {
                 last_run:     Le64::new(end_time as u64),
                 last_runtime: Le32::new(runtime as u32),
                 ..Default::default()
@@ -958,7 +958,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
 /// The async runner: the passes scheduled that can run online, unless a run
 /// is already going - then it picks them up. run_async() queues it, holding
 /// a write ref.
-pub(crate) fn async_runner(recovery: &bch_fs_recovery) {
+pub(crate) fn async_runner(recovery: &FsRecovery) {
     let fs = recovery.container();
     let Some(_run) = recovery.run_lock.try_lock() else { return };
 

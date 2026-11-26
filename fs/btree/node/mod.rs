@@ -15,10 +15,10 @@ pub mod keys;
 pub mod sort;
 
 use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX,
-    bkey_format_state};
+    BkeyFormatState};
 use crate::btree::cache::{NodeBufs, BtreeNodeCacheState};
 use crate::btree::path::{LockedNode, NodeLock};
-use crate::btree::locking::btree_bkey_cached_common;
+use crate::btree::locking::BtreeBkeyCachedCommon;
 use crate::btree::node::bset::MAX_BSETS;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::locking::{six::SixLockInitFlags, LockedBy};
@@ -32,7 +32,7 @@ use core::ops::{ControlFlow, Range};
 use core::ptr;
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
-use crate::format::{BkeyType, bkey, bkey_format, btree_node, btree_node_entry, BkeyField};
+use crate::format::{BkeyType, Bkey, BkeyFormat, btree_node, BtreeNodeEntry, BkeyField};
 use cstruct_macros::{Init, MaybeZeroable, bch_enum, bitfield};
 use pin_init::pin_data;
 
@@ -125,7 +125,7 @@ impl BtreeNrKeys {
     }
 
     /// The live u64s, the keys repacked from @old_f to @new_f.
-    pub fn u64s_with_format(&self, old_f: &bkey_format, new_f: &bkey_format) -> usize {
+    pub fn u64s_with_format(&self, old_f: &BkeyFormat, new_f: &BkeyFormat) -> usize {
         let new_key_u64s = i32::from(new_f.key_u64s);
         let delta = (new_key_u64s - i32::from(old_f.key_u64s)) * i32::from(self.packed_keys) +
                     (new_key_u64s - BKEY_U64S as i32) * i32::from(self.unpacked_keys);
@@ -153,8 +153,8 @@ pub const NR_WRITES: u8 = 3;
 #[init_args(fs: &Fs, lock_flags: SixLockInitFlags, gfp: Flags)]
 pub struct BtreeNode {
     #[pin]
-    #[init(btree_bkey_cached_common::init(false, lock_flags, gfp))]
-    pub c: btree_bkey_cached_common,
+    #[init(BtreeBkeyCachedCommon::init(false, lock_flags, gfp))]
+    pub c: BtreeBkeyCachedCommon,
 
     pub hash_val: core::cell::UnsafeCell<u64>,
 
@@ -231,7 +231,7 @@ pub struct NodeContents {
     pub nsets: u8,
     pub nr_key_bits: u8,
 
-    pub format: bkey_format,
+    pub format: BkeyFormat,
 
     /*
      * Per-field unpack constants, derived from @format at node init.
@@ -403,7 +403,7 @@ impl BtreeNode {
     {
         let keys = self.keys(contents);
         let mut node_iter = KeyIter::default();
-        let mut unpacked = bkey::new();
+        let mut unpacked = Bkey::new();
 
         node_iter.init_from_start(&keys);
 
@@ -415,7 +415,7 @@ impl BtreeNode {
     }
 
     /// Every bset's live keys added to @s.
-    pub fn format_add_keys(&self, contents: &NodeContents, s: &mut bkey_format_state) {
+    pub fn format_add_keys(&self, contents: &NodeContents, s: &mut BkeyFormatState) {
         let keys = self.keys(contents);
         for t in contents.sets() {
             for (i, k) in keys.set_keys(t) {
@@ -427,9 +427,9 @@ impl BtreeNode {
     }
 
     /* Calculate ideal packed bkey format for new btree nodes: */
-    pub fn calc_format(&self, contents: &NodeContents) -> bkey_format {
+    pub fn calc_format(&self, contents: &NodeContents) -> BkeyFormat {
         let data = contents.data();
-        let mut s = bkey_format_state::new();
+        let mut s = BkeyFormatState::new();
         s.add_pos(data.min_key);
         s.add_pos(data.max_key);
         self.format_add_keys(contents, &mut s);
@@ -555,7 +555,7 @@ impl BtreeNode {
     fn unwritten_end(&self, contents: &NodeContents, fs: &Fs) -> usize {
         let unwritten = usize::from(self.flags.nr_written_bsets())..;
         let u64s = contents.sets()[unwritten].iter().map(BsetTree::u64s).sum::<usize>();
-        let bytes = offset_of!(Head<btree_node_entry>, keys) + size_of::<Head<crate::format::bset>>() + u64s * size_of::<u64>();
+        let bytes = offset_of!(Head<BtreeNodeEntry>, keys) + size_of::<Head<crate::format::Bset>>() + u64s * size_of::<u64>();
 
         self.written_end() + bytes.next_multiple_of(fs.block_bytes() as usize) / size_of::<u64>()
     }
@@ -605,7 +605,7 @@ impl BtreeNode {
         let sectors = |bytes: usize| (bytes as u64).next_multiple_of(fs.block_bytes()) >> 9;
 
         let initial  = size_of::<Head<btree_node>>() + usize::from(contents.nr.live_u64s) * size_of::<u64>() + 8;
-        let followon = size_of::<Head<btree_node_entry>>() + new_key_u64s * size_of::<u64>() + 8;
+        let followon = size_of::<Head<BtreeNodeEntry>>() + new_key_u64s * size_of::<u64>() + 8;
 
         sectors(initial) + sectors(followon) <= u64::from(fs.btree_sectors())
     }
@@ -636,7 +636,7 @@ impl BtreeNode {
         let t = contents.last_set();
         let bne = if pending { self.unwritten_end(contents, fs) } else { self.written_end() }
             .max(t.end_offset as usize);
-        let keys = (offset_of!(Head<btree_node_entry>, keys) + offset_of!(Head<crate::format::bset>, _data)) / size_of::<u64>();
+        let keys = (offset_of!(Head<BtreeNodeEntry>, keys) + offset_of!(Head<crate::format::Bset>, _data)) / size_of::<u64>();
 
         let want = if self.last_bset_written(contents) {
             self.written.get() as u32 + fs.block_sectors() <= fs.btree_sectors()
@@ -695,7 +695,7 @@ pub struct BtreeNodePosToText<'b, 'f> {
 
 impl ToText for BtreeNodePosToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::cache::bch2_btree_pos_to_text(out, self.fs, self.b)
+        crate::btree::cache::btree_node_pos_to_text(out, self.fs, self.b)
     }
 }
 crate::display_via_to_text!(BtreeNodePosToText<'_, '_>);

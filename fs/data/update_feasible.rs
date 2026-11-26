@@ -17,9 +17,9 @@
 
 use crate::alloc::{disk_groups::Target, foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark}};
 use crate::btree::{bkey::{BkeySC, BkeyV}, iter::TransAttempt};
-use crate::data::update::{data_update_opts, DataUpdateType};
-use crate::init::dev::bch_devs_list;
-use crate::opts::bch_inode_opts;
+use crate::data::update::{DataUpdateOpts, DataUpdateType};
+use crate::init::dev::DevsList;
+use crate::opts::InodeOpts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::data::copygc;
@@ -47,15 +47,15 @@ fn no_room<T>(fs: &Fs, need_copygc: bool) -> Result<T, BchError> {
     })
 }
 
-fn watermark(data_opts: &data_update_opts) -> Watermark {
+fn watermark(data_opts: &DataUpdateOpts) -> Watermark {
     Watermark::from_bits(data_opts.commit_flags.bits() & BCH_WATERMARK_MASK)
 }
 
 impl Fs {
     /// Durability available to a write to @target, 0 meaning every device. A
     /// cached write counts 1 per device.
-    fn durability_available(&self, data_opts: &data_update_opts, data_type: DataType,
-                            target: u32, devs_have: &bch_devs_list,
+    fn durability_available(&self, data_opts: &DataUpdateOpts, data_type: DataType,
+                            target: u32, devs_have: &DevsList,
                             mut trace: Option<&mut Printbuf>) -> Available {
         if let Some(out) = trace.as_deref_mut() {
             write!(out, "available to write on target=");
@@ -73,7 +73,7 @@ impl Fs {
         let devs = self.target_rw_devs(data_type, Target::decode(target));
         let mut ret = Available::default();
 
-        for i in devs.d.iter() {
+        for i in devs.iter() {
             if devs_have.has(i as u8) {
                 continue;
             }
@@ -103,7 +103,7 @@ impl Fs {
         k.ptrs(self)
             .filter(|ptr| ptr.cached() == 0)
             .map(|ptr| u32::from(ptr.dev()))
-            .filter(|&dev| dev != BCH_SB_MEMBER_INVALID && devs.d.test(dev as usize))
+            .filter(|&dev| dev != BCH_SB_MEMBER_INVALID && devs.test(dev as usize))
             .map(|dev| self.dev_durability(dev, &rcu))
             .sum()
     }
@@ -123,7 +123,7 @@ impl Fs {
     /// "succeeds" off target and requeues forever; and the replacement gets
     /// whatever durability the filesystem has, which trades replicas for
     /// placement if it's less - worth it only to evacuate.
-    fn write_btree_feasible(&self, opts: &bch_inode_opts, data_opts: &data_update_opts,
+    fn write_btree_feasible(&self, opts: &InodeOpts, data_opts: &DataUpdateOpts,
                             k: BkeySC<'_, BtreePtrs>, mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let evacuating = self.btree_ptr_has_dev_evacuating(k);
         let replicas = u32::from(opts.data_replicas);
@@ -133,7 +133,7 @@ impl Fs {
             return Ok(());
         }
 
-        let none = bch_devs_list::default();
+        let none = DevsList::default();
         let btree = DataType::btree;
         let target = data_opts.target.into();
 
@@ -159,8 +159,8 @@ impl Fs {
         if worth_it { Ok(()) } else { no_room(self, need_copygc) }
     }
 
-    pub fn data_update_write_feasible(&self, opts: &bch_inode_opts, data_opts: &data_update_opts,
-                                      devs_have: &bch_devs_list, k: BkeySC<'_>,
+    pub fn data_update_write_feasible(&self, opts: &InodeOpts, data_opts: &DataUpdateOpts,
+                                      devs_have: &DevsList, k: BkeySC<'_>,
                                       mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let btree = k.arm::<BtreePtrs>();
         if let Some(b) = btree.filter(|_| data_opts.type_ == DataUpdateType::reconcile) {
@@ -193,10 +193,10 @@ impl TransAttempt<'_, '_> {
     /// Ok if the update can be done; otherwise why not, a data_update_fail_*
     /// or ec_alloc_failed error, explained into @trace too. Getting a stripe
     /// head takes mutexes, so it can restart.
-    pub fn can_do_data_update(&self, opts: &bch_inode_opts, data_opts: &data_update_opts,
+    pub fn can_do_data_update(&self, opts: &InodeOpts, data_opts: &DataUpdateOpts,
                               k: BkeySC<'_>, mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let fs = self.fs();
-        let mut devs_have = bch_devs_list::default();
+        let mut devs_have = DevsList::default();
         let mut keeping = 0;
 
         if let Some(k) = k.arm::<Ptrs>() {

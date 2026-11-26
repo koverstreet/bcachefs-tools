@@ -270,13 +270,13 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
-use crate::btree::{trans::{cached_trans_retire, bch_fs_btree_trans}, bch_fs_btree};
+use crate::btree::{trans::{cached_trans_retire, FsBtreeTrans}, FsBtree};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::{place::{Contained, PlacedDrop}, rcu::Flavor};
 use core::ptr::NonNull;
 
-impl PlacedDrop for bch_fs_btree_trans {
+impl PlacedDrop for FsBtreeTrans {
     unsafe fn placed_drop(&self) {
         let fs = self.container().container();
 
@@ -299,7 +299,7 @@ impl PlacedDrop for bch_fs_btree_trans {
     }
 }
 
-impl PlacedDrop for bch_fs_btree {
+impl PlacedDrop for FsBtree {
     unsafe fn placed_drop(&self) {
         let fs = self.container();
 

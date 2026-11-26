@@ -7,7 +7,7 @@
 //! position - and its value the same records the superblock's errors
 //! section keeps, in the same vocabulary as the error counters and fsck:
 //! per SbErrorId, an occurrence count and the times of the first and
-//! last occurrence (bch_sb_field_error_entry_v2), strictly ascending by id.
+//! last occurrence (SbFieldErrorEntryV2), strictly ascending by id.
 //! A count saturates, and a value holds what a key's u8 of u64s does,
 //! MAX_ENTRIES: past that, new ids aren't recorded.
 //!
@@ -34,15 +34,15 @@ use crate::btree::bkey::{AnyKeySC, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::data::extents_format::BtreePtrV2;
 use crate::init::{damage_format::Damage, error::{id, BkeyValidate}};
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::posix::inode;
-use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId, bch_sb_error_entry_cpu};
+use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId, SbErrorEntryCpu};
 use crate::util::{DateTime, Printbuf, alloc::Vec, vstructs::{Unvalidated, Validated}};
 use crate::os::kernel::ktime_get_real_seconds;
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
-use crate::sb::errors_format::bch_sb_field_error_entry_v2 as Entry;
+use crate::sb::errors_format::SbFieldErrorEntryV2 as Entry;
 use core::cmp::Ordering;
 use core::mem::size_of;
 use crate::format::{Bpos, Btree, BkeyType, BKEY_VAL_U64s_MAX};
@@ -103,9 +103,9 @@ pub fn inode_has_damage(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> R
 /// versions', merged, sorted by id: damage recorded against an ancestor
 /// version happened to the data a descendant sees.
 pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
-    -> Result<Vec<bch_sb_error_entry_cpu>, BchError>
+    -> Result<Vec<SbErrorEntryCpu>, BchError>
 {
-    let mut out: Vec<bch_sb_error_entry_cpu> = Vec::new();
+    let mut out: Vec<SbErrorEntryCpu> = Vec::new();
     loop {
         let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
         let Some(d) = iter.peek_slot(t)?.and_then(|k| k.arm::<Damage>()) else { break };
@@ -228,7 +228,7 @@ pub fn delete(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<(), 
 /// so a real one when no older version needs the record and a whiteout when
 /// one does - snapshots keep their view, and the whiteout hides inherited
 /// damage from this view and its descendants. A clean file's is nothing.
-pub fn clear(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<(), BchError> {
+pub fn clear(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
     let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum.inum, snapshot), BtreeIterFlags::INTENT);

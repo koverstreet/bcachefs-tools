@@ -30,7 +30,7 @@ use crate::btree::iter::{
 use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
-use crate::posix::{inode::bch_inode_unpacked, inode_format::BCACHEFS_ROOT_INO, inode};
+use crate::posix::{inode::InodeUnpacked, inode_format::BCACHEFS_ROOT_INO, inode};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState, SnapshotTree,
     Subvolume, SubvolumeState};
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
@@ -38,7 +38,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
-use crate::snapshots::{snapshot, bch_fs_snapshots};
+use crate::snapshots::{snapshot, FsSnapshots};
 use crate::util::alloc::Vec;
 use crate::util::place::Contained;
 use crate::util::Printbuf;
@@ -51,13 +51,13 @@ use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, MaybeZeroable)]
-pub struct subvol_inum {
+pub struct SubvolInum {
     /* we can't have padding in this struct: */
     pub subvol: u64,
     pub inum: u64,
 }
 
-impl subvol_inum {
+impl SubvolInum {
     /// The root directory, in the root subvolume.
     pub const ROOT: Self = Self { subvol: BCACHEFS_ROOT_SUBVOL as u64, inum: BCACHEFS_ROOT_INO as u64 };
 }
@@ -559,7 +559,7 @@ fn check_subvol<'a, 't>(
         }
     }
 
-    let root = subvol_inum { subvol: id, inum: s.v().inode.get() };
+    let root = SubvolInum { subvol: id, inum: s.v().inode.get() };
     match inode::peek(t, &mut BtreeIter::uninit(t.trans()), root, BtreeIterFlags::empty()) {
         Ok(mut inode) => {
             if fsck_err_on!(t, inode.bi_subvol as u64 != id, id::subvol_root_wrong_bi_subvol,
@@ -577,7 +577,7 @@ fn check_subvol<'a, 't>(
                          root.inum, s.v().snapshot())? {
                 // Recreated empty; check_directory_structure reattaches its
                 // contents under lost+found
-                let mut inode = bch_inode_unpacked::default();
+                let mut inode = InodeUnpacked::default();
                 inode::init_early(fs, &mut inode);
                 inode::init_late(fs, &mut inode, fs.current_time(), 0, 0,
                                  (c::S_IFDIR | 0o700) as c::umode_t, 0, None);
@@ -787,7 +787,7 @@ fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
 
 /// Deletes unlinked subvolumes, once the VFS has let go of their inodes:
 /// unlink() queues it, holding a write ref.
-pub(crate) fn delete_unlinked(snapshots: &bch_fs_snapshots) {
+pub(crate) fn delete_unlinked(snapshots: &FsSnapshots) {
     let fs = snapshots.container();
     loop {
         let subvols = core::mem::replace(&mut *snapshots.unlinked.lock(), Vec::new());

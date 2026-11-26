@@ -18,7 +18,7 @@ pub mod stripe_new_tasks;
 pub mod trigger;
 pub mod update;
 
-use crate::data::{ec::head::{ec_dev_stripe_state, ec_stripe_head}, ec::trigger::gc_stripe};
+use crate::data::{ec::head::{EcDevStripeState, EcStripeHead}, ec::trigger::GcStripe};
 use crate::fs::Fs;
 use crate::locking::{ByteLock, Locked, Lockdep, Mutex, SpinLockIrq};
 use crate::new_lock;
@@ -37,7 +37,7 @@ use stripe_new::NewStripes;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_ec {
+pub struct FsEc {
     /// Stripe buffers' memory in use, against ec_stripe_buf_limit: Rust's
     /// alone.
     #[pin]
@@ -59,13 +59,13 @@ pub struct bch_fs_ec {
     /// without this lock: Rust's alone.
     #[pin]
     #[init(new_lock!(Vec::new()))]
-    pub(crate) stripe_heads: Locked<Lockdep<ByteLock>, Vec<Pin<KBox<ec_stripe_head>>>>,
+    pub(crate) stripe_heads: Locked<Lockdep<ByteLock>, Vec<Pin<KBox<EcStripeHead>>>>,
 
-    /// Each disk label's ec_dev_stripe_state, made on first use - boxed, as
+    /// Each disk label's EcDevStripeState, made on first use - boxed, as
     /// stripe heads point at them: Rust's alone.
     #[pin]
     #[init(new_lock!(Vec::new()))]
-    pub(crate) dev_stripe_states: Locked<Lockdep<ByteLock>, Vec<Pin<KBox<ec_dev_stripe_state>>>>,
+    pub(crate) dev_stripe_states: Locked<Lockdep<ByteLock>, Vec<Pin<KBox<EcDevStripeState>>>>,
 
     /// The stripes being made, once their heads or repairs hand them on,
     /// until their task is done with them; and room for those held. Boxed,
@@ -97,5 +97,5 @@ pub struct bch_fs_ec {
 
     /// gc's copies of the stripes: trigger.rs's alone - allocated as the gc
     /// triggers find them, from several threads at once.
-    pub(crate) gc_stripes: SharedGenRadix<gc_stripe>,
+    pub(crate) gc_stripes: SharedGenRadix<GcStripe>,
 }

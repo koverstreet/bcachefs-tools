@@ -1,10 +1,10 @@
-//! bkey_format, how a btree node packs its keys, and bkey_format_state, the
+//! bkey_format, how a btree node packs its keys, and BkeyFormatState, the
 //! builder that picks one to fit the keys a node will hold.
 
 use super::BKEY_U64S;
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::errcode::BchError;
-use crate::format::{BkeyField::{self, *}, bkey_format, Bpos, bkey, KEY_PACKED_BITS_START};
+use crate::format::{BkeyField::{self, *}, BkeyFormat, Bpos, Bkey, KEY_PACKED_BITS_START};
 use crate::sb_err_on;
 use crate::types::{field_size, Le64};
 use crate::util::{Printbuf, ToText};
@@ -23,7 +23,7 @@ xmacro! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct bkey_format_state {
+pub struct BkeyFormatState {
     pub field_min: [u64; BkeyField::BKEY_NR_FIELDS as usize],
     pub field_max: [u64; BkeyField::BKEY_NR_FIELDS as usize],
 }
@@ -41,9 +41,9 @@ macro_rules! format_current {
     ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {{
         let mut bits_per_field = [0; NR_FIELDS];
         $(bits_per_field[$id as usize] =
-            (field_size(|k: crate::format::bkey| k.$($field).+) * 8) as u8;)*
+            (field_size(|k: crate::format::Bkey| k.$($field).+) * 8) as u8;)*
 
-        bkey_format {
+        BkeyFormat {
             key_u64s:     BKEY_U64S as u8,
             nr_fields:    BKEY_NR_FIELDS as u8,
             bits_per_field,
@@ -53,7 +53,7 @@ macro_rules! format_current {
 }
 
 /// An unpacked key's: each field all of struct bkey's.
-pub const BKEY_FORMAT_CURRENT: bkey_format = bkey_fields!(format_current);
+pub const BKEY_FORMAT_CURRENT: BkeyFormat = bkey_fields!(format_current);
 
 pub(super) fn fls64(v: u64) -> u32 {
     u64::BITS - v.leading_zeros()
@@ -63,7 +63,7 @@ pub(super) fn u64_bitmask(bits: u32) -> u64 {
     if bits != 0 { !0u64 >> (64 - bits) } else { 0 }
 }
 
-impl bkey_format {
+impl BkeyFormat {
     pub fn bits(&self, f: BkeyField) -> u32 {
         self.bits_per_field[f as usize] as u32
     }
@@ -133,7 +133,7 @@ impl bkey_format {
     }
 }
 
-impl ToText for bkey_format {
+impl ToText for BkeyFormat {
     fn to_text(&self, out: &mut Printbuf) {
         write!(out, "u64s {} fields ", self.key_u64s);
 
@@ -145,9 +145,9 @@ impl ToText for bkey_format {
         }
     }
 }
-crate::display_via_to_text!(bkey_format);
+crate::display_via_to_text!(BkeyFormat);
 
-impl bkey_format_state {
+impl BkeyFormatState {
     pub fn new() -> Self {
         let mut s = Self { field_min: [u64::MAX; NR_FIELDS], field_max: [0; NR_FIELDS] };
 
@@ -170,16 +170,16 @@ impl bkey_format_state {
     /*
      * Changes @format so that @k can be successfully packed with @format
      */
-    pub fn add_key(&mut self, k: &bkey) {
+    pub fn add_key(&mut self, k: &Bkey) {
         macro_rules! add {
             ($( ($id:ident, $($field:ident).+) ),* $(,)?) => { $(self.add($id, k.$($field).+ as u64);)* };
         }
         bkey_fields!(add);
     }
 
-    pub fn done(&mut self) -> bkey_format {
+    pub fn done(&mut self) -> BkeyFormat {
         let mut bits = KEY_PACKED_BITS_START;
-        let mut ret = bkey_format { nr_fields: BKEY_NR_FIELDS as u8, ..Default::default() };
+        let mut ret = BkeyFormat { nr_fields: BKEY_NR_FIELDS as u8, ..Default::default() };
 
         for f in FIELDS {
             let (min, max) = (&mut self.field_min[f as usize], self.field_max[f as usize]);

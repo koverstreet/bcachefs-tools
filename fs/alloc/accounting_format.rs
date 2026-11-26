@@ -2,10 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, counters, tagged_union, whole, MaybeZeroable, Plain, TypeInfo};
-use crate::format::{Bpos, bch_val};
+use crate::format::{Bpos, Val};
 use crate::types::Le8;
 
 /*
@@ -53,7 +53,7 @@ use crate::types::Le8;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Accounting {
-    pub v: bch_val,
+    pub v: Val,
     pub d: [u64; 0],
 }
 
@@ -78,7 +78,7 @@ pub enum DataType {
     multiple = 11,
 }
 
-pub type Replicas = Head<bch_replicas_entry_v1>;
+pub type Replicas = Head<ReplicasEntryV1>;
 crate::alloc::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {

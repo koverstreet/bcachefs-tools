@@ -19,7 +19,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::check::SnapshotsSeen;
 use crate::posix::dirent::{Dirent, DirentTarget};
 use crate::errcode::{Errcode, BchError};
@@ -79,7 +79,7 @@ fn inc_link(
     }
 }
 
-fn is_dir(u: &bch_inode_unpacked) -> bool {
+fn is_dir(u: &InodeUnpacked) -> bool {
     u.bi_mode as u32 & c::S_IFMT == c::S_IFDIR
 }
 

@@ -11,7 +11,7 @@ pub mod trigger;
 pub mod work;
 
 use crate::data::moving::MoveStats;
-use crate::init::progress::progress_indicator;
+use crate::init::progress::ProgressIndicator;
 use crate::fs::Fs;
 use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::{Status, StripesPending};
@@ -26,7 +26,7 @@ use pin_init::pin_data;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_reconcile {
+pub struct FsReconcile {
     /*
      * The thread, from start to stop - which doesn't mean it's running: it
      * also exits on its own if a pass fails, with thread_exit_ret its error
@@ -43,7 +43,7 @@ pub struct bch_fs_reconcile {
     #[init(SeqLock::new(Status::new()))]
     pub(crate) status: SeqLock<Status>,
     pub work_stats: MoveStats,
-    pub progress: progress_indicator,
+    pub progress: ProgressIndicator,
     pub scan_stats: MoveStats,
 
     /*
@@ -73,5 +73,5 @@ pub struct bch_fs_reconcile {
     pub(crate) on_battery: AtomicBool,
     #[pin]
     #[init(::pin_init::init_zeroed())]
-    pub(crate) power_notifier: PowerNotifier<bch_fs_reconcile>,
+    pub(crate) power_notifier: PowerNotifier<FsReconcile>,
 }

@@ -305,10 +305,10 @@ use crate::btree::trans::TransGuard;
 use crate::locking::{ExclusiveGuard, Mutex};
 use crate::c;
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
-use crate::snapshots::{check_snapshots, delete, subvolume, bch_fs_snapshots};
+use crate::snapshots::{check_snapshots, delete, subvolume, FsSnapshots};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::bitmap::{BitArray, AtomicBitArray};
@@ -420,7 +420,7 @@ impl<'g> Table<'g> {
         }
     }
 
-    /// See bch_fs_snapshots::live_descendent().
+    /// See FsSnapshots::live_descendent().
     fn live_descendent(&self, mut id: u32) -> Result<Option<u32>, Errcode> {
         loop {
             let s = self.entry(id).ok_or(Errcode::invalid_snapshot_node)?;
@@ -502,7 +502,7 @@ impl<'g> Table<'g> {
         })
     }
 
-    /// See bch_fs_snapshots::redundant_interior().
+    /// See FsSnapshots::redundant_interior().
     fn redundant_interior(&self, orig: u32) -> Option<u32> {
         let mut id = orig;
         let mut s = self.entry(id)?;
@@ -658,7 +658,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
 
 // ── Queries, and accounting ──────────────────────────────────────────────
 
-impl bch_fs_snapshots {
+impl FsSnapshots {
     /// The filesystem these are in, whose errors they throw.
     fn fs(&self) -> &Fs {
         self.container()
@@ -1598,7 +1598,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
                     Err(e) if is_restart(&e) => return Err(e),
                     Err(e) => { let _ = write!(out, "{}", e.msg()); }
                     Ok(sv) => crate::posix::namei::inum_to_path(
-                        t, subvol_inum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
+                        t, SubvolInum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
                 }
             }
             out.tab();

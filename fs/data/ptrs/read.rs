@@ -1,6 +1,6 @@
 //! Reading a key's data: which of its pointers to read - pick_read_device() -
 //! and the record of what failed, a device at a time, that the read paths
-//! retry against: bch_io_failures, which the write paths keep too.
+//! retry against: IoFailures, which the write paths keep too.
 //!
 //! A pick prefers what hasn't failed, then a checksummed copy, then - with
 //! BCH_READ_soft_require_read_device - the asked-for device, then, at
@@ -20,8 +20,7 @@ use crate::sb::{errors::blk_sts_sb_err, members_format::BCH_SB_MEMBER_INVALID};
 use crate::os::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
-use core::ops::{Deref, DerefMut};
-use crate::data::extents::{bch_io_failures, extent_ptr_decoded, ReadFlags};
+use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -47,23 +46,9 @@ pub struct DevIoFailures {
 /// coded reconstruct's message. All zeroes is empty.
 #[repr(C)]
 #[derive(Default)]
-pub struct IoFailures<const N: usize> {
+pub struct IoFailures<const N: usize = { BCH_BKEY_PTRS_MAX as usize }> {
     devs: ArrayVec<DevIoFailures, N>,
     pub ec_msg: Printbuf,
-}
-
-impl Deref for bch_io_failures {
-    type Target = IoFailures<{ BCH_BKEY_PTRS_MAX as usize }>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.failures
-    }
-}
-
-impl DerefMut for bch_io_failures {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.failures
-    }
 }
 
 impl<const N: usize> IoFailures<N> {
@@ -115,7 +100,7 @@ impl<const N: usize> IoFailures<N> {
     /// Record @err, reading @p: a failed reconstruct, a checksum error - those
     /// counted, retried until checksum_err_retry_nr - or an io error.
     /// bch2_mark_io_failure().
-    pub fn mark(&mut self, p: &extent_ptr_decoded, err: BchError) {
+    pub fn mark(&mut self, p: &ExtentPtrDecoded, err: BchError) {
         assert!(err.raw() != 0, "marking an io failure that isn't one");
         assert!(!err.matches(Errcode::transaction_restart),
                 "marking a transaction restart as an io failure");
@@ -230,7 +215,7 @@ fn dev_latency(ca: Option<&Dev>) -> u64 {
 
 /// Whether @p1 is a better read than @p2, of latencies @l1 and @l2:
 /// ptr_better(). The last choice is random.
-fn ptr_better(fs: &Fs, p1: &extent_ptr_decoded, mut l1: u64, p2: &extent_ptr_decoded, mut l2: u64,
+fn ptr_better(fs: &Fs, p1: &ExtentPtrDecoded, mut l1: u64, p2: &ExtentPtrDecoded, mut l2: u64,
               preferred_dev: u32, flags: ReadFlags) -> bool {
     if debug_params::force_reconstruct_read() {
         return p1.do_ec_reconstruct > p2.do_ec_reconstruct;
@@ -287,8 +272,8 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
     /// failed reading it so far: bch2_bkey_pick_read_device(). None if there's
     /// nothing to read: it's unwritten, or has no pointers but cached ones, or
     /// none. An error is why nothing could be picked.
-    fn pick_read_device(&self, fs: &Fs, failed: Option<&bch_io_failures>, preferred_dev: u32,
-                        flags: ReadFlags) -> Result<Option<extent_ptr_decoded>, BchError> {
+    fn pick_read_device(&self, fs: &Fs, failed: Option<&IoFailures>, preferred_dev: u32,
+                        flags: ReadFlags) -> Result<Option<ExtentPtrDecoded>, BchError> {
         use crate::errcode::Errcode as e;
         let key = self.as_sc();
 
@@ -298,7 +283,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
 
         let (mut have_csum_errors, mut have_io_errors, mut have_missing_devs) = (false, false, false);
         let mut have_dirty_ptrs = false;
-        let mut pick: Option<(extent_ptr_decoded, u64)> = None;
+        let mut pick: Option<(ExtentPtrDecoded, u64)> = None;
 
         if let Some(k) = key.arm::<Ptrs>() {
             let mut rcu = read_lock();

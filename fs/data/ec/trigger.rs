@@ -21,15 +21,15 @@ use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_change, LruId};
 use crate::alloc::replicas::{bkey_replicas_acct, bkey_replicas_padded, entry_acct,
-    bch_replicas_padded};
+    ReplicasPadded};
 use crate::btree::bkey::{pos, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, UpdateTriggerFlags};
 use crate::data::ec::format::Stripe;
 use crate::alloc::format::AllocV4;
 use crate::btree::check_allocations::GcPhase;
-use crate::data::ec::bch_fs_ec;
-use crate::data::extents_format::bch_extent_ptr;
+use crate::data::ec::FsEc;
+use crate::data::extents_format::ExtentPtr;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
 use crate::data::ptrs::BkeyVPtrs;
@@ -50,10 +50,10 @@ use nestify::nest;
 /// into.
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct gc_stripe {
+pub struct GcStripe {
     pub lock: Locked<ByteLock, GcStripeData>,
 }
-crate::genradix_entry!(gc_stripe);
+crate::genradix_entry!(GcStripe);
 
 nest! {
     /// What a gc_stripe's lock protects. Not packed, as a bucket's is:
@@ -64,7 +64,7 @@ nest! {
     pub struct GcStripeData {
         #[members]
         #>[bitfield(u8)]
-        pub bits: pub struct gc_stripe_bits {
+        pub bits: pub struct GcStripeBits {
             /* does a corresponding key exist in stripes btree? */
             alive: u1,
             __pad: u7,
@@ -73,9 +73,9 @@ nest! {
         pub nr_blocks: u8,
         pub nr_redundant: u8,
         pub block_sectors: [u16; BCH_BKEY_PTRS_MAX as usize],
-        pub ptrs: [bch_extent_ptr; BCH_BKEY_PTRS_MAX as usize],
+        pub ptrs: [ExtentPtr; BCH_BKEY_PTRS_MAX as usize],
 
-        pub r: bch_replicas_padded,
+        pub r: ReplicasPadded,
     }
 }
 
@@ -97,15 +97,15 @@ impl TransAttempt<'_, '_> {
 
 // ── gc's stripes ─────────────────────────────────────────────────────────
 
-impl bch_fs_ec {
+impl FsEc {
     /// gc's copy of stripe @idx, if it has one.
-    pub fn gc_stripe(&self, idx: u64) -> Option<&gc_stripe> {
+    pub fn gc_stripe(&self, idx: u64) -> Option<&GcStripe> {
         // SAFETY: an entry - a Locked, all of whose state is behind its lock
         self.gc_stripes.get(idx as usize)
     }
 
     /// gc_stripe(), allocated - zeroed, not alive - if it wasn't.
-    pub fn gc_stripe_alloc(&self, idx: u64) -> Result<&gc_stripe, AllocError> {
+    pub fn gc_stripe_alloc(&self, idx: u64) -> Result<&GcStripe, AllocError> {
         self.gc_stripes.prealloc(idx as usize)?;
         Ok(self.gc_stripe(idx).expect("an entry, allocated"))
     }
@@ -362,7 +362,7 @@ fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool
 /// too (the backpointer carries the reconcile phys bits).
 fn mark_stripe_buckets(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: Option<StripeK<'_>>,
                        flags: UpdateTriggerFlags) -> Result<(), BchError> {
-    fn block<'a>(s: Option<StripeK<'a>>, i: u32) -> Option<&'a bch_extent_ptr> {
+    fn block<'a>(s: Option<StripeK<'a>>, i: u32) -> Option<&'a ExtentPtr> {
         s.and_then(|s| s.v().block_ptrs().get(i as usize))
     }
     let nr_blocks = |s: Option<StripeK<'_>>| s.map_or(0, |s| u32::from(s.v().nr_blocks));

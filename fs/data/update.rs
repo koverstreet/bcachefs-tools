@@ -29,14 +29,14 @@ use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::alloc::buckets::ReservationFlags;
-use crate::alloc::write_point::write_point_specifier;
-use crate::btree::bbpos::bbpos;
+use crate::alloc::write_point::WritePointSpecifier;
+use crate::btree::bbpos::Bbpos;
 use crate::btree::update::TransCommitFlags;
 use crate::c::rcu_head;
-use crate::data::extents::{extent_ptr_decoded, ReadFlags};
+use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
-use crate::data::write::{bch_write_op, WriteFlags};
-use crate::opts::bch_inode_opts;
+use crate::data::write::{WriteOp, WriteFlags};
+use crate::opts::InodeOpts;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, extent_ptr_durability,
                                BkeyVDurability};
@@ -92,7 +92,7 @@ pub enum DataUpdateType {
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
-    pub struct data_update_opts {
+    pub struct DataUpdateOpts {
         pub type_: DataUpdateType,
         pub ptrs_io_error: u16,
         pub ptrs_kill: u16,
@@ -101,7 +101,7 @@ nest! {
         pub target: u16,
         #[members]
         #>[bitfield(u8)]
-        pub bits: pub struct data_update_opts_bits {
+        pub bits: pub struct DataUpdateOptsBits {
             no_devs_have:      bool,
             checksum_paranoia: bool,
             __pad:             u6,
@@ -118,7 +118,7 @@ nest! {
 /// copygc's - so one of each can be in flight at a position.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
-pub struct data_update_key {
+pub struct DataUpdateKey {
     pub btree: Btree,
     pub pos: Bpos,
     pub copygc: bool,
@@ -129,31 +129,31 @@ pub struct data_update_key {
 /// context it's counted in.
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct data_update_index {
+pub struct DataUpdateIndex {
     /* extent being updated: */
     pub btree_id: Btree,
     pub k: BkeyBuf,
-    pub opts: data_update_opts,
+    pub opts: DataUpdateOpts,
     pub ctxt: Option<BackRef<crate::data::moving::MovingContext>>,
 }
 
 // borrowed by its write, on whatever thread that runs: @ctxt, its one
 // pointer, is to a moving context that outlives the update
-unsafe impl Sync for data_update_index {}
+unsafe impl Sync for DataUpdateIndex {}
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct data_update {
+pub struct DataUpdate {
     pub rcu: rcu_head,
-    pub index: data_update_index,
+    pub index: DataUpdateIndex,
 
     /* read by the in-flight listing, racily */
     pub read_done: AtomicBool,
     /* its key in c->update_table, while it's in: Held's in_flight */
-    pub in_flight_key: data_update_key,
+    pub in_flight_key: DataUpdateKey,
 
     pub rbio: Rbio,
-    pub op: bch_write_op,
+    pub op: WriteOp,
     /* the bio the write's of, owning the pages the read reads into */
     pub pages: Bio<Pages<'static>>,
 }
@@ -185,34 +185,34 @@ pub fn fail_should_trace(type_: Type, e: BchError) -> bool {
 
 // ── In flight ────────────────────────────────────────────────────────────
 
-pub(crate) type InFlightTable = Cuckoo<Entry<data_update_key>>;
+pub(crate) type InFlightTable = Cuckoo<Entry<DataUpdateKey>>;
 
 /// An update's place in the in-flight table, at its in_flight_key.
-pub(crate) type InFlightReg = Registration<data_update_key, data_update_key>;
+pub(crate) type InFlightReg = Registration<DataUpdateKey, DataUpdateKey>;
 
-impl data_update_key {
-    fn new(pos: bbpos, type_: Type) -> Self {
-        data_update_key { btree: pos.btree, pos: pos.pos, copygc: type_ == Type::copygc }
+impl DataUpdateKey {
+    fn new(pos: Bbpos, type_: Type) -> Self {
+        DataUpdateKey { btree: pos.btree, pos: pos.pos, copygc: type_ == Type::copygc }
     }
 }
 
 impl Fs {
     /// Whether an update in flight at @pos conflicts with a new one of @type_:
     /// a new copygc update conflicts only with copygc, anything else with any.
-    pub fn data_update_in_flight(&self, pos: bbpos, type_: Type) -> bool {
-        let key = data_update_key::new(pos, type_);
+    pub fn data_update_in_flight(&self, pos: Bbpos, type_: Type) -> bool {
+        let key = DataUpdateKey::new(pos, type_);
         self.update_table.contains(&key) ||
-            (!key.copygc && self.update_table.contains(&data_update_key { copygc: true, ..key }))
+            (!key.copygc && self.update_table.contains(&DataUpdateKey { copygc: true, ..key }))
     }
 
     /// Adds @m to the in-flight table, or fails with data_update_fail_in_flight.
     /// If the table can't grow, @m goes ahead untracked rather than failing.
-    pub fn data_update_in_flight_add(&self, m: &mut data_update, pos: bbpos)
+    pub fn data_update_in_flight_add(&self, m: &mut DataUpdate, pos: Bbpos)
         -> Result<Option<InFlightReg>, BchError>
     {
         let type_ = m.index.opts.type_;
         if !self.data_update_in_flight(pos, type_) {
-            m.in_flight_key = data_update_key::new(pos, type_);
+            m.in_flight_key = DataUpdateKey::new(pos, type_);
             // SAFETY: an update is freed a grace period after it's done, and
             // in_flight_key is written only here, before it's inserted; the
             // table is the filesystem's, which outlives its updates
@@ -252,8 +252,8 @@ pub(crate) fn ptr_bits_to_text(out: &mut Printbuf, bits: u16, name: &str) {
 
 impl Fs {
     #[cold]
-    pub fn data_update_opts_to_text(&self, out: &mut Printbuf, io_opts: &bch_inode_opts,
-                                    data_opts: &data_update_opts) {
+    pub fn data_update_opts_to_text(&self, out: &mut Printbuf, io_opts: &InodeOpts,
+                                    data_opts: &DataUpdateOpts) {
         if out.nr_tabstops() == 0 {
             out.tabstop_push(20);
         }
@@ -283,10 +283,10 @@ impl Fs {
 }
 
 
-impl data_update_index {
+impl DataUpdateIndex {
     /// The update, @op its write.
     #[cold]
-    pub(crate) fn to_text(&self, out: &mut Printbuf, op: &bch_write_op) {
+    pub(crate) fn to_text(&self, out: &mut Printbuf, op: &WriteOp) {
         let fs = op.fs();
         fs.data_update_opts_to_text(out, &op.opts, &self.opts);
         out.newline();
@@ -299,7 +299,7 @@ impl data_update_index {
     }
 }
 
-impl ToText for data_update {
+impl ToText for DataUpdate {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
         self.index.to_text(out, &self.op);
@@ -307,7 +307,7 @@ impl ToText for data_update {
 }
 
 #[cold]
-pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &data_update) {
+pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &DataUpdate) {
     let fs = m.op.fs();
     prt!(out, "{}", BkeySC::from(m.index.k.as_ref()).to_text(fs));
     out.newline();
@@ -336,7 +336,7 @@ pub(crate) fn is_scrub(t: Type) -> bool {
     matches!(t, Type::scrub | Type::scrub_no_repair)
 }
 
-impl data_update_opts {
+impl DataUpdateOpts {
     /// A checksummed extent with unchecksummed pointers: we mustn't apply the
     /// existing checksum to unchecksummed data, or lose the ability to tell
     /// that replicas differ. So read from the replica being rewritten, and
@@ -380,7 +380,7 @@ fn put_found(found: Option<&BadRef>, bad: Bad) {
 /// For an update with nothing to write: drops @k's killed pointers and extra
 /// cached pointers, and commits.
 fn extent_drop_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>,
-                    io_opts: &bch_inode_opts, data_opts: &data_update_opts) -> Result<(), BchError> {
+                    io_opts: &InodeOpts, data_opts: &DataUpdateOpts) -> Result<(), BchError> {
     let fs = t.fs();
     // an extents btree update always wants a reservation passed in
     let res = DiskReservation::new(fs);
@@ -418,7 +418,7 @@ fn extent_drop_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)
 }
 
-impl data_update {
+impl DataUpdate {
     fn fs(&self) -> &'static Fs {
         self.op.fs()
     }
@@ -429,7 +429,7 @@ impl data_update {
 
     /// The pages the update's data is read into, and written from: its pages'
     /// bio, which the write is of, and the read's bio, a clone of it.
-    fn bios_init(&mut self, io_opts: &bch_inode_opts, buf_bytes: u32) -> Result<(), BchError> {
+    fn bios_init(&mut self, io_opts: &InodeOpts, buf_bytes: u32) -> Result<(), BchError> {
         let fs = self.fs();
         let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
@@ -550,10 +550,10 @@ impl data_update {
     /// The update is zeroed, and doesn't move until exit().
     #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn init(&mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
-                   wp: write_point_specifier, io_opts: &bch_inode_opts, data_opts: data_update_opts,
+                   wp: WritePointSpecifier, io_opts: &InodeOpts, data_opts: DataUpdateOpts,
                    btree_id: Btree, k: BkeySC<'_>) -> Result<Held, BchError> {
         let fs = t.fs();
-        let pos = bbpos {
+        let pos = Bbpos {
             btree: iter.map_or(Btree::extents, |i| i.btree()),
             pos:   k.k.p,
         };
@@ -567,7 +567,7 @@ impl data_update {
         self.index.ctxt = moving.map(|m| unsafe { BackRef::new(m.context()) });
 
         // SAFETY: an update is done before the filesystem goes
-        unsafe { bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
+        unsafe { WriteOp::init_at(&raw mut self.op, fs, *io_opts) };
         self.op.pos = self.index.k.as_ref().k().start_pos();
         self.op.version = self.index.k.as_ref().k().bversion;
         self.op.target = data_opts.target;
@@ -594,7 +594,7 @@ impl data_update {
     /// On error, Held's guards - locals till it returns - are dropped; init()
     /// gives back the rest.
     fn init_body(&mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>,
-                 io_opts: &bch_inode_opts, pos: bbpos) -> Result<Held, BchError> {
+                 io_opts: &InodeOpts, pos: Bbpos) -> Result<Held, BchError> {
         let fs = self.fs();
         let mut held = Held { in_flight: None, nocow: None, devs: Default::default() };
         let type_ = self.index.opts.type_;
@@ -772,7 +772,7 @@ impl data_update {
     /// @found.
     #[cold]
     #[inline(never)]
-    fn read_err_record(&self, e: BchError, pick: Option<&extent_ptr_decoded>, found: Option<&BadRef>) {
+    fn read_err_record(&self, e: BchError, pick: Option<&ExtentPtrDecoded>, found: Option<&BadRef>) {
         if read_err_benign(e) {
             return;
         }

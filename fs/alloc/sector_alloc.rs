@@ -25,10 +25,10 @@
 //! for the next write.
 
 use crate::alloc::disk_groups::Target;
-use crate::alloc::write_point::{WritePointGuard, WritePointSpec, write_point, write_point_specifier,
+use crate::alloc::write_point::{WritePointGuard, WritePointSpec, WritePoint, WritePointSpecifier,
     WritePointLocked};
 use crate::btree::{bkey::prelude::*, bkey::{BkeyI, BkeyS}, iter::TransAttempt};
-use crate::alloc::foreground::{alloc_request, open_buckets};
+use crate::alloc::foreground::{alloc_request, OpenBuckets};
 use crate::init::dev::DevsMask;
 use crate::errcode::{Errcode, BchError};
 use crate::data::{extents::bkey_append_ptr, ptrs::PtrsMut};
@@ -41,7 +41,7 @@ use crate::os::kernel::unlikely;
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::data::write::WriteFlags as w;
-use crate::format::{Bpos, DataType, BkeyType, bkey};
+use crate::format::{Bpos, DataType, BkeyType, Bkey};
 
 impl alloc_request<'_, '_> {
     /// The devices it has copies on: its caller's, and the buckets it's got.
@@ -101,14 +101,14 @@ impl<'f> TransAttempt<'_, 'f> {
             // durable ones alike
             if req.flags.contains(w::cached) {
                 let cached = fs.target_rw_devs(DataType::cached, Target::decode(req.target));
-                req.devs_may_alloc.d.or(&cached.d);
+                req.devs_may_alloc.or(&cached);
             }
 
             // not the devices it has copies on, and away from their failure
             // domains
             let used = req.devs_used(fs);
-            req.devs_may_alloc.d.andnot(&used);
-            req.devs_chosen.d = used;
+            req.devs_may_alloc.andnot(&used);
+            req.devs_chosen = used;
             req.devs_required = fs.dev_alloc_required(req);
 
             let mut err = self.write_point_buckets(req, wp).err();
@@ -203,9 +203,9 @@ impl<'f> TransAttempt<'_, 'f> {
             // each copy, and may have been widened
             req.devs_may_alloc = fs.target_rw_devs(DataType::cached, Target::decode(orig_target));
             let used = req.devs_used(fs);
-            req.devs_may_alloc.d.andnot(&used);
+            req.devs_may_alloc.andnot(&used);
 
-            if req.devs_may_alloc.d.weight() != 0 {
+            if req.devs_may_alloc.weight() != 0 {
                 self.bucket_alloc_cached(req, wp)?;
             }
         }
@@ -245,7 +245,7 @@ impl<'f> TransAttempt<'_, 'f> {
     /// locked, its buckets @req's copies, as much as all of them have free
     /// in its sectors_free.
     pub(crate) fn alloc_sectors_req(&self, req: &mut alloc_request<'_, 'f>, spec: WritePointSpec<'f>)
-        -> Result<(&'f write_point, WritePointGuard<'f>), BchError>
+        -> Result<(&'f WritePoint, WritePointGuard<'f>), BchError>
     {
         let fs = self.fs();
         let a = &fs.allocator;
@@ -302,9 +302,9 @@ impl Fs {
     /// A write done with @wp, @g its lock: its buckets with less than a
     /// block left put - after the unlock - the rest kept for the next write,
     /// and the sectors the write took counted.
-    pub(crate) fn alloc_sectors_done(&self, wp: &write_point, mut g: WritePointGuard<'_>) {
+    pub(crate) fn alloc_sectors_done(&self, wp: &WritePoint, mut g: WritePointGuard<'_>) {
         let block_sectors = (self.block_bytes() >> 9) as u32;
-        let (mut keep, mut spent) = (open_buckets::default(), open_buckets::default());
+        let (mut keep, mut spent) = (OpenBuckets::default(), OpenBuckets::default());
         for ob in g.ptrs.drain(self) {
             match ob.sectors_free.get() < block_sectors {
                 true  => spent.push(ob),
@@ -325,14 +325,14 @@ impl Fs {
 /// alloc_sectors_done().
 pub struct LockedWritePoint<'f> {
     fs: &'f Fs,
-    wp: &'f write_point,
+    wp: &'f WritePoint,
     /* taken by the drop */
     g:  Option<WritePointGuard<'f>>,
 }
 
 impl<'f> TransAttempt<'_, 'f> {
     /// @write_point, locked, with buckets allocated for @req.
-    pub fn alloc_sectors(&self, req: &mut alloc_request<'_, 'f>, write_point: write_point_specifier)
+    pub fn alloc_sectors(&self, req: &mut alloc_request<'_, 'f>, write_point: WritePointSpecifier)
         -> Result<LockedWritePoint<'f>, BchError>
     {
         let (wp, g) = self.alloc_sectors_req(req, write_point.spec(self.fs()))?;
@@ -352,7 +352,7 @@ impl LockedWritePoint<'_> {
 
     /// Takes a pin on each of its buckets, into @ptrs, for the data's writer
     /// to hold until it's indexed.
-    pub fn open_buckets_get(&self, ptrs: &mut open_buckets) {
+    pub fn open_buckets_get(&self, ptrs: &mut OpenBuckets) {
         for ob in self.guard().ptrs.iter(self.fs) {
             ob.data_type.set(self.wp.alloc.data_type.0 as u8);
             ptrs.push(ob.get());
@@ -385,9 +385,9 @@ impl LockedWritePoint<'_> {
     /// are free, its buckets pinned in @ptrs for the index update. Returns
     /// its size.
     pub fn unwritten_extent(mut self, k: &mut DstRoom<BkeyI>, pos: Bpos, sectors: u32,
-                            ptrs: &mut open_buckets) -> u32 {
+                            ptrs: &mut OpenBuckets) -> u32 {
         let sectors = sectors.min(self.sectors_free());
-        k.k = bkey { type_: BkeyType::extent.0 as u8, p: pos, ..bkey::new() };
+        k.k = Bkey { type_: BkeyType::extent.0 as u8, p: pos, ..Bkey::new() };
         k.k.resize(sectors);
 
         self.open_buckets_get(ptrs);
@@ -409,7 +409,7 @@ impl<'f> LockedWritePoint<'f> {
 
     /// Done with, unlocked: the write point, for queueing the write's index
     /// update on.
-    pub fn done(self) -> &'f write_point {
+    pub fn done(self) -> &'f WritePoint {
         self.wp
     }
 

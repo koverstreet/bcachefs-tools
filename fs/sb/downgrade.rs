@@ -13,7 +13,7 @@ use core::mem::size_of;
 
 use crate::init::{passes::RecoveryPass, dev::bch_sb_buf, passes};
 use crate::btree::bkey::ValidateFlags;
-use crate::sb::downgrade_format::{bch_sb_field_downgrade, bch_sb_field_downgrade_entry};
+use crate::sb::downgrade_format::{SbFieldDowngrade, SbFieldDowngradeEntry};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard, FsFlag};
 use crate::{prt, sb_err_on};
@@ -24,15 +24,15 @@ use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated};
 use crate::util::Printbuf;
-use crate::format::{Btree, MetadataVersion, bch_sb, bch_sb_field_ext};
+use crate::format::{Btree, MetadataVersion, Sb, SbFieldExt};
 
-type Section = bch_sb_field_downgrade<Validated>;
+type Section = SbFieldDowngrade<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
 
 impl SbFieldOps for Section {
-    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_downgrade<Unvalidated>,
+    fn validate(sb: &Sb<Unvalidated>, f: &SbFieldDowngrade<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let sb_major = sb.version.get().major();
         for e in f.entries().map_while(Result::ok) {
@@ -43,8 +43,8 @@ impl SbFieldOps for Section {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_downgrade<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                f: &SbFieldDowngrade<Unvalidated>) {
         if out.nr_tabstops() <= 1 {
             out.tabstop_push(16);
         }
@@ -63,7 +63,7 @@ impl SbFieldOps for Section {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<bch_sb_field_downgrade_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
+        entries_end::<SbFieldDowngradeEntry<Unvalidated>>(b, SECTION_HEAD, |_| true)
     }
 
     /// downgrade_entries(): what this version knows. As C, failing leaves
@@ -239,8 +239,8 @@ const DOWNGRADE_STRIPES: &[UpDown] = table! {
 // ── Applying them ────────────────────────────────────────────────────────────
 
 /// Every superblock has one from mount on.
-pub(crate) fn ext(sb: &mut bch_sb_buf) -> &mut bch_sb_field_ext<Validated> {
-    sb.field_mut::<bch_sb_field_ext>().expect("an ext section")
+pub(crate) fn ext(sb: &mut bch_sb_buf) -> &mut SbFieldExt<Validated> {
+    sb.field_mut::<SbFieldExt>().expect("an ext section")
 }
 
 /// Upgrading from @old to @new: what each version past @old, up to @new,

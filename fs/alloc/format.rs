@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::accounting_format::{DataType, DataTypes};
-use crate::format::bch_val;
+use crate::format::Val;
 use crate::types::{Le8, Le64};
 use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
                      SizedVal};
@@ -12,7 +12,7 @@ use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroa
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Alloc {
-    pub v: bch_val,
+    pub v: Val,
     pub fields: u8,
     pub generation: u8,
     pub data: [u8; 0],
@@ -35,7 +35,7 @@ xmacro! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct AllocV2 {
-    pub v: bch_val,
+    pub v: Val,
     pub nr_fields: u8,
     pub generation: u8,
     pub oldest_gen: u8,
@@ -58,7 +58,7 @@ xmacro! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct AllocV3 {
-    pub v: bch_val,
+    pub v: Val,
     pub journal_seq: Le64,
     #[members]
     pub flags: AllocV3Flags,
@@ -103,7 +103,7 @@ pub struct AllocV3Flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct AllocV4 {
-    pub v: bch_val,
+    pub v: Val,
     pub journal_seq_nonempty: u64,
     #[members]
     pub flags: AllocV4Flags,
@@ -139,7 +139,7 @@ pub struct AllocV4Flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, View, SizedVal)]
 pub struct BucketGens {
-    pub v: bch_val,
+    pub v: Val,
     pub gens: [u8; BucketGens::NR],
 }
 

@@ -5,7 +5,7 @@ use crate::btree::bkey::{AnyKeySC, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion, bkey,
+use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion, Bkey,
     Cookie, Deleted, Error, ExtentWhiteout, HashWhiteout, Set, Whiteout};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::BkeyValidate;
@@ -38,10 +38,10 @@ pub enum BkeyValidateFrom {
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
-    pub struct bkey_validate_context {
+    pub struct BkeyValidateContext {
         #[members]
         #>[bitfield(u16)]
-        pub bits: pub struct bkey_validate_context_bits {
+        pub bits: pub struct BkeyValidateContextBits {
             #[bits(8)] pub from: BkeyValidateFrom,
             #[bits(8, from = ValidateFlags::from_bits_retain)] pub flags: ValidateFlags,
         },
@@ -49,7 +49,7 @@ nest! {
         pub btree: Btree,
         #[members]
         #>[bitfield(u8)]
-        pub root_bits: pub struct bkey_validate_context_root_bits {
+        pub root_bits: pub struct BkeyValidateContextRootBits {
             root:  bool,
             __pad: u7,
         },
@@ -174,7 +174,7 @@ pub fn bpos_to_text(out: &mut Printbuf, p: Bpos) {
 }
 
 #[cold]
-pub fn bkey_to_text(out: &mut Printbuf, k: &bkey) {
+pub fn bkey_to_text(out: &mut Printbuf, k: &Bkey) {
     prt!(out, "u64s {} type ", k.u64s);
     match k.key_type().name() {
         Some(name) => prt!(out, "{name} "),
@@ -326,14 +326,14 @@ pub fn bkey_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 /// @r might be merged into @l - the same type and version, @r starting where
 /// @l ends.
-pub fn bch2_bkey_maybe_mergable(l: &bkey, r: &bkey) -> bool {
+pub fn bkey_maybe_mergable(l: &Bkey, r: &Bkey) -> bool {
     l.type_ == r.type_ && { l.bversion } == { r.bversion } && l.p == r.start_pos()
 }
 
 /// @r merged into @l, by its type's merge - if they're mergable, and the
 /// result isn't too big for a key.
 pub fn bkey_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-    bch2_bkey_maybe_mergable(l.k, r.k) &&
+    bkey_maybe_mergable(l.k, r.k) &&
         u64::from(l.k.size) + u64::from(r.k.size) <= u64::from(u32::MAX) &&
         !crate::debug::params::key_merging_disabled() &&
         (l.k.key_type().ops().merge)(fs, l, r)

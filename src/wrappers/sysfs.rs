@@ -127,7 +127,7 @@ pub struct DevInfo {
     /// Human-facing device name selected by [`DeviceNameMode`].
     pub dev:        String,
     pub label:      Option<String>,
-    /// Failure domain name - see bch_member.failure_domain.
+    /// Failure domain name - see Member.failure_domain.
     pub failure_domain: Option<String>,
     pub durability: u32,
     pub online:     bool,

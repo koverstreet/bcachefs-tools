@@ -262,19 +262,6 @@ macro_rules! count_zerocopy_le {
 }
 count_zerocopy_le!(U16, U32, U64);
 
-/// floored_by_self!(T, ..): each T is whole in every valid value of it - a
-/// header, whose count includes itself - so a View of one derefs to all of
-/// it: a container's, or an entry's.
-macro_rules! floored_by_self {
-    ($($t:ty),* $(,)?) => {
-        // SAFETY: Min is Self
-        $(unsafe impl $crate::util::projections::Floored for $t {
-            type Min = Self;
-        })*
-    };
-}
-pub(crate) use floored_by_self;
-
 /// vstruct!(unsized T_head, u64s), for an unsized vstruct - what
 /// #[unsized_vstruct(u64s = ..)] makes: @u64s is its header's count of the
 /// u64s past the header; hdr.u64s, past the header @hdr it embeds first;
@@ -1341,7 +1328,7 @@ impl<'a, E: SelfSized + Unsized + ?Sized + 'a> Iterator for UnvalidatedEntriesMu
 }
 
 /// A Validated container's entries, each an &E of its own bytes, in its
-/// state: keys, a Validated jset_entry's entries(). Validated, so the walk is
+/// state: keys, a Validated JsetEntry's entries(). Validated, so the walk is
 /// bkey_next()'s: each entry's length, read from its header, and on.
 pub struct ViewEntries<'a, E: ?Sized> {
     rest:   &'a [u8],
@@ -1682,7 +1669,7 @@ impl<T: core::fmt::Debug> std::error::Error for ArmWalkError<T> {}
 mod tests {
     use super::*;
     use crate::format::{JsetEntryRef, JsetEntryType, SbFieldType};
-    use crate::format::{bch_sb, bch_sb_field, bch_sb_field_clean, btree_node_entry, jset, jset_entry};
+    use crate::format::{Sb, bch_sb_field, SbFieldClean, BtreeNodeEntry, Jset, JsetEntry};
     use crate::types::{Le32, Le64};
     use crate::util::projections::{View, ViewMut};
     use cstruct_macros::{Plain, View};
@@ -1697,8 +1684,8 @@ mod tests {
         plain_bytes(buf)
     }
 
-    fn entry(u64s: usize) -> Head<jset_entry> {
-        let mut e = Head::<jset_entry>::default();
+    fn entry(u64s: usize) -> Head<JsetEntry> {
+        let mut e = Head::<JsetEntry>::default();
         e.set_u64s(u64s);
         e
     }
@@ -1707,9 +1694,9 @@ mod tests {
     /// with @second's u64s for the second, the jset's u64s saying 1 + 1 + 1
     /// + 3 still.
     fn jset(second: usize) -> Vec<u64> {
-        let hdr = size_of::<Head<jset>>();
+        let hdr = size_of::<Head<Jset>>();
         let mut buf = vec![0u64; hdr / 8 + 6];
-        let mut j = Head::<jset>::default();
+        let mut j = Head::<Jset>::default();
         j.set_u64s(6);
         put(&mut buf, 0, &j);
         put(&mut buf, hdr, &entry(1));
@@ -1723,7 +1710,7 @@ mod tests {
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
         // SAFETY: valid, as built
-        let j = unsafe { jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let j = unsafe { Jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(j.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
@@ -1743,7 +1730,7 @@ mod tests {
         buf[1] = 77;                            // v
         buf[2] = 1 | 2 << 8 | 1 << 16 | 3 << 24 | 5 << 32; // r: data_type, nr_devs 2, nr_required, devs 3, 5
         // SAFETY: valid, as built
-        let e = unsafe { jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let e = unsafe { JsetEntry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         let Ok(JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
         assert_eq!((u.v.get(), u.as_bytes().len()), (77, 16));
         assert_eq!(&u._rest[..u.r.nr_devs as usize], [3, 5]);
@@ -1752,7 +1739,7 @@ mod tests {
         e.type_ = JsetEntryType::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         // SAFETY: as above
-        let e = unsafe { jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let e = unsafe { JsetEntry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(e.as_bytes().len(), 16);
         assert!(e.typed().is_err());
     }
@@ -1763,7 +1750,7 @@ mod tests {
         let buf = jset(4);
         // SAFETY: valid, as built - but for the entry past it, which the walk
         // ends at
-        let j = unsafe { jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let j = unsafe { Jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(j.entries().count(), 1);
     }
 
@@ -1774,24 +1761,24 @@ mod tests {
         let mut buf = [0u64; 8];
 
         put(&mut buf, 0, &entry(3));
-        assert_eq!(jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 8 + 24);
+        assert_eq!(JsetEntry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 8 + 24);
 
         let mut f = Head::<bch_sb_field>::default();
         f.set_u64s(3);
         put(&mut buf, 0, &f);
         assert_eq!(bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 24);
 
-        let mut b = ::pin_init::zeroed::<Head<btree_node_entry>>();
+        let mut b = ::pin_init::zeroed::<Head<BtreeNodeEntry>>();
         b.keys.set_u64s(3);
         put(&mut buf, 0, &b);
-        assert_eq!(btree_node_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 16 + 24 + 24);
+        assert_eq!(BtreeNodeEntry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 16 + 24 + 24);
     }
 
     /// A superblock of one u64 past its header, and in it a field of @u64s.
     fn sb(field_u64s: usize) -> Vec<u64> {
-        let hdr = size_of::<Head<bch_sb>>();
+        let hdr = size_of::<Head<Sb>>();
         let mut buf = vec![0u64; hdr / 8 + 1];
-        let mut sb = ::pin_init::zeroed::<Head<bch_sb>>();
+        let mut sb = ::pin_init::zeroed::<Head<Sb>>();
         sb.set_u64s(1);
         put(&mut buf, 0, &sb);
         let mut f = Head::<bch_sb_field>::default();
@@ -1806,12 +1793,12 @@ mod tests {
     fn entries_end_at_a_zero_length_entry() {
         let buf = sb(0);
         // SAFETY: valid, as built - but for the field that ends the walk
-        let sb = unsafe { bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let sb = unsafe { Sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(sb.entries().count(), 0);
 
         let buf = self::sb(1);
         // SAFETY: as above
-        let sb = unsafe { bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let sb = unsafe { Sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(sb.entries().count(), 1);
     }
 
@@ -1821,18 +1808,18 @@ mod tests {
     #[test]
     fn unvalidated_counts_are_checked() {
         let buf = jset(3);
-        let j = jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let j = Jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es = j.entries().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!((es[0].u64s(), es[1].u64s()), (1, 3));
         assert_eq!(es[1].as_bytes().len(), 32);
 
         let buf = jset(4);
-        let j = jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let j = Jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es: Vec<_> = j.entries().collect();
         assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 40, have: 32, .. })]));
 
-        let hdr = size_of::<Head<jset>>();
-        assert!(matches!(jset::<Unvalidated>::from_bytes(&bytes(&buf)[..hdr + 8]),
+        let hdr = size_of::<Head<Jset>>();
+        assert!(matches!(Jset::<Unvalidated>::from_bytes(&bytes(&buf)[..hdr + 8]),
                          Err(VStructError::Overrun { want, have, .. }) if want == hdr + 48 && have == hdr + 8));
     }
 
@@ -1841,7 +1828,7 @@ mod tests {
     #[test]
     fn unvalidated_short_entry() {
         let buf = sb(0);
-        let sb = bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let sb = Sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es: Vec<_> = sb.entries().collect();
         assert!(matches!(es[..], [Err(VStructError::Short { len: 0, .. })]));
     }
@@ -1851,7 +1838,7 @@ mod tests {
     /// ones, each as long as it says.
     #[test]
     fn entries_start_at_start() {
-        let (hdr, start) = (size_of::<Head<bch_sb_field>>(), size_of::<bch_sb_field_clean>());
+        let (hdr, start) = (size_of::<Head<bch_sb_field>>(), size_of::<SbFieldClean>());
         let mut buf = vec![0u64; (hdr + start) / 8 + 2];
         let mut f = Head::<bch_sb_field>::default();
         f.set_u64s(buf.len());
@@ -1860,7 +1847,7 @@ mod tests {
         put(&mut buf, hdr + start, &entry(1));
         // SAFETY: valid, as built
         let f = unsafe { bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
-        let clean = f.arm::<bch_sb_field_clean<Validated>>().expect("a clean section");
+        let clean = f.arm::<SbFieldClean<Validated>>().expect("a clean section");
         assert_eq!(clean.as_bytes().len(), buf.len() * 8 - hdr);
         let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);
@@ -1939,13 +1926,13 @@ mod unsized_tests {
     use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain};
 
     /// A container of tents: 8 bytes of header, its u64s counting what follows.
-    #[unsized_vstruct(u64s = u64s, entries = tent)]
+    #[unsized_vstruct(u64s = u64s, entries = Tent)]
     #[repr(C)]
     #[derive(Default, MaybeZeroable, Plain)]
-    pub struct tcont {
+    pub struct Tcont {
         u64s:      Le32,
         pub tag:   u32,
-        pub start: [Head<tent>; 0],
+        pub start: [Head<Tent>; 0],
         pub _data: [u64; 0],
     }
 
@@ -1953,25 +1940,25 @@ mod unsized_tests {
     #[unsized_vstruct(u64s = u64s, start = 0)]
     #[repr(C)]
     #[derive(Default, MaybeZeroable, Plain)]
-    pub struct tent {
+    pub struct Tent {
         u64s:      Le16,
         pub ty:    u16,
         pub pad:   u32,
         pub _data: [u64; 0],
     }
 
-    /// A tcont of entries @sizes long, in u64s, typed 1, 2, ...: and @extra
+    /// A Tcont of entries @sizes long, in u64s, typed 1, 2, ...: and @extra
     /// u64s past it, all ones - what's next, not its.
     fn buf(sizes: &[u16], extra: usize) -> Vec<u64> {
         let total: usize = sizes.iter().map(|&s| s as usize).sum();
         let mut buf = vec![0u64; 1 + total + extra];
-        let mut h = Head::<tcont>::default();
+        let mut h = Head::<Tcont>::default();
         h.set_u64s(total);
         h.tag = 7;
         buf[0] = u64::from_le_bytes(plain_bytes(&h).try_into().unwrap());
         let mut at = 1;
         for (i, &s) in sizes.iter().enumerate() {
-            let mut e = Head::<tent>::default();
+            let mut e = Head::<Tent>::default();
             e.set_u64s(s as usize);
             e.ty = i as u16 + 1;
             buf[at] = u64::from_le_bytes(plain_bytes(&e).try_into().unwrap());
@@ -1991,7 +1978,7 @@ mod unsized_tests {
     fn unsized_reference_is_the_value() {
         let buf = buf(&[1, 3, 2], 2);
 
-        let c = tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let c = Tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         assert_eq!((c.u64s(), c.tag, c._data.len(), size_of_val(c)), (6, 7, 6, 56));
         let e: Vec<(u16, usize)> = c.entries().map(|e| e.map(|e| (e.ty, e.as_bytes().len()))).collect::<Result<_, _>>()
             .unwrap();
@@ -2013,13 +2000,13 @@ mod unsized_tests {
     #[test]
     fn unsized_overrun() {
         let buf = buf(&[1, 3], 0);
-        assert!(matches!(tcont::<Unvalidated>::from_bytes(&bytes(&buf)[..24]),
+        assert!(matches!(Tcont::<Unvalidated>::from_bytes(&bytes(&buf)[..24]),
                          Err(VStructError::Overrun { want: 40, have: 24, .. })));
 
         // the second entry says 5, in 3
         let mut buf = buf;
         buf[2] = 5 | (2 << 16);
-        let c = tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let c = Tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let r: Vec<_> = c.entries().collect();
         assert!(matches!(r.as_slice(), [Ok(_), Err(VStructError::Overrun { want: 40, have: 24, .. })]));
 
@@ -2034,7 +2021,7 @@ mod unsized_tests {
     fn unsized_entries_mut() {
         let mut buf = buf(&[2, 1], 1);
         let mut b = bytes(&buf).to_vec();
-        let c = tcont::<Unvalidated>::from_bytes_mut(&mut b).unwrap();
+        let c = Tcont::<Unvalidated>::from_bytes_mut(&mut b).unwrap();
         for e in c.entries_mut() {
             e.unwrap()._data.fill(0x5a);
         }

@@ -8,7 +8,7 @@
 use core::mem::size_of;
 use core::ptr;
 use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::{AllocWait, alloc_request, open_buckets};
+use crate::alloc::foreground::{AllocWait, alloc_request, OpenBuckets};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
 use crate::btree::iter::CommitOpts;
@@ -17,18 +17,18 @@ use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
 use crate::alloc::buckets::ReservationFlags;
-use crate::alloc::write_point::write_point_specifier;
+use crate::alloc::write_point::WritePointSpecifier;
 use crate::btree::cache::BtreeNodeCacheState;
 use crate::btree::update::TransCommitFlags;
 use crate::data::extents_format::BtreePtrV2;
 use crate::data::write::WriteFlags;
-use crate::init::dev::bch_devs_list;
+use crate::init::dev::DevsList;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::{POS_MIN, SPOS_MAX, prt};
-use crate::format::{BkeyType, Bpos, DataType, bkey_format, BTREE_MAX_DEPTH};
+use crate::format::{BkeyType, Bpos, DataType, BkeyFormat, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::os::kernel::WRITE;
 use crate::util::{rcu::read_lock, sleep::Sleep};
@@ -46,7 +46,7 @@ use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, Taken, TakenNode, BT
  *
  * Assumes all keys will successfully pack with the new format.
  */
-fn format_fits(b: LockedNode<'_, BtreeNode>, new_f: &bkey_format) -> bool {
+fn format_fits(b: LockedNode<'_, BtreeNode>, new_f: &BkeyFormat) -> bool {
     let contents = b.contents();
     b.fits_u64s(contents.nr.u64s_with_format(&contents.format, new_f))
 }
@@ -100,7 +100,7 @@ fn can_use_btree_node(fs: &Fs, res: &DiskReservation<'_>, target: u32, k: BkeySC
 
     let devs = fs.target_rw_devs(DataType::btree, Target::decode(target));
     let rcu = read_lock();
-    let available: u32 = devs.d.iter()
+    let available: u32 = devs.iter()
         .filter_map(|i| fs.dev_rcu(i as u32, &rcu))
         .map(|ca| ca.rw_durability())
         .sum();
@@ -131,7 +131,7 @@ impl<'t> InteriorUpdate<'t> {
 
         let target = [target, fs.opts.metadata_target.get().into(), fs.opts.foreground_target.get().into()]
             .into_iter().find(|&t| t != 0).unwrap_or(0);
-        let devs_have = bch_devs_list::default();
+        let devs_have = DevsList::default();
         let nr_replicas = self.disk_res.nr_replicas.get();
         let mut req = paths.lend(|| t.alloc_request(target, false, Some(&devs_have), nr_replicas, nr_replicas,
                                                     watermark, write, AllocWait::Never))?;
@@ -219,11 +219,11 @@ impl<'t> InteriorUpdate<'t> {
         let fs = self.fs();
 
         let mut b = trans.btree_node_mem_alloc(paths, interior)?;
-        let mut ob = open_buckets::default();
+        let mut ob = OpenBuckets::default();
 
         let ret: Result<(), BchError> = (|| {
             let mut wp = loop {
-                let wp = paths.lend(|| t.alloc_sectors(req, write_point_specifier::BTREE))?;
+                let wp = paths.lend(|| t.alloc_sectors(req, WritePointSpecifier::BTREE))?;
                 if wp.sectors_free() >= fs.btree_sectors() {
                     break wp;
                 }

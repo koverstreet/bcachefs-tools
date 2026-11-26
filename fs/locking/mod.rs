@@ -52,4 +52,4 @@ pub(crate) use noio::{memalloc_flags_restore, memalloc_flags_save, PF_MEMALLOC_N
                       PF_MEMALLOC_NOWARN};
 pub use seqlock::SeqLock;
 pub use seqmutex::SeqMutexSeq;
-pub use two_state::{two_state_lock_t, TwoState, TwoStateGuard};
+pub use two_state::{TwoStateLock, TwoState, TwoStateGuard};

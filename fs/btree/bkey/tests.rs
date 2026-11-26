@@ -3,7 +3,7 @@ use crate::alloc::lru_format::Lru;
 use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkV};
 use crate::posix::inode_format::InodeGeneration;
 use crate::snapshots::format::{Snapshot, Subvolume};
-use crate::format::{BkeyType, bkey};
+use crate::format::{BkeyType, Bkey};
 use crate::util::vstructs::{len_at, plain_bytes, plain_bytes_mut, ArmRef, VStructError};
 use crate::types::Le32;
 
@@ -96,7 +96,7 @@ fn key_type_info() {
     assert_eq!("snapshot".parse::<BkeyType>().ok(), Some(BkeyType::snapshot));
     assert!("no_such_type".parse::<BkeyType>().is_err());
 
-    let k = |ty: BkeyType| bkey { type_: ty.0 as u8, ..Default::default() };
+    let k = |ty: BkeyType| Bkey { type_: ty.0 as u8, ..Default::default() };
 
     let r = k(BkeyType::reflink_v);
     assert_eq!(REFCOUNT.of(&r), Some(core::mem::offset_of!(ReflinkV, repr.refcount)));
@@ -143,11 +143,11 @@ fn bpos_predecessor_of_min() {
 /// claiming the value past the bytes.
 #[test]
 fn bkey_len_short() {
-    let mut k = bkey::default();
-    k.u64s = (size_of::<bkey>() / size_of::<u64>()) as u8;
-    let mut b = [0u64; size_of::<bkey>() / size_of::<u64>()];
+    let mut k = Bkey::default();
+    k.u64s = (size_of::<Bkey>() / size_of::<u64>()) as u8;
+    let mut b = [0u64; size_of::<Bkey>() / size_of::<u64>()];
     plain_bytes_mut(&mut b).copy_from_slice(plain_bytes(&k));
 
-    assert!(matches!(len_at::<BkeyI<Lru>>(plain_bytes(&b), bkey::bytes),
+    assert!(matches!(len_at::<BkeyI<Lru>>(plain_bytes(&b), Bkey::bytes),
                      Err(VStructError::Short { len: 40, min: 48, .. })));
 }

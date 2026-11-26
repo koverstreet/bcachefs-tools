@@ -5,8 +5,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_fsck_offline, bch_ioctl_fsck_online};
-use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::bcachefs_ioctl::{IoctlFsckOffline, IoctlFsckOnline};
+use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::format::MetadataVersion;
@@ -76,7 +76,7 @@ fn splice_fd_to_stdinout(fd: BorrowedFd<'_>) -> i32 {
 
 fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
     let c_opts = CString::new(opt_str)?;
-    let fsck = bch_ioctl_fsck_online {
+    let fsck = IoctlFsckOnline {
         flags: 0,
         opts: c_opts.as_ptr() as u64,
     };
@@ -100,7 +100,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
     }
 
     let dev_paths: Vec<std::path::PathBuf> = devs.iter().map(|d| d.as_str().into()).collect();
-    let mut opts = bch_opts::default();
+    let mut opts = Opts::default();
     opts.set_nostart(true);
     opts.set_noexcl(true);
     opts.set_nochanges(true);
@@ -287,7 +287,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             }
         }
 
-        let mut buf = IoctlBuf::<Head<bch_ioctl_fsck_offline>>::new(dev_ptrs.len());
+        let mut buf = IoctlBuf::<Head<IoctlFsckOffline>>::new(dev_ptrs.len());
         let c_opts = CString::new(opts_str.as_str())?;
         let hdr = buf.hdr_mut();
         hdr.opts = c_opts.as_ptr() as u64;
@@ -323,7 +323,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
     run_userspace_fsck(devices, fs_opts)
 }
 
-fn run_userspace_fsck(devices: &[String], fs_opts: bch_opts) -> Result<()> {
+fn run_userspace_fsck(devices: &[String], fs_opts: Opts) -> Result<()> {
     println!("Running userspace offline fsck");
 
     let dev_paths: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();

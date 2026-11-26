@@ -28,7 +28,7 @@ use crate::format::{Btree, BkeyType};
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_logged_ops {
+pub struct FsLoggedOps {
     /*
      * Test knob: KEY_TYPE_logged_op_* whose next cursor update should fail,
      * or 0. Armed via sysfs, one shot, disarms itself as it fires.

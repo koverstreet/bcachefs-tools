@@ -521,7 +521,7 @@ macro_rules! at {
 /// Up<P> the parent of what P reaches, by its container(); FieldOf<P, N>
 /// field N of what P reaches, by Field<N>; ElemOf<P, I> element I of the
 /// array P reaches; Through<P> what the pointer P reaches points to - a
-/// BackRef. field!() writes one: from bch_fs_snapshots, field!(super.writes)
+/// BackRef. field!() writes one: from FsSnapshots, field!(super.writes)
 /// - FieldOf<Up<Here>, N> - is the write refs of its Fs.
 ///
 /// A path of every step but Through stays within what the value it starts

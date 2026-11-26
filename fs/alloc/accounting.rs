@@ -50,12 +50,12 @@
 
 use crate::fs::{Dev, Fs};
 use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, Delta, MarkHeld};
-use crate::alloc::buckets::bch_fs_usage_base;
+use crate::alloc::buckets::FsUsageBase;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
-use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{self, Bpos};
@@ -122,7 +122,7 @@ impl DevDataType {
     }
 }
 
-pub(crate) fn replicas_entry(pos: &DiskAccountingPos<Unvalidated>) -> Option<&bch_replicas_entry_v1> {
+pub(crate) fn replicas_entry(pos: &DiskAccountingPos<Unvalidated>) -> Option<&ReplicasEntryV1> {
     match pos.validated().ok()?.get() {
         Ok(DiskAccountingPosRef::replicas(r)) => Some(r),
         _ => None,
@@ -188,15 +188,15 @@ macro_rules! acct_counters {
 }
 pub(crate) use acct_counters;
 
-pub(crate) fn accounting_bkey(p: Bpos, nr_counters: usize) -> format::bkey {
-    let mut k = format::bkey { type_: <Accounting as BkeyTag>::TYPE.0 as u8, p, ..format::bkey::new() };
+pub(crate) fn accounting_bkey(p: Bpos, nr_counters: usize) -> format::Bkey {
+    let mut k = format::Bkey { type_: <Accounting as BkeyTag>::TYPE.0 as u8, p, ..format::Bkey::new() };
     k.set_val_bytes(nr_counters * size_of::<u64>());
     k
 }
 
 /* @acc's replicas entry has more devs than the key has room for: */
 fn replicas_past_end(err: VStructError) -> Option<(usize, usize)> {
-    let hdr = size_of::<Head<bch_replicas_entry_v1>>();
+    let hdr = size_of::<Head<ReplicasEntryV1>>();
     match err {
         VStructError::Overrun { want, have, .. } => Some((want - hdr, have - hdr)),
         _ => None,
@@ -494,7 +494,7 @@ pub fn dev_usage_init(ca: &Dev, gc: bool) -> Result<(), BchError> {
 
 pub fn verify_accounting_clean(fs: &Fs) {
     let mut mismatch = false;
-    let mut base = bch_fs_usage_base::default();
+    let mut base = FsUsageBase::default();
 
     let trans = btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, format::Btree::accounting, POS_MIN, BtreeIterFlags::ALL_SNAPSHOTS);

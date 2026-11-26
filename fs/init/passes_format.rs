@@ -268,22 +268,22 @@ pub enum RecoveryPass {
 /* We normally enumerate recovery passes in the order we run them: */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct recovery_pass_entry {
+pub struct RecoveryPassEntry {
     pub last_run: Le64,
     pub last_runtime: Le32,
     #[members]
-    pub flags: recovery_pass_entry_flags,
+    pub flags: RecoveryPassEntryFlags,
 }
 
 #[bitfield(Le32)]
-pub struct recovery_pass_entry_flags {
+pub struct RecoveryPassEntryFlags {
     no_ratelimit:   bool,
     __:             u31,
 }
 
-#[whole(tail = start: [recovery_pass_entry])]
+#[whole(tail = start: [RecoveryPassEntry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_recovery_passes {
-    pub start: [recovery_pass_entry; 0],
+pub struct SbFieldRecoveryPasses {
+    pub start: [RecoveryPassEntry; 0],
 }

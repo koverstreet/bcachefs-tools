@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::format::{DegradedAction, ErrorAction, jset, JsetEntryRef};
+use bcachefs_kernel::format::{DegradedAction, ErrorAction, Jset, JsetEntryRef};
 use bcachefs_kernel::opts::FsckErrOpt;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
@@ -11,7 +11,7 @@ use crate::wrappers::journal::JournalReplays;
 // ---- per-jset accessors ----
 
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
-fn jset_datetime(j: &jset) -> Option<u64> {
+fn jset_datetime(j: &Jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
         Ok(JsetEntryRef::datetime(d)) => Some(d.seconds.get()),
         _ => None,
@@ -19,7 +19,7 @@ fn jset_datetime(j: &jset) -> Option<u64> {
 }
 
 /// A jset's first rewind_limit entry's seq, or None if absent.
-fn jset_rewind_limit(j: &jset) -> Option<u64> {
+fn jset_rewind_limit(j: &Jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
         Ok(JsetEntryRef::rewind_limit(r)) => Some(r.seq.get()),
         _ => None,

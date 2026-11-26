@@ -26,8 +26,8 @@ use crate::btree::update::extent_whiteout_type;
 use crate::posix::{inode_format::InodeFlags, inode, inode_opts};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::reflink_format::ReflinkP;
-use crate::opts::bch_inode_opts;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::opts::InodeOpts;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::journal::flush_wait::Flush;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
@@ -284,7 +284,7 @@ impl<'t> TransAttempt<'_, 't> {
     /// to @new_i_size, i_sectors by @i_sectors_delta, at @extent_iter's
     /// snapshot. Its io options in @opts.
     pub(crate) fn extent_update_i_size_sectors(&self, extent_iter: &BtreeIter<'t>, new_i_size: u64,
-                                    mut i_sectors_delta: i64, opts: &mut bch_inode_opts)
+                                    mut i_sectors_delta: i64, opts: &mut InodeOpts)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -371,7 +371,7 @@ impl<'t> TransAttempt<'_, 't> {
     /// what it overwrites doesn't give back. @flush, if given, waits on the
     /// commit's journal flush - unless @k was cut, the commit not the last.
     #[allow(clippy::too_many_arguments)]
-    pub fn extent_update<V: ?Sized>(&self, _inum: subvol_inum, iter: &mut BtreeIter<'t>,
+    pub fn extent_update<V: ?Sized>(&self, _inum: SubvolInum, iter: &mut BtreeIter<'t>,
                                     k: &mut TransBkey<'_, 't, V>, disk_res: &DiskReservation<'_>,
                                     new_i_size: u64, i_sectors_delta_total: Option<&mut i64>,
                                     check_enospc: bool, change_cookie: u32,
@@ -409,7 +409,7 @@ impl<'t> TransAttempt<'_, 't> {
                                   })?;
         }
 
-        let mut opts = bch_inode_opts::default();
+        let mut opts = InodeOpts::default();
         self.extent_update_i_size_sectors(iter, (k.k().p.offset << 9).min(new_i_size),
                                           s.i_sectors_delta, &mut opts)?;
 

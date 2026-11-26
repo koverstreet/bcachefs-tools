@@ -61,11 +61,11 @@ use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
 use crate::data::ec::stripe_new::{IoRef, StripeNew};
 use crate::btree::iter::TransAttempt;
-use crate::alloc::buckets::bch_dev_usage;
-use crate::data::extents::bch_io_failures;
-use crate::data::extents_format::bch_extent_ptr;
+use crate::alloc::buckets::DevUsage;
+use crate::data::ptrs::IoFailures;
+use crate::data::extents_format::ExtentPtr;
 use crate::data::write::WriteFlags;
-use crate::init::dev::{AtomicDevsMask, bch_devs_list, bch_devs_mask, DevsMask};
+use crate::init::dev::{AtomicDevsMask, DevsList, DevsMask};
 use crate::sb::members_format::{BCH_SB_MEMBER_INVALID, BCH_SB_MEMBERS_MAX};
 use crate::util::time_stats::TimeStat;
 use crate::errcode::{Errcode, ret_to_c, BchError};
@@ -96,7 +96,7 @@ use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, BitfieldMembers, placed, Init, NonZeroWord,
     TypeInfo};
 use nestify::nest;
-use crate::alloc::write_point::{WritePointsHash, write_point, WRITE_POINT_MAX};
+use crate::alloc::write_point::{WritePointsHash, WritePoint, WRITE_POINT_MAX};
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8};
 use pin_init::pin_data;
 
@@ -120,19 +120,12 @@ pub const BCH_WATERMARK_MASK: u32 = !(!0 << BCH_WATERMARK_BITS);
 
 pub const OPEN_BUCKETS_COUNT: u32 = 4096;
 
-/*
- * 0 is never a valid open_bucket_idx_t:
- */
-#[allow(non_camel_case_types)]
-pub type open_bucket_idx_t = u16;
-
 /// An open bucket's index in c->allocator.open_buckets - never 0, slot 0
-/// being the sentinel - so a field C has as an open_bucket_idx_t, 0 for none,
-/// is an Option<OpenBucketIdx>, laid out the same. A count stays an
-/// open_bucket_idx_t.
+/// being the sentinel - so an optional one, 0 for none, is an
+/// Option<OpenBucketIdx>, laid out as the u16. A count is a u16.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, NonZeroWord)]
-pub struct OpenBucketIdx(core::num::NonZero<open_bucket_idx_t>);
+pub struct OpenBucketIdx(core::num::NonZero<u16>);
 
 // SAFETY: None is all zeroes, as an Option of a NonZero is
 unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
@@ -142,7 +135,7 @@ unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
 
 impl OpenBucketIdx {
     /// Slot @idx's index - None for 0, the sentinel's.
-    pub fn new(idx: open_bucket_idx_t) -> Option<Self> {
+    pub fn new(idx: u16) -> Option<Self> {
         core::num::NonZero::new(idx).map(OpenBucketIdx)
     }
 
@@ -160,7 +153,7 @@ impl OpenBucketIdx {
 //
 //     #[repr(transparent)]
 //     #[derive(PartialEq, Eq, Debug, Linear)]
-//     pub struct OpenBucketIdx(core::num::NonZero<c::open_bucket_idx_t>);
+//     pub struct OpenBucketIdx(core::num::NonZero<u16>);
 //
 // Tried 2026-10-26: it compiles with small changes, and doesn't link. What it
 // needs:
@@ -221,7 +214,7 @@ nest! {
     /// place's: placed last, the fields before it ordered so that it fills
     /// what would be tail padding. Raw, not an OpenBucketIdx: slot 0, the
     /// sentinel, has one too.
-    #[placed(bch_fs_allocator.open_buckets[], index = idx: open_bucket_idx_t)]
+    #[placed(FsAllocator.open_buckets[], index = idx: u16)]
     #[pin_data]
     #[repr(C)]
     #[derive(MaybeZeroable, Init)]
@@ -272,8 +265,8 @@ published! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct open_buckets {
-    pub nr: open_bucket_idx_t,
+pub struct OpenBuckets {
+    pub nr: u16,
     pub v: [Option<OpenBucketIdx>; BCH_BKEY_PTRS_MAX as usize],
 }
 
@@ -281,7 +274,7 @@ pub struct open_buckets {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_allocator {
+pub struct FsAllocator {
     pub rw_devs: [AtomicDevsMask; DataType::NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
      * read without it */
@@ -304,19 +297,19 @@ pub struct bch_fs_allocator {
     pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; OPEN_BUCKETS_COUNT as usize],
 
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| write_point::init(DataType::user)))]
-    pub write_points: [write_point; WRITE_POINT_MAX as usize],
+    #[init(::pin_init::pin_init_array_from_fn(|_| WritePoint::init(DataType::user)))]
+    pub write_points: [WritePoint; WRITE_POINT_MAX as usize],
     /* the write point hash's writers, and write_points_nr's */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
     pub write_points_hash_lock: Locked<Lockdep<ByteLock>, (), WritePointsHash>,
 
     #[pin]
-    #[init(write_point::init(DataType::btree))]
-    pub btree_write_point: write_point,
+    #[init(WritePoint::init(DataType::btree))]
+    pub btree_write_point: WritePoint,
     #[pin]
-    #[init(write_point::init(DataType::user))]
-    pub reconcile_write_point: write_point,
+    #[init(WritePoint::init(DataType::user))]
+    pub reconcile_write_point: WritePoint,
 }
 
 /* freelist_lock's: the open buckets not in use, and the partial list */
@@ -333,15 +326,15 @@ published! {
     /// taking the lock for.
     #[derive(MaybeZeroable)]
     pub struct OpenBucketsFreeNr {
-        pub open_buckets_nr_free: Volatile<open_bucket_idx_t>,
-        pub open_buckets_partial_nr: Volatile<open_bucket_idx_t>,
+        pub open_buckets_nr_free: Volatile<u16>,
+        pub open_buckets_partial_nr: Volatile<u16>,
     }
 }
 
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
-pub struct dev_alloc_list {
+pub struct DevAllocList {
     pub nr: c_uint,
     pub data: [u8; BCH_SB_MEMBERS_MAX as usize],
 }
@@ -349,11 +342,11 @@ pub struct dev_alloc_list {
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
-    pub struct alloc_trace_entry {
+    pub struct AllocTraceEntry {
         pub dev: u8,
         #[members]
         #>[bitfield(u8)]
-        pub bits: pub struct alloc_trace_entry_bits {
+        pub bits: pub struct AllocTraceEntryBits {
             new_stripe_alloc:          bool,
             will_retry_all_devices:    bool,
             will_retry_target_devices: bool,
@@ -370,7 +363,7 @@ nest! {
 
 /// alloc_request's trace: room for 16 attempts in the request itself, as
 /// C's DARRAY_PREALLOCATED(, 16) had.
-pub(crate) type AllocTrace = InlineVec<alloc_trace_entry, 16>;
+pub(crate) type AllocTrace = InlineVec<AllocTraceEntry, 16>;
 
 /*
  * alloc_request.btree_bitmap: whether the bucket must be in a region the
@@ -444,7 +437,7 @@ nest! {
         pub ec_max_data_blocks: u8, /* 0 = no cap */
         pub target: c_uint,
         #>[bitfield(u8)]
-        pub bits: pub struct alloc_request_bits {
+        pub bits: pub struct AllocRequestBits {
             ec:                        bool,
             new_stripe_alloc:          bool,
             will_retry_all_devices:    bool,
@@ -458,28 +451,28 @@ nest! {
         pub watermark: Watermark,
         pub flags: WriteFlags,
         pub data_type: DataType,
-        pub devs_have: Option<&'r bch_devs_list>,
-        pub wp: Option<&'f write_point>,
+        pub devs_have: Option<&'r DevsList>,
+        pub wp: Option<&'f WritePoint>,
 
         /* These fields are used primarily by open_bucket_add_buckets */
-        pub ptrs: open_buckets,
+        pub ptrs: OpenBuckets,
         pub nr_effective: c_uint, /* sum of @ptrs durability */
-        pub devs_may_alloc: bch_devs_mask,
+        pub devs_may_alloc: DevsMask,
 
         /*
          * Devices already holding a replica of what we're allocating for -
          * devs_have plus buckets allocated so far - for spreading replicas
          * across failure domains, see bch2_dev_domain_key():
          */
-        pub devs_chosen: bch_devs_mask,
+        pub devs_chosen: DevsMask,
 
         /* devices this allocation should use first, see dev_alloc_required() */
         pub devs_required: Option<&'f Volatile<DevsMask>>,
 
         /* bch2_bucket_alloc_set_trans(): */
-        pub devs_sorted: dev_alloc_list,
+        pub devs_sorted: DevAllocList,
         pub domain_keys: [u64; BCH_SB_MEMBERS_MAX as usize],
-        pub usage: bch_dev_usage,
+        pub usage: DevUsage,
 
         /*
          * Allocate the free bucket nearest this device position (a 32.32
@@ -496,7 +489,7 @@ nest! {
         pub btree_bitmap: AllocBtreeBitmap,
 
         #>[derive(Clone, Copy, Default)]
-        pub counters: pub struct alloc_request_counters {
+        pub counters: pub struct AllocRequestCounters {
             pub buckets_seen: u64,
             pub skipped_open: u64,
             pub skipped_need_journal_commit: u64,
@@ -506,7 +499,7 @@ nest! {
             pub skipped_mi_btree_bitmap: u64,
         },
 
-        pub scratch_ptrs: open_buckets,
+        pub scratch_ptrs: OpenBuckets,
 
         /* Allocation attempt trace — dumped on allocator stuck */
         pub(crate) trace: AllocTrace,
@@ -551,11 +544,11 @@ impl OpenBucketRef {
     }
 
     /// Where its free space starts.
-    pub fn ptr(&self) -> bch_extent_ptr {
+    pub fn ptr(&self) -> ExtentPtr {
         let id = self.id();
         let ca = self.ca();
 
-        bch_extent_ptr::new()
+        ExtentPtr::new()
             .with_generation(id.generation())
             .with_dev(id.dev())
             .with_offset(ca.bucket_to_sector(id.bucket()) + u64::from(ca.mi.get().bucket_size) -
@@ -654,7 +647,7 @@ impl Drop for EcOpenBucket {
     }
 }
 
-impl open_buckets {
+impl OpenBuckets {
     /// Its buckets, borrowed: the list's pins keep them open while it is.
     pub fn iter<'a>(&'a self, fs: &'a Fs) -> impl Iterator<Item = RefBorrow<'a, OpenBucketRef>> + 'a {
         self.v[..usize::from(self.nr)].iter().map(move |&i| {
@@ -754,7 +747,7 @@ impl open_bucket {
 
 // ── The hash ─────────────────────────────────────────────────────────────
 
-impl bch_fs_allocator {
+impl FsAllocator {
     fn hash_slot(&self, dev: u32, bucket: u64) -> &Volatile<Option<OpenBucketIdx>> {
         &self.open_buckets_hash[open_bucket_hash(dev, bucket)]
     }
@@ -842,7 +835,7 @@ pub(crate) fn open_buckets_reserved(watermark: Watermark) -> u32 {
     }
 }
 
-impl bch_fs_allocator {
+impl FsAllocator {
     /// The partial list's buckets, its pins held while @g is.
     pub(crate) fn partial<'a>(&'a self, g: &'a FreelistGuard<'_>)
         -> impl DoubleEndedIterator<Item = &'a OpenBucketRef> + ExactSizeIterator + 'a
@@ -1077,7 +1070,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @erasure_code and @ec_replicas is 2 or more - in the attempt's memory,
     /// its trace emptied when it's dropped.
     #[allow(clippy::too_many_arguments)]
-    pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a bch_devs_list>,
+    pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a DevsList>,
                          nr_replicas: u32, ec_replicas: u32, watermark: Watermark,
                          flags: WriteFlags, wait: AllocWait)
         -> Result<AllocRequest<'a, 't>, BchError>
@@ -1106,7 +1099,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 impl<'r, 'f> alloc_request<'r, 'f> {
     /// alloc_request_get()'s: zeroed, but for what it's given, and its trace.
     #[allow(clippy::too_many_arguments)]
-    fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r bch_devs_list>, nr_replicas: u32,
+    fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r DevsList>, nr_replicas: u32,
            ec_replicas: u32, watermark: Watermark, flags: WriteFlags,
            wait: AllocWait)
         -> impl ::pin_init::Init<Self, Infallible>
@@ -1121,7 +1114,7 @@ impl<'r, 'f> alloc_request<'r, 'f> {
                 (&raw mut (*slot).wake_all_counter_snapshot).write(fs.allocator.wake_all_counter.load(Relaxed) as u32);
                 (&raw mut (*slot).nr_replicas).write(nr_replicas as u8);
                 (&raw mut (*slot).ec_replicas).write(ec_replicas as u8);
-                (&raw mut (*slot).bits).write(alloc_request_bits::new().with_ec(erasure_code && ec_replicas >= 2));
+                (&raw mut (*slot).bits).write(AllocRequestBits::new().with_ec(erasure_code && ec_replicas >= 2));
                 (&raw mut (*slot).target).write(target);
                 (&raw mut (*slot).watermark).write(watermark);
                 (&raw mut (*slot).flags).write(flags);
@@ -1145,9 +1138,9 @@ impl<'r, 'f> alloc_request<'r, 'f> {
     pub fn trace_add(&mut self, dev: u8, err: Option<BchError>, wake_counter_snapshot: u32, free_buckets: u64,
                      copygc_can_make_progress: bool) {
         let b = self.bits;
-        let e = alloc_trace_entry {
+        let e = AllocTraceEntry {
             dev,
-            bits: alloc_trace_entry_bits::new()
+            bits: AllocTraceEntryBits::new()
                 .with_new_stripe_alloc(b.new_stripe_alloc())
                 .with_will_retry_all_devices(b.will_retry_all_devices())
                 .with_will_retry_target_devices(b.will_retry_target_devices())
@@ -1305,7 +1298,7 @@ impl Fs {
         }
 
         write!(out, "devs_may_alloc:\t");
-        for i in req.devs_may_alloc.d.iter() {
+        for i in req.devs_may_alloc.iter() {
             write!(out, "{i} ");
         }
         write!(out, "\ndevs_sorted:\t");
@@ -1597,10 +1590,10 @@ pub fn allocator_foreground_init(fs: &Fs) {
     fs.write_points_init();
 }
 
-impl open_buckets {
+impl OpenBuckets {
     /// The stripes its buckets on each device of @failed are blocks of,
     /// cancelled with its error: the writes to it failed.
-    pub fn write_errors(&self, fs: &Fs, failed: &bch_io_failures) {
+    pub fn write_errors(&self, fs: &Fs, failed: &IoFailures) {
         for f in failed.devs() {
             let err = if f.errcode != 0 {
                 BchError::from_raw(f.errcode.into())

@@ -29,7 +29,7 @@ pub mod super_block;
 pub mod ioctl;
 pub mod writeback;
 
-use crate::data_structures::fast_list::fast_list;
+use crate::data_structures::fast_list::FastList;
 use crate::errcode::Errcode;
 use crate::vfs::pagecache::BCH_WRITEPAGE_BUF_BYTES;
 use crate::os::{workqueue::{Workqueue, WqFlags}, bio::BioSet};
@@ -40,10 +40,10 @@ use pin_init::pin_data;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
-pub struct bch_fs_vfs {
+pub struct FsVfs {
     #[pin]
-    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_fs_other_alloc))]
-    pub inodes: fast_list,
+    #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_fs_other_alloc))]
+    pub inodes: FastList,
     /* every VFS inode of ours, and which subvolumes hold an inode number */
     #[pin]
     #[init(crate::vfs::inode_cache::InodeCache::default())]

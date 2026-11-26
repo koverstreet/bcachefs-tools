@@ -3,12 +3,12 @@ use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
-use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2, bch_ioctl_disk, bch_ioctl_disk_v2, bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2, bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2, bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2, bch_ioctl_subvolume, bch_ioctl_subvolume_v2, bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super, BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE};
+use bcachefs_kernel::bcachefs_ioctl::{IoctlDevUsage, IoctlDevUsageV2, IoctlDisk, IoctlDiskV2, IoctlDiskSetState, IoctlDiskSetStateV2, IoctlDiskResize, IoctlDiskResizeV2, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2, IoctlSubvolume, IoctlSubvolumeV2, IoctlQueryBtreeKeys, IoctlQueryUuid, IoctlReadSuper, BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE};
 use bcachefs_kernel::sb::members_format::MemberState;
 use crate::wrappers::{ioctl::*, sysfs};
 use bcachefs_kernel::c;
-use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::format::{bch_sb, DataType, MetadataVersion};
+use bcachefs_kernel::opts::Opts;
+use bcachefs_kernel::format::{Sb, DataType, MetadataVersion};
 use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::path_to_cstr;
@@ -144,7 +144,7 @@ impl BcachefsHandle {
         }
 
         // Try BCH_IOCTL_QUERY_UUID — if it succeeds, it's a mounted fs path
-        let mut query_uuid = pin_init::zeroed::<bch_ioctl_query_uuid>();
+        let mut query_uuid = pin_init::zeroed::<IoctlQueryUuid>();
         if ioctl_rw::<BCH_IOCTL_QUERY_UUID>(&path_fd, &mut query_uuid).is_ok() {
             return Self::open_mounted_path(path_fd, query_uuid.uuid.b).map(Some);
         }
@@ -269,7 +269,7 @@ impl BcachefsHandle {
     fn open_via_superblock(path: &Path) -> Result<Self, BchError> {
         use bcachefs_kernel::c;
 
-        let mut opts = bch_opts::default();
+        let mut opts = Opts::default();
         opts.set_noexcl(true);
         opts.set_nochanges(true);
 
@@ -308,13 +308,13 @@ impl BcachefsHandle {
         src_ptr: u64,
     ) -> Result<(), Errno>
     where
-        V2: Ioctl<Arg = bch_ioctl_subvolume_v2>,
-        V1: Ioctl<Arg = bch_ioctl_subvolume>,
+        V2: Ioctl<Arg = IoctlSubvolumeV2>,
+        V1: Ioctl<Arg = IoctlSubvolume>,
     {
         v2_v1_ioctl!(
             self.ioctl_fd(), V2, V1,
-            bch_ioctl_subvolume_v2 { flags, dirfd, mode, dst_ptr, src_ptr, ..Default::default() },
-            bch_ioctl_subvolume    { flags, dirfd, mode, dst_ptr, src_ptr, ..Default::default() }
+            IoctlSubvolumeV2 { flags, dirfd, mode, dst_ptr, src_ptr, ..Default::default() },
+            IoctlSubvolume    { flags, dirfd, mode, dst_ptr, src_ptr, ..Default::default() }
         )
     }
 
@@ -365,13 +365,13 @@ impl BcachefsHandle {
 
     fn disk_ioctl<V2, V1>(&self, flags: u32, dev: u64) -> Result<(), Errno>
     where
-        V2: Ioctl<Arg = bch_ioctl_disk_v2>,
-        V1: Ioctl<Arg = bch_ioctl_disk>,
+        V2: Ioctl<Arg = IoctlDiskV2>,
+        V1: Ioctl<Arg = IoctlDisk>,
     {
         v2_v1_ioctl!(
             self.ioctl_fd(), V2, V1,
-            bch_ioctl_disk_v2 { flags, dev, ..Default::default() },
-            bch_ioctl_disk    { flags, dev, ..Default::default() }
+            IoctlDiskV2 { flags, dev, ..Default::default() },
+            IoctlDisk    { flags, dev, ..Default::default() }
         )
     }
 
@@ -407,8 +407,8 @@ impl BcachefsHandle {
     pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: MemberState, flags: u32) -> Result<(), Errno> {
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_SET_STATE_v2, BCH_IOCTL_DISK_SET_STATE,
-            bch_ioctl_disk_set_state_v2 { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() },
-            bch_ioctl_disk_set_state    { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() }
+            IoctlDiskSetStateV2 { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() },
+            IoctlDiskSetState    { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() }
         )
     }
 
@@ -416,8 +416,8 @@ impl BcachefsHandle {
     pub(crate) fn disk_resize(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_RESIZE_v2, BCH_IOCTL_DISK_RESIZE,
-            bch_ioctl_disk_resize_v2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
-            bch_ioctl_disk_resize    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
+            IoctlDiskResizeV2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
+            IoctlDiskResize    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
     }
 
@@ -425,8 +425,8 @@ impl BcachefsHandle {
     pub(crate) fn disk_resize_journal(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_RESIZE_JOURNAL_v2, BCH_IOCTL_DISK_RESIZE_JOURNAL,
-            bch_ioctl_disk_resize_journal_v2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
-            bch_ioctl_disk_resize_journal    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
+            IoctlDiskResizeJournalV2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
+            IoctlDiskResizeJournal    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
     }
 
@@ -436,7 +436,7 @@ impl BcachefsHandle {
     pub(crate) fn read_super(&self) -> Result<Vec<u8>, Errno> {
         grow_on_erange(4096, 1 << 20, |size| {
             let mut buf = vec![0u8; size];
-            let arg = bch_ioctl_read_super {
+            let arg = IoctlReadSuper {
                 size: size as u64,
                 sb:   buf.as_mut_ptr() as u64,
                 ..Default::default()
@@ -451,24 +451,24 @@ impl BcachefsHandle {
     /// advances `arg.start` past the last key returned; loop until
     /// `arg.done` is set. Returns ERANGE if `arg.buf_size` can't hold even
     /// a single key.
-    pub(crate) fn query_btree_keys(&self, arg: &mut bch_ioctl_query_btree_keys) -> std::io::Result<()> {
+    pub(crate) fn query_btree_keys(&self, arg: &mut IoctlQueryBtreeKeys) -> std::io::Result<()> {
         ioctl_rw::<BCH_IOCTL_QUERY_BTREE_KEYS>(self.ioctl_fd(), arg).map(|_| ())
     }
 
     /// Read the on-disk metadata version from the filesystem superblock.
     pub(crate) fn sb_version(&self) -> Result<MetadataVersion, Errno> {
         let buf = self.read_super()?;
-        if buf.len() < mem::size_of::<Head<bch_sb>>() {
+        if buf.len() < mem::size_of::<Head<Sb>>() {
             return Err(Errno::IO);
         }
-        Ok(read_past::<Head<bch_sb>>(&buf, 0).version.get())
+        Ok(read_past::<Head<Sb>>(&buf, 0).version.get())
     }
 
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = DataType::NR as usize;
 
-        let mut buf = IoctlBuf::<Head<bch_ioctl_dev_usage_v2>>::new(nr_data_types);
+        let mut buf = IoctlBuf::<Head<IoctlDevUsageV2>>::new(nr_data_types);
         let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;
@@ -497,7 +497,7 @@ impl BcachefsHandle {
         }
 
         // v1 fallback
-        let mut u_v1 = bch_ioctl_dev_usage {
+        let mut u_v1 = IoctlDevUsage {
             dev: dev_idx as u64,
             flags: BCH_BY_INDEX,
             ..Default::default()

@@ -6,9 +6,9 @@ use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
-use crate::init::dev::{bch_devs_list, bch_devs_mask, bch_sb_buf, DevFlag, DevsMask};
-use crate::sb::members_format::{bch_member, BCH_MEMBER_NBUCKETS_MAX, BCH_MI_BTREE_BITMAP_SHIFT_MAX,
-    BCH_MIN_NR_NBUCKETS, bch_sb_field_members_v1, bch_sb_field_members_v2, BCH_SB_MEMBER_INVALID,
+use crate::init::dev::{DevsList, DevsMask, bch_sb_buf, DevFlag};
+use crate::sb::members_format::{Member, BCH_MEMBER_NBUCKETS_MAX, BCH_MI_BTREE_BITMAP_SHIFT_MAX,
+    BCH_MIN_NR_NBUCKETS, SbFieldMembersV1, SbFieldMembersV2, BCH_SB_MEMBER_INVALID,
     BCH_SB_MEMBERS_MAX, IopsMeasurement, MemberErrorType};
 use crate::errcode::{Errcode, BchError};
 use crate::locking::MemallocFlags;
@@ -34,7 +34,7 @@ use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo, VolatileValue};
 use crate::util::projections::TearSafe;
 use super::io::*;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures,
-    bch_sb, BTREE_MAX_DEPTH, SbFieldType};
+    Sb, BTREE_MAX_DEPTH, SbFieldType};
 
 #[bch_enum(closed)]
 #[nr]
@@ -72,7 +72,7 @@ pub enum DevWriteRefKind {
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
-pub struct bch_dev_identity {
+pub struct DevIdentity {
     pub name: [c_char; 16 + 1],
     pub model: [c_char; 64 + 1],
     pub serial: [c_char; 64 + 1],
@@ -82,7 +82,7 @@ pub struct bch_dev_identity {
 // ca->mi: read by anyone, a field at a time - a copy half made is one
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, VolatileValue, TypeInfo)]
-pub struct bch_member_cpu {
+pub struct MemberCpu {
     pub nbuckets: u64, /* device size */
     pub nbuckets_minus_first: u64,
     pub first_bucket: u16, /* index of first bucket used */
@@ -101,17 +101,17 @@ pub struct bch_member_cpu {
 }
 
 // ---------------------------------------------------------------------------
-// Members — bounds-checked readers for bch_sb_field_members_v2 and v1
+// Members — bounds-checked readers for SbFieldMembersV2 and v1
 //
 // Members are variable-size: each entry is `member_bytes` wide, which may
-// be smaller than `sizeof(bch_member)` for on-disk backward compatibility.
+// be smaller than `sizeof(Member)` for on-disk backward compatibility.
 // The reader copies into a zeroed struct (like the C `bch2_members_v2_get`);
-// to edit one, bch_sb_handle::member_mut(), for a member that's all there.
+// to edit one, SbHandle::member_mut(), for a member that's all there.
 // ---------------------------------------------------------------------------
 
 const BCH_MEMBER_V1_BYTES: usize = crate::sb::members_format::BCH_MEMBER_V1_BYTES as usize;
-const MEMBERS_V2_HEAD: usize = size_of::<Head<bch_sb_field_members_v2>>();
-const MEMBERS_V1_HEAD: usize = size_of::<Head<bch_sb_field_members_v1>>();
+const MEMBERS_V2_HEAD: usize = size_of::<Head<SbFieldMembersV2>>();
+const MEMBERS_V1_HEAD: usize = size_of::<Head<SbFieldMembersV1>>();
 
 /// BCH_SB_MEMBER_DELETED_UUID.
 pub(crate) const MEMBER_DELETED_UUID: [u8; 16] = [
@@ -119,7 +119,7 @@ pub(crate) const MEMBER_DELETED_UUID: [u8; 16] = [
     0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
 ];
 
-impl bch_member {
+impl Member {
     /// Not an empty slot or a deleted member.
     pub fn alive(&self) -> bool {
         self.uuid.b != [0; 16] && !self.deleted()
@@ -131,11 +131,11 @@ impl bch_member {
     }
 }
 
-pub fn member_exists<S: SbState>(sb: &bch_sb<S>, dev: u32) -> bool {
+pub fn member_exists<S: SbState>(sb: &Sb<S>, dev: u32) -> bool {
     dev < u32::from(sb.nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
 }
 
-impl<S: SbState> bch_sb<S> {
+impl<S: SbState> Sb<S> {
     /// Its members that exist, of nr_devices' slots.
     pub fn number_of_devices(&self) -> u32 {
         (0..u32::from(self.nr_devices)).filter(|&i| member_exists(self, i)).count() as u32
@@ -145,7 +145,7 @@ impl<S: SbState> bch_sb<S> {
 /// A free member slot: past the last one in use if there's room, else the
 /// empty one least recently mounted - never BCH_SB_MEMBER_INVALID, the
 /// sentinel. Deleted ones aren't free until fsck clears them.
-fn sb_member_find_slot(fs: &Fs, sb: &bch_sb) -> Result<u32, BchError> {
+fn sb_member_find_slot(fs: &Fs, sb: &Sb) -> Result<u32, BchError> {
     let nr = fs.nr_devices();
     if nr < BCH_SB_MEMBERS_MAX && nr != BCH_SB_MEMBER_INVALID {
         return Ok(nr);
@@ -179,10 +179,10 @@ pub(crate) fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, 
     let dev = sb_member_find_slot(fs, sb.sb())?;
     let nr = (dev + 1).max(fs.nr_devices());
 
-    let stride = usize::from(sb.field::<bch_sb_field_members_v2>().expect("members_v2").member_bytes.get());
+    let stride = usize::from(sb.field::<SbFieldMembersV2>().expect("members_v2").member_bytes.get());
     let u64s = (MEMBERS_V2_HEAD + stride * nr as usize).div_ceil(size_of::<u64>());
 
-    fs.sb_resize(sb).field_resize::<bch_sb_field_members_v2>(u64s as u32)
+    fs.sb_resize(sb).field_resize::<SbFieldMembersV2>(u64s as u32)
         .ok_or(BchError::from(Errcode::ENOSPC_sb_members))?;
     sb.sb_mut().nr_devices = nr as u8;
     Ok(dev)
@@ -208,7 +208,7 @@ impl Fs {
 }
 
 /// From members_v2 if the superblock has it, else members_v1.
-pub fn sb_member<S: SbState>(sb: &bch_sb<S>, idx: u32) -> Option<bch_member> {
+pub fn sb_member<S: SbState>(sb: &Sb<S>, idx: u32) -> Option<Member> {
     match members_v2(sb) {
         Some(v2) => v2.get(idx),
         None     => members_v1(sb)?.get(idx),
@@ -217,12 +217,12 @@ pub fn sb_member<S: SbState>(sb: &bch_sb<S>, idx: u32) -> Option<bch_member> {
 
 /// Read-only view of members_v2 with bounds-checked access.
 pub struct MembersV2<'a> {
-    members:    Strided<'a, bch_member>,
+    members:    Strided<'a, Member>,
     nr_devices: u32,
 }
 
 impl<'a> MembersV2<'a> {
-    pub fn get(&self, idx: u32) -> Option<bch_member> {
+    pub fn get(&self, idx: u32) -> Option<Member> {
         (idx < self.nr_devices).then(|| self.members.get(idx as usize))?.map(|m| m.get())
     }
 
@@ -234,19 +234,19 @@ impl<'a> MembersV2<'a> {
         self.nr_devices
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = bch_member> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = Member> + '_ {
         (0..self.nr_devices).filter_map(|i| self.get(i))
     }
 }
 
 /// Read-only view of members_v1 with bounds-checked access.
 pub struct MembersV1<'a> {
-    members:    Strided<'a, bch_member>,
+    members:    Strided<'a, Member>,
     nr_devices: u32,
 }
 
 impl<'a> MembersV1<'a> {
-    pub fn get(&self, idx: u32) -> Option<bch_member> {
+    pub fn get(&self, idx: u32) -> Option<Member> {
         (idx < self.nr_devices).then(|| self.members.get(idx as usize))?.map(|m| m.get())
     }
 
@@ -254,55 +254,55 @@ impl<'a> MembersV1<'a> {
         self.nr_devices
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = bch_member> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = Member> + '_ {
         (0..self.nr_devices).filter_map(|i| self.get(i))
     }
 }
 
-impl<S: InPlace> bch_sb_field_members_v2<S> {
-    fn members(&self) -> Option<Strided<'_, bch_member>> {
+impl<S: InPlace> SbFieldMembersV2<S> {
+    fn members(&self) -> Option<Strided<'_, Member>> {
         Strided::new(&self._members, self.member_bytes.get().into())
     }
 }
 
-impl<S: InPlace> bch_sb_field_members_v1<S> {
-    fn members(&self) -> Option<Strided<'_, bch_member>> {
+impl<S: InPlace> SbFieldMembersV1<S> {
+    fn members(&self) -> Option<Strided<'_, Member>> {
         Strided::new(&self._members, BCH_MEMBER_V1_BYTES)
     }
 }
 
 /// Construct a MembersV2 reader from a superblock.
-pub fn members_v2<S: SbState>(sb: &bch_sb<S>) -> Option<MembersV2<'_>> {
+pub fn members_v2<S: SbState>(sb: &Sb<S>) -> Option<MembersV2<'_>> {
     Some(MembersV2 {
-        members: S::field::<bch_sb_field_members_v2>(sb)?.members()?,
+        members: S::field::<SbFieldMembersV2>(sb)?.members()?,
         nr_devices: sb.nr_devices.into(),
     })
 }
 
 /// Construct a MembersV1 reader from a superblock.
-pub fn members_v1<S: SbState>(sb: &bch_sb<S>) -> Option<MembersV1<'_>> {
+pub fn members_v1<S: SbState>(sb: &Sb<S>) -> Option<MembersV1<'_>> {
     Some(MembersV1 {
-        members: S::field::<bch_sb_field_members_v1>(sb)?.members()?,
+        members: S::field::<SbFieldMembersV1>(sb)?.members()?,
         nr_devices: sb.nr_devices.into(),
     })
 }
 
-fn members_v2_mut(mi: &mut bch_sb_field_members_v2<Validated>) -> Option<StridedMut<'_, bch_member>> {
+fn members_v2_mut(mi: &mut SbFieldMembersV2<Validated>) -> Option<StridedMut<'_, Member>> {
     let stride = mi.member_bytes.get().into();
     StridedMut::new(&mut mi._members, stride)
 }
 
 impl bch_sb_buf {
     /// Member @idx, to edit: None if there's no such member in the section,
-    /// or it's shorter than a bch_member - written before it grew.
-    pub fn member_mut(&mut self, idx: u32) -> Option<&mut bch_member> {
+    /// or it's shorter than a Member - written before it grew.
+    pub fn member_mut(&mut self, idx: u32) -> Option<&mut Member> {
         if idx >= u32::from(self.sb().nr_devices) {
             return None;
         }
-        members_v2_mut(self.field_mut::<bch_sb_field_members_v2>()?)?.into_whole_mut(idx as usize)
+        members_v2_mut(self.field_mut::<SbFieldMembersV2>()?)?.into_whole_mut(idx as usize)
     }
 
-    fn put_member_v1<F: SbSection<Arm: Unsized> + ?Sized>(&mut self, start: usize, i: u32, m: &bch_member) {
+    fn put_member_v1<F: SbSection<Arm: Unsized> + ?Sized>(&mut self, start: usize, i: u32, m: &Member) {
         let at = start + i as usize * BCH_MEMBER_V1_BYTES;
         let f = bytes_of_mut(self.field_mut::<F>().expect("members: just sized"));
         f[at..at + BCH_MEMBER_V1_BYTES].copy_from_slice(&plain_bytes(m)[..BCH_MEMBER_V1_BYTES]);
@@ -322,12 +322,12 @@ pub trait SbMembersMut: SbResize {
 
         let nr = u32::from(self.sb().nr_devices);
         let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * nr as usize).div_ceil(size_of::<u64>());
-        self.field_resize::<bch_sb_field_members_v1>(u64s as u32)
+        self.field_resize::<SbFieldMembersV1>(u64s as u32)
             .ok_or(BchError::from(Errcode::ENOSPC_sb_members))?;
 
         for i in 0..nr {
             let m = members_v2(self.sb()).and_then(|v2| v2.get(i)).expect("members_v2: every member");
-            self.put_member_v1::<bch_sb_field_members_v1>(MEMBERS_V1_HEAD, i, &m);
+            self.put_member_v1::<SbFieldMembersV1>(MEMBERS_V1_HEAD, i, &m);
         }
         Ok(())
     }
@@ -335,24 +335,24 @@ pub trait SbMembersMut: SbResize {
     /// After, every member of members_v2 is whole. None if there isn't room.
     fn members_v2_init(&mut self) -> Option<()> {
         let nr = u32::from(self.sb().nr_devices);
-        let member = size_of::<bch_member>();
+        let member = size_of::<Member>();
         let u64s = ((MEMBERS_V2_HEAD + member * nr as usize).div_ceil(size_of::<u64>())) as u32;
 
-        if self.field::<bch_sb_field_members_v2>().is_none() {
-            let mi = self.field_resize::<bch_sb_field_members_v2>(u64s)?;
+        if self.field::<SbFieldMembersV2>().is_none() {
+            let mi = self.field_resize::<SbFieldMembersV2>(u64s)?;
             mi.pad = Default::default();
             mi.member_bytes = (BCH_MEMBER_V1_BYTES as u16).into();
 
             for i in 0..nr {
                 let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_else(::pin_init::zeroed);
-                self.put_member_v1::<bch_sb_field_members_v2>(MEMBERS_V2_HEAD, i, &m);
+                self.put_member_v1::<SbFieldMembersV2>(MEMBERS_V2_HEAD, i, &m);
             }
         }
 
-        let stride: usize = self.field::<bch_sb_field_members_v2>()?.member_bytes.get().into();
+        let stride: usize = self.field::<SbFieldMembersV2>()?.member_bytes.get().into();
         if stride < member {
-            let mi = self.field_resize::<bch_sb_field_members_v2>(u64s)?;
-            StridedMut::<bch_member>::grow(&mut bytes_of_mut(mi)[MEMBERS_V2_HEAD..], nr as usize, stride, member)
+            let mi = self.field_resize::<SbFieldMembersV2>(u64s)?;
+            StridedMut::<Member>::grow(&mut bytes_of_mut(mi)[MEMBERS_V2_HEAD..], nr as usize, stride, member)
                 .expect("members_v2: validated, and just sized");
             mi.member_bytes = (member as u16).into();
         }
@@ -377,7 +377,7 @@ fn invalid() -> Result<(), BchError> {
     Err(Errcode::invalid_sb_members.into())
 }
 
-fn validate_member(err: &mut Printbuf, m: &bch_member, sb: &bch_sb<Unvalidated>, i: u32) -> Result<(), BchError> {
+fn validate_member(err: &mut Printbuf, m: &Member, sb: &Sb<Unvalidated>, i: u32) -> Result<(), BchError> {
     let nbuckets = m.nbuckets.get();
     sb_err_on!(err, nbuckets > BCH_MEMBER_NBUCKETS_MAX.into(), invalid_sb_members,
                "device {i}: too many buckets (got {nbuckets}, max {})", BCH_MEMBER_NBUCKETS_MAX)?;
@@ -405,7 +405,7 @@ fn validate_member(err: &mut Printbuf, m: &bch_member, sb: &bch_sb<Unvalidated>,
     Ok(())
 }
 
-fn members_validate(sb: &bch_sb<Unvalidated>, members: Option<Strided<'_, bch_member>>,
+fn members_validate(sb: &Sb<Unvalidated>, members: Option<Strided<'_, Member>>,
                     err: &mut Printbuf) -> Result<(), BchError> {
     let nr = usize::from(sb.nr_devices);
     let have = members.as_ref().map_or(0, |m| m.len());
@@ -422,7 +422,7 @@ fn members_validate(sb: &bch_sb<Unvalidated>, members: Option<Strided<'_, bch_me
 
 /// Every member there's room for, nr_devices or not: printed sections
 /// include ones that failed validation.
-fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, members: Option<Strided<'_, bch_member>>) {
+fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &Sb<S>, members: Option<Strided<'_, Member>>) {
     let Some(members) = members else {
         write!(out, "member_bytes 0");
         return;
@@ -442,26 +442,26 @@ fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, members: Opti
     }
 }
 
-impl SbFieldOps for bch_sb_field_members_v1<Validated> {
-    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_members_v1<Unvalidated>,
+impl SbFieldOps for SbFieldMembersV1<Validated> {
+    fn validate(sb: &Sb<Unvalidated>, f: &SbFieldMembersV1<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, f.members(), err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_members_v1<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &Sb<Unvalidated>,
+                f: &SbFieldMembersV1<Unvalidated>) {
         members_to_text(out, sb, f.members());
     }
 }
 
-impl SbFieldOps for bch_sb_field_members_v2<Validated> {
-    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_members_v2<Unvalidated>,
+impl SbFieldOps for SbFieldMembersV2<Validated> {
+    fn validate(sb: &Sb<Unvalidated>, f: &SbFieldMembersV2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, f.members(), err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_members_v2<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &Sb<Unvalidated>,
+                f: &SbFieldMembersV2<Unvalidated>) {
         members_to_text(out, sb, f.members());
     }
 
@@ -505,7 +505,7 @@ pub(crate) fn data_types_to_text(out: &mut Printbuf, types: DataTypes) {
     }
 }
 
-fn label_to_text<S: SbState>(out: &mut Printbuf, m: &bch_member, sb: &bch_sb<S>) {
+fn label_to_text<S: SbState>(out: &mut Printbuf, m: &Member, sb: &Sb<S>) {
     write!(out, "Label:\t");
     match m.group() {
         0 => write!(out, "(none)"),
@@ -514,7 +514,7 @@ fn label_to_text<S: SbState>(out: &mut Printbuf, m: &bch_member, sb: &bch_sb<S>)
     out.newline();
 }
 
-fn failure_domain_to_text(out: &mut Printbuf, m: &bch_member) {
+fn failure_domain_to_text(out: &mut Printbuf, m: &Member) {
     if m.failure_domain[0] != 0 {
         write!(out, "Failure domain:\t");
         out.write_bytes(nonstring(&m.failure_domain));
@@ -522,14 +522,14 @@ fn failure_domain_to_text(out: &mut Printbuf, m: &bch_member) {
     }
 }
 
-fn has_data_to_text<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, idx: u32) {
+fn has_data_to_text<S: SbState>(out: &mut Printbuf, sb: &Sb<S>, idx: u32) {
     write!(out, "Has data:\t");
     data_types_to_text(out, sb.dev_has_data(idx));
     out.newline();
 }
 
 /// show-super's member: every field.
-pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &bch_member, sb: &bch_sb<S>, idx: u32) {
+pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &Member, sb: &Sb<S>, idx: u32) {
     let bucket_size = u64::from(m.bucket_size.get());
 
     label_to_text(out, m, sb);
@@ -589,7 +589,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &bch_member, sb: &bch_s
 
 /// For messages, to say which disk is meant: what's empty is left out. The
 /// superblock's alone, for mount to name a device it hasn't opened.
-fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &bch_member, sb: &bch_sb<S>, idx: u32) {
+fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &Member, sb: &Sb<S>, idx: u32) {
     if out.nr_tabstops() == 0 {
         out.tabstop_push(16 + out.indent_level());
     }
@@ -613,13 +613,13 @@ fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &bch_member, sb: &bch
     has_data_to_text(out, sb, idx);
 }
 
-pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &bch_sb, dev: u32) {
+pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &Sb, dev: u32) {
     member_to_text_short(out, &sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed), sb, dev);
 }
 
 /// Each of @devs that's a device of @fs's, short: bch2_devs_mask_to_text_locked().
-pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &bch_sb, devs: &bch_devs_mask) {
-    for dev in devs.d.iter() {
+pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &Sb, devs: &DevsMask) {
+    for dev in devs.iter() {
         if fs.dev_rcu(dev as u32, &read_lock()).is_some() {
             dev_to_text_short(out, sb, dev as u32);
         }
@@ -632,14 +632,14 @@ pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &bch_sb, devs: 
 // takes the guard - and read without it, as C's readers always have, so a
 // reader can see a copy half made.
 
-impl bch_member {
+impl Member {
     /// As ca->mi has it - all but the failure domain, which takes the other
     /// members to number.
-    pub fn to_cpu(&self) -> bch_member_cpu {
+    pub fn to_cpu(&self) -> MemberCpu {
         let nbuckets = self.nbuckets.get();
         let first_bucket = self.first_bucket.get();
 
-        bch_member_cpu {
+        MemberCpu {
             nbuckets,
             nbuckets_minus_first:   nbuckets.wrapping_sub(first_bucket.into()),
             first_bucket,
@@ -663,7 +663,7 @@ impl bch_member {
 /// Member @dev's failure domain, as an id: one more than the first member
 /// with the same string, 0 for none. Only compared for equality, so it
 /// needn't be dense.
-fn failure_domain_id(sb: &bch_sb, dev: u32, m: &bch_member) -> u16 {
+fn failure_domain_id(sb: &Sb, dev: u32, m: &Member) -> u16 {
     if m.failure_domain[0] == 0 {
         return 0;
     }
@@ -675,9 +675,9 @@ impl Fs {
     /// The worst IO latency seen, reading or writing as @rw, of @devs, in
     /// jiffies: to scale timeouts and "held too long" warnings so slow storage
     /// doesn't trip them.
-    pub fn dev_latency_max(&self, devs: &bch_devs_mask, rw: c_int) -> c_ulong {
+    pub fn dev_latency_max(&self, devs: &DevsMask, rw: c_int) -> c_ulong {
         let rcu = read_lock();
-        let ns = self.devs_rcu_in(devs.d.iter(), &rcu)
+        let ns = self.devs_rcu_in(devs.iter(), &rcu)
             .map(|ca| ca.io_latency.get(rw as usize).stats().stats.lock.lock().max_duration)
             .max()
             .unwrap_or(0);
@@ -707,7 +707,7 @@ fn mi_update_str(dst: &mut [u8], src: &[c_char]) -> bool {
 
 /// Member @dev's name, model and serial made @id's, and its rotational
 /// flag if it's never been set. Whether anything changed.
-pub(crate) fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &bch_dev_identity) -> bool {
+pub(crate) fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &DevIdentity) -> bool {
     let m = sb.fs_member_mut(dev);
     let mut dirty = false;
 
@@ -965,7 +965,7 @@ pub(crate) fn btree_bitmap_gc_schedule(fs: &Fs) {
 
 /// A short list of devices - an extent's, a write point's: at most
 /// BCH_BKEY_PTRS_MAX, no repeats.
-impl bch_devs_list {
+impl DevsList {
     /// Just @dev: bch2_dev_list_single().
     pub fn single(dev: u8) -> Self {
         let mut l = Self::default();
@@ -1316,8 +1316,8 @@ impl<C: DevIoCount> RefGuard<C> {
 }
 
 /// @bdev's name, model and serial, and whether it's rotational.
-pub(crate) fn identity(bdev: &crate::os::blkdev::BlockDevice) -> bch_dev_identity {
-    let mut id = ::pin_init::zeroed::<bch_dev_identity>();
+pub(crate) fn identity(bdev: &crate::os::blkdev::BlockDevice) -> DevIdentity {
+    let mut id = ::pin_init::zeroed::<DevIdentity>();
     crate::init::dev::read_identity(bdev, &mut id);
     id.rotational = crate::os::blkdev::rotational(bdev);
     id
@@ -1492,7 +1492,7 @@ impl Dev {
     }
 
     /// ca->mi made @mi: see "In memory" above.
-    fn set_mi(&self, _sb: &SbLockGuard<'_>, mi: bch_member_cpu) {
+    fn set_mi(&self, _sb: &SbLockGuard<'_>, mi: MemberCpu) {
         self.mi.set(mi)
     }
 
@@ -1648,18 +1648,18 @@ crate::display_via_to_text!(Dev);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::init::dev::bch_sb_handle;
+    use crate::init::dev::SbHandle;
     use crate::util::vstructs::plain_bytes_mut;
 
-    fn new_sb(nr: u8) -> bch_sb_handle {
-        let mut sb = bch_sb_handle::default();
+    fn new_sb(nr: u8) -> SbHandle {
+        let mut sb = SbHandle::default();
         sb.sb_realloc(0).unwrap();
         sb.sb_mut().nr_devices = nr;
         sb
     }
 
-    fn member(i: u8) -> bch_member {
-        let mut m = ::pin_init::zeroed::<bch_member>();
+    fn member(i: u8) -> Member {
+        let mut m = ::pin_init::zeroed::<Member>();
         m.uuid.b = [i + 1; 16];
         m.nbuckets = (1000 * u64::from(i) + 1).into();
         m
@@ -1667,9 +1667,9 @@ mod tests {
 
     /// @nr members, each its first @bytes, at a stride of @bytes - as an
     /// older version wrote them.
-    fn put_v2(sb: &mut bch_sb_handle, nr: u8, bytes: usize) {
+    fn put_v2(sb: &mut SbHandle, nr: u8, bytes: usize) {
         let u64s = (MEMBERS_V2_HEAD + bytes * usize::from(nr)).div_ceil(8) as u32;
-        let mi = sb.field_resize::<bch_sb_field_members_v2>(u64s).unwrap();
+        let mi = sb.field_resize::<SbFieldMembersV2>(u64s).unwrap();
         mi.member_bytes = (bytes as u16).into();
         let mut m = members_v2_mut(mi).unwrap();
         for i in 0..nr {
@@ -1677,7 +1677,7 @@ mod tests {
         }
     }
 
-    fn whole(sb: &mut bch_sb_handle, i: u8) -> bch_member {
+    fn whole(sb: &mut SbHandle, i: u8) -> Member {
         *sb.member_mut(i.into()).expect("a whole member")
     }
 
@@ -1686,14 +1686,14 @@ mod tests {
     fn members_v2_from_v1() {
         let mut sb = new_sb(3);
         let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * 3).div_ceil(8) as u32;
-        sb.field_resize::<bch_sb_field_members_v1>(u64s).unwrap();
+        sb.field_resize::<SbFieldMembersV1>(u64s).unwrap();
         for i in 0..3 {
-            sb.put_member_v1::<bch_sb_field_members_v1>(MEMBERS_V1_HEAD, i.into(), &member(i));
+            sb.put_member_v1::<SbFieldMembersV1>(MEMBERS_V1_HEAD, i.into(), &member(i));
         }
 
         sb.members_v2_init().unwrap();
-        let mi = sb.field::<bch_sb_field_members_v2>().unwrap();
-        assert_eq!(usize::from(mi.member_bytes.get()), size_of::<bch_member>());
+        let mi = sb.field::<SbFieldMembersV2>().unwrap();
+        assert_eq!(usize::from(mi.member_bytes.get()), size_of::<Member>());
         for i in 0..3 {
             assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&member(i)));
         }
@@ -1709,7 +1709,7 @@ mod tests {
 
         sb.members_v2_init().unwrap();
         for i in 0..3 {
-            let mut want = ::pin_init::zeroed::<bch_member>();
+            let mut want = ::pin_init::zeroed::<Member>();
             plain_bytes_mut(&mut want)[..BCH_MEMBER_V1_BYTES]
                 .copy_from_slice(&plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
             assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&want));
@@ -1717,18 +1717,18 @@ mod tests {
     }
 
     /// members_v1's to_text counts its members by its own stride: C's used
-    /// bch_member's, so printed a few and said nr_devices didn't match.
+    /// Member's, so printed a few and said nr_devices didn't match.
     #[test]
     fn members_v1_to_text() {
         let mut sb = new_sb(3);
         let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * 3).div_ceil(8) as u32;
-        sb.field_resize::<bch_sb_field_members_v1>(u64s).unwrap();
+        sb.field_resize::<SbFieldMembersV1>(u64s).unwrap();
         for i in 0..3 {
-            sb.put_member_v1::<bch_sb_field_members_v1>(MEMBERS_V1_HEAD, i.into(), &member(i));
+            sb.put_member_v1::<SbFieldMembersV1>(MEMBERS_V1_HEAD, i.into(), &member(i));
         }
 
         let mut out = Printbuf::new();
-        members_to_text(&mut out, sb.sb(), sb.field::<bch_sb_field_members_v1>().unwrap().members());
+        members_to_text(&mut out, sb.sb(), sb.field::<SbFieldMembersV1>().unwrap().members());
         assert!(!out.as_str().contains("mismatch"));
         assert_eq!(out.as_str().matches("Device:").count(), 3);
     }
@@ -1738,7 +1738,7 @@ mod tests {
     #[test]
     fn members_v1_mirror() {
         let mut sb = new_sb(2);
-        put_v2(&mut sb, 2, size_of::<bch_member>());
+        put_v2(&mut sb, 2, size_of::<Member>());
         sb.members_cpy_v2_v1().unwrap();
         for i in 0..2 {
             let m = members_v1(sb.sb()).unwrap().get(i.into()).unwrap();
@@ -1747,7 +1747,7 @@ mod tests {
 
         sb.sb_mut().set_version_incompat(MetadataVersion(MetadataVersion::extent_flags.0 + 1));
         sb.members_cpy_v2_v1().unwrap();
-        assert!(sb.field::<bch_sb_field_members_v1>().is_none());
+        assert!(sb.field::<SbFieldMembersV1>().is_none());
     }
 
     /// A range's bits, then coarsened, are the bits it has at the coarser

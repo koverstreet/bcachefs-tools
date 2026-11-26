@@ -18,8 +18,8 @@ use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::disk_groups::Target;
 use crate::alloc::foreground::{AllocWait, Blocked, OpenBucket, alloc_request, Watermark};
 use crate::btree::{bkey::BkeyV, iter::TransAttempt};
-use crate::alloc::dev_select::dev_stripe_state;
-use crate::init::dev::bch_devs_mask;
+use crate::alloc::dev_select::DevStripeState;
+use crate::init::dev::DevsMask;
 use crate::data::ec::buf::{MemWait, StripeBuf};
 use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_reuse::OldRead;
@@ -37,26 +37,26 @@ use cstruct_macros::{bch_enum, MaybeZeroable};
 use pin_init::{pin_data, pin_init};
 
 /// A disk label's striping of new stripes' buckets across its devices - in
-/// bch_fs_ec.dev_stripe_states, by label, made on first use: shared by the
+/// FsEc.dev_stripe_states, by label, made on first use: shared by the
 /// label's stripe heads, and repairs. Freed only with the filesystem.
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct ec_dev_stripe_state {
+pub struct EcDevStripeState {
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, DevStripes>,
 
     pub disk_label: c_uint,
 }
 
-/// What an ec_dev_stripe_state's lock protects: how the buckets of new
+/// What an EcDevStripeState's lock protects: how the buckets of new
 /// stripes' data blocks, and of their parity, have been spread across the
 /// devices, for the allocator to go on spreading them.
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct DevStripes {
-    pub block_stripe: dev_stripe_state,
-    pub parity_stripe: dev_stripe_state,
+    pub block_stripe: DevStripeState,
+    pub parity_stripe: DevStripeState,
 }
 
 /*
@@ -88,12 +88,12 @@ pub type StripeBlockMask = BitArray<{ bits_to_longs(BCH_BKEY_PTRS_MAX as usize) 
 
 /// The sector allocator's source of erasure coded buckets, one per disk label,
 /// algorithm, redundancy and watermark - its key, fixed when it's made - and
-/// the stripe it's filling, @s. In bch_fs_ec.stripe_heads, made on first use,
+/// the stripe it's filling, @s. In FsEc.stripe_heads, made on first use,
 /// freed with the filesystem.
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct ec_stripe_head {
+pub struct EcStripeHead {
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, HeadState>,
 
@@ -112,7 +112,7 @@ pub struct ec_stripe_head {
 pub struct HeadDevs {
     /// The allocator's rw_devs_change_count they're as of
     pub change_count: c_ulong,
-    pub mask:         bch_devs_mask,
+    pub mask:         DevsMask,
     pub nr_active:    c_uint,
     pub blocksize:    c_uint,
     /// Too few for the head's redundancy: it makes no stripes
@@ -141,8 +141,8 @@ fn disk_label_target(disk_label: u32) -> Target {
 impl Fs {
     /// The most common bucket size among @devs - on a tie, the smaller:
     /// pick_blocksize().
-    fn ec_pick_blocksize(&self, devs: &bch_devs_mask, rcu: &ReadGuard) -> u32 {
-        let sizes = || self.devs_rcu_in(devs.d.iter(), rcu).map(|ca| u32::from(ca.mi.get().bucket_size));
+    fn ec_pick_blocksize(&self, devs: &DevsMask, rcu: &ReadGuard) -> u32 {
+        let sizes = || self.devs_rcu_in(devs.iter(), rcu).map(|ca| u32::from(ca.mi.get().bucket_size));
 
         sizes()
             .map(|size| (sizes().filter(|&s| s == size).count(), size))
@@ -155,20 +155,20 @@ impl Fs {
     /// The devices a stripe in @disk_label can be made on now: rw for user
     /// data, durable, with buckets of @blocksize - or if that's 0, of the
     /// most common size among them - and the blocksize.
-    pub fn disk_label_ec_devs(&self, disk_label: u32, blocksize: u32) -> (bch_devs_mask, u32) {
+    pub fn disk_label_ec_devs(&self, disk_label: u32, blocksize: u32) -> (DevsMask, u32) {
         let mut devs = self.target_rw_devs(DataType::user, disk_label_target(disk_label));
         let rcu = read_lock();
 
         let all = devs;
-        for ca in self.devs_rcu_in(all.d.iter(), &rcu).filter(|ca| ca.mi.get().durability == 0) {
-            devs.d.clear(ca.dev_idx.into());
+        for ca in self.devs_rcu_in(all.iter(), &rcu).filter(|ca| ca.mi.get().durability == 0) {
+            devs.clear(ca.dev_idx.into());
         }
 
         let blocksize = if blocksize != 0 { blocksize } else { self.ec_pick_blocksize(&devs, &rcu) };
 
         let all = devs;
-        for ca in self.devs_rcu_in(all.d.iter(), &rcu).filter(|ca| u32::from(ca.mi.get().bucket_size) != blocksize) {
-            devs.d.clear(ca.dev_idx.into());
+        for ca in self.devs_rcu_in(all.iter(), &rcu).filter(|ca| u32::from(ca.mi.get().bucket_size) != blocksize) {
+            devs.clear(ca.dev_idx.into());
         }
         (devs, blocksize)
     }
@@ -178,9 +178,9 @@ impl Fs {
     /// one data block plus parity is worse than replication - in as many
     /// failure domains, which count separately as the allocator won't put two
     /// blocks in one. Why not, into @out: callers park work on this answer.
-    pub fn ec_devs_sufficient(&self, devs: &bch_devs_mask, disk_label: u32, redundancy: u32,
+    pub fn ec_devs_sufficient(&self, devs: &DevsMask, disk_label: u32, redundancy: u32,
                               out: Option<&mut Printbuf>) -> bool {
-        let nr_devs = devs.d.weight();
+        let nr_devs = devs.weight();
         let nr_domains = self.target_nr_domains(devs);
         let need = redundancy + 2;
 
@@ -231,15 +231,15 @@ impl Fs {
     /// is measured against.
     ///
     /// As C's, a label whose group is gone counts every device, as label 0.
-    pub fn disk_label_ec_rw_member_devs(&self, disk_label: u32, blocksize: u32) -> bch_devs_mask {
+    pub fn disk_label_ec_rw_member_devs(&self, disk_label: u32, blocksize: u32) -> DevsMask {
         let rcu = read_lock();
-        let mut devs = bch_devs_mask::default();
+        let mut devs = DevsMask::default();
 
         let label = match disk_label {
             0 => None,
             l => self.target_to_mask(disk_label_target(l), &rcu),
         };
-        let in_label = |ca: &&Dev| label.is_none_or(|t| t.d.test(ca.dev_idx.into()));
+        let in_label = |ca: &&Dev| label.is_none_or(|t| t.test(ca.dev_idx.into()));
 
         for ca in self.devs_rcu_in(0..self.nr_devices() as usize, &rcu).filter(in_label) {
             let mi = ca.mi.get();
@@ -250,7 +250,7 @@ impl Fs {
                mi.data_allowed.contains(DataType::user.into()) &&
                u32::from(mi.bucket_size) == blocksize
             {
-                devs.d.set(ca.dev_idx.into());
+                devs.set(ca.dev_idx.into());
             }
         }
         devs
@@ -258,7 +258,7 @@ impl Fs {
 
     /// How many disk_label_ec_rw_member_devs() there are.
     pub fn ec_rw_member_devs_nr(&self, disk_label: u8, sectors: u16) -> u32 {
-        self.disk_label_ec_rw_member_devs(disk_label.into(), sectors.into()).d.weight()
+        self.disk_label_ec_rw_member_devs(disk_label.into(), sectors.into()).weight()
     }
 }
 
@@ -293,18 +293,18 @@ fn stripe_head_detach(fs: &Fs, g: &mut HeadGuard<'_>, err: Option<BchError>) {
 
 /// @h's devices, as of the allocator's RW device changes @change_count: a
 /// stripe not yet allocated that some have left is cancelled.
-fn stripe_head_devs_update(fs: &Fs, h: &ec_stripe_head, g: &mut HeadGuard<'_>, change_count: c_ulong) {
+fn stripe_head_devs_update(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, change_count: c_ulong) {
     let (mask, blocksize) = fs.disk_label_ec_devs(h.disk_label, 0);
     let mut leaving = mask;
-    leaving.d.not_and(&g.devs.mask.d);
+    leaving.not_and(&g.devs.mask);
 
     g.devs.change_count = change_count;
-    g.devs.nr_active    = mask.d.weight();
+    g.devs.nr_active    = mask.weight();
     g.devs.insufficient = !fs.ec_devs_sufficient(&mask, h.disk_label, h.redundancy, None);
     g.devs.blocksize    = blocksize;
     g.devs.mask         = mask;
 
-    if head_stripe(g).is_some_and(|s| !s.lock().allocated) && !leaving.d.is_empty() {
+    if head_stripe(g).is_some_and(|s| !s.lock().allocated) && !leaving.is_empty() {
         stripe_head_detach(fs, g, Some(fs.err(Errcode::EINTR_stripe_head_devs_changed)));
     }
 }
@@ -314,13 +314,13 @@ fn stripe_head_devs_update(fs: &Fs, h: &ec_stripe_head, g: &mut HeadGuard<'_>, c
 /// stops erasure coding for it, the filesystem going read-only or the label
 /// too few devices.
 pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, algo: u32, redundancy: u32,
-                       watermark: Watermark) -> Result<(&'f ec_stripe_head, HeadGuard<'f>), BchError> {
+                       watermark: Watermark) -> Result<(&'f EcStripeHead, HeadGuard<'f>), BchError> {
     let fs = t.fs();
     if redundancy == 0 {
         return fs.throw(Errcode::ec_alloc_failed_no_redundancy);
     }
     // SAFETY: boxed - pinned - and freed only with @fs
-    let fs_lifetime = |h: &ec_stripe_head| -> &'f ec_stripe_head { unsafe { &*core::ptr::from_ref(h) } };
+    let fs_lifetime = |h: &EcStripeHead| -> &'f EcStripeHead { unsafe { &*core::ptr::from_ref(h) } };
 
     let mut heads = fs.ec.stripe_heads.lock_trans(t)?;
     if fs.flags.get(FsFlag::going_ro) {
@@ -347,7 +347,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
             (h, g)
         }
         None => {
-            let new = kbox_pin_init(pin_init!(ec_stripe_head {
+            let new = kbox_pin_init(pin_init!(EcStripeHead {
                 lock <- new_lock!(HeadState::default()),
                 disk_label,
                 algo,
@@ -465,7 +465,7 @@ pub(crate) fn stripe_heads_to_text(out: &mut Printbuf, fs: &Fs) {
 /// allocator's rotation through the devices, which new_stripe_alloc_buckets()
 /// takes it around.
 pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32)
-    -> Result<&'f ec_dev_stripe_state, BchError>
+    -> Result<&'f EcDevStripeState, BchError>
 {
     let fs = t.fs();
     let mut states = fs.ec.dev_stripe_states.lock_trans(t)?;
@@ -473,7 +473,7 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
     let s = match states.iter().find(|s| s.disk_label == disk_label) {
         Some(s) => s,
         None => {
-            let s = kbox_pin_init(pin_init!(ec_dev_stripe_state {
+            let s = kbox_pin_init(pin_init!(EcDevStripeState {
                 lock <- new_lock!(::pin_init::zeroed::<DevStripes>()),
                 disk_label,
             }? BchError))?;
@@ -482,7 +482,7 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
         }
     };
     // SAFETY: boxed - pinned - and freed only with @fs
-    Ok(unsafe { &*core::ptr::from_ref::<ec_dev_stripe_state>(s) })
+    Ok(unsafe { &*core::ptr::from_ref::<EcDevStripeState>(s) })
 }
 
 // ── The head's: staging, and claiming blocks ──────────────────────────────
@@ -491,7 +491,7 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
 /// failure domain is a hard requirement, so the width is capped by domains
 /// as well as devices; if a domain goes away the next stripe is narrower
 /// rather than doubling up.
-fn alloc_for_head(fs: &Fs, h: &ec_stripe_head, g: &mut HeadGuard<'_>, max_data_blocks: u32)
+fn alloc_for_head(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, max_data_blocks: u32)
     -> Result<StripeNewBox, BchError>
 {
     let active = g.devs.nr_active.min(BCH_BKEY_PTRS_MAX);
@@ -556,8 +556,8 @@ fn claim_block(s: &StripeNew, i: &mut Internal, idx: usize) -> OpenBucket {
 /// @h's stripe staged - allocated, its buffers, its task started - and a
 /// block of it claimed for this write, if it's given @wp_stripe, its write
 /// point's: None if it has none for us.
-fn head_stage(t: &TransAttempt<'_, '_>, req: &mut alloc_request, h: &ec_stripe_head, g: &mut HeadGuard<'_>,
-              wp_stripe: Option<&mut dev_stripe_state>) -> Result<Option<OpenBucket>, BchError> {
+fn head_stage(t: &TransAttempt<'_, '_>, req: &mut alloc_request, h: &EcStripeHead, g: &mut HeadGuard<'_>,
+              wp_stripe: Option<&mut DevStripeState>) -> Result<Option<OpenBucket>, BchError> {
     let fs = t.fs();
     if g.s.is_none() {
         let s = alloc_for_head(fs, h, g, req.ec_max_data_blocks.into())?;
@@ -626,8 +626,8 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut alloc_request, h: &ec_stripe_h
 /// point's, and it had one for us: or the error, an ec_alloc_failed subtype
 /// naming the reason.
 pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut alloc_request, algo: u32,
-                           wp_stripe: Option<&mut dev_stripe_state>)
-    -> Result<(&'f ec_stripe_head, HeadGuard<'f>, Option<OpenBucket>), BchError>
+                           wp_stripe: Option<&mut DevStripeState>)
+    -> Result<(&'f EcStripeHead, HeadGuard<'f>, Option<OpenBucket>), BchError>
 {
     let fs = t.fs();
     let redundancy = u32::from(req.ec_replicas).wrapping_sub(1);

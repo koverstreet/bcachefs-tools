@@ -35,7 +35,7 @@ use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
 use crate::format::StrHashKind;
-use crate::posix::{str_hash::bch_hash_info, dirent::{self, DirEmit}, str_hash};
+use crate::posix::{str_hash::HashInfo, dirent::{self, DirEmit}, str_hash};
 use crate::os::dir_context::DirContext;
 use crate::errcode::{BchError, Errcode};
 use crate::locking::{Guard, LockedBy};
@@ -68,7 +68,7 @@ fn dirents_32bit(file: &File) -> bool {
          (cfg!(target_pointer_width = "32") || crate::os::kernel::in_compat_syscall()))
 }
 
-fn cookie_shift(hash: &bch_hash_info) -> u32 {
+fn cookie_shift(hash: &HashInfo) -> u32 {
     if hash.is_31bit {
         0
     } else if hash.type_ == StrHashKind::crc32c {

@@ -284,7 +284,7 @@ fn journal_pins(parent: &str, name: &Ident, ty: &Type) -> syn::Result<Option<Tok
 /// Whether @ty is a journal pin: core's Pin always has its pointer argument.
 fn is_journal_pin(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s|
-        (s.ident == "Pin" || s.ident == "journal_entry_pin") && s.arguments.is_empty()))
+        (s.ident == "Pin" || s.ident == "JournalEntryPin") && s.arguments.is_empty()))
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────

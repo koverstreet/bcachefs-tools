@@ -29,12 +29,13 @@
 //! again. That's checked only at runtime, by verify_not_restarted() and an
 //! ended attempt's checks.
 
+use crate::btree::bkey::BkeyI;
 use super::bkey::*;
 use super::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use super::trans::BtreeTrans;
-use crate::alloc::{capacity::DiskReservation, buckets::bch_fs_usage_base};
+use crate::alloc::{capacity::DiskReservation, buckets::FsUsageBase};
 use crate::c;
-use crate::btree::{journal_overlay::journal_keys, update::TransCommitFlags};
+use crate::btree::{journal_overlay::JournalKeys, update::TransCommitFlags};
 use crate::data::{extents_format::BKEY_BTREE_PTR_U64s_MAX, write::WriteFlags};
 use crate::journal::flush_wait::Flush;
 pub use crate::alloc::foreground::Watermark;
@@ -64,7 +65,7 @@ use crate::btree::node::BtreeWriteType;
 use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes_mut, State};
 use crate::data_structures::dst_room::DstRoom;
 use crate::btree::bkey_buf::copy_key;
-use crate::format::{Bpos, Btree, BkeyType, bch_val, bkey, bkey_i, BKEY_U64s, BTREE_MAX_DEPTH};
+use crate::format::{Bpos, Btree, BkeyType, Val, Bkey, BKEY_U64s, BTREE_MAX_DEPTH};
 
 /// One attempt at @trans: from one begin() to the next.
 ///
@@ -295,17 +296,17 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The journal keys, till replay's done: the transaction's ref -
     /// journal_replay_not_finished - holds them, and only begin, which ends
     /// the attempt, lets it go.
-    pub(crate) fn journal_keys(&self) -> Option<&'a journal_keys> {
+    pub(crate) fn journal_keys(&self) -> Option<&'a JournalKeys> {
         unlikely(self.trans.journal_replay_not_finished()).then(|| unsafe { self.fs().journal_keys_held() })
     }
 
     /// What the commit in progress changes usage by, as its triggers
     /// accounted it.
-    pub fn fs_usage_delta(&self) -> bch_fs_usage_base {
+    pub fn fs_usage_delta(&self) -> FsUsageBase {
         self.trans.fs_usage_delta.get()
     }
 
-    pub fn fs_usage_delta_add(&self, d: bch_fs_usage_base) {
+    pub fn fs_usage_delta_add(&self, d: FsUsageBase) {
         self.trans.fs_usage_delta_add(d)
     }
 
@@ -772,7 +773,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 "{val_u64s} u64s of value, shorter than a {:?}'s {}", K::TYPE, K::MIN_VAL_SIZE);
         let mut k = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         k.as_mut_u64s().fill(0);
-        *k.k_mut() = bkey::new();
+        *k.k_mut() = Bkey::new();
         k.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
         k.k_mut().type_ = K::TYPE.0 as u8;
         k.k_mut().p = pos;
@@ -999,16 +1000,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
 }
 
 impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
-    pub fn as_ptr(&self) -> *const bkey_i {
+    pub fn as_ptr(&self) -> *const BkeyI<Val> {
         self.room.elems().as_ptr().cast()
     }
 
-    pub fn as_mut_ptr(&mut self) -> *mut bkey_i {
+    pub fn as_mut_ptr(&mut self) -> *mut BkeyI<Val> {
         self.room.elems_mut().as_mut_ptr().cast()
     }
 
     /// Where the key is, and its room, in u64s - for an update to queue.
-    pub(crate) fn as_raw(&mut self) -> (NonNull<bkey_i>, u32) {
+    pub(crate) fn as_raw(&mut self) -> (NonNull<BkeyI<Val>>, u32) {
         let u64s = self.buf_u64s();
         (NonNull::from(&mut *self.room).cast(), u64s)
     }
@@ -1039,11 +1040,11 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
         TransBkey { room: &mut *self.room, t: PhantomData, v: PhantomData }
     }
 
-    pub fn k(&self) -> &bkey {
+    pub fn k(&self) -> &Bkey {
         &self.room.k
     }
 
-    pub fn k_mut(&mut self) -> &mut bkey {
+    pub fn k_mut(&mut self) -> &mut Bkey {
         &mut self.room.k
     }
 
@@ -1123,7 +1124,7 @@ impl<'a, 't> TransBkey<'a, 't> {
     /// # Safety
     /// @ptr is a key valid and the caller's to edit while @t's attempt runs,
     /// and @buf_u64s u64s there are its.
-    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'_, '_>, ptr: *mut bkey_i, buf_u64s: u32) -> Self {
+    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'_, '_>, ptr: *mut BkeyI<Val>, buf_u64s: u32) -> Self {
         assert!(!ptr.is_null(), "a key with room");
         let room = core::ptr::slice_from_raw_parts_mut(ptr.cast::<u64>(), buf_u64s as usize);
         let k = TransBkey { room: unsafe { &mut *DstRoom::from_elems_raw(room) }, t: PhantomData, v: PhantomData };
@@ -1170,7 +1171,7 @@ impl<V: ?Sized + BkeyVal> BkeyVMut for TransBkey<'_, '_, V> {
 }
 
 /// The header, and where the value starts.
-fn room_sc(room: &DstRoom<BkeyI>) -> (&bkey, *const bch_val) {
+fn room_sc(room: &DstRoom<BkeyI>) -> (&Bkey, *const Val) {
     let BkeyI { k, v } = &**room;
     (k, (&raw const *v).cast())
 }

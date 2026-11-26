@@ -8,13 +8,13 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
 use crate::c;
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::sb::members::DevWriteRefKind;
 use crate::journal::flush_wait::Flush;
 use crate::data_structures::{dst_room::DstRoom, array_vec::ArrayVec};
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
-use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor, bch_write_op,
+use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor, WriteOp,
     WriteFlags as w};
 use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::os::{bio::{Bio, BioRange}, kernel::unlikely};
@@ -27,7 +27,7 @@ use crate::{btree_trans, fs_inconsistent};
 use crate::posix::inode;
 use core::ops::ControlFlow;
 
-type Op = bch_write_op;
+type Op = WriteOp;
 
 fn extent_is_writeable(op: &Op, k: BkeySC<'_>) -> bool {
     let fs = op.fs();
@@ -81,7 +81,7 @@ fn nocow_write_convert_one_unwritten<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeI
      * since been created. The write is still outstanding, so we're ok
      * w.r.t. snapshot atomicity:
      */
-    let mut opts = bch_inode_opts::default();
+    let mut opts = InodeOpts::default();
 
     t.extent_update_i_size_sectors(iter, (new.k().p.offset << 9).min(op.new_i_size), 0, &mut opts)?;
     new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,

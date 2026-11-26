@@ -14,7 +14,7 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use crate::c;
-use crate::opts::bch_opts;
+use crate::opts::Opts;
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::errcode::BchError;
@@ -40,7 +40,7 @@ pub struct BouncePool {
 }
 
 impl BouncePool {
-    pub(crate) fn new(opts: &bch_opts) -> impl PinInit<Self, BchError> {
+    pub(crate) fn new(opts: &Opts) -> impl PinInit<Self, BchError> {
         let max = opts.btree_node_size.max(opts.encoded_extent_max);
         pin_init!(Self {
             lock <- new_lock!((), "&c->bio_bounce_pages_lock"),

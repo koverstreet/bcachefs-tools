@@ -471,20 +471,20 @@ pub enum SbErrorId {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_error_entry {
-    pub v: bch_sb_field_error_entry_v,
+pub struct SbFieldErrorEntry {
+    pub v: SbFieldErrorEntryV,
     pub last_error_time: Le64,
 }
 
-#[whole(tail = entries: [bch_sb_field_error_entry])]
+#[whole(tail = entries: [SbFieldErrorEntry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_errors {
-    pub entries: [bch_sb_field_error_entry; 0],
+pub struct SbFieldErrors {
+    pub entries: [SbFieldErrorEntry; 0],
 }
 
 #[bitfield(Le64)]
-pub struct bch_sb_field_error_entry_v {
+pub struct SbFieldErrorEntryV {
     #[bits(16)]
     id:             SbErrorId,
     nr:             u48,
@@ -507,9 +507,9 @@ pub struct bch_sb_field_error_entry_v {
 nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-    pub struct bch_sb_field_error_entry_v2 {
+    pub struct SbFieldErrorEntryV2 {
         #>[bitfield(u128, repr = le::U128, from = le::U128::new, into = le::U128::get)]
-        pub v: pub struct bch_sb_field_error_entry_v2_bits {
+        pub v: pub struct SbFieldErrorEntryV2Bits {
             #[bits(16)]
             id:               SbErrorId,
             nr:               u32,
@@ -519,11 +519,11 @@ nest! {
     }
 }
 
-#[whole(tail = entries: [bch_sb_field_error_entry_v2])]
+#[whole(tail = entries: [SbFieldErrorEntryV2])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_errors_v2 {
-    pub entries: [bch_sb_field_error_entry_v2; 0],
+pub struct SbFieldErrorsV2 {
+    pub entries: [SbFieldErrorEntryV2; 0],
 }
 
 pub const BCH_SB_ERROR_ENTRY_V2_NR_MAX: u64 = (1 << 32) - 1;

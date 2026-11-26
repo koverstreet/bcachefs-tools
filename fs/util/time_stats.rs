@@ -18,8 +18,8 @@
 //! A device's IO latency stats have quantiles too, written under the stats'
 //! lock and read without it, by the congestion accounting. The Quantiles
 //! trait is what an event's duration goes to besides the stats - quantiles,
-//! or () - and TimeStatsKind is a bare bch2_time_stats or a
-//! bch2_time_stats_quantiles.
+//! or () - and TimeStatsKind is a bare TimeStats or a
+//! TimeStatsQuantiles.
 //!
 //! Stats come in a TimeStatsArray, which keeps their buffers' pointers - read
 //! by every event - apart from what a flush writes; its get() is a
@@ -31,7 +31,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::util::mean_and_variance::mean_and_variance;
+use crate::util::mean_and_variance::MeanAndVariance;
 use crate::util::alloc::flags;
 use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -161,14 +161,14 @@ pub enum TimeStat {
 }
 
 
-/* a bch2_time_stats_quantiles' - a device's IO latency */
+/* a TimeStatsQuantiles' - a device's IO latency */
 pub const NR_QUANTILES: u32 = 15;
 
 /* written under the stats' lock, read without it - write.c's congestion
  * accounting, the device's congested_to_text() */
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct quantile_entry {
+pub struct QuantileEntry {
     pub m: Volatile<u64>,
     pub step: Volatile<u64>,
 }
@@ -176,19 +176,19 @@ pub struct quantile_entry {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct quantiles {
-    pub entries: [quantile_entry; NR_QUANTILES as usize],
+    pub entries: [QuantileEntry; NR_QUANTILES as usize],
 }
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct time_stat_buffer_entry {
+pub struct TimeStatBufferEntry {
     pub start: Volatile<u64>,
     pub end: Volatile<u64>,
 }
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct time_stat_buffer {
+pub struct TimeStatBuffer {
     /*
      * Guards nr and entries for its own cpu: interrupts off - or on
      * PREEMPT_RT a sleeping per-cpu lock, which is what lets the
@@ -199,12 +199,12 @@ pub struct time_stat_buffer {
      */
     pub lock: Opaque<c::local_lock_t>,
     pub nr: Volatile<c_uint>,
-    pub entries: [time_stat_buffer_entry; 31],
+    pub entries: [TimeStatBufferEntry; 31],
 }
 
 // SAFETY: Volatiles, and the lock Opaque
-unsafe impl CpuShared for time_stat_buffer_entry {}
-unsafe impl CpuShared for time_stat_buffer {}
+unsafe impl CpuShared for TimeStatBufferEntry {}
+unsafe impl CpuShared for TimeStatBuffer {}
 
 /* default weight for streaming median+MAD: half-life ≈ 2^N samples */
 pub const TIME_STATS_MV_WEIGHT: u32 = 8;
@@ -221,17 +221,17 @@ pub struct TimeStatsLocked {
     pub min_freq: u64,
     pub last_event: u64,
 
-    pub duration_stats: mean_and_variance,
-    pub freq_stats: mean_and_variance,
+    pub duration_stats: MeanAndVariance,
+    pub freq_stats: MeanAndVariance,
 
-    pub duration_stats_weighted: mean_and_variance,
-    pub freq_stats_weighted: mean_and_variance,
+    pub duration_stats_weighted: MeanAndVariance,
+    pub freq_stats_weighted: MeanAndVariance,
 }
 
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct bch2_time_stats {
+pub struct TimeStats {
     #[pin]
     #[init(new_lock!(TimeStatsLocked::new(), "&stats->lock"))]
     pub lock: Locked<SpinLockIrq, TimeStatsLocked>,
@@ -242,10 +242,10 @@ pub struct bch2_time_stats {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct bch2_time_stats_quantiles {
+pub struct TimeStatsQuantiles {
     #[pin]
-    #[init(bch2_time_stats::init())]
-    pub stats: bch2_time_stats,
+    #[init(TimeStats::init())]
+    pub stats: TimeStats,
     pub quantiles: quantiles,
 }
 
@@ -304,7 +304,7 @@ fn nsecs_aligned(out: &mut Printbuf, ns: u64) {
 type StatsGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, TimeStatsLocked>;
 
 /// What an event's duration goes to besides the stats' own: a
-/// bch2_time_stats_quantiles' quantiles, or nothing - ().
+/// TimeStatsQuantiles' quantiles, or nothing - ().
 pub trait Quantiles {
     /// @v, an event's duration, with the stats' lock held: @g.
     fn update(&self, g: &mut StatsGuard<'_>, v: u64);
@@ -440,7 +440,7 @@ fn count(g: &mut StatsGuard<'_>, q: &impl Quantiles, start: u64, end: u64) {
 /// @b's events counted, and @b emptied - another CPU's, perhaps, racing its
 /// owner: only its first nr are real, and nr is bounded, as a bad one
 /// mustn't walk off the end.
-fn count_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &time_stat_buffer) {
+fn count_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &TimeStatBuffer) {
     let nr = (b.nr.get() as usize).min(b.entries.len());
     for e in &b.entries[..nr] {
         count(g, q, e.start.get(), e.end.get());
@@ -462,7 +462,7 @@ struct BufferSummary {
 }
 
 impl BufferSummary {
-    fn new(b: &time_stat_buffer) -> Self {
+    fn new(b: &TimeStatBuffer) -> Self {
         let mut s = BufferSummary {
             first_end:      b.entries[0].end.get(),
             last_end:       0,
@@ -490,7 +490,7 @@ impl BufferSummary {
 }
 
 /// @b's events counted, @b full and this CPU's: as count() of each, in order.
-fn count_full_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &time_stat_buffer, s: &BufferSummary) {
+fn count_full_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &TimeStatBuffer, s: &BufferSummary) {
     if let Some(f) = since(g.last_event, s.first_end) {
         g.min_freq = g.min_freq.min(f);
         g.max_freq = g.max_freq.max(f);
@@ -513,24 +513,24 @@ fn count_full_buffer(g: &mut StatsGuard<'_>, q: &impl Quantiles, b: &time_stat_b
 
 // ── Time stats, with or without quantiles ────────────────────────────────
 
-/// A bch2_time_stats, or one with quantiles: the stats, and what its events'
+/// A TimeStats, or one with quantiles: the stats, and what its events'
 /// durations go to besides.
 pub trait TimeStatsKind: Sized {
     type Quantiles: Quantiles;
 
     fn init() -> impl PinInit<Self, BchError>;
-    fn stats(&self) -> &bch2_time_stats;
+    fn stats(&self) -> &TimeStats;
     fn quantiles(&self) -> &Self::Quantiles;
 }
 
-impl TimeStatsKind for bch2_time_stats {
+impl TimeStatsKind for TimeStats {
     type Quantiles = ();
 
     fn init() -> impl PinInit<Self, BchError> {
-        bch2_time_stats::init()
+        TimeStats::init()
     }
 
-    fn stats(&self) -> &bch2_time_stats {
+    fn stats(&self) -> &TimeStats {
         self
     }
 
@@ -539,14 +539,14 @@ impl TimeStatsKind for bch2_time_stats {
     }
 }
 
-impl TimeStatsKind for bch2_time_stats_quantiles {
+impl TimeStatsKind for TimeStatsQuantiles {
     type Quantiles = quantiles;
 
     fn init() -> impl PinInit<Self, BchError> {
-        bch2_time_stats_quantiles::init()
+        TimeStatsQuantiles::init()
     }
 
-    fn stats(&self) -> &bch2_time_stats {
+    fn stats(&self) -> &TimeStats {
         &self.stats
     }
 
@@ -620,9 +620,9 @@ impl<'a, T: TimeStatsKind> TimeStatsRef<'a, T> {
         self.stats
     }
 
-    fn buffer(self) -> Option<PerCpuRef<'a, time_stat_buffer>> {
+    fn buffer(self) -> Option<PerCpuRef<'a, TimeStatBuffer>> {
         // update_at()'s release: the buffer zeroed, its locks initialized
-        let p = self.buffer.load(Acquire) as *mut time_stat_buffer;
+        let p = self.buffer.load(Acquire) as *mut TimeStatBuffer;
         // SAFETY: installed by update_at(), and freed only when the array
         // drops
         (!p.is_null()).then(|| unsafe { PerCpuRef::from_raw(p) })
@@ -657,7 +657,7 @@ impl<'a, T: TimeStatsKind> TimeStatsRef<'a, T> {
             if self.buffer.load(Relaxed) == 0 &&
                g.freq_stats_weighted.median() < 32000 &&
                g.duration_stats.n > 1024 {
-                if let Ok(b) = PerCpu::<time_stat_buffer>::alloc_gfp(flags::ATOMIC) {
+                if let Ok(b) = PerCpu::<TimeStatBuffer>::alloc_gfp(flags::ATOMIC) {
                     percpu_field!(b.get(), lock).init();
                     self.buffer.store(b.into_raw() as usize, Release);
                 }
@@ -842,7 +842,7 @@ fn name_and_nsecs(out: &mut Printbuf, name: &str, ns: u64) {
 
 /// The mean and stddev lines of @all and @recent, all time and recent: no
 /// mean if there's no @n.
-fn mean_and_stddev(out: &mut Printbuf, all: &mean_and_variance, recent: &mean_and_variance, n: i64) {
+fn mean_and_stddev(out: &mut Printbuf, all: &MeanAndVariance, recent: &MeanAndVariance, n: i64) {
     let (mean, stddev) = if n != 0 { (all.mean(), u64::from(all.stddev())) } else { (0, 0) };
 
     write!(out, "mean:\t");
@@ -869,9 +869,9 @@ mod tests {
     /// duration, some out of order.
     #[test]
     fn full_buffer_counts_as_each() -> Result<(), BchError> {
-        stack_try_pin_init!(let each =? bch2_time_stats_quantiles::init());
-        stack_try_pin_init!(let full =? bch2_time_stats_quantiles::init());
-        let b: time_stat_buffer = pin_init::zeroed();
+        stack_try_pin_init!(let each =? TimeStatsQuantiles::init());
+        stack_try_pin_init!(let full =? TimeStatsQuantiles::init());
+        let b: TimeStatBuffer = pin_init::zeroed();
 
         let mut x = 0x2545_f491_4f6c_dd1du64;
         let mut rand = move |m: u64| {

@@ -37,7 +37,8 @@ use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos, reconcile_bp_get_key,
                                       BkeyVReconcile, SetNeedsReconcileCtx};
 use crate::errcode::BchError;
-use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::data::reconcile::trigger::PerSnapshotIoOpts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::util::{log::{LogLevel, LogMsg}, printbuf::Msg, vstructs::plain_bytes, Printbuf};
 use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::mem::size_of;
@@ -210,8 +211,8 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
         check_extent_reconcile_phys(t, btree, data_k, last_flushed)?;
     }
 
-    let opts = get_io_opts(t, Some(&mut **s), data_k)?;
-    update_reconcile_opts(t, Some(&mut **s), &opts, data_iter, 0, data_k,
+    let opts = get_io_opts(t, Some(&mut *s), data_k)?;
+    update_reconcile_opts(t, Some(&mut *s), &opts, data_iter, 0, data_k,
                           SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)
 }
 

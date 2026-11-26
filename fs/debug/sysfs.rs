@@ -36,7 +36,7 @@ use crate::format::{CompressionType, DataType};
 use crate::fs::{Fs, WriteRef, FsFlag};
 use crate::init::passes;
 use crate::locking::MemallocFlags;
-use crate::opts::{self, OptChange, OptType, bch_opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
+use crate::opts::{self, OptChange, OptType, Opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
 use crate::sb::counters::COUNTERS;
 use crate::sb::members;
 use crate::prt;
@@ -303,7 +303,7 @@ const OPT_MODES: [u16; opts::NR] = {
     let mut modes = [0o444; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        if bch_opts::TABLE[i].flags.bits() & OptFlags::runtime.bits() != 0 {
+        if Opts::TABLE[i].flags.bits() & OptFlags::runtime.bits() != 0 {
             modes[i] = 0o644;
         }
         i += 1;
@@ -382,7 +382,7 @@ const fn opts_with_files(fs: bool) -> [bool; opts::NR] {
     let mut which = [false; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        let flags = bch_opts::TABLE[i].flags.bits();
+        let flags = Opts::TABLE[i].flags.bits();
         /*
          * For options that are both fs and device (currently only
          * @discard), expose only the per-device sysfs entry: the FS-level

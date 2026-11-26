@@ -52,7 +52,7 @@ pub fn max_of<T: num_traits::Bounded>(_x: &T) -> T {
 // memzero_explicit(): volatile writes + a compiler fence, so the store
 // can't be optimized away as dead - the wipe is the point (the technique
 // the `zeroize` crate uses internally). The keys' Drop in-kernel, which
-// has no `zeroize`; and in both builds, key material that isn't a bch_key.
+// has no `zeroize`; and in both builds, key material that isn't a Key.
 #[cfg(not(feature = "std"))]
 pub(crate) fn wipe<T: ?Sized>(v: &mut T) {
     let len = core::mem::size_of_val(v);

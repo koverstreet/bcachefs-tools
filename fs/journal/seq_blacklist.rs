@@ -34,11 +34,11 @@
 use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use crate::btree::bkey::ValidateFlags;
-use crate::format::{SbFeatures, bch_sb, SbFieldType};
+use crate::format::{SbFeatures, Sb, SbFieldType};
 use crate::locking::Guard as _;
 use crate::{sb_err_on, bch_verbose};
-use crate::journal::seq_blacklist_format::{bch_sb_field_journal_seq_blacklist,
-    journal_seq_blacklist_entry};
+use crate::journal::seq_blacklist_format::{SbFieldJournalSeqBlacklist,
+    JournalSeqBlacklistEntry};
 use crate::util::{vstructs::{Unvalidated, Validated}, rcu::RcuArray, Printbuf};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
@@ -46,10 +46,10 @@ use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
 use crate::types::Le64;
 use crate::data_structures::eytzinger::Eytzinger0;
 
-type Section = bch_sb_field_journal_seq_blacklist<Validated>;
+type Section = SbFieldJournalSeqBlacklist<Validated>;
 
 impl SbFieldOps for Section {
-    fn validate(_sb: &bch_sb<Unvalidated>, f: &bch_sb_field_journal_seq_blacklist<Unvalidated>,
+    fn validate(_sb: &Sb<Unvalidated>, f: &SbFieldJournalSeqBlacklist<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (i, e) in f.start.iter().enumerate() {
             let (start, end) = (e.start.get(), e.end.get());
@@ -64,8 +64,8 @@ impl SbFieldOps for Section {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_journal_seq_blacklist<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                f: &SbFieldJournalSeqBlacklist<Unvalidated>) {
         for (i, e) in f.start.iter().enumerate() {
             if i != 0 {
                 write!(out, " ");
@@ -180,7 +180,7 @@ fn section_add(sb: &mut (impl SbResize + ?Sized), mut start: u64, mut end: u64) 
 
     let Some(f) = sb.field_resize::<Section>(sb_field_u64s::<Section>(nr + 1)) else { return false };
     f.start[i..].rotate_right(1);
-    f.start[i] = journal_seq_blacklist_entry { start: Le64::new(start), end: Le64::new(end) };
+    f.start[i] = JournalSeqBlacklistEntry { start: Le64::new(start), end: Le64::new(end) };
 
     sb.sb_mut().features.update(|f| f | SbFeatures::journal_seq_blacklist_v3);
     true

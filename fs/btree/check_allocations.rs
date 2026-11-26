@@ -47,10 +47,10 @@ pub enum GcPhase {
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
-    pub struct gc_pos {
+    pub struct GcPos {
         #[members]
         #>[bitfield(u16)]
-        pub bits: pub struct gc_pos_bits {
+        pub bits: pub struct GcPosBits {
             #[bits(8)] pub phase: GcPhase,
             #[bits(8)] pub btree: Btree,
         },
@@ -93,23 +93,23 @@ pub fn gc_btree_order(btree: Btree) -> i32 {
  * mark with the gc pos seqlock held, and bch_mark_bucket checks against the gc
  * position inside its cmpxchg loop, so crap magically works).
  */
-impl gc_pos {
+impl GcPos {
     /* Position of (the start of) a gc phase: */
     pub fn of_phase(phase: GcPhase) -> Self {
-        Self { bits: gc_pos_bits::new().with_phase(phase), ..Default::default() }
+        Self { bits: GcPosBits::new().with_phase(phase), ..Default::default() }
     }
 
     /// gc_pos_btree(): @pos at @level of @btree, in gc's walk of the btrees.
     pub fn in_btree(btree: Btree, level: u16, pos: Bpos) -> Self {
         Self {
-            bits: gc_pos_bits::new().with_phase(GcPhase::btree).with_btree(btree),
+            bits: GcPosBits::new().with_phase(GcPhase::btree).with_btree(btree),
             level,
             pos,
         }
     }
 }
 
-impl Ord for gc_pos {
+impl Ord for GcPos {
     fn cmp(&self, r: &Self) -> Ordering {
         (self.bits.phase() as u32).cmp(&(r.bits.phase() as u32))
             .then(gc_btree_order(self.bits.btree()).cmp(&gc_btree_order(r.bits.btree())))
@@ -118,26 +118,26 @@ impl Ord for gc_pos {
     }
 }
 
-impl PartialOrd for gc_pos {
+impl PartialOrd for GcPos {
     fn partial_cmp(&self, r: &Self) -> Option<Ordering> {
         Some(self.cmp(r))
     }
 }
 
-impl PartialEq for gc_pos {
+impl PartialEq for GcPos {
     fn eq(&self, r: &Self) -> bool {
         self.cmp(r) == Ordering::Equal
     }
 }
 
-impl Eq for gc_pos {}
+impl Eq for GcPos {}
 
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_gc {
+pub struct FsGc {
     /// How far gc's walk has got: not_running, when there's none.
-    pub pos: SeqLock<gc_pos>,
+    pub pos: SeqLock<GcPos>,
 
     /*
      * The allocation code needs gc_mark in struct bucket to be correct, but
@@ -148,18 +148,18 @@ pub struct bch_fs_gc {
     pub lock: Locked<RwSem>,
 }
 
-impl bch_fs_gc {
+impl FsGc {
     pub fn phase(&self) -> GcPhase {
         self.pos.read().bits.phase()
     }
 
     /// Whether gc's walk has got to @pos: gc_visited().
-    pub fn visited(&self, pos: gc_pos) -> bool {
+    pub fn visited(&self, pos: GcPos) -> bool {
         pos <= self.pos.read()
     }
 
     /// gc's walk on to @pos - never back.
-    pub fn set_pos(&self, pos: gc_pos) {
+    pub fn set_pos(&self, pos: GcPos) {
         let cur = self.pos.read();
         assert!(pos >= cur, "gc position going backwards, from phase {} {} level {} {} to phase {} {} level {} {}",
                 cur.bits.phase() as u32, cur.bits.btree(), cur.level, { cur.pos },
@@ -169,7 +169,7 @@ impl bch_fs_gc {
 
     /// gc's walk done: not_running.
     pub fn set_not_running(&self) {
-        self.pos.write(|p| *p = gc_pos::default());
+        self.pos.write(|p| *p = GcPos::default());
     }
 }
 
@@ -224,7 +224,7 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
     let key = t.trans().paths()[iter.iter().path].locked_btree_node(level.into()).expect("the node it peeked").key_peek();
 
     let level = u32::from(level) + 1;
-    fs.gc.set_pos(gc_pos::in_btree(btree, level as u16, SPOS_MAX));
+    fs.gc.set_pos(GcPos::in_btree(btree, level as u16, SPOS_MAX));
     gc_mark_key(t, btree, level, iter.iter(), BkeySC::from(&*key))
 }
 
@@ -236,7 +236,7 @@ fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, targe
     for level in target_depth..BTREE_MAX_DEPTH as u32 {
         let mut prev = None;
         BtreeIter::new_level(trans, btree, POS_MIN, level, BtreeIterFlags::PREFETCH).for_each(trans, |t, iter, k| {
-            fs.gc.set_pos(gc_pos::in_btree(btree, level as u16, k.k.p));
+            fs.gc.set_pos(GcPos::in_btree(btree, level as u16, k.k.p));
             progress.update(t, iter)?;
 
             let node = {
@@ -294,7 +294,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
 }
 
 fn mark_superblocks(fs: &Fs) -> Result<(), BchError> {
-    fs.gc.set_pos(gc_pos::of_phase(GcPhase::sb));
+    fs.gc.set_pos(GcPos::of_phase(GcPhase::sb));
 
     fs.trans_mark_dev_sbs(UpdateTriggerFlags::GC)
 }
@@ -520,7 +520,7 @@ fn gc(fs: &Fs) -> Result<(), BchError> {
     gc_alloc_start(fs)?;
     gc_reflink_start(fs);
 
-    fs.gc.set_pos(gc_pos::of_phase(GcPhase::start));
+    fs.gc.set_pos(GcPos::of_phase(GcPhase::start));
 
     bch_err_msg!(fs, mark_superblocks(fs), "marking superblocks")?;
 

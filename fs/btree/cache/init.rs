@@ -3,7 +3,7 @@
 /* Filesystem init / exit */
 
 use super::{node_mem_alloc, node_mem_free, OwnedNode, BtreeCacheGuard};
-use crate::btree::{node::BtreeNode, cache::{bch_fs_btree_cache, BtreeNodeCacheState as State}};
+use crate::btree::{node::BtreeNode, cache::{FsBtreeCache, BtreeNodeCacheState as State}};
 use crate::data_structures::list::Walk;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -105,7 +105,7 @@ impl Fs {
     }
 }
 
-impl PlacedDrop for bch_fs_btree_cache {
+impl PlacedDrop for FsBtreeCache {
     unsafe fn placed_drop(&self) {
         let (fs, bc) = (self.container().container(), self);
 

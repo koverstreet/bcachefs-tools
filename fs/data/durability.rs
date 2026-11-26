@@ -5,22 +5,22 @@
 //!
 //! A pointer's durability is its device's - nothing for one that's gone or
 //! being evacuated - but an erasure coded pointer's is its stripe's: the
-//! stripe read from the stripes btree, so bkey_durability() takes a
+//! stripe read from the stripes btree, so BkeyDurability() takes a
 //! transaction, and hands its restarts back up, to the caller's loop.
 //!
 //! A device fails once however many of the key's pointers, or of its stripes'
 //! blocks, it backs, so it counts once: the total and the online sums are
 //! deduplicated across the key, separately - they pick different devices.
 //!
-//! The counts are bkey_durability's u8s, summed as C's are: wrapping.
+//! The counts are BkeyDurability's u8s, summed as C's are: wrapping.
 
 use crate::btree::bkey::{pos, AnyKeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::data::ec::format::Stripe;
-use crate::data::extents::{bkey_durability, extent_ptr_decoded};
+use crate::data::extents::{BkeyDurability, ExtentPtrDecoded};
 use crate::data::extents_format::Reservation;
 use crate::init::dev::DevsMask;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ec::stripe::ptr_matches_stripe;
 use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
@@ -77,7 +77,7 @@ struct StripeDev {
 /// devices' - none with fewer than nr_data online. A device @seen has counted
 /// fills its place, and isn't summed again. The desired sum is deduplicated
 /// within the stripe, not by @seen: it's per pointer, for accounting.
-fn stripe_durability(t: &TransAttempt<'_, '_>, p: &extent_ptr_decoded, ret: &mut bkey_durability,
+fn stripe_durability(t: &TransAttempt<'_, '_>, p: &ExtentPtrDecoded, ret: &mut BkeyDurability,
                      seen: &mut Seen, desired_total: Option<&mut u32>) -> Result<(), BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, p.ec.idx()), BtreeIterFlags::CACHED);
@@ -132,7 +132,7 @@ fn sort_stable_by_key(devs: &mut [StripeDev], key: impl Fn(&StripeDev) -> u8) {
 /// Of devices of equal durability, the first in block order are taken first:
 /// that decides which @seen counts, so it's C's order exactly.
 fn stripe_devs_durability(devs: &mut [StripeDev], nr_blocks: u8, nr_redundant: u8,
-                          ret: &mut bkey_durability, seen: &mut Seen, desired_total: Option<&mut u32>) {
+                          ret: &mut BkeyDurability, seen: &mut Seen, desired_total: Option<&mut u32>) {
     // unsigned, as C's: nr_redundant past nr_blocks is damage
     let nr_data = u32::from(nr_blocks).wrapping_sub(nr_redundant.into());
     let online_count = devs.iter().filter(|d| d.online).count() as u32;
@@ -169,7 +169,7 @@ fn stripe_devs_durability(devs: &mut [StripeDev], nr_blocks: u8, nr_redundant: u
 
 /// A pointer's durability: none for a cached one, its stripe's for an
 /// erasure coded one. bch2_extent_ptr_durability().
-pub fn extent_ptr_durability(t: &TransAttempt<'_, '_>, p: &extent_ptr_decoded) -> Result<u32, BchError> {
+pub fn extent_ptr_durability(t: &TransAttempt<'_, '_>, p: &ExtentPtrDecoded) -> Result<u32, BchError> {
     if p.ptr.cached() != 0 {
         return Ok(0);
     }
@@ -179,16 +179,16 @@ pub fn extent_ptr_durability(t: &TransAttempt<'_, '_>, p: &extent_ptr_decoded) -
         return Ok(fs.dev_durability(p.ptr.dev().into(), &read_lock()));
     }
 
-    let mut d = bkey_durability::default();
+    let mut d = BkeyDurability::default();
     stripe_durability(t, p, &mut d, &mut Seen::default(), None)?;
     Ok(d.total.into())
 }
 
 /// A reservation's: no pointers, but a replica count - all of it online, a
 /// claim on free space.
-fn reservation_durability(k: AnyKeySC<'_, Unvalidated>) -> Option<bkey_durability> {
+fn reservation_durability(k: AnyKeySC<'_, Unvalidated>) -> Option<BkeyDurability> {
     let nr = k.arm::<Reservation>()?.v().nr_replicas;
-    Some(bkey_durability {
+    Some(BkeyDurability {
         online:          nr,
         total:           nr,
         nr_overwritable: nr,
@@ -201,7 +201,7 @@ fn reservation_durability(k: AnyKeySC<'_, Unvalidated>) -> Option<bkey_durabilit
 
 /// The counts of @p's that need no device: its pointer, replicas, and how
 /// much is compressed.
-fn count_ptr(ret: &mut bkey_durability, p: &extent_ptr_decoded) {
+fn count_ptr(ret: &mut BkeyDurability, p: &ExtentPtrDecoded) {
     let real = u8::from(u32::from(p.ptr.dev()) != BCH_SB_MEMBER_INVALID);
     let compressed = crc_is_compressed(&p.crc);
 
@@ -221,7 +221,7 @@ pub trait BkeyVDurability: BkeyV {
     /// replica and pointer counts, the per-pointer sum of desired durability
     /// (acct) and the least of it (min_durability, an evacuating device's
     /// none): bch2_bkey_durability(). Its stripes are looked up in @t.
-    fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<bkey_durability, BchError>
+    fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<BkeyDurability, BchError>
     where Self::V: BkeyVal<State = Validated>
     {
         let key = self.as_sc();
@@ -229,7 +229,7 @@ pub trait BkeyVDurability: BkeyV {
             return Ok(r);
         }
 
-        let mut ret = bkey_durability { min_durability: u8::MAX, ..Default::default() };
+        let mut ret = BkeyDurability { min_durability: u8::MAX, ..Default::default() };
         let Some(k) = key.arm::<Ptrs>() else { return Ok(ret) };
         let fs = t.fs();
         let mut seen = Seen::default();
@@ -271,13 +271,13 @@ pub trait BkeyVDurability: BkeyV {
     /// erasure coded pointer counts as its redundancy plus one, and online
     /// isn't counted. bch2_bkey_durability_safe(), for reserving space to
     /// rewrite a key: tolerates bad pointers.
-    fn durability_safe(&self, fs: &Fs) -> bkey_durability {
+    fn durability_safe(&self, fs: &Fs) -> BkeyDurability {
         let key = self.as_sc().as_read();
         if let Some(r) = reservation_durability(key) {
             return r;
         }
 
-        let mut ret = bkey_durability { min_durability: u8::MAX, ..Default::default() };
+        let mut ret = BkeyDurability { min_durability: u8::MAX, ..Default::default() };
         let Some(k) = key.arm::<Ptrs>() else { return ret };
         let rcu = read_lock();
 
@@ -302,10 +302,10 @@ pub trait BkeyVDurability: BkeyV {
     /// A btree node pointer's durability, total and online - each pointer's
     /// device counted, unlike a data key's, as often as it's pointed to:
     /// bch2_btree_ptr_durability().
-    fn btree_ptr_durability(&self, fs: &Fs) -> bkey_durability
+    fn btree_ptr_durability(&self, fs: &Fs) -> BkeyDurability
     where Self: BkeyV<V = BtreePtrs>
     {
-        let mut ret = bkey_durability::default();
+        let mut ret = BkeyDurability::default();
         let rcu = read_lock();
 
         for ptr in self.ptrs(fs) {
@@ -344,7 +344,7 @@ impl<K: BkeyV> BkeyVDurability for K {}
 /// on a copy, the whole key's online durability recomputed - a per-pointer
 /// delta can't count devices pointers share. Either renumbers the pointers,
 /// so @k comes back unbranded.
-pub fn drop_extra_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &bch_inode_opts,
+pub fn drop_extra_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &InodeOpts,
                                                            k: Branded<'id, K>, mask: PtrMask<'id>, kill: bool)
     -> Result<K, BchError>
 {
@@ -379,7 +379,7 @@ pub fn drop_extra_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_,
 /// Of @k's pointers in @mask, the stripe_ptrs it can do without, dropped -
 /// tried on a copy, as drop_extra_durability().
 /// The devices are gathered first: dropping a stripe_ptr moves the entries.
-pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &bch_inode_opts,
+pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &InodeOpts,
                                                               k: &mut Branded<'id, K>, mask: PtrMask<'id>)
     -> Result<(), BchError>
 {
@@ -416,7 +416,7 @@ mod tests {
     /// stripe_devs_durability() of @devs, a fresh key's first stripe: its
     /// total, online and desired durability.
     fn sums(mut devs: std::vec::Vec<StripeDev>, nr_redundant: u8, seen: &mut Seen) -> (u8, u8, u32) {
-        let mut ret = bkey_durability::default();
+        let mut ret = BkeyDurability::default();
         let mut desired = 0;
         let nr_blocks = devs.len() as u8;
         stripe_devs_durability(&mut devs, nr_blocks, nr_redundant, &mut ret, seen, Some(&mut desired));

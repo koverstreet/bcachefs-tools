@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{bch2_btree_pos_to_text, cached_node, OwnedNode, BtreeCacheNotFreedReason as NotFreed,
+use super::{btree_node_pos_to_text, cached_node, OwnedNode, BtreeCacheNotFreedReason as NotFreed,
     BtreeCacheGuard};
 use crate::btree::node::{BtreeNode, BtreeWriteType};
 use crate::btree::path::LockedNode;
 use crate::btree::write::{node_write, BtreeWriteFlags};
-use crate::btree::cache::bch_fs_btree_cache;
+use crate::btree::cache::FsBtreeCache;
 use crate::journal::journal::JournalFlag;
 use crate::util::time_stats::TimeStat;
 use crate::data_structures::list::Walk;
@@ -31,7 +31,7 @@ fn replay_writeback(fs: &Fs) -> bool {
         !fs.flags.get(FsFlag::going_ro)
 }
 
-impl bch_fs_btree_cache {
+impl FsBtreeCache {
     fn can_free(&self, idx: usize) -> usize {
         let can_free = self.lock.live_nr[idx].nr_clean.get();
         if idx == 0 { can_free.saturating_sub(self.lock.nr_reserve.get()) } else { can_free }
@@ -99,7 +99,7 @@ impl Fs {
         self.reclaim_checks(lists, b, flags)?;
 
         if b.hash_val() != 0 {
-            self.event_inc_trace(events::btree_cache_reap, |out| bch2_btree_pos_to_text(out, self, b));
+            self.event_inc_trace(events::btree_cache_reap, |out| btree_node_pos_to_text(out, self, b));
         }
         Ok(held)
     }

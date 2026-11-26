@@ -10,7 +10,7 @@
 
 use super::inode::InodeInfo;
 use crate::c;
-use crate::vfs::pagecache::{bch_folio_sector, FolioState};
+use crate::vfs::pagecache::{FolioSector, FolioState};
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::os::{folio, bio::FolioHold};
@@ -79,7 +79,7 @@ impl DerefMut for FolioStateGuard<'_> {
 
 impl FolioStateGuard<'_> {
     /// s[], a sector of the folio each.
-    pub fn sectors(&mut self) -> &mut [bch_folio_sector] {
+    pub fn sectors(&mut self) -> &mut [FolioSector] {
         unsafe { core::slice::from_raw_parts_mut((&raw mut self.guard.s).cast(), self.sectors) }
     }
 }

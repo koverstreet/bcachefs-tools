@@ -24,7 +24,7 @@
 
 use crate::fs::{Dev, Fs};
 use crate::btree::iter::TransAttempt;
-use crate::alloc::{dev_select::dev_stripe_state, foreground::{bch_fs_allocator, open_buckets}};
+use crate::alloc::{dev_select::DevStripeState, foreground::{FsAllocator, OpenBuckets}};
 use crate::data::ec::head::stripe_heads_stop;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep, Locked};
 use crate::{prt, new_lock, published};
@@ -73,8 +73,8 @@ pub struct WritePointLocked {
     pub sectors_free: c_uint,
     pub prev_sectors_free: c_uint,
 
-    pub ptrs: open_buckets,
-    pub stripe: dev_stripe_state,
+    pub ptrs: OpenBuckets,
+    pub stripe: DevStripeState,
 
     pub sectors_allocated: u64,
 }
@@ -94,7 +94,7 @@ published! {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 #[init_args(data_type: DataType)]
-pub struct write_point_alloc {
+pub struct WritePointAlloc {
     pub __align: CacheAligned,
     /* the next in its hash chain: write_points_hash_lock's */
     pub hash_next: Volatile<Option<WritePointIdx>>,
@@ -109,10 +109,10 @@ pub struct write_point_alloc {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 #[init_args(data_type: DataType)]
-pub struct write_point {
+pub struct WritePoint {
     #[pin]
-    #[init(write_point_alloc::init(data_type))]
-    pub alloc: write_point_alloc,
+    #[init(WritePointAlloc::init(data_type))]
+    pub alloc: WritePointAlloc,
     pub __align: CacheAligned,
     /*
      * its writes, their IO done, run by its work item: their index updates -
@@ -124,7 +124,7 @@ pub struct write_point {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable)]
-pub struct write_point_specifier {
+pub struct WritePointSpecifier {
     pub v: c_ulong,
 }
 
@@ -149,11 +149,11 @@ pub(crate) type WritePointGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, Writ
 /// A write point, as a write names it.
 #[derive(Clone, Copy)]
 pub(crate) enum WritePointSpec<'a> {
-    Named(&'a write_point),
+    Named(&'a WritePoint),
     Hashed(c_ulong),
 }
 
-impl write_point_specifier {
+impl WritePointSpecifier {
     /// The filesystem's own write points, by name.
     pub const BTREE: Self     = Self { v: 2 };
     pub const COPYGC: Self    = Self { v: 4 };
@@ -178,14 +178,14 @@ impl write_point_specifier {
 
 // ── The hash ─────────────────────────────────────────────────────────────
 
-impl bch_fs_allocator {
+impl FsAllocator {
     fn wp_hash_slot(write_point: c_ulong) -> usize {
         hash_64(write_point as u64, WRITE_POINT_HASH_NR.ilog2()) as usize
     }
 
     /// The write point last used for @write_point, if a walk without the
     /// lock finds it: one may be missed, or moved since.
-    fn wp_hash_find(&self, write_point: c_ulong) -> Option<&write_point> {
+    fn wp_hash_find(&self, write_point: c_ulong) -> Option<&WritePoint> {
         let mut i = self.write_points_hash_lock.write_points_hash[Self::wp_hash_slot(write_point)].get();
         // bounded: a link followed racing a move may lead anywhere
         for _ in 0..self.write_points.len() {
@@ -285,7 +285,7 @@ impl Fs {
     /// used, given it, the write points in use grown first if they may be.
     /// Waiting for its lock may drop the btree locks: the caller relocks.
     pub(crate) fn writepoint_find<'a>(&'a self, t: &TransAttempt<'_, '_>, spec: WritePointSpec<'a>)
-        -> (&'a write_point, WritePointGuard<'a>)
+        -> (&'a WritePoint, WritePointGuard<'a>)
     {
         let a = &self.allocator;
         let write_point = match spec {
@@ -339,9 +339,9 @@ impl Fs {
 
 impl Fs {
     /// @wp's buckets that go - see open_bucket_should_drop() - put.
-    fn writepoint_stop(&self, wp: &write_point, ca: Option<&Dev>, ec: bool) {
+    fn writepoint_stop(&self, wp: &WritePoint, ca: Option<&Dev>, ec: bool) {
         let mut g = wp.alloc.lock.lock();
-        let mut keep = open_buckets::default();
+        let mut keep = OpenBuckets::default();
         for ob in g.ptrs.drain(self) {
             if !self.open_bucket_should_drop(&ob, ca, ec) {
                 keep.push(ob);
@@ -378,7 +378,7 @@ impl Fs {
 impl Fs {
     /// Every write point: the hashed ones, and copygc's, reconcile's and the
     /// btree's.
-    fn write_points_all(&self) -> impl Iterator<Item = &write_point> {
+    fn write_points_all(&self) -> impl Iterator<Item = &WritePoint> {
         let a = &self.allocator;
         a.write_points.iter().chain([&self.copygc.write_point, &a.reconcile_write_point, &a.btree_write_point])
     }
@@ -417,7 +417,7 @@ impl Fs {
 
 impl Fs {
     #[cold]
-    fn write_point_to_text(&self, out: &mut Printbuf, wp: &write_point) {
+    fn write_point_to_text(&self, out: &mut Printbuf, wp: &WritePoint) {
         let g = wp.alloc.lock.lock();
 
         prt!(out, "{}: {} last wrote: {}", wp.alloc.lock.write_point.get(),

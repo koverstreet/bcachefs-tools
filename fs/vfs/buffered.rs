@@ -31,7 +31,7 @@ use crate::data::{ptrs::{BkeyVPtrs, Ptrs}, read::{self, Rbio}, extents::ReadFlag
 use crate::errcode::{Errcode as err, BchError};
 use crate::format::{Bpos, Btree, CompressionType, CsumType};
 use crate::fs::Fs;
-use crate::init::error::bch2_inum_offset_err_msg_trans;
+use crate::init::error::inum_offset_err_msg_trans;
 use crate::posix::inode_opts::get_inode;
 use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
@@ -47,7 +47,7 @@ use crate::util::task::{exclusive_size, waiter, TaskSlot, WaitSync};
 use crate::{btree_trans, c, log_msg_ratelimited};
 use core::pin::Pin;
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::vfs::inode::PagecacheAdd;
 
 type F = ReadFlags;
@@ -234,7 +234,7 @@ pub fn pools_exit(q: &Quiesced<'_>) {
 struct PagecacheRead<'a> {
     fs:       &'a Fs,
     inode:    &'a InodeInfo,
-    opts:     bch_inode_opts,
+    opts:     InodeOpts,
     /// The readahead window: past this is the speculative extension
     orig_end: u64,
     extend:   bool,
@@ -317,7 +317,7 @@ fn read_pagecache(w: &PagecacheRead<'_>, iter: &mut ReadaheadIter) -> Result<(),
     if let Err(e) = ret {
         let mut m = log_msg_ratelimited!(w.fs);
         write!(m, "data read error at ");
-        bch2_inum_offset_err_msg_trans(&trans, &mut m, inum.subvol as u32, pos(inum.inum, iter.pos));
+        inum_offset_err_msg_trans(&trans, &mut m, inum.subvol as u32, pos(inum.inum, iter.pos));
         write!(m, ": data read error: {e}");
     }
     ret

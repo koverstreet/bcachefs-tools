@@ -5,9 +5,9 @@
 use super::bset::BsetTree;
 use super::keys::Keys;
 use super::{check_lookups, BtreeNode, NodeContents};
-use crate::btree::bkey::{BkeyP, BkeySC, BkeyV, bkey_packed_padded, BkeyPackPosRet};
+use crate::btree::bkey::{BkeyP, BkeySC, BkeyV, BkeyPackedPadded, BkeyPackPosRet};
 use crate::btree::node::bset::MAX_BSETS;
-use crate::format::{Bpos, bkey};
+use crate::format::{Bpos, Bkey};
 use crate::fs::Fs;
 use crate::prt;
 use crate::debug::trace::events;
@@ -218,7 +218,7 @@ impl KeyIter {
      */
     pub fn init(&mut self, fs: &Fs, keys: &Keys<'_>, search: &Bpos) {
         let b = keys.contents();
-        let mut p = ::pin_init::zeroed::<bkey_packed_padded>();
+        let mut p = ::pin_init::zeroed::<BkeyPackedPadded>();
         let mut k = [0u16; NR];
 
         ebug_assert!(*search >= keys.min_key());
@@ -407,7 +407,7 @@ impl KeyIter {
         }
     }
 
-    pub fn peek_unpack<'u>(&mut self, keys: &Keys<'u>, u: &'u mut bkey) -> Option<BkeySC<'u>> {
+    pub fn peek_unpack<'u>(&mut self, keys: &Keys<'u>, u: &'u mut Bkey) -> Option<BkeySC<'u>> {
         let k = self.peek(keys)?;
 
         Some(keys.disassemble(k, u))

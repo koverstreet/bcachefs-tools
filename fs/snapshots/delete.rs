@@ -60,7 +60,7 @@ use crate::btree::iter::{
 };
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::init::progress::progress_indicator;
+use crate::init::progress::ProgressIndicator;
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::errcode::{Errcode, BchError};
@@ -128,7 +128,7 @@ pub(crate) struct SnapshotDelete {
     nodes:    Locked<RwSem, Option<DeleteNodes>>,
     /// Which sweep the progress describes: 1 or 2.
     version:  AtomicU32,
-    progress: progress_indicator,
+    progress: ProgressIndicator,
 }
 
 impl SnapshotDelete {

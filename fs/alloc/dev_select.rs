@@ -3,7 +3,7 @@
 //! Device selection for allocation - foreground.c's: which devices a write's
 //! copies go to, in what order.
 //!
-//! A dev_stripe_state is a round robin over the devices - a write point's,
+//! A DevStripeState is a round robin over the devices - a write point's,
 //! the journal's, a stripe head's: a clock hand per device, the smallest
 //! allocated from, each allocation adding the inverse of the device's free
 //! space, so the round robin favours free space. Hands are rescaled before
@@ -18,9 +18,9 @@
 //! it), then the clock hands.
 
 use crate::fs::{Dev, Fs};
-use crate::alloc::{buckets::bch_dev_usage, foreground::{alloc_request, dev_alloc_list, Watermark}};
+use crate::alloc::{buckets::DevUsage, foreground::{alloc_request, DevAllocList, Watermark}};
 use crate::format::BCH_REPLICAS_MAX;
-use crate::init::dev::{bch_devs_mask, DevsMask};
+use crate::init::dev::DevsMask;
 use crate::sb::members_format::BCH_SB_MEMBERS_MAX;
 use crate::debug::trace::events;
 use crate::os::kernel::likely;
@@ -44,9 +44,9 @@ use cstruct_macros::MaybeZeroable;
  */
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
-pub struct dev_stripe_state {
+pub struct DevStripeState {
     pub next_alloc: [u64; BCH_SB_MEMBERS_MAX as usize],
-    pub cached_devs: bch_devs_mask,
+    pub cached_devs: DevsMask,
 }
 
 published! {
@@ -70,18 +70,18 @@ const HAND_RESCALE: u64 = 1 << 62;    /* rescale past this */
 const HAND_MAX: u64     = 1 << 56;    /* the most, after a rescale */
 const HAND_INV: u64     = 1 << 52;    /* the most an allocation adds: no free space */
 
-impl dev_stripe_state {
+impl DevStripeState {
     /// @devs the devices it's choosing between: those new to it join at the
     /// least hand of the rest - raised to it, never lowered, so one rejoining
     /// keeps its history, and doesn't win every tie while its siblings starve.
-    fn sync(&mut self, devs: &bch_devs_mask) {
-        if likely(self.cached_devs.d == devs.d) {
+    fn sync(&mut self, devs: &DevsMask) {
+        if likely(self.cached_devs == *devs) {
             return;
         }
 
-        let mut added = devs.d;
-        added.andnot(&self.cached_devs.d);
-        if let Some(min) = devs.d.iter().filter(|&i| !added.test(i)).map(|i| self.next_alloc[i]).min() {
+        let mut added = *devs;
+        added.andnot(&self.cached_devs);
+        if let Some(min) = devs.iter().filter(|&i| !added.test(i)).map(|i| self.next_alloc[i]).min() {
             for i in added.iter() {
                 self.next_alloc[i] = self.next_alloc[i].max(min);
             }
@@ -106,7 +106,7 @@ impl dev_stripe_state {
 
     /// An allocation from @ca, its usage @usage: its hand advanced by the
     /// inverse of its free space.
-    pub fn increment(&mut self, ca: &Dev, usage: &bch_dev_usage) {
+    pub fn increment(&mut self, ca: &Dev, usage: &DevUsage) {
         let free = ca.free_buckets_at(usage, Watermark::normal);
         let v = &mut self.next_alloc[usize::from(ca.dev_idx)];
 
@@ -118,12 +118,12 @@ impl dev_stripe_state {
 
     /// @devs into @ret, ordered for allocation: by @domain_keys, then those
     /// @required, then the hands - ties as they came, by device index.
-    fn alloc_list(&mut self, devs: &bch_devs_mask, domain_keys: &[u64; NR_DEVS],
-                  required: Option<&DevsMask>, ret: &mut dev_alloc_list) {
+    fn alloc_list(&mut self, devs: &DevsMask, domain_keys: &[u64; NR_DEVS],
+                  required: Option<&DevsMask>, ret: &mut DevAllocList) {
         self.sync(devs);
 
         ret.nr = 0;
-        for i in devs.d.iter() {
+        for i in devs.iter() {
             ret.data[ret.nr as usize] = i as u8;
             ret.nr += 1;
         }
@@ -150,7 +150,7 @@ impl alloc_request<'_, '_> {
         if required.test(dev as usize) {
             return true;
         }
-        let nr_required = required.iter().filter(|&i| self.devs_may_alloc.d.test(i)).count() as u32;
+        let nr_required = required.iter().filter(|&i| self.devs_may_alloc.test(i)).count() as u32;
         u32::from(self.nr_replicas).wrapping_sub(self.nr_effective) > nr_required
     }
 }
@@ -161,7 +161,7 @@ impl Fs {
     /// erasure coding, failure domains are a hard requirement: a device
     /// sharing one with a chosen block is excluded.
     pub(crate) fn domain_keys_update(&self, req: &mut alloc_request) {
-        let may = req.devs_may_alloc.d;
+        let may = req.devs_may_alloc;
         {
             let rcu = read_lock();
             for i in may.iter() {
@@ -171,14 +171,14 @@ impl Fs {
 
         if req.bits.failure_domains_required() {
             for i in may.iter().filter(|&i| req.domain_keys[i] != 0) {
-                req.devs_may_alloc.d.clear(i);
+                req.devs_may_alloc.clear(i);
             }
         }
     }
 
     /// @req's devs_sorted: its devs_may_alloc, in the order to allocate from
     /// them, @stripe's hands breaking ties.
-    pub fn dev_alloc_list(&self, stripe: &mut dev_stripe_state, req: &mut alloc_request) {
+    pub fn dev_alloc_list(&self, stripe: &mut DevStripeState, req: &mut alloc_request) {
         self.domain_keys_update(req);
         let required = req.devs_required();
         stripe.alloc_list(&req.devs_may_alloc, &req.domain_keys, required.as_ref(), &mut req.devs_sorted);
@@ -202,7 +202,7 @@ impl Fs {
         }
 
         let required = &p.placement_required[n as usize - 1];
-        let may = &req.devs_may_alloc.d;
+        let may = &req.devs_may_alloc;
         (required.get().intersects(may) && may.weight() > n.wrapping_sub(req.nr_effective)).then_some(required)
     }
 
@@ -227,12 +227,12 @@ impl Fs {
     }
 
     /// The journal's: its domain keys in @domain_keys, not an alloc_request.
-    pub fn dev_alloc_list_devs(&self, stripe: &mut dev_stripe_state, devs: &bch_devs_mask,
-                               devs_chosen: &bch_devs_mask, domain_keys: &mut [u64; NR_DEVS],
-                               ret: &mut dev_alloc_list) {
+    pub fn dev_alloc_list_devs(&self, stripe: &mut DevStripeState, devs: &DevsMask,
+                               devs_chosen: &DevsMask, domain_keys: &mut [u64; NR_DEVS],
+                               ret: &mut DevAllocList) {
         {
             let rcu = read_lock();
-            for i in devs.d.iter() {
+            for i in devs.iter() {
                 domain_keys[i] = self.dev_domain_key(devs_chosen, i as u32, &rcu);
             }
         }

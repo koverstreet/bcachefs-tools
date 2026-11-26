@@ -17,13 +17,13 @@ use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{BKEY_U64S, BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::xattr_format::Xattr;
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::posix::str_hash::{self, HashTable, bch_hash_info};
+use crate::posix::str_hash::{self, HashTable, HashInfo};
 use crate::util::{os_str::{OsStr, OsStrExt}, vstructs::{InPlace, Unvalidated, Validated}, Printbuf};
 use crate::format::Btree;
 
@@ -43,11 +43,11 @@ impl HashTable for Xattrs {
 
     const BTREE: Btree = Btree::xattrs;
 
-    fn hash_key(info: &bch_hash_info, key: &XattrKey<'_>) -> u64 {
+    fn hash_key(info: &HashInfo, key: &XattrKey<'_>) -> u64 {
         hash(info, key.ty, key.name.as_bytes())
     }
 
-    fn hash_bkey(info: &bch_hash_info, k: BkeySC<'_, Xattr<Validated>>) -> u64 {
+    fn hash_bkey(info: &HashInfo, k: BkeySC<'_, Xattr<Validated>>) -> u64 {
         let (ty, name) = k.v().key();
         hash(info, ty, name)
     }
@@ -63,7 +63,7 @@ impl HashTable for Xattrs {
 
 /// An xattr's hash under @info: its type, then its name - as
 /// bch2_xattr_hash().
-fn hash(info: &bch_hash_info, ty: XattrType, name: &[u8]) -> u64 {
+fn hash(info: &HashInfo, ty: XattrType, name: &[u8]) -> u64 {
     str_hash::hash_parts(info, &[&[ty.0 as u8], name], false)
 }
 
@@ -237,8 +237,8 @@ impl crate::btree::bkey::BkeyOps for Xattr {
 /// if @buffer is too small, ENOENT if there's no such xattr.
 pub fn get_trans(
     t:      &TransAttempt<'_, '_>,
-    inode:  &bch_inode_unpacked,
-    inum:   subvol_inum,
+    inode:  &InodeUnpacked,
+    inum:   SubvolInum,
     ty:     XattrType,
     name:   &OsStr,
     buffer: Option<&mut [u8]>,
@@ -253,8 +253,8 @@ pub fn get_trans(
 pub fn lookup<'i, 'a>(
     t:     &'i TransAttempt<'a, '_>,
     iter:  &'i mut BtreeIter<'a>,
-    inode: &bch_inode_unpacked,
-    inum:  subvol_inum,
+    inode: &InodeUnpacked,
+    inum:  SubvolInum,
     ty:    XattrType,
     name:  &OsStr,
     flags: BtreeIterFlags,
@@ -277,8 +277,8 @@ fn copy_out(buffer: Option<&mut [u8]>, v: &[u8]) -> Result<usize, BchError> {
 /// __bch2_xattr_set(). ERANGE if it doesn't fit in a key.
 pub fn set_key(
     t:         &TransAttempt<'_, '_>,
-    inum:      subvol_inum,
-    hash_info: &bch_hash_info,
+    inum:      SubvolInum,
+    hash_info: &HashInfo,
     name:      &OsStr,
     value:     &[u8],
     ty:        XattrType,
@@ -304,8 +304,8 @@ pub fn set_key(
 #[allow(clippy::too_many_arguments)]
 pub fn set_trans(
     t:     &TransAttempt<'_, '_>,
-    inum:  subvol_inum,
-    inode: &mut bch_inode_unpacked,
+    inum:  SubvolInum,
+    inode: &mut InodeUnpacked,
     name:  &OsStr,
     value: Option<&[u8]>,
     ty:    XattrType,
@@ -343,8 +343,8 @@ pub fn set_trans(
 #[allow(clippy::too_many_arguments)]
 pub fn set(
     t:     &TransAttempt<'_, '_>,
-    inum:  subvol_inum,
-    inode: &mut bch_inode_unpacked,
+    inum:  SubvolInum,
+    inode: &mut InodeUnpacked,
     name:  &OsStr,
     val:   &[u8],
     ty:    XattrType,
@@ -414,7 +414,7 @@ mod vfs {
     /// @inode's options, as bcachefs.* xattrs - or with @all,
     /// bcachefs_effective.*, inherited ones too: as
     /// bch2_xattr_list_bcachefs().
-    fn list_bcachefs(inode: &bch_inode_unpacked, buf: &mut XattrBuf<'_>, all: bool)
+    fn list_bcachefs(inode: &InodeUnpacked, buf: &mut XattrBuf<'_>, all: bool)
         -> Result<(), BchError>
     {
         let prefix: &[u8] = if all { b"bcachefs_effective." } else { b"bcachefs." };
@@ -473,7 +473,7 @@ mod vfs {
         -> Result<(), BchError>
     {
         let name = OsStr::from_bytes(name.to_bytes());
-        let mut inode = bch_inode_unpacked::default();
+        let mut inode = InodeUnpacked::default();
 
         // Updating the VFS inode wants the inode's btree position still
         // locked: in the attempt that wrote it, after its commit.
@@ -527,8 +527,8 @@ mod vfs {
     /// inode_opt_set_fn().
     fn inode_opt_set(
         t:       &TransAttempt<'_, '_>,
-        inum:    subvol_inum,
-        bi:      &mut bch_inode_unpacked,
+        inum:    SubvolInum,
+        bi:      &mut InodeUnpacked,
         opt:     InodeOpt,
         v:       u64,
         defined: bool,

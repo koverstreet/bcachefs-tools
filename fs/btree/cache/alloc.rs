@@ -6,8 +6,8 @@ use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
 use crate::util::{alloc::{flags, Flags}, time_stats::TimeStat, log::LogMsg};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::{BtreeNode, BtreeWriteType};
-use crate::btree::path::{bch2_btree_path_to_text, LockedNode, PathIdx, Paths, Write};
-use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write, node_read, ReadInFlightNode};
+use crate::btree::path::{btree_path_to_text, LockedNode, PathIdx, Paths, Write};
+use crate::btree::read::{btree_node_wait_on_read, btree_node_wait_on_write, node_read, ReadInFlightNode};
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::data::extents_format::BKEY_BTREE_PTR_U64s_MAX;
@@ -221,8 +221,8 @@ impl BtreeTrans<'_> {
                 }
                 drop(held);
 
-                bch2_btree_node_wait_on_read(self, paths, b);
-                bch2_btree_node_wait_on_write(self, paths, b);
+                btree_node_wait_on_read(self, paths, b);
+                btree_node_wait_on_write(self, paths, b);
                 continue;
             }
 
@@ -384,7 +384,7 @@ impl BtreeTrans<'_> {
 
                 fs.event_inc_trace(events::trans_restart_memory_allocation_failure, |out| {
                     prt!(out, "{}\n", self.fn_name());
-                    bch2_btree_path_to_text(out, self, p, &paths[p]);
+                    btree_path_to_text(out, self, p, &paths[p]);
                 });
                 return Err(self.restart(Errcode::transaction_restart_fill_mem_alloc_fail));
             }

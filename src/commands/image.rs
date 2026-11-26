@@ -15,13 +15,13 @@ use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::util::{HumanReadable, ToText, vstructs::Head, printbuf::Printbuf};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bcachefs_kernel::c;
-use bcachefs_kernel::alloc::buckets::bch_dev_usage_full;
-use bcachefs_kernel::alloc::write_point::write_point_specifier;
+use bcachefs_kernel::alloc::buckets::DevUsageFull;
+use bcachefs_kernel::alloc::write_point::WritePointSpecifier;
 use bcachefs_kernel::data::{write::WriteFlags, moving::{MoveStats, MovingCtxt}};
 use bcachefs_kernel::errcode::Errcode;
-use bcachefs_kernel::opts::{bch_opts, OptFlags, OptId};
+use bcachefs_kernel::opts::{Opts, OptFlags, OptId};
 use bcachefs_kernel::sb::members::DevReadRefKind;
-use bcachefs_kernel::sb::members_format::{BCH_MIN_NR_NBUCKETS, bch_sb_field_members_v2};
+use bcachefs_kernel::sb::members_format::{BCH_MIN_NR_NBUCKETS, SbFieldMembersV2};
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc};
@@ -33,7 +33,7 @@ use crate::commands::format::{
     take_opt_value, take_short_value, version_parse,
 };
 use crate::commands::format_util::{kernel_format_version, DevOpts, FormatOpts};
-use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
+use crate::commands::opts::{find_opt_negated, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::commands::format_util::SUPERBLOCK_SIZE_DEFAULT;
@@ -142,7 +142,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
 
     let target = Target::Dev(target_dev).encode();
     let stats = MoveStats::default();
-    let ctxt = MovingCtxt::new(fs, &stats, write_point_specifier::hashed(1), false)
+    let ctxt = MovingCtxt::new(fs, &stats, WritePointSpecifier::hashed(1), false)
         .map_err(|_| anyhow!("allocating a moving context"))?;
     let btree_id_nr = Btree::NR;
 
@@ -208,7 +208,7 @@ fn prt_sectors(out: &mut Printbuf, v: u64) {
 fn print_data_type_usage(
     out: &mut Printbuf,
     ca: &Dev,
-    usage: &bch_dev_usage_full,
+    usage: &DevUsageFull,
     data_type: DataType,
 ) {
     let d = &usage.d[data_type];
@@ -372,12 +372,12 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     sb.sb_mut().features.update(|f| f | SbFeatures::small_image);
 
     // Resize members_v2 to contain only one device
-    let member_bytes = sb.field::<bch_sb_field_members_v2>()
+    let member_bytes = sb.field::<SbFieldMembersV2>()
         .expect("members_v2 field missing")
         .member_bytes.get();
-    let u64s = (std::mem::size_of::<Head<bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
+    let u64s = (std::mem::size_of::<Head<SbFieldMembersV2>>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
-    fs.sb_resize(&mut sb).field_resize::<bch_sb_field_members_v2>(u64s);
+    fs.sb_resize(&mut sb).field_resize::<SbFieldMembersV2>(u64s);
     sb.sb_mut().nr_devices = 1;
     sb.sb_mut().set_multi_device(false);
 
@@ -389,7 +389,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 /// Create a new filesystem image from a directory.
 fn image_create_inner(
     fs_opt_strs: &[(OptId, String)],
-    fs_opts: bch_opts,
+    fs_opts: Opts,
     mut format_opts: FormatOpts<'_>,
     dev_opts: DevOpts,
     src_path: &str,
@@ -461,7 +461,7 @@ fn image_create_inner(
         .collect();
     drop(devs);
 
-    let mut opts: bch_opts = Default::default();
+    let mut opts: Opts = Default::default();
     opts.set_copygc_enabled(false);
     opts.set_reconcile_enabled(false);
     opts.set_nostart(true);
@@ -542,7 +542,7 @@ fn image_update_inner(
     }
 
     // Open filesystem
-    let mut opts: bch_opts = Default::default();
+    let mut opts: Opts = Default::default();
     opts.set_copygc_enabled(false);
     opts.set_reconcile_enabled(false);
     opts.set_nostart(true);
@@ -711,9 +711,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
 
     let mut dev_label: Option<String> = None;
     let mut dev_fs_size: u64 = 0;
-    let mut dev_opts: bch_opts = Default::default();
+    let mut dev_opts: Opts = Default::default();
 
-    let mut fs_opts: bch_opts = Default::default();
+    let mut fs_opts: Opts = Default::default();
     let mut deferred_opts: Vec<(OptId, String)> = Vec::new();
 
     let mut image_path: Option<String> = None;
@@ -738,7 +738,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
             };
             let name = raw_name.replace('-', "_");
 
-            if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
+            if let Some((opt_id, opt, negated)) = find_opt_negated(&name) {
                 if opt.flags.bits() & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()

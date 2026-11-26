@@ -16,8 +16,8 @@
 
 use cstruct_macros::{Init, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
-use crate::format::bch_sb;
-use crate::sb::counters_format::{bch_sb_field_counters, PersistentCounter, PersistentCounter_arms,
+use crate::format::Sb;
+use crate::sb::counters_format::{SbFieldCounters, PersistentCounter, PersistentCounter_arms,
     PersistentCounterStable};
 use crate::debug::trace::{events, TraceEvent};
 use crate::errcode::BchError;
@@ -34,7 +34,7 @@ pub const NR_RECENT_COUNTERS: u32 = 20;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_counters {
+pub struct FsCounters {
     mount: [AtomicU64; PersistentCounter::NR as usize],
     #[init(PerCpu::init())]
     pub now: PerCpu<[u64; PersistentCounter::NR as usize]>,
@@ -143,7 +143,7 @@ impl Fs {
 const NR: usize = PersistentCounter::NR as usize;
 const NR_STABLE: usize = PersistentCounterStable::NR as usize;
 
-impl bch_fs_counters {
+impl FsCounters {
     /// Counter @i, every CPU's count summed.
     fn now(&self, i: usize) -> u64 {
         self.now.at(i).sum()
@@ -221,9 +221,9 @@ impl Fs {
     }
 }
 
-impl SbFieldOps for bch_sb_field_counters<Validated> {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_counters<Unvalidated>) {
+impl SbFieldOps for SbFieldCounters<Validated> {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                f: &SbFieldCounters<Unvalidated>) {
         for ctr in COUNTERS {
             if let Some(v) = f.d.get(ctr.stable_id as usize) {
                 prt!(out, "{} \t{}\n", ctr.name, v.get());
@@ -233,7 +233,7 @@ impl SbFieldOps for bch_sb_field_counters<Validated> {
 
     /// The counts now; those it has no slot for are left as they are.
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let d: &[Le64] = sb.field::<bch_sb_field_counters>().map_or(&[], |f| &f.d);
+        let d: &[Le64] = sb.field::<SbFieldCounters>().map_or(&[], |f| &f.d);
         for (i, ctr) in COUNTERS.iter().enumerate() {
             if let Some(v) = d.get(ctr.stable_id as usize) {
                 fs.counters.set_now(i, v.get());
@@ -247,9 +247,9 @@ impl SbFieldOps for bch_sb_field_counters<Validated> {
     fn from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let mut sb = fs.sb_resize(guard);
 
-        let u64s = sb_field_u64s::<bch_sb_field_counters>(NR_STABLE);
-        let _ = sb.field_get_minsize::<bch_sb_field_counters>(u64s);
-        let Some(f) = sb.field_mut::<bch_sb_field_counters>() else { return Ok(()) };
+        let u64s = sb_field_u64s::<SbFieldCounters>(NR_STABLE);
+        let _ = sb.field_get_minsize::<SbFieldCounters>(u64s);
+        let Some(f) = sb.field_mut::<SbFieldCounters>() else { return Ok(()) };
 
         for (i, ctr) in COUNTERS.iter().enumerate() {
             if let Some(d) = f.d.get_mut(ctr.stable_id as usize) {
@@ -274,9 +274,9 @@ pub(crate) fn queue_recent(fs: &Fs) {
 /// mount. A counter the superblock has no slot for starts at 0.
 pub fn counters_init(fs: &Fs) {
     let mut sb = fs.sb_lock();
-    let _ = bch_sb_field_counters::<Validated>::to_cpu(fs, &mut sb);
+    let _ = SbFieldCounters::<Validated>::to_cpu(fs, &mut sb);
 
-    let d: &[Le64] = sb.field::<bch_sb_field_counters>().map_or(&[], |f| &f.d);
+    let d: &[Le64] = sb.field::<SbFieldCounters>().map_or(&[], |f| &f.d);
     for (i, ctr) in COUNTERS.iter().enumerate() {
         fs.counters.mount[i].store(d.get(ctr.stable_id as usize).map_or(0, |v| v.get()), Relaxed);
     }
@@ -288,14 +288,14 @@ pub fn counters_init(fs: &Fs) {
 pub mod ioctl {
     use super::*;
     use crate::bcachefs_ioctl::BCH_IOCTL_QUERY_COUNTERS_MOUNT;
-    use crate::bcachefs_ioctl::bch_ioctl_query_counters;
+    use crate::bcachefs_ioctl::IoctlQueryCounters;
     use crate::errcode::{Errcode, BchError};
     use crate::os::ioctl::UserVstruct;
 
     /// The counters, by stable id, up to the user's @nr of them: now, or at
     /// mount (BCH_IOCTL_QUERY_COUNTERS_MOUNT). @nr comes back as the number
     /// filled.
-    pub fn query_counters(fs: &Fs, user: UserVstruct<bch_ioctl_query_counters>)
+    pub fn query_counters(fs: &Fs, user: UserVstruct<IoctlQueryCounters>)
         -> Result<(), BchError>
     {
         let mut arg = user.head()?;

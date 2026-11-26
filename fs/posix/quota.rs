@@ -15,9 +15,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{AnyKeySC, BkeyWhole};
-use crate::format::bch_sb;
-use crate::posix::inode::bch_inode_unpacked;
-use crate::posix::quota_format::{bch_sb_field_quota, Quota, QuotaCounter, QuotaType};
+use crate::format::Sb;
+use crate::posix::inode::InodeUnpacked;
+use crate::posix::quota_format::{SbFieldQuota, Quota, QuotaCounter, QuotaType};
 use crate::util::{vstructs::{Unvalidated, Validated}, Printbuf};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -34,7 +34,7 @@ use crate::format::Btree;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
-pub struct bch_qid {
+pub struct Qid {
     pub q: [u32; QuotaType::NR as usize],
 }
 
@@ -135,9 +135,9 @@ const COUNTERS: [&str; QuotaCounter::NR as usize] = ["space", "inodes"];
 
 // ── The superblock section ───────────────────────────────────────────────
 
-impl SbFieldOps for bch_sb_field_quota<Validated> {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                q: &bch_sb_field_quota<Unvalidated>) {
+impl SbFieldOps for SbFieldQuota<Validated> {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                q: &SbFieldQuota<Unvalidated>) {
         for (t, name) in q.q.iter().zip(TYPES) {
             write!(out, "{name}: flags {:x}", t.flags.get());
             for (c, counter) in t.c.iter().zip(COUNTERS) {
@@ -180,8 +180,8 @@ pub fn set_qtypes(qtypes: u32) -> impl Iterator<Item = usize> {
 }
 
 /// The ids an inode's usage is charged to.
-pub fn qid(u: &bch_inode_unpacked) -> bch_qid {
-    bch_qid { q: [u.bi_uid, u.bi_gid, u.bi_project.saturating_sub(1)] }
+pub fn qid(u: &InodeUnpacked) -> Qid {
+    Qid { q: [u.bi_uid, u.bi_gid, u.bi_project.saturating_sub(1)] }
 }
 
 #[cfg(CONFIG_BCACHEFS_QUOTA)]
@@ -203,7 +203,7 @@ impl<'f> QuotaWarnings<'f> {
 }
 
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
-pub fn acct(_fs: &Fs, _qid: bch_qid, _counter: usize, _v: i64, _mode: QuotaAcctMode,
+pub fn acct(_fs: &Fs, _qid: Qid, _counter: usize, _v: i64, _mode: QuotaAcctMode,
             _w: &mut QuotaWarnings<'_>) -> Result<(), BchError> {
     Ok(())
 }
@@ -214,13 +214,13 @@ pub fn fs_quota_read(_fs: &Fs) -> Result<(), BchError> {
 }
 
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
-pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: bch_qid, _src: bch_qid, _space: u64,
+pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: Qid, _src: Qid, _space: u64,
                 _mode: QuotaAcctMode, _w: &mut QuotaWarnings<'_>) -> Result<(), BchError> {
     Ok(())
 }
 
 #[cfg(not(CONFIG_BCACHEFS_QUOTA))]
-pub fn prealloc(_fs: &Fs, _qid: bch_qid) -> Result<(), BchError> {
+pub fn prealloc(_fs: &Fs, _qid: Qid) -> Result<(), BchError> {
     Ok(())
 }
 
@@ -229,7 +229,7 @@ mod vfs {
     use super::*;
     use crate::c;
     use crate::init::dev::bch_sb_buf;
-    use crate::snapshots::subvolume::subvol_inum;
+    use crate::snapshots::subvolume::SubvolInum;
     use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
@@ -513,7 +513,7 @@ mod vfs {
     /// @qid's entries, in each quota type accounted: what accounting to it
     /// under a lock - an inode's ei_quota - needs made first, as it can't
     /// allocate there.
-    pub fn prealloc(fs: &Fs, qid: bch_qid) -> Result<(), BchError> {
+    pub fn prealloc(fs: &Fs, qid: Qid) -> Result<(), BchError> {
         for i in set_qtypes(enabled_qtypes(fs)) {
             fs.quotas.get(i).table.prealloc(qid.q[i] as usize)?;
         }
@@ -524,7 +524,7 @@ mod vfs {
     /// none of them: as bch2_quota_acct(). Its warnings are @w's to send.
     pub fn acct(
         fs:      &Fs,
-        qid:     bch_qid,
+        qid:     Qid,
         counter: usize,
         v:       i64,
         mode:    QuotaAcctMode,
@@ -552,8 +552,8 @@ mod vfs {
     pub fn transfer(
         fs:     &Fs,
         qtypes: u32,
-        dst:    bch_qid,
-        src:    bch_qid,
+        dst:    Qid,
+        src:    Qid,
         space:  u64,
         mode:   QuotaAcctMode,
         w:      &mut QuotaWarnings<'_>,
@@ -641,13 +641,13 @@ mod vfs {
 
     /// The quota section, made with the default grace period if there isn't
     /// one.
-    fn sb_get_or_create_quota(sb: &mut (impl SbResize + ?Sized)) -> Option<&mut bch_sb_field_quota<Validated>> {
-        if sb.field::<bch_sb_field_quota>().is_some() {
-            return sb.field_mut::<bch_sb_field_quota>();
+    fn sb_get_or_create_quota(sb: &mut (impl SbResize + ?Sized)) -> Option<&mut SbFieldQuota<Validated>> {
+        if sb.field::<SbFieldQuota>().is_some() {
+            return sb.field_mut::<SbFieldQuota>();
         }
 
-        let u64s = core::mem::size_of::<bch_sb_field_quota>() / core::mem::size_of::<u64>();
-        let q = sb.field_resize::<bch_sb_field_quota>(u64s as u32)?;
+        let u64s = core::mem::size_of::<SbFieldQuota>() / core::mem::size_of::<u64>();
+        let q = sb.field_resize::<SbFieldQuota>(u64s as u32)?;
 
         for t in &mut q.q {
             for c in &mut t.c {
@@ -659,7 +659,7 @@ mod vfs {
 
     /// The superblock's time and warning limits, into memory.
     fn sb_quota_read(fs: &Fs, sb: &bch_sb_buf) {
-        let Some(sb_quota) = sb.field::<bch_sb_field_quota>() else {
+        let Some(sb_quota) = sb.field::<SbFieldQuota>() else {
             return;
         };
 
@@ -689,7 +689,7 @@ mod vfs {
             return Ok(());
         }
 
-        let u = match inode::find_by_inum_nowarn_trans(t, subvol_inum {
+        let u = match inode::find_by_inum_nowarn_trans(t, SubvolInum {
             subvol: master_subvol as u64,
             inum:   k.k.p.offset,
         }) {

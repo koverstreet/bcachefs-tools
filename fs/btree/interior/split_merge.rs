@@ -5,7 +5,7 @@
 use core::ptr;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, ValidateFlags,
-                         BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX, bkey_format_state};
+                         BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX, BkeyFormatState};
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitFlags,
@@ -18,13 +18,13 @@ use crate::btree::node::sort::{btree_sort_into, build_aux_trees, maybe_compact_w
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::shard::key_is_shard_boundary;
 use crate::btree::validate::{bkey_in_btree_node, validate_from};
-use crate::btree::locking::btree_bkey_cached_common;
+use crate::btree::locking::BtreeBkeyCachedCommon;
 use crate::data::{extents_format::BtreePtrV2, write::WriteFlags, keylist::{keys, keys_mut}};
 use crate::util::time_stats::TimeStat;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, bkey_format, BTREE_MAX_DEPTH, btree_node, KEY_FORMAT_LOCAL_BTREE};
+use crate::format::{Bpos, Btree, BkeyFormat, BTREE_MAX_DEPTH, btree_node, KEY_FORMAT_LOCAL_BTREE};
 use crate::fs::Fs;
 use crate::init::{error::{count_fsck_err, BkeyValidate}, progress::Progress};
 use crate::locking::MemallocFlags;
@@ -294,7 +294,7 @@ pub(super) fn split_threshold(fs: &Fs) -> usize {
  */
 struct SplitLayout {
     pivot:  Bpos,
-    format: [bkey_format; 2],
+    format: [BkeyFormat; 2],
     size:   [usize; 2],
 }
 
@@ -310,7 +310,7 @@ struct SplitLayout {
  */
 fn predict_split(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], inserting: Option<&InteriorUpdate<'_>>,
                  n1_target_u64s: usize, mut pivot: Bpos) -> SplitLayout {
-    let mut state = [bkey_format_state::new(), bkey_format_state::new()];
+    let mut state = [BkeyFormatState::new(), BkeyFormatState::new()];
     let mut nr_keys = [0; 2];
     let mut val_u64s = [0; 2];
     let (mut u64s, mut n1_u64s) = (0, n1_target_u64s);
@@ -464,7 +464,7 @@ fn merge_layout(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>]) -> Option<SplitLayo
 
 #[derive(Clone, Copy)]
 struct DstLayout {
-    format:  bkey_format,
+    format:  BkeyFormat,
     min_key: Bpos,
     max_key: Bpos,
 }
@@ -895,7 +895,7 @@ fn set_sib_u64s(b: Node<'_>, sib: usize, u64s: u16) {
 }
 
 /// @path's node above @level, as btree_node_parent() has it: for identity.
-fn parent(paths: &Paths<'_>, path: PathIdx, level: usize) -> *mut btree_bkey_cached_common {
+fn parent(paths: &Paths<'_>, path: PathIdx, level: usize) -> *mut BtreeBkeyCachedCommon {
     let p = paths[path].l[level + 1].b;
     if p.is_node() { p.as_ptr() } else { ptr::null_mut() }
 }
@@ -1042,7 +1042,7 @@ fn merge_sibling(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
             let sib_parent = paths[path].locked_btree_node(level + 1).expect("a sibling's parent, relocked");
             let hash = paths[path].l[level + 1].iter.peek_all().map(|i| {
                 let keys = sib_parent.keys(sib_parent.contents());
-                let mut u = crate::format::bkey::new();
+                let mut u = crate::format::Bkey::new();
                 btree_ptr_hash_val(keys.disassemble(i, &mut u))
             });
 
@@ -1063,12 +1063,12 @@ fn merge_sibling(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
 
 /// The srcs' u64s together: in the format they'd be packed into, if they've
 /// all been read, and it - their estimates' sum if not.
-fn merge_u64s_and_format(paths: &Paths<'_>, level: usize, srcs: &[Src]) -> (usize, Option<bkey_format>) {
+fn merge_u64s_and_format(paths: &Paths<'_>, level: usize, srcs: &[Src]) -> (usize, Option<BkeyFormat>) {
     let Some(nodes) = srcs.iter().map(|s| s.node(paths, level)).collect::<Option<ArrayVec<Node<'_>, 3>>>() else {
         return (srcs.iter().map(|s| usize::from(s.live_u64s)).sum(), None);
     };
 
-    let mut s = bkey_format_state::new();
+    let mut s = BkeyFormatState::new();
     s.add_pos(nodes[0].contents().data().min_key);
     for n in &nodes {
         n.format_add_keys(n.contents(), &mut s);
@@ -1117,7 +1117,7 @@ fn merge_fail_reset_sib_u64s(fs: &Fs, paths: &Paths<'_>, level: usize, pivot: Pa
  * in fewer dsts than srcs.
  */
 fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, level: usize, pivot: PathIdx,
-              srcs: &mut ArrayVec<Src, 3>) -> Option<(usize, usize, Option<bkey_format>)> {
+              srcs: &mut ArrayVec<Src, 3>) -> Option<(usize, usize, Option<BkeyFormat>)> {
     let fs = trans.fs();
     let (mut total_u64s, mut new_f) = merge_u64s_and_format(paths, level, srcs);
     /*

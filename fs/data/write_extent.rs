@@ -6,13 +6,13 @@
 use crate::alloc::sector_alloc::LockedWritePoint;
 use crate::util::{alloc::flags, volatile::Out};
 use crate::c;
-use crate::data::extents::bch_extent_crc_unpacked;
+use crate::data::extents::ExtentCrcUnpacked;
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
-use crate::data::update::data_update_index;
+use crate::data::update::DataUpdateIndex;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src,
     bch_compression_opt};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
-use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData, bch_write_op,
+use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData, WriteOp,
     WriteFlags as w};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -20,16 +20,16 @@ use crate::locking::MemallocFlags;
 use crate::os::bio::{pages, BioRange, BioSubmit, Buffer, Pages};
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
 use core::ffi::c_void;
-use crate::format::{Bversion, BkeyType, bch_csum, bkey, CompressionType, CsumType};
+use crate::format::{Bversion, BkeyType, Csum, Bkey, CompressionType, CsumType};
 
-type Op = bch_write_op;
+type Op = WriteOp;
 
-fn csum_differs(a: bch_csum, b: bch_csum) -> bool {
+fn csum_differs(a: Csum, b: Csum) -> bool {
     ((a.lo.get() ^ b.lo.get()) | (a.hi.get() ^ b.hi.get())) != 0
 }
 
 fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bversion,
-                      crc: bch_extent_crc_unpacked) {
+                      crc: ExtentCrcUnpacked) {
     /*
      * The key covers the crc's live data, not all of it: an extent that won't
      * decompress is written as is, untrimmed - its crc's offset and
@@ -39,8 +39,8 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
 
     let (pos, cached) = (op.pos, op.has(w::cached));
     op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX as usize, |e| {
-        e.k = bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
-                            ..bkey::new() };
+        e.k = Bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
+                            ..Bkey::new() };
         e.k.size = crc.live_size;
 
         if crc.csum_type != CsumType::none || crc.compression_type != CompressionType::none || crc.nonce != 0 {
@@ -112,7 +112,7 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
 fn write_rechecksum(fs: &Fs, op: &mut Op, data: &mut BioRange<'_>, mut new_csum_type: CsumType)
     -> Result<(), BchError>
 {
-    let mut new_crc = bch_extent_crc_unpacked::default();
+    let mut new_crc = ExtentCrcUnpacked::default();
 
     /* bch2_rechecksum_bio() can't encrypt or decrypt data: */
 
@@ -139,7 +139,7 @@ fn write_rechecksum(fs: &Fs, op: &mut Op, data: &mut BioRange<'_>, mut new_csum_
  * @bio and @op->crc are untouched unless this returns 0, so a caller that can't
  * use the plaintext still has the extent exactly as it arrived.
  */
-fn write_op_decode(op: &mut Op, data: &mut BioRange<'_>, update: Option<&data_update_index>)
+fn write_op_decode(op: &mut Op, data: &mut BioRange<'_>, update: Option<&DataUpdateIndex>)
     -> Result<(), BchError>
 {
     let fs = op.fs();
@@ -199,11 +199,11 @@ fn write_op_decode(op: &mut Op, data: &mut BioRange<'_>, update: Option<&data_up
     crc.compressed_size   = crc.live_size;
     crc.uncompressed_size = crc.live_size;
     crc.offset            = 0;
-    crc.csum              = bch_csum::default();
+    crc.csum              = Csum::default();
     Ok(())
 }
 
-fn csum_err(op: &Op, update: Option<&data_update_index>, csum: bch_csum) -> BchError {
+fn csum_err(op: &Op, update: Option<&DataUpdateIndex>, csum: Csum) -> BchError {
     let fs = op.fs();
     let ty = op.crc.csum_type.get();
     let ty_name: &dyn core::fmt::Display = if ty.0 < CsumType::NR { &ty } else { &"(unknown)" };
@@ -215,7 +215,7 @@ fn csum_err(op: &Op, update: Option<&data_update_index>, csum: bch_csum) -> BchE
 }
 
 #[inline(never)]
-fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<&data_update_index>,
+fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<&DataUpdateIndex>,
                            wp: &LockedWritePoint<'_>)
     -> Result<(), BchError>
 {
@@ -345,7 +345,7 @@ fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<
         fs.encrypt_range(nonce, *data)?;
 
         op.crc.csum_type.set(CsumType::none);
-        op.crc.csum = bch_csum::default();
+        op.crc.csum = Csum::default();
     }
 
     Ok(())
@@ -364,7 +364,7 @@ pub(crate) struct Extent<'a> {
 /// written out at @wp: its extents' keys appended, and what to submit - a bio
 /// of its own made with @opf - or an error, and no keys appended.
 pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
-                               update: Option<&data_update_index>, wp: &mut LockedWritePoint<'_>)
+                               update: Option<&DataUpdateIndex>, wp: &mut LockedWritePoint<'_>)
     -> Result<Extent<'a>, BchError>
 {
     let fs = op.fs();
@@ -426,7 +426,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
 
     let ret = (|| -> Result<(), BchError> {
         loop {
-            let mut crc = bch_extent_crc_unpacked::default();
+            let mut crc = ExtentCrcUnpacked::default();
             let mut version = op.version;
             let (mut dst_len, mut src_len) = (0u32, 0u32);
             let src_size = data.len();

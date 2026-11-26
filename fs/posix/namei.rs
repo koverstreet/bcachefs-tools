@@ -33,18 +33,18 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::data::reconcile::format::bch_extent_reconcile;
+use crate::data::reconcile::format::ExtentReconcile;
 use crate::posix::{dirent_format, inode, str_hash};
 use crate::posix::dirent_format::DT_SUBVOL;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::dirent::{self, d_type_str, Dirent, DirentTarget, Dirents, RenameMode};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
-use crate::posix::inode_opts::{reinherit_attrs, inode_opt_change};
+use crate::posix::inode_opts::{reinherit_attrs, InodeOptChange};
 use crate::snapshots::subvolume;
 use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf, ToText, log::LogMsg};
 use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
@@ -57,18 +57,18 @@ pub const BCH_CREATE_SUBVOL: u32 = 1 << 1;
 pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2;
 pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3;
 
-pub(crate) fn subvol_inum_eq(l: subvol_inum, r: subvol_inum) -> bool {
+pub(crate) fn subvol_inum_eq(l: SubvolInum, r: SubvolInum) -> bool {
     l.subvol == r.subvol && l.inum == r.inum
 }
 
-fn is_root(inode: &bch_inode_unpacked) -> bool {
+fn is_root(inode: &InodeUnpacked) -> bool {
     inode.bi_subvol == BCACHEFS_ROOT_SUBVOL && inode.bi_inum == BCACHEFS_ROOT_INO as u64
 }
 
 /// The directory @inode, which is @inum, is named in: in the parent
 /// subvolume, for a subvolume's root.
-pub(crate) fn parent_inum(inum: subvol_inum, inode: &bch_inode_unpacked) -> subvol_inum {
-    subvol_inum {
+pub(crate) fn parent_inum(inum: SubvolInum, inode: &InodeUnpacked) -> SubvolInum {
+    SubvolInum {
         subvol: if inode.bi_parent_subvol != 0 { inode.bi_parent_subvol as u64 } else { inum.subvol },
         inum:   inode.bi_dir,
     }
@@ -85,7 +85,7 @@ fn mode_to_type(mode: c::umode_t) -> u8 {
 
 /// Whether @dir's new inodes go below 2^32: its own inodes_32bit, else the
 /// filesystem's. Inode options are stored +1, 0 for unset.
-fn inodes_32bit(fs: &Fs, dir: &bch_inode_unpacked) -> bool {
+fn inodes_32bit(fs: &Fs, dir: &InodeUnpacked) -> bool {
     match dir.bi_inodes_32bit {
         0 => fs.opts().inodes_32bit.get() != 0,
         v => v - 1 != 0,
@@ -108,9 +108,9 @@ fn inodes_32bit(fs: &Fs, dir: &bch_inode_unpacked) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn create_trans(
     t:                &TransAttempt<'_, '_>,
-    dir:              subvol_inum,
-    dir_u:            &mut bch_inode_unpacked,
-    new_inode:        &mut bch_inode_unpacked,
+    dir:              SubvolInum,
+    dir_u:            &mut InodeUnpacked,
+    new_inode:        &mut InodeUnpacked,
     new_subvol:       &mut Subvolume,
     name:             Option<&OsStr>,
     uid:              c::uid_t,
@@ -119,7 +119,7 @@ pub fn create_trans(
     rdev:             c::dev_t,
     default_acl:      Option<&PosixAcl>,
     acl:              Option<&PosixAcl>,
-    mut snapshot_src: subvol_inum,
+    mut snapshot_src: SubvolInum,
     mut flags:        u32,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -156,7 +156,7 @@ pub fn create_trans(
 
         inode::create(t, &mut inode_iter, new_inode, dir_snapshot, inodes_32bit(fs, dir_u))?;
 
-        snapshot_src = subvol_inum::default();
+        snapshot_src = SubvolInum::default();
     } else {
         // Creating a snapshot - we're not allocating a new inode, but we do
         // have to look up the root inode of the subvolume we're snapshotting
@@ -211,7 +211,7 @@ pub fn create_trans(
             use crate::os::posix_acl::AclType;
 
             // In the new subvolume, if one was made:
-            let new_inum = subvol_inum {
+            let new_inum = SubvolInum {
                 subvol: if flags & BCH_CREATE_SUBVOL != 0 {
                     new_inode.bi_subvol as u64
                 } else {
@@ -249,7 +249,7 @@ pub fn create_trans(
 
     if is_dir(mode) {
         let subvol = if new_inode.bi_subvol != 0 { new_inode.bi_subvol as u64 } else { dir.subvol };
-        let inum = subvol_inum { subvol, inum: new_inode.bi_inum };
+        let inum = SubvolInum { subvol, inum: new_inode.bi_inum };
         maybe_propagate_has_case_insensitive(t, inum, new_inode)?;
     }
 
@@ -269,10 +269,10 @@ pub fn create_trans(
 /// @inode_u are read and returned.
 pub fn link_trans(
     t:       &TransAttempt<'_, '_>,
-    dir:     subvol_inum,
-    dir_u:   &mut bch_inode_unpacked,
-    inum:    subvol_inum,
-    inode_u: &mut bch_inode_unpacked,
+    dir:     SubvolInum,
+    dir_u:   &mut InodeUnpacked,
+    inum:    SubvolInum,
+    inode_u: &mut InodeUnpacked,
     name:    &OsStr,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -316,8 +316,8 @@ pub fn link_trans(
 #[cold]
 fn report_bad_unlink(
     t:      &TransAttempt<'_, '_>,
-    wanted: subvol_inum,
-    got:    subvol_inum,
+    wanted: SubvolInum,
+    got:    SubvolInum,
     name:   &OsStr,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -342,10 +342,10 @@ fn report_bad_unlink(
 #[allow(clippy::too_many_arguments)]
 pub fn unlink_trans(
     t:               &TransAttempt<'_, '_>,
-    dir:             subvol_inum,
-    dir_u:           &mut bch_inode_unpacked,
-    inode:           subvol_inum,
-    inode_u:         &mut bch_inode_unpacked,
+    dir:             SubvolInum,
+    dir_u:           &mut InodeUnpacked,
+    inode:           SubvolInum,
+    inode_u:         &mut InodeUnpacked,
     name:            &OsStr,
     deleting_subvol: bool,
 ) -> Result<(), BchError> {
@@ -444,17 +444,17 @@ fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
 #[allow(clippy::too_many_arguments)]
 pub fn rename_trans(
     t:              &TransAttempt<'_, '_>,
-    src_dir:        subvol_inum,
-    src_dir_u:      &mut bch_inode_unpacked,
-    dst_dir:        subvol_inum,
-    dst_dir_u:      &mut bch_inode_unpacked,
-    src_inode_u:    &mut bch_inode_unpacked,
-    dst_inode_u:    &mut bch_inode_unpacked,
+    src_dir:        SubvolInum,
+    src_dir_u:      &mut InodeUnpacked,
+    dst_dir:        SubvolInum,
+    dst_dir_u:      &mut InodeUnpacked,
+    src_inode_u:    &mut InodeUnpacked,
+    dst_inode_u:    &mut InodeUnpacked,
     src_name:       &OsStr,
     dst_name:       &OsStr,
     mode:           RenameMode,
-    src_opt_change: &mut inode_opt_change,
-    dst_opt_change: &mut inode_opt_change,
+    src_opt_change: &mut InodeOptChange,
+    dst_opt_change: &mut InodeOptChange,
 ) -> Result<(), BchError> {
     use crate::posix::dirent::RenameMode::*;
 
@@ -472,8 +472,8 @@ pub fn rename_trans(
         () => { if same_dir { &mut *src_dir_u } else { &mut *dst_dir_u } };
     }
 
-    *src_opt_change = inode_opt_change::new();
-    *dst_opt_change = inode_opt_change::new();
+    *src_opt_change = InodeOptChange::new();
+    *dst_opt_change = InodeOptChange::new();
 
     *src_dir_u = inode::peek(t, &mut src_dir_iter, src_dir, BtreeIterFlags::INTENT)?;
 
@@ -495,7 +495,7 @@ pub fn rename_trans(
     *src_inode_u = inode::peek(t, &mut src_inode_iter, src_inum, BtreeIterFlags::INTENT)?;
     let src_old_r = inode::reconcile_opts_get(fs, src_inode_u);
 
-    let mut dst_old_r = bch_extent_reconcile::default();
+    let mut dst_old_r = ExtentReconcile::default();
     if dst_inum.inum != 0 {
         *dst_inode_u = inode::peek(t, &mut dst_inode_iter, dst_inum, BtreeIterFlags::INTENT)?;
         dst_old_r = inode::reconcile_opts_get(fs, dst_inode_u);
@@ -643,7 +643,7 @@ pub fn rename_trans(
 pub fn inode_get_dirent<'i, 'a>(
     t:        &'i TransAttempt<'a, '_>,
     iter:     &'i mut BtreeIter<'a>,
-    inode:    &bch_inode_unpacked,
+    inode:    &InodeUnpacked,
     snapshot: &mut u32,
 ) -> Result<BkeySC<'i>, BchError> {
     if inode.bi_parent_subvol != 0 {
@@ -813,7 +813,7 @@ fn __inum_to_path(
 
 /// Print @inum's path - its names through its dirents, from the root - to
 /// @out: as bch2_inum_to_path(). In the caller's transaction attempt.
-pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: subvol_inum, out: &mut Printbuf)
+pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: SubvolInum, out: &mut Printbuf)
     -> Result<(), BchError>
 {
     __inum_to_path(t, inum.subvol as u32, inum.inum, 0, 0, false, out)
@@ -821,7 +821,7 @@ pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: subvol_inum, out: &mut Print
 
 /// @inum's path from subvolume @stop_subvol's root: an error if the walk
 /// can't get there.
-pub fn inum_to_path_in_subvol(t: &TransAttempt<'_, '_>, inum: subvol_inum, stop_subvol: u32,
+pub fn inum_to_path_in_subvol(t: &TransAttempt<'_, '_>, inum: SubvolInum, stop_subvol: u32,
                               out: &mut Printbuf) -> Result<(), BchError> {
     __inum_to_path(t, inum.subvol as u32, inum.inum, 0, stop_subvol, true, out)
 }
@@ -843,8 +843,8 @@ pub fn inum_snapshot_to_path(
 /// disconnected or loops isn't below anything.
 pub fn inum_is_descendant(
     t:        &TransAttempt<'_, '_>,
-    inum:     subvol_inum,
-    ancestor: subvol_inum,
+    inum:     SubvolInum,
+    ancestor: SubvolInum,
 ) -> Result<bool, BchError> {
     let mut subvol = inum.subvol as u32;
     let mut cur = inum.inum;
@@ -884,7 +884,7 @@ pub fn inum_is_descendant(
 
 /// Whether @d names @inode - a DT_SUBVOL dirent by subvolume, any other by
 /// inode number: as dirent_points_to_inode_nowarn().
-pub fn dirent_points_to_inode(d: Dirent<'_>, inode: &bch_inode_unpacked) -> bool {
+pub fn dirent_points_to_inode(d: Dirent<'_>, inode: &InodeUnpacked) -> bool {
     match d.target() {
         DirentTarget::Subvol { child, .. } => child == inode.bi_subvol,
         DirentTarget::Inode(inum)          => inum == inode.bi_inum,
@@ -892,7 +892,7 @@ pub fn dirent_points_to_inode(d: Dirent<'_>, inode: &bch_inode_unpacked) -> bool
 }
 
 /// Whether @inode's backpointer is @d: as inode_points_to_dirent().
-fn inode_points_to_dirent(inode: &bch_inode_unpacked, d: Dirent<'_>) -> bool {
+fn inode_points_to_dirent(inode: &InodeUnpacked, d: Dirent<'_>) -> bool {
     inode.bi_dir        == d.k().k.p.inode &&
     inode.bi_dir_offset == d.k().k.p.offset
 }
@@ -902,7 +902,7 @@ fn inode_points_to_dirent(inode: &bch_inode_unpacked, d: Dirent<'_>) -> bool {
 pub fn dirent_inode_mismatch<'a, 'k>(
     fs:    &'a Fs,
     k:     BkeySC<'k>,
-    inode: &'a bch_inode_unpacked,
+    inode: &'a InodeUnpacked,
 ) -> DirentInodeMismatch<'a, 'k> {
     DirentInodeMismatch { fs, k, inode }
 }
@@ -910,7 +910,7 @@ pub fn dirent_inode_mismatch<'a, 'k>(
 pub struct DirentInodeMismatch<'a, 'k> {
     fs:    &'a Fs,
     k:     BkeySC<'k>,
-    inode: &'a bch_inode_unpacked,
+    inode: &'a InodeUnpacked,
 }
 
 impl ToText for DirentInodeMismatch<'_, '_> {
@@ -927,7 +927,7 @@ impl ToText for DirentInodeMismatch<'_, '_> {
 /// dirent_points_to_inode() is not enough to pick it out - for a subvolume
 /// root it also accepts a DT_DIR dirent naming bi_inum, which is exactly
 /// what a reattach into lost+found manufactures.
-fn dirent_is_subvol_root_name(d: Dirent<'_>, target: &bch_inode_unpacked) -> bool {
+fn dirent_is_subvol_root_name(d: Dirent<'_>, target: &InodeUnpacked) -> bool {
     d.d_type() as u32 == DT_SUBVOL && dirent_points_to_inode(d, target)
 }
 
@@ -938,7 +938,7 @@ fn dirent_is_subvol_root_name(d: Dirent<'_>, target: &bch_inode_unpacked) -> boo
 fn check_dirent_inode_dirent(
     t:       &TransAttempt<'_, '_>,
     d:       Dirent<'_>,
-    target:  &mut bch_inode_unpacked,
+    target:  &mut InodeUnpacked,
     in_fsck: bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -1063,7 +1063,7 @@ fn __check_dirent_target(
     t:           &TransAttempt<'_, '_>,
     dirent_iter: &BtreeIter<'_>,
     d:           Dirent<'_>,
-    target:      &mut bch_inode_unpacked,
+    target:      &mut InodeUnpacked,
     in_fsck:     bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -1101,7 +1101,7 @@ pub fn check_dirent_target(
     t:       &TransAttempt<'_, '_>,
     iter:    &BtreeIter<'_>,
     d:       Dirent<'_>,
-    target:  &mut bch_inode_unpacked,
+    target:  &mut InodeUnpacked,
     in_fsck: bool,
 ) -> Result<(), BchError> {
     if inode_points_to_dirent(target, d) && d.d_type() == target.d_type() {
@@ -1115,7 +1115,7 @@ pub fn check_dirent_target(
 
 /// Set BCH_INODE_has_case_insensitive on directory @inum and up from it, as
 /// far as a directory that has it already.
-fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: subvol_inum)
+fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: SubvolInum)
     -> Result<(), BchError>
 {
     loop {
@@ -1129,7 +1129,7 @@ fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: subvol_inu
         inode.set_flag(InodeFlags::has_case_insensitive, true);
         inode::write(t, &mut iter, &mut inode)?;
 
-        if subvol_inum_eq(inum, subvol_inum::ROOT) {
+        if subvol_inum_eq(inum, SubvolInum::ROOT) {
             break;
         }
 
@@ -1144,8 +1144,8 @@ fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: subvol_inu
 /// bch2_maybe_propagate_has_case_insensitive().
 pub fn maybe_propagate_has_case_insensitive(
     t:     &TransAttempt<'_, '_>,
-    inum:  subvol_inum,
-    inode: &mut bch_inode_unpacked,
+    inum:  SubvolInum,
+    inode: &mut InodeUnpacked,
 ) -> Result<(), BchError> {
     if inode.casefold(t.fs()) {
         inode.set_flag(InodeFlags::has_case_insensitive, true);
@@ -1169,7 +1169,7 @@ pub fn maybe_propagate_has_case_insensitive(
 /// the repairs.
 pub fn check_inode_has_case_insensitive(
     t:         &TransAttempt<'_, '_>,
-    inode:     &mut bch_inode_unpacked,
+    inode:     &mut InodeUnpacked,
     do_update: &mut bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();

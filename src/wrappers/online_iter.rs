@@ -15,7 +15,7 @@
 use std::ops::ControlFlow;
 
 use anyhow::anyhow;
-use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_query_btree_keys,
+use bcachefs_kernel::bcachefs_ioctl::{IoctlQueryBtreeKeys,
     BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots, BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts,
     BCH_IOCTL_QUERY_BTREE_KEYS_prev, BCH_IOCTL_QUERY_BTREE_KEYS_slots};
 use bcachefs_kernel::btree::bkey::{AnyKey, AnyKeySC, BkeySC};
@@ -45,7 +45,7 @@ impl std::ops::BitOr for OnlineIterFlags {
 
 pub struct OnlineBtreeIter<'h> {
     fs:   &'h BcachefsHandle,
-    arg:  bch_ioctl_query_btree_keys,
+    arg:  IoctlQueryBtreeKeys,
     /// u64s: the kernel writes each key at a multiple of 8 from the start,
     /// aligned for one if the buffer is
     buf:  Vec<u64>,
@@ -77,7 +77,7 @@ impl<'h> OnlineBtreeIter<'h> {
 			 buf_size: usize) -> Self {
         OnlineBtreeIter {
             fs,
-            arg: bch_ioctl_query_btree_keys {
+            arg: IoctlQueryBtreeKeys {
                 btree: btree.into(),
                 level,
                 flags: flags.0,

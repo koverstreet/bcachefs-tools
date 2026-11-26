@@ -54,7 +54,7 @@ use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::init::{damage, error::id, progress::{Progress, progress_indicator}};
+use crate::init::{damage, error::id, progress::{Progress, ProgressIndicator}};
 use crate::posix::inode_opts::{self, get_io_opts};
 use crate::util::{rcu::read_lock, Printbuf};
 use crate::prt;
@@ -328,7 +328,7 @@ impl DevDrop<'_> {
 }
 
 pub(crate) fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
-    let p = progress_indicator::default();
+    let p = ProgressIndicator::default();
 
     let user = crate::BTREE_HAS_DATA_PTRS_MASK & !(1 << Btree::stripes.0);
     d.usrdata(fs, &Progress::new(&p, fs, c"dropping user data", user, 0))?;
@@ -352,7 +352,7 @@ pub(crate) fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_
 
     let trans = crate::btree_trans!(fs);
     let mut last_flushed = WbMaybeFlush::new();
-    let p = progress_indicator::default();
+    let p = ProgressIndicator::default();
     let progress = Progress::new(&p, fs, c"dropping device data", 1 << Btree::backpointers.0, 0);
 
     let mut min_data_buckets = u64::MAX;

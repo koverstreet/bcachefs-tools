@@ -9,7 +9,7 @@
 use crate::format::{MemberState, SbFeature, VersionUpgradeOpt};
 use crate::fs::{Dev, FsFlag, Fs};
 use super::{opt_to_text, Opt, OptId, OPTS};
-use crate::alloc::disk_groups_format::bch_sb_field_disk_groups;
+use crate::alloc::disk_groups_format::SbFieldDiskGroups;
 use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
 use crate::data::compress;
 use crate::errcode::{Errcode, BchError};
@@ -69,7 +69,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
             // the next superblock swap
             if post {
-                let _ = crate::bch_err_fn!(fs, bch_sb_field_disk_groups::<crate::util::vstructs::Validated>::to_cpu(fs, &mut fs.sb_lock()));
+                let _ = crate::bch_err_fn!(fs, SbFieldDiskGroups::<crate::util::vstructs::Validated>::to_cpu(fs, &mut fs.sb_lock()));
             }
 
             // Only the label is in targets: a failure domain only spreads

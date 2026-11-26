@@ -20,7 +20,7 @@ use crate::data::ptrs::BkeyVRead;
 use crate::data::update::dev_ptr_bit;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::errcode::{BchError, Errcode};
-use crate::format::{BkeyTypeFlags, Btree, BCH_BKEY_PTRS_MAX, btree_node, btree_node_entry};
+use crate::format::{BkeyTypeFlags, Btree, BCH_BKEY_PTRS_MAX, btree_node, BtreeNodeEntry};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::os::{workqueue::Queue, bio::{Bio, BioBox, BioSubmit, Buffer}};
 use crate::sb::members::{DevIoRef, DevReadRefKind};
@@ -73,10 +73,10 @@ pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf)
     while written < end {
         let sectors = if written == 0 {
             replica_bset::<btree_node<Unvalidated>>(fs, buf, written, end, err)
-        } else if btree_node_entry::<Unvalidated>::head(&buf[written << 9..]).seq != bn.keys.seq {
+        } else if BtreeNodeEntry::<Unvalidated>::head(&buf[written << 9..]).seq != bn.keys.seq {
             break;
         } else {
-            replica_bset::<btree_node_entry<Unvalidated>>(fs, buf, written, end, err)
+            replica_bset::<BtreeNodeEntry<Unvalidated>>(fs, buf, written, end, err)
         };
         let Some(sectors) = sectors else { return false };
 

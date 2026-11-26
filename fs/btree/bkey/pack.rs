@@ -11,14 +11,14 @@ use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::format::BkeyField::{self, *};
-use crate::format::{bkey_format, Bpos, BkeyType, bkey, bkey_format_bits, bkey_packed,
+use crate::format::{BkeyFormat, Bpos, BkeyType, Bkey, BkeyFormatBits, BkeyPacked,
     KEY_FORMAT_CURRENT, KEY_FORMAT_LOCAL_BTREE, KEY_PACKED_BITS_START};
 use crate::os::kernel::unlikely;
 use crate::util::{vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut}, Printbuf, ToText};
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
 
 /*
- * Wrapper for stack-allocated struct bkey_packed.
+ * Wrapper for stack-allocated struct BkeyPacked.
  *
  * The byte-aligned fast paths (BtreeNode::unpack_key_at(), unpack_pos_at(),
  * pack_pos()) issue an 8-byte unaligned load at @bytes +
@@ -26,14 +26,14 @@ use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
  * (and unpack_key_at()'s header trick reads @bytes - 1). This
  * is safe for bkeys inside a bset (preceded by the bset header or by
  * another bkey), but reads into the stack redzone for a bare stack-local
- * struct bkey_packed. Wrap stack copies in this to provide the leading
+ * struct BkeyPacked. Wrap stack copies in this to provide the leading
  * padding.
  */
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, Plain)]
-pub struct bkey_packed_padded {
+pub struct BkeyPackedPadded {
     pub _pad: [u8; 8],
-    pub k: bkey_packed,
+    pub k: BkeyPacked,
 }
 
 #[bch_enum(closed)]
@@ -52,7 +52,7 @@ pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { 
 
 /* byte order helpers */
 
-fn high_word_offset(f: &bkey_format) -> u32 {
+fn high_word_offset(f: &BkeyFormat) -> u32 {
     if cfg!(target_endian = "little") { f.key_u64s as u32 - 1 } else { 0 }
 }
 
@@ -73,7 +73,7 @@ fn word(k: &[u64], p: u32) -> u64 {
     k.get(p as usize).copied().unwrap_or(0)
 }
 
-fn bkey_words(k: &bkey) -> [u64; BKEY_U64S] {
+fn bkey_words(k: &Bkey) -> [u64; BKEY_U64S] {
     let mut w = [0u64; BKEY_U64S];
     plain_bytes_mut(&mut w).copy_from_slice(plain_bytes(k));
     w
@@ -91,7 +91,7 @@ fn set_pos_header(w: &mut u64, key_u64s: u8) {
 }
 
 struct PackState<'a> {
-    format: &'a bkey_format,
+    format: &'a BkeyFormat,
     k:      &'a mut [u64],
     bits:   u32,	/* bits remaining in current word */
     w:      u64,	/* current word */
@@ -100,7 +100,7 @@ struct PackState<'a> {
 
 impl<'a> PackState<'a> {
     #[inline(always)]
-    fn new(format: &'a bkey_format, k: &'a mut [u64]) -> Self {
+    fn new(format: &'a BkeyFormat, k: &'a mut [u64]) -> Self {
         Self { format, k, bits: 64 - HIGH_BIT_OFFSET, w: 0, p: high_word_offset(format) }
     }
 
@@ -152,7 +152,7 @@ impl<'a> PackState<'a> {
 }
 
 struct UnpackState<'a> {
-    format: &'a bkey_format,
+    format: &'a BkeyFormat,
     k:      &'a [u64],
     bits:   u32,	/* bits remaining in current word */
     w:      u64,	/* current word */
@@ -161,7 +161,7 @@ struct UnpackState<'a> {
 
 impl<'a> UnpackState<'a> {
     #[inline(always)]
-    fn new(format: &'a bkey_format, k: &'a [u64]) -> Self {
+    fn new(format: &'a BkeyFormat, k: &'a [u64]) -> Self {
         let p = high_word_offset(format);
 
         Self { format, k, bits: 64 - HIGH_BIT_OFFSET, w: word(k, p) << HIGH_BIT_OFFSET, p }
@@ -191,12 +191,12 @@ impl<'a> UnpackState<'a> {
     }
 }
 
-impl bkey_format {
-    pub fn unpack_key(&self, k: &BkeyP<impl ?Sized>) -> bkey {
+impl BkeyFormat {
+    pub fn unpack_key(&self, k: &BkeyP<impl ?Sized>) -> Bkey {
         self.unpack_key_words(k.as_slice())
     }
 
-    fn unpack_key_words(&self, k: &[u64]) -> bkey {
+    fn unpack_key_words(&self, k: &[u64]) -> Bkey {
         let h = BkeyPHeader::of(&k[0]);
         let mut s = UnpackState::new(self, k);
 
@@ -205,9 +205,9 @@ impl bkey_format {
         ebug_assert!(h.format_bits.format() as u32 == KEY_FORMAT_LOCAL_BTREE);
         ebug_assert!(h.u64s as u32 - self.key_u64s as u32 + BKEY_U64S as u32 <= u8::MAX as u32);
 
-        let mut out = bkey {
+        let mut out = Bkey {
             u64s:        (h.u64s as u32 - self.key_u64s as u32 + BKEY_U64S as u32) as u8,
-            format_bits: bkey_format_bits::new()
+            format_bits: BkeyFormatBits::new()
                 .with_format(KEY_FORMAT_CURRENT as u8)
                 .with_needs_whiteout(h.format_bits.needs_whiteout()),
             type_:       h.type_,
@@ -237,7 +237,7 @@ impl bkey_format {
     }
 
     /// Just the key, not the value: false if it doesn't fit.
-    pub fn pack_key(&self, out: &mut [u64], k: &bkey) -> bool {
+    pub fn pack_key(&self, out: &mut [u64], k: &Bkey) -> bool {
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
         ebug_assert!(k.format_bits.format() as u32 == KEY_FORMAT_CURRENT);
 
@@ -269,7 +269,7 @@ impl bkey_format {
 
     #[cold]
     #[inline(never)]
-    fn pack_verify(&self, packed: &[u64], unpacked: &bkey) {
+    fn pack_verify(&self, packed: &[u64], unpacked: &Bkey) {
         let h = BkeyPHeader::of(&packed[0]);
 
         assert!(h.u64s >= self.key_u64s, "packed to {} u64s, under its format's {}", h.u64s, self.key_u64s);
@@ -478,7 +478,7 @@ impl bkey_format {
     }
 }
 
-fn packed_to_binary_text(out: &mut Printbuf, f: &bkey_format, k: &[u64]) {
+fn packed_to_binary_text(out: &mut Printbuf, f: &BkeyFormat, k: &[u64]) {
     let mut p = high_word_offset(f);
     let mut word_bits = 64 - HIGH_BIT_OFFSET;
     let mut nr_key_bits = f.key_bits() + HIGH_BIT_OFFSET;
@@ -520,7 +520,7 @@ fn packed_to_binary_text(out: &mut Printbuf, f: &bkey_format, k: &[u64]) {
  * Also: doesn't work on extents - it doesn't preserve the invariant that
  * if k is packed bkey_start_pos(k) will successfully pack
  */
-fn transform_key(out_f: &bkey_format, out: &mut [u64], in_f: &bkey_format, k: &BkeyP<impl ?Sized>) -> bool {
+fn transform_key(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &BkeyP<impl ?Sized>) -> bool {
     out[0] = 0;
 
     let mut out_s = PackState::new(out_f, out);
@@ -544,7 +544,7 @@ fn transform_key(out_f: &bkey_format, out: &mut [u64], in_f: &bkey_format, k: &B
     true
 }
 
-pub fn transform(out_f: &bkey_format, out: &mut [u64], in_f: &bkey_format, k: &BkeyP<impl ?Sized>) -> bool {
+pub fn transform(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &BkeyP<impl ?Sized>) -> bool {
     if !transform_key(out_f, out, in_f, k) {
         return false;
     }
@@ -556,7 +556,7 @@ pub fn transform(out_f: &bkey_format, out: &mut [u64], in_f: &bkey_format, k: &B
 
 /*
  * The byte-aligned fast paths: a key is at @at in @buf, a node's buffer or a
- * bkey_packed_padded's, where the word before it is the buffer's too - the
+ * BkeyPackedPadded's, where the word before it is the buffer's too - the
  * loads start up to 8 bytes before the key.
  */
 
@@ -599,7 +599,7 @@ fn unpack_field_fast(bytes: &[u8], k: u32, uf: &BkeyUnpackField, offset: u64) ->
     (raw >> (uf.shift_right & 63)).wrapping_add(offset)
 }
 
-impl bkey_packed_padded {
+impl BkeyPackedPadded {
     /// Its key, as the fast paths take one: a buffer, and its offset there.
     pub fn as_buf_mut(&mut self) -> (&mut [u64], u16) {
         let buf = cast_plain_slice_mut(plain_bytes_mut(self)).expect("a bkey_packed_padded is whole u64s");
@@ -666,7 +666,7 @@ impl NodeContents {
 
     /// Just the key at @at in @buf, not the value: by the node's unpack
     /// constants, if it's packed and the format's byte aligned.
-    pub fn unpack_key_at(&self, buf: &[u64], at: u16) -> bkey {
+    pub fn unpack_key_at(&self, buf: &[u64], at: u16) -> Bkey {
         let k = packed(&buf[at as usize..]);
 
         if unlikely(!k.is_packed()) {
@@ -709,7 +709,7 @@ impl NodeContents {
             .wrapping_add((BKEY_U64S as u32).wrapping_sub(self.format.key_u64s as u32) |
                           ((KEY_FORMAT_CURRENT - KEY_FORMAT_LOCAL_BTREE) << 8));
 
-        let mut out = bkey::default();
+        let mut out = Bkey::default();
         plain_bytes_mut(&mut out)[..4].copy_from_slice(&hdr.to_le_bytes());
 
         macro_rules! unpack_fields {
@@ -802,7 +802,7 @@ impl NodeContents {
      * _provided_ it compares <= to the original pos.
      *
      * Padding requirement is identical to bch2_bkey_pack_pos() — see
-     * struct bkey_packed_padded.
+     * struct BkeyPackedPadded.
      */
     pub fn pack_pos_lossy(&self, buf: &mut [u64], at: u16, p: Bpos) -> BkeyPackPosRet {
         let Some((v, exact)) = self.format.pos_fields_lossy(p) else {
@@ -912,11 +912,11 @@ impl NodeContents {
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 pub fn pack_test() {
-    let t = bkey { p: Bpos { inode: 4134, offset: 1250629070527416633, snapshot: 0 }, ..bkey::new() };
+    let t = Bkey { p: Bpos { inode: 4134, offset: 1250629070527416633, snapshot: 0 }, ..Bkey::new() };
     let t_words = bkey_words(&t);
     let mut p = [0u64; BKEY_U64S];
 
-    let test_format = bkey_format {
+    let test_format = BkeyFormat {
         key_u64s:       3,
         nr_fields:      BKEY_NR_FIELDS as u8,
         bits_per_field: [13, 64, 32, 0, 0, 0],

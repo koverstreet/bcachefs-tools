@@ -34,7 +34,7 @@ pub enum SixLockType {
 /* its own thread's, read by the waker and by other threads' cycle detectors */
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct six_lock_waiter {
+pub struct SixLockWaiter {
     pub trans_start_time: Volatile<u64>,
     pub task: AtomicPtr<c::task_struct>,
     pub lock_want: Volatile<SixLockType>,
@@ -47,17 +47,17 @@ pub struct six_lock_waiter {
 /* filled under wait_lock, read without it by the cycle detector: @w last */
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]
-pub struct six_lock_wait_slot {
-    pub w: AtomicPtr<six_lock_waiter>,
+pub struct SixLockWaitSlot {
+    pub w: AtomicPtr<SixLockWaiter>,
     pub start_time: Volatile<u64>,
 }
 
 /* the cycle detector reads them under RCU */
-impl !FreeAnytime for six_lock_wait_slot {}
+impl !FreeAnytime for SixLockWaitSlot {}
 
 pub const SIX_LOCK_INLINE_WAITERS: u32 = 8;
 
-type WaitList = InlineVec<six_lock_wait_slot, { SIX_LOCK_INLINE_WAITERS as usize }, usize>;
+type WaitList = InlineVec<SixLockWaitSlot, { SIX_LOCK_INLINE_WAITERS as usize }, usize>;
 
 /*
  * RCU-swappable wait list. Not a FIFO — entries sit at fixed indices from
@@ -72,7 +72,7 @@ type WaitList = InlineVec<six_lock_wait_slot, { SIX_LOCK_INLINE_WAITERS as usize
  */
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct six_lock_waiters {
+pub struct SixLockWaiters {
     pub next_free_hint: u16,
     /* C has no use for it; six_lock_exit() frees it */
     pub list: ManuallyDrop<WaitList>,
@@ -80,7 +80,7 @@ pub struct six_lock_waiters {
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct six_lock {
+pub struct SixLock {
     pub state: AtomicI32,
     /* written by the write lock's holder, read without the lock */
     pub seq: Volatile<u32>,
@@ -91,7 +91,7 @@ pub struct six_lock {
     /* the intent lock's holder's */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub owner_stack: core::cell::UnsafeCell<crate::util::alloc::Vec<c_ulong>>,
-    pub wait_lock: Locked<RawSpinLock, six_lock_waiters>,
+    pub wait_lock: Locked<RawSpinLock, SixLockWaiters>,
     pub dep_map: LockdepMap,
 }
 
@@ -103,14 +103,14 @@ pub enum SixLockInitFlags {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct six_lock_count {
+pub struct SixLockCount {
     pub n: [c_uint; 3],
 }
 
 /*
  * Wait list entry: cached {waiter pointer, start_time + lock_want} pair.
  * Keeping start_time and lock_want in the slot lets the wakeup scan filter
- * and pick the oldest matching waiter without dereffing each six_lock_waiter
+ * and pick the oldest matching waiter without dereffing each SixLockWaiter
  * — only the chosen one is touched via @w.
  *
  * Low SIX_LOCK_WANT_BITS bits of @start_time hold lock_want; the remaining
@@ -129,7 +129,7 @@ const SIX_LOCK_WAITING_read: u32 = 1 << (28 + (SixLockType::SIX_LOCK_read as u32
 const SIX_LOCK_WAITING_write: u32 = 1 << (28 + (SixLockType::SIX_LOCK_write as u32));
 const SIX_LOCK_NOSPIN: u32 = 1 << 31;
 
-struct six_lock_vals {
+struct SixLockVals {
     /* Value we add to the lock in order to take the lock: */
     lock_val:      u32,
 
@@ -143,20 +143,20 @@ struct six_lock_vals {
     unlock_wakeup: SixLockType,
 }
 
-static L: [six_lock_vals; 3] = [
-    six_lock_vals {
+static L: [SixLockVals; 3] = [
+    SixLockVals {
         lock_val:      1 << SIX_LOCK_HELD_read_OFFSET,
         lock_fail:     SIX_LOCK_HELD_write,
         held_mask:     SIX_LOCK_HELD_read,
         unlock_wakeup: SixLockType::SIX_LOCK_write,
     },
-    six_lock_vals {
+    SixLockVals {
         lock_val:      SIX_LOCK_HELD_intent,
         lock_fail:     SIX_LOCK_HELD_intent,
         held_mask:     SIX_LOCK_HELD_intent,
         unlock_wakeup: SixLockType::SIX_LOCK_intent,
     },
-    six_lock_vals {
+    SixLockVals {
         lock_val:      SIX_LOCK_HELD_write,
         lock_fail:     SIX_LOCK_HELD_read,
         held_mask:     SIX_LOCK_HELD_write,
@@ -165,26 +165,26 @@ static L: [six_lock_vals; 3] = [
 ];
 
 #[inline(always)]
-fn atomic_read(lock: &six_lock) -> u32 {
+fn atomic_read(lock: &SixLock) -> u32 {
     lock.state.load(Relaxed) as u32
 }
 
 #[inline(always)]
-fn six_set_bitmask(lock: &six_lock, mask: u32) {
+fn six_set_bitmask(lock: &SixLock, mask: u32) {
     if atomic_read(lock) & mask != mask {
         lock.state.fetch_or(mask as i32, Relaxed);
     }
 }
 
 #[inline(always)]
-fn six_clear_bitmask(lock: &six_lock, mask: u32) {
+fn six_clear_bitmask(lock: &SixLock, mask: u32) {
     if atomic_read(lock) & mask != 0 {
         lock.state.fetch_and(!mask as i32, Relaxed);
     }
 }
 
 #[inline(always)]
-fn six_set_owner(lock: &six_lock, ty: SixLockType, old: u32, owner: *mut c::task_struct) {
+fn six_set_owner(lock: &SixLock, ty: SixLockType, old: u32, owner: *mut c::task_struct) {
     if ty != SixLockType::SIX_LOCK_intent {
         return;
     }
@@ -197,7 +197,7 @@ fn six_set_owner(lock: &six_lock, ty: SixLockType, old: u32, owner: *mut c::task
     }
 }
 
-fn six_lock_record_acquire(lock: &six_lock, ty: SixLockType) {
+fn six_lock_record_acquire(lock: &SixLock, ty: SixLockType) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if ty == SixLockType::SIX_LOCK_intent {
         // a trylock's caller may hold a C spinlock, which isn't a scope
@@ -211,7 +211,7 @@ fn six_lock_record_acquire(lock: &six_lock, ty: SixLockType) {
 }
 
 #[inline(always)]
-fn pcpu_read_count(lock: &six_lock) -> u32 {
+fn pcpu_read_count(lock: &SixLock) -> u32 {
     lock.readers.get().sum()
 }
 
@@ -234,7 +234,7 @@ enum Trylock {
  * wakeup: when a wakeup is required, we return Wakeup(wakeup_type).
  */
 #[inline(always)]
-fn __do_six_trylock(lock: &six_lock, ty: SixLockType, task: *mut c::task_struct, try_: bool) -> Trylock {
+fn __do_six_trylock(lock: &SixLock, ty: SixLockType, task: *mut c::task_struct, try_: bool) -> Trylock {
     use SixLockType::*;
     let l = &L[ty as usize];
     let mut old = 0;
@@ -259,7 +259,7 @@ fn __do_six_trylock(lock: &six_lock, ty: SixLockType, task: *mut c::task_struct,
      *
      * Failure to take the lock may cause a spurious trylock failure in
      * another thread, because we temporarily set the lock to indicate that
-     * we held it. This would be a problem for a thread in six_lock(), when
+     * we held it. This would be a problem for a thread in SixLock(), when
      * they are calling trylock after adding themself to the waitlist and
      * prior to sleeping.
      *
@@ -350,16 +350,16 @@ fn __do_six_trylock(lock: &six_lock, ty: SixLockType, task: *mut c::task_struct,
     ret
 }
 
-type WaitLockGuard<'a> = ExclusiveGuard<'a, RawSpinLock, six_lock_waiters>;
+type WaitLockGuard<'a> = ExclusiveGuard<'a, RawSpinLock, SixLockWaiters>;
 
 /// The wait list, as wait_lock's holder has it, and its lock: what fills and
 /// empties its slots.
 struct WaitListLocked<'a> {
-    lock: &'a six_lock,
-    w:    &'a mut six_lock_waiters,
+    lock: &'a SixLock,
+    w:    &'a mut SixLockWaiters,
 }
 
-impl six_lock {
+impl SixLock {
     /// The wait list, for @g, wait_lock's holder.
     fn wait_list<'a>(&'a self, g: &'a mut WaitLockGuard<'_>) -> WaitListLocked<'a> {
         ebug_assert!(ptr::eq(g.lock(), &self.wait_lock));
@@ -367,7 +367,7 @@ impl six_lock {
     }
 
     /// The wait list's slots, read without wait_lock.
-    fn wait_list_rcu<'a>(&'a self, rcu: &'a rcu::ReadGuard) -> &'a [six_lock_wait_slot] {
+    fn wait_list_rcu<'a>(&'a self, rcu: &'a rcu::ReadGuard) -> &'a [SixLockWaitSlot] {
         // wait_lock's holder has it by &mut, and readers by read_rcu() alone
         unsafe { WaitList::read_rcu((&raw const (*self.wait_lock.data_ptr()).list).cast(), rcu) }
     }
@@ -376,7 +376,7 @@ impl six_lock {
     /// the cycle detector. A slot's waiter is read with acquire, before its
     /// start_time - the publish in WaitListLocked::insert() is a release.
     pub fn waiters<'a>(&'a self, rcu: &'a rcu::ReadGuard)
-        -> impl Iterator<Item = (NonNull<six_lock_waiter>, SixLockType)> + 'a
+        -> impl Iterator<Item = (NonNull<SixLockWaiter>, SixLockType)> + 'a
     {
         self.wait_list_rcu(rcu).iter().filter_map(|slot| {
             let w = NonNull::new(slot.w.load(Acquire))?;
@@ -425,7 +425,7 @@ impl WaitListLocked<'_> {
     /// # Safety
     /// @wait lives until it's removed.
     #[inline(always)]
-    unsafe fn insert(&mut self, wait: &six_lock_waiter) -> bool {
+    unsafe fn insert(&mut self, wait: &SixLockWaiter) -> bool {
         let list = &mut *self.w.list;
         let (nr, size) = (list.len(), list.capacity());
         let free = |i: usize| i >= nr || list[i].w.load(Relaxed).is_null();
@@ -440,7 +440,7 @@ impl WaitListLocked<'_> {
         } else {
             return false;
         };
-        if i == nr && list.push(six_lock_wait_slot::default()).is_err() {
+        if i == nr && list.push(SixLockWaitSlot::default()).is_err() {
             return false;
         }
 
@@ -513,7 +513,7 @@ impl WaitListLocked<'_> {
  */
 fn __six_lock_wakeup(mut wl: WaitListLocked<'_>, mut lock_type: SixLockType) {
     let lock = wl.lock;
-    let matches = |slot: &six_lock_wait_slot, ty: SixLockType|
+    let matches = |slot: &SixLockWaitSlot, ty: SixLockType|
         !slot.w.load(Relaxed).is_null() && slot.start_time.get() & SIX_LOCK_WANT_MASK as u64 == ty as u64;
 
     loop {
@@ -585,7 +585,7 @@ fn __six_lock_wakeup(mut wl: WaitListLocked<'_>, mut lock_type: SixLockType) {
 }
 
 #[inline(always)]
-fn six_lock_wakeup(lock: &six_lock, state: u32, lock_type: SixLockType) {
+fn six_lock_wakeup(lock: &SixLock, state: u32, lock_type: SixLockType) {
     if lock_type == SixLockType::SIX_LOCK_write && state & SIX_LOCK_HELD_read != 0 {
         return;
     }
@@ -599,7 +599,7 @@ fn six_lock_wakeup(lock: &six_lock, state: u32, lock_type: SixLockType) {
 }
 
 #[inline(always)]
-fn do_six_trylock(lock: &six_lock, ty: SixLockType, try_: bool) -> bool {
+fn do_six_trylock(lock: &SixLock, ty: SixLockType, try_: bool) -> bool {
     let ret = __do_six_trylock(lock, ty, sched::current(), try_);
 
     if let Trylock::Wakeup(wakeup) = ret {
@@ -618,7 +618,7 @@ fn do_six_trylock(lock: &six_lock, ty: SixLockType, try_: bool) -> bool {
  *
  * Return: true on success, false on failure.
  */
-pub fn six_trylock_ip(lock: &six_lock, ty: SixLockType, ip: c_ulong) -> bool {
+pub fn six_trylock_ip(lock: &SixLock, ty: SixLockType, ip: c_ulong) -> bool {
     if !do_six_trylock(lock, ty, true) {
         return false;
     }
@@ -640,7 +640,7 @@ pub fn six_trylock_ip(lock: &six_lock, ty: SixLockType, ip: c_ulong) -> bool {
  *
  * Return: true on success, false on failure.
  */
-pub fn six_relock_ip(lock: &six_lock, ty: SixLockType, seq: c_uint, ip: c_ulong) -> bool {
+pub fn six_relock_ip(lock: &SixLock, ty: SixLockType, seq: c_uint, ip: c_ulong) -> bool {
     if lock.seq.get() != seq || !six_trylock_ip(lock, ty, ip) {
         return false;
     }
@@ -654,7 +654,7 @@ pub fn six_relock_ip(lock: &six_lock, ty: SixLockType, seq: c_uint, ip: c_ulong)
 }
 
 #[cfg(CONFIG_SMP)]
-fn six_owner_running(lock: &six_lock) -> bool {
+fn six_owner_running(lock: &SixLock) -> bool {
     /*
      * When there's no owner, we might have preempted between the owner
      * acquiring the lock and setting the owner field. If we're an RT task
@@ -668,7 +668,7 @@ fn six_owner_running(lock: &six_lock) -> bool {
 }
 
 #[cfg(CONFIG_SMP)]
-fn six_optimistic_spin(lock: &six_lock, wait: &six_lock_waiter, ty: SixLockType) -> bool {
+fn six_optimistic_spin(lock: &SixLock, wait: &SixLockWaiter, ty: SixLockType) -> bool {
     if ty == SixLockType::SIX_LOCK_write || six_optimistic_spin_disabled() {
         return false;
     }
@@ -722,12 +722,12 @@ fn six_optimistic_spin(lock: &six_lock, wait: &six_lock_waiter, ty: SixLockType)
 }
 
 #[cfg(not(CONFIG_SMP))]
-fn six_optimistic_spin(_lock: &six_lock, _wait: &six_lock_waiter, _ty: SixLockType) -> bool {
+fn six_optimistic_spin(_lock: &SixLock, _wait: &SixLockWaiter, _ty: SixLockType) -> bool {
     false
 }
 
 #[inline(always)]
-fn __six_lock_slowpath(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
+fn __six_lock_slowpath(lock: &SixLock, ty: SixLockType, wait: &SixLockWaiter,
                        mut should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     use SixLockType::*;
     let mut spare = None;
@@ -855,7 +855,7 @@ fn __six_lock_slowpath(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
 }
 
 #[inline(never)]
-fn six_lock_slowpath(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
+fn six_lock_slowpath(lock: &SixLock, ty: SixLockType, wait: &SixLockWaiter,
                      should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     __six_lock_slowpath(lock, ty, wait, should_sleep_fn, ip)
 }
@@ -870,7 +870,7 @@ fn six_lock_slowpath(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
  * @p:		passed through to @should_sleep_fn
  * @ip:		ip parameter for lockdep/lockstat, i.e. _THIS_IP_
  *
- * This is the most general six_lock() variant, with parameters to support full
+ * This is the most general SixLock() variant, with parameters to support full
  * cycle detection for deadlock avoidance.
  *
  * The code calling this function must implement tracking of held locks, and the
@@ -890,7 +890,7 @@ fn six_lock_slowpath(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
  *
  * Return: 0 on success, or the return code from @should_sleep_fn on failure.
  */
-pub fn six_lock_ip_waiter(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
+pub fn six_lock_ip_waiter(lock: &SixLock, ty: SixLockType, wait: &SixLockWaiter,
                           should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     if ty != SixLockType::SIX_LOCK_write {
         lock.dep_map.acquire(false, ty == SixLockType::SIX_LOCK_read, ip);
@@ -927,7 +927,7 @@ pub fn six_lock_ip_waiter(lock: &six_lock, ty: SixLockType, wait: &six_lock_wait
  * to recheck would be wasted work. The post-WAITING-bit retry inside
  * six_lock_slowpath() still covers the unlock-raced-with-us window.
  */
-pub fn six_lock_contended(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
+pub fn six_lock_contended(lock: &SixLock, ty: SixLockType, wait: &SixLockWaiter,
                           should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> c_int {
     if ty != SixLockType::SIX_LOCK_write {
         lock.dep_map.acquire(false, ty == SixLockType::SIX_LOCK_read, ip);
@@ -947,7 +947,7 @@ pub fn six_lock_contended(lock: &six_lock, ty: SixLockType, wait: &six_lock_wait
 }
 
 #[inline(always)]
-fn do_six_unlock_type(lock: &six_lock, ty: SixLockType) {
+fn do_six_unlock_type(lock: &SixLock, ty: SixLockType) {
     let l = &L[ty as usize];
     let state;
 
@@ -991,7 +991,7 @@ fn do_six_unlock_type(lock: &six_lock, ty: SixLockType) {
  */
 /// # Safety
 /// @lock is held as @ty, by the caller.
-pub unsafe fn six_unlock_ip(lock: &six_lock, ty: SixLockType, ip: c_ulong) {
+pub unsafe fn six_unlock_ip(lock: &SixLock, ty: SixLockType, ip: c_ulong) {
     use SixLockType::*;
 
     ebug_assert!(!(ty == SIX_LOCK_write && atomic_read(lock) & SIX_LOCK_HELD_intent == 0));
@@ -1027,7 +1027,7 @@ pub unsafe fn six_unlock_ip(lock: &six_lock, ty: SixLockType, ip: c_ulong) {
  */
 /// # Safety
 /// @lock is held for intent, by the caller.
-pub unsafe fn six_lock_downgrade(lock: &six_lock) {
+pub unsafe fn six_lock_downgrade(lock: &SixLock) {
     let intent = unsafe { SixHold::from_raw(Locked::from_c(lock), SixLockType::SIX_LOCK_intent) };
     intent.downgrade().into_raw();
 }
@@ -1043,7 +1043,7 @@ pub unsafe fn six_lock_downgrade(lock: &six_lock) {
  */
 /// # Safety
 /// @lock is held for read, by the caller.
-pub unsafe fn six_lock_tryupgrade(lock: &six_lock) -> bool {
+pub unsafe fn six_lock_tryupgrade(lock: &SixLock) -> bool {
     let read = unsafe { SixHold::from_raw(Locked::from_c(lock), SixLockType::SIX_LOCK_read) };
     let (Ok(hold) | Err(hold)) = read.try_upgrade();
     hold.into_raw() == SixLockType::SIX_LOCK_intent
@@ -1074,7 +1074,7 @@ pub unsafe fn six_lock_tryupgrade(lock: &six_lock) -> bool {
  */
 /// # Safety
 /// @lock is held as @ty or stronger, by the caller.
-pub unsafe fn six_lock_increment_ip(lock: &six_lock, ty: SixLockType, ip: c_ulong) {
+pub unsafe fn six_lock_increment_ip(lock: &SixLock, ty: SixLockType, ip: c_ulong) {
     use SixLockType::*;
 
     lock.dep_map.acquire(false, ty == SIX_LOCK_read, ip);
@@ -1110,7 +1110,7 @@ pub unsafe fn six_lock_increment_ip(lock: &six_lock, ty: SixLockType, ip: c_ulon
  * This function is never needed in a bug-free program; it's only useful in
  * debug code, e.g. to determine if a cycle detector is at fault.
  */
-pub fn six_lock_wakeup_all(lock: &six_lock) {
+pub fn six_lock_wakeup_all(lock: &SixLock) {
     let state = atomic_read(lock);
 
     /*
@@ -1144,12 +1144,12 @@ pub fn six_lock_wakeup_all(lock: &six_lock) {
  * Return: the number of times a lock is held for read, intent and write.
  */
 /// Whether it's held for write: by its intent holder, if anyone.
-pub fn six_lock_write_held(lock: &six_lock) -> bool {
+pub fn six_lock_write_held(lock: &SixLock) -> bool {
     atomic_read(lock) & SIX_LOCK_HELD_write != 0
 }
 
-pub fn six_lock_counts(lock: &six_lock) -> six_lock_count {
-    let mut ret = six_lock_count::default();
+pub fn six_lock_counts(lock: &SixLock) -> SixLockCount {
+    let mut ret = SixLockCount::default();
 
     ret.n[SixLockType::SIX_LOCK_read as usize] = if !lock.readers.allocated() {
         atomic_read(lock) & SIX_LOCK_HELD_read
@@ -1186,7 +1186,7 @@ pub fn six_lock_counts(lock: &six_lock) -> six_lock_count {
 /// # Safety
 /// @lock is held for intent by the caller, and @nr takes away only read locks
 /// it holds, or gives back those it took.
-pub unsafe fn six_lock_readers_add(lock: &six_lock, nr: c_int) {
+pub unsafe fn six_lock_readers_add(lock: &SixLock, nr: c_int) {
     if lock.readers.allocated() {
         lock.readers.get().add(nr as u32);
     } else {
@@ -1196,7 +1196,7 @@ pub unsafe fn six_lock_readers_add(lock: &six_lock, nr: c_int) {
     }
 }
 
-impl RawLockBase for six_lock {
+impl RawLockBase for SixLock {
     type GuardState = ();
     type InitError = Infallible;
 
@@ -1210,21 +1210,21 @@ impl RawLockBase for six_lock {
     }
 }
 
-impl<G, P> Locked<six_lock, G, P> {
+impl<G, P> Locked<SixLock, G, P> {
     /// The lock's state, for what reads it - its seq, its counts - and for
     /// six's functions, while btree locking takes node locks through them
     /// rather than a guard.
-    pub fn six(&self) -> &six_lock {
+    pub fn six(&self) -> &SixLock {
         self.raw()
     }
 }
 
-pub type SixReadGuard<'a, G = (), P = ()> = SharedGuard<'a, six_lock, G, P, Shared>;
-pub type SixIntentGuard<'a, G = (), P = ()> = SharedGuard<'a, six_lock, G, P, SixIntent>;
+pub type SixReadGuard<'a, G = (), P = ()> = SharedGuard<'a, SixLock, G, P, Shared>;
+pub type SixIntentGuard<'a, G = (), P = ()> = SharedGuard<'a, SixLock, G, P, SixIntent>;
 /// Write, over intent: both the guard's.
-pub type SixWriteGuard<'a, G = (), P = ()> = ExclusiveGuard<'a, six_lock, G, P, SixWriteIntent>;
+pub type SixWriteGuard<'a, G = (), P = ()> = ExclusiveGuard<'a, SixLock, G, P, SixWriteIntent>;
 
-impl<G: Sync, P> Locked<six_lock, G, P> {
+impl<G: Sync, P> Locked<SixLock, G, P> {
     /// As @ty, read or intent: write is had over intent,
     /// SixHold::write_waiting_over().
     pub fn try_lock_as(&self, ty: SixLockType) -> Option<SixHold<'_, G, P>> {
@@ -1242,7 +1242,7 @@ impl<G: Sync, P> Locked<six_lock, G, P> {
     /// just failed: @wait on the lock's waitlist while it waits, where other
     /// threads' cycle detection reads it; @should_sleep_fn's error if it gives
     /// up.
-    pub fn lock_waiting_as(&self, ty: SixLockType, wait: &six_lock_waiter,
+    pub fn lock_waiting_as(&self, ty: SixLockType, wait: &SixLockWaiter,
                            should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong,
                            contended: bool) -> Result<SixHold<'_, G, P>, c_int> {
         assert!(ty != SixLockType::SIX_LOCK_write, "a six write lock is taken over intent");
@@ -1253,7 +1253,7 @@ impl<G: Sync, P> Locked<six_lock, G, P> {
     }
 }
 
-fn six_lock_waiting(lock: &six_lock, ty: SixLockType, wait: &six_lock_waiter,
+fn six_lock_waiting(lock: &SixLock, ty: SixLockType, wait: &SixLockWaiter,
                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong, contended: bool) -> c_int {
     if contended {
         six_lock_contended(lock, ty, wait, should_sleep_fn, ip)
@@ -1276,7 +1276,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
     /// # Safety
     /// @lock is held as @ty by the caller, its to give the guard - or, for a
     /// guard never dropped, for as long as the guard lives.
-    pub unsafe fn from_raw(lock: &'a Locked<six_lock, G, P>, ty: SixLockType) -> Self {
+    pub unsafe fn from_raw(lock: &'a Locked<SixLock, G, P>, ty: SixLockType) -> Self {
         unsafe {
             match ty {
                 SixLockType::SIX_LOCK_read   => SixHold::Read(SharedGuard::from_held(lock, ())),
@@ -1302,7 +1302,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
         }
     }
 
-    pub fn lock(&self) -> &'a Locked<six_lock, G, P> {
+    pub fn lock(&self) -> &'a Locked<SixLock, G, P> {
         match self {
             SixHold::Read(g)   => g.lock(),
             SixHold::Intent(g) => g.lock(),
@@ -1324,7 +1324,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
 
     /// increment(), had for as long as @lock - this hold's lock, reached
     /// through what has it for longer than this hold is.
-    pub fn increment_on<'b>(&self, lock: &'b Locked<six_lock, G, P>, ty: SixLockType) -> SixHold<'b, G, P> {
+    pub fn increment_on<'b>(&self, lock: &'b Locked<SixLock, G, P>, ty: SixLockType) -> SixHold<'b, G, P> {
         assert!(ptr::eq(self.lock(), lock), "a six lock incremented by a hold on another");
         let ty = self.increment(ty).into_raw();
         unsafe { SixHold::from_raw(lock, ty) }
@@ -1400,7 +1400,7 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
     ///
     /// # Safety
     /// @readers are read holds the caller has on the lock.
-    pub unsafe fn write_waiting_over(self, readers: c_int, wait: &six_lock_waiter,
+    pub unsafe fn write_waiting_over(self, readers: c_int, wait: &SixLockWaiter,
                                      should_sleep_fn: impl FnMut() -> c_int,
                                      ip: c_ulong) -> Result<Self, (Self, c_int)> {
         assert!(self.ty() == SixLockType::SIX_LOCK_intent, "a six write lock taken over a hold that isn't intent");
@@ -1424,16 +1424,16 @@ impl<'a, G: Sync, P> SixHold<'a, G, P> {
 
 }
 
-impl six_lock {
+impl SixLock {
     /// six_lock_ip(), without a should_sleep_fn: it can't fail.
     fn lock_type(&self, ty: SixLockType) {
-        let wait = ::pin_init::zeroed::<six_lock_waiter>();
+        let wait = ::pin_init::zeroed::<SixLockWaiter>();
         let ret = six_lock_ip_waiter(self, ty, &wait, || 0, 0);
         ebug_assert!(ret == 0, "six lock without should_sleep_fn failed: {ret}");
     }
 }
 
-impl RawReadLock for six_lock {
+impl RawReadLock for SixLock {
     fn lock_read(&self) {
         self.lock_type(SixLockType::SIX_LOCK_read)
     }
@@ -1443,7 +1443,7 @@ impl RawReadLock for six_lock {
     }
 }
 
-impl RawSixLock for six_lock {
+impl RawSixLock for SixLock {
     fn lock_intent(&self) {
         self.lock_type(SixLockType::SIX_LOCK_intent)
     }
@@ -1470,7 +1470,7 @@ impl RawSixLock for six_lock {
  */
 /// # Safety
 /// Nothing holds @lock, or will.
-pub unsafe fn six_lock_exit(lock: *mut six_lock) {
+pub unsafe fn six_lock_exit(lock: *mut SixLock) {
     unsafe {
         crate::warn_on!((*lock).readers.allocated() && pcpu_read_count(&*lock) != 0);
         crate::warn_on!(atomic_read(&*lock) & SIX_LOCK_HELD_read != 0);
@@ -1487,14 +1487,14 @@ pub unsafe fn six_lock_exit(lock: *mut six_lock) {
 /// Nothing holds or reaches @lock until this returns. What init doesn't set
 /// keeps what it was - zeroes, or six_lock_exit()'s: seq, and readers but
 /// with SixLockInitFlags::pcpu.
-pub unsafe fn __six_lock_init(lock: *mut six_lock, name: *const c_char, key: LockClass,
+pub unsafe fn __six_lock_init(lock: *mut SixLock, name: *const c_char, key: LockClass,
                               flags: SixLockInitFlags, gfp: Flags) {
-    let wait_lock = crate::new_lock!(six_lock_waiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },
+    let wait_lock = crate::new_lock!(SixLockWaiters { next_free_hint: 0, list: ManuallyDrop::new(WaitList::new_zeroed()) },
                                      "&lock->wait_lock");
     unsafe {
         (*lock).state.store(0, Relaxed);
         let Ok(()) = init_at(wait_lock, &raw mut (*lock).wait_lock);
-        crate::os::lockdep::debug_check_no_locks_freed(lock.cast(), size_of::<six_lock>());
+        crate::os::lockdep::debug_check_no_locks_freed(lock.cast(), size_of::<SixLock>());
         LockdepMap::init(&raw mut (*lock).dep_map, name, key);
 
         if crate::os::percpu::SIX_PERCPU_READERS && flags.contains(SixLockInitFlags::pcpu) {

@@ -14,10 +14,10 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, Upda
 use crate::c;
 use crate::data::extents_format::{BCH_INLINE_DATA_POISONED, InlineData, InlineDataCsum,
     InlineDataV2};
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::data::checksum::csum_err_msg;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits, bch_csum, bkey, CsumOpt,
+use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits, Csum, Bkey, CsumOpt,
     CsumType};
 use crate::fs::{Fs, WriteRef};
 use crate::init::{damage, error::{id, BkeyValidate}};
@@ -36,7 +36,7 @@ pub type Inline = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::inline_data }>>;
 pub static DATA: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::inline_data, "data");
 pub static CSUM: FieldOffsets = FieldOffsets::optional(BkeyTypeFlags::inline_data, "csum");
 
-impl bkey {
+impl Bkey {
     pub fn extent_is_inline_data(&self) -> bool {
         <Inline as BkeyFamily>::contains(self)
     }
@@ -125,8 +125,8 @@ impl<'a> InlineDataMut<'a> {
 /// An inline data key's data that doesn't match its checksum.
 pub struct CsumMismatch {
     pub ty:   CsumType,
-    pub want: bch_csum,
-    pub got:  bch_csum,
+    pub want: Csum,
+    pub got:  Csum,
 }
 
 impl CsumMismatch {
@@ -139,7 +139,7 @@ impl InlineDataCsum {
     /// For @data, written now with @opts: offset 0, the checksum @opts'
     /// data_checksum says - none for none, or for nocow - never an encryption
     /// type, whatever the filesystem is.
-    pub fn new(fs: &Fs, opts: &bch_inode_opts, data: &[u8]) -> Self {
+    pub fn new(fs: &Fs, opts: &InodeOpts, data: &[u8]) -> Self {
         let ty = if opts.nocow != 0 {
             CsumType::none
         } else {

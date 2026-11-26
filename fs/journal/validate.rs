@@ -3,17 +3,17 @@
 use core::ffi::c_uint;
 use core::mem::{offset_of, size_of};
 
-use crate::alloc::{replicas::SbEntry, replicas_format::bch_replicas_entry_v1};
+use crate::alloc::{replicas::SbEntry, replicas_format::ReplicasEntryV1};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Btree, DataType, MetadataVersion, bkey_format_bits, bkey_packed,
-    BTREE_MAX_DEPTH, FsUsageType, jset, jset_entry, jset_entry_blacklist, jset_entry_blacklist_v2,
-    jset_entry_clock, jset_entry_data_usage, jset_entry_datetime, jset_entry_dev_usage,
-    jset_entry_log, jset_entry_prio_ptrs, jset_entry_rewind, jset_entry_rewind_limit,
-    jset_entry_usage, KEY_FORMAT_CURRENT, jset_entry_by_tag, jset_entry_match,
-    jset_entry_data_usage_whole, JsetEntryType, jset_entry_btree_keys, jset_entry_btree_root,
+use crate::format::{Btree, DataType, MetadataVersion, BkeyFormatBits, BkeyPacked,
+    BTREE_MAX_DEPTH, FsUsageType, Jset, JsetEntry, JsetEntryBlacklist, JsetEntryBlacklistV2,
+    JsetEntryClock, JsetEntryDataUsage, JsetEntryDatetime, JsetEntryDevUsage,
+    JsetEntryLog, JsetEntryPrioPtrs, JsetEntryRewind, JsetEntryRewindLimit,
+    JsetEntryUsage, KEY_FORMAT_CURRENT, JsetEntry_by_tag, JsetEntry_match,
+    JsetEntryDataUsageWhole, JsetEntryType, jset_entry_btree_keys, jset_entry_btree_root,
     jset_entry_overwrite, jset_entry_write_buffer_keys, jset_entry_log_bkey};
 use crate::fs::{Dev, Fs};
-use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags, bkey_validate_context,
+use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags, BkeyValidateContext,
     BkeyValidateFrom};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
@@ -24,10 +24,10 @@ use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, Ar
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 
-const HEAD: usize = size_of::<Head<jset_entry>>();
-const JSET_HEAD: usize = size_of::<Head<jset>>();
+const HEAD: usize = size_of::<Head<JsetEntry>>();
+const JSET_HEAD: usize = size_of::<Head<Jset>>();
 
-pub(crate) enum Jset {
+pub(crate) enum JsetCheck {
     Ok,
     None,
     Bad,
@@ -76,12 +76,12 @@ struct Ctx<'a> {
     big_endian: bool,
     jset:       Option<JsetPos>,
     entry:      Option<EntryPos>,
-    from:       bkey_validate_context,
+    from:       BkeyValidateContext,
 }
 
 impl<'a> Ctx<'a> {
-    fn jset(fs: &'a Fs, h: &Head<jset>, flags: ValidateFlags) -> Self {
-        let mut from = bkey_validate_context::default();
+    fn jset(fs: &'a Fs, h: &Head<Jset>, flags: ValidateFlags) -> Self {
+        let mut from = BkeyValidateContext::default();
         from.bits.set_flags(flags);
         from.bits.set_from(BkeyValidateFrom::journal);
         from.journal_seq = h.seq.get();
@@ -128,11 +128,11 @@ macro_rules! journal_entry_err_on {
     };
 }
 
-fn head(e: &[u8]) -> &Head<jset_entry> {
+fn head(e: &[u8]) -> &Head<JsetEntry> {
     cast_plain(e).expect("an entry's header")
 }
 
-fn head_mut(e: &mut [u8]) -> &mut Head<jset_entry> {
+fn head_mut(e: &mut [u8]) -> &mut Head<JsetEntry> {
     cast_plain_mut(e).expect("an entry's header")
 }
 
@@ -144,7 +144,7 @@ fn head_mut(e: &mut [u8]) -> &mut Head<jset_entry> {
  * validated under sb_lock, which bch2_btree_lost_data() takes - its entries
  * are roots, and a missing root recovery handles itself.
  */
-fn journal_key_lost(fs: &Fs, from: &bkey_validate_context) {
+fn journal_key_lost(fs: &Fs, from: &BkeyValidateContext) {
     if from.bits.flags().contains(ValidateFlags::write) ||
        from.bits.from() != BkeyValidateFrom::journal {
         return;
@@ -214,7 +214,7 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
     }
 
     let bytes = u64s * 8;
-    let format = bkey_format_bits::from_bits(e[at + offset_of!(bkey_packed, format_bits)]).format();
+    let format = BkeyFormatBits::from_bits(e[at + offset_of!(BkeyPacked, format_bits)]).format();
     if journal_entry_err_on!(ctx, format != KEY_FORMAT_CURRENT as u8,
                              journal_entry_bkey_bad_format, "bad format {}", format) {
         return drop(e, bytes);
@@ -314,7 +314,7 @@ trait EntryOps: ArmRef {
     }
 
     /// @self, the arm of entry @e.
-    fn to_text(&self, e: &jset_entry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>);
+    fn to_text(&self, e: &JsetEntry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>);
 
     /// Entry @e's arm, its type, its size checked.
     fn arm(e: &[u8]) -> &Self {
@@ -346,7 +346,7 @@ fn journal_entry_btree_root_validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), 
                              "invalid btree root journal entry: level {} >= max depth {}",
                              h.level, BTREE_MAX_DEPTH) {
         /*
-         * we don't want to null out this jset_entry,
+         * we don't want to null out this JsetEntry,
          * just the contents, so that later we can tell
          * we were _supposed_ to have a btree root
          */
@@ -377,7 +377,7 @@ macro_rules! keys_entry_ops {
                 $validate(ctx, e)
             }
 
-            fn to_text(&self, e: &crate::format::jset_entry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>) {
+            fn to_text(&self, e: &crate::format::JsetEntry<Unvalidated>, out: &mut Printbuf, fs: Option<&Fs>) {
                 journal_entry_btree_keys_to_text(out, fs, e.as_bytes())
             }
         }
@@ -391,20 +391,20 @@ keys_entry_ops!(
     jset_entry_log_bkey:          journal_entry_overwrite_validate,
 );
 
-impl EntryOps for jset_entry_prio_ptrs<Unvalidated> {
+impl EntryOps for JsetEntryPrioPtrs<Unvalidated> {
     /* obsolete, don't care: */
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, _out: &mut Printbuf, _fs: Option<&Fs>) {}
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, _out: &mut Printbuf, _fs: Option<&Fs>) {}
 }
 
-impl EntryOps for jset_entry_blacklist<Unvalidated> {
+impl EntryOps for JsetEntryBlacklist<Unvalidated> {
     const SIZE: Size = Size::Exactly(id::journal_entry_blacklist_bad_size);
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "seq={}", self.seq.get());
     }
 }
 
-impl EntryOps for jset_entry_blacklist_v2<Unvalidated> {
+impl EntryOps for JsetEntryBlacklistV2<Unvalidated> {
     const SIZE: Size = Size::Exactly(id::journal_entry_blacklist_v2_bad_size);
 
     fn validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
@@ -416,15 +416,15 @@ impl EntryOps for jset_entry_blacklist_v2<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "start={} end={}", self.start.get(), self.end.get());
     }
 }
 
-impl EntryOps for jset_entry_usage<Unvalidated> {
+impl EntryOps for JsetEntryUsage<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_usage_bad_size);
 
-    fn to_text(&self, e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "type=");
         FsUsageType(e.btree_id.into()).to_text(out);
         prt!(out, " v={}", self.v.get());
@@ -433,12 +433,12 @@ impl EntryOps for jset_entry_usage<Unvalidated> {
 
 /// The replicas entry in data_usage arm @v's bytes.
 fn data_usage_replicas(v: &[u8]) -> Option<SbEntry<'_>> {
-    v.get(offset_of!(jset_entry_data_usage_whole, r)..)
-        .and_then(|r| bch_replicas_entry_v1::<Unvalidated>::from_bytes(r).ok())
+    v.get(offset_of!(JsetEntryDataUsageWhole, r)..)
+        .and_then(|r| ReplicasEntryV1::<Unvalidated>::from_bytes(r).ok())
         .map(SbEntry::from)
 }
 
-impl EntryOps for jset_entry_data_usage<Unvalidated> {
+impl EntryOps for JsetEntryDataUsage<Unvalidated> {
     fn validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
         let Some(r) = data_usage_replicas(&e[HEAD..]) else {
             ctx.err(id::journal_entry_data_usage_bad_size, &message!("invalid journal entry usage: bad size"))?;
@@ -455,7 +455,7 @@ impl EntryOps for jset_entry_data_usage<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         match data_usage_replicas(self.as_bytes()) {
             Some(r) => r.to_text(out),
             None    => prt!(out, "(invalid, replicas entry overruns jset_entry)"),
@@ -464,7 +464,7 @@ impl EntryOps for jset_entry_data_usage<Unvalidated> {
     }
 }
 
-impl EntryOps for jset_entry_clock<Unvalidated> {
+impl EntryOps for JsetEntryClock<Unvalidated> {
     const SIZE: Size = Size::Exactly(id::journal_entry_clock_bad_size);
 
     fn validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
@@ -474,12 +474,12 @@ impl EntryOps for jset_entry_clock<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "{}={}", if self.rw != 0 { "write" } else { "read" }, self.time.get());
     }
 }
 
-impl EntryOps for jset_entry_dev_usage<Unvalidated> {
+impl EntryOps for JsetEntryDevUsage<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_dev_usage_bad_size);
 
     fn validate(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
@@ -489,7 +489,7 @@ impl EntryOps for jset_entry_dev_usage<Unvalidated> {
         Ok(())
     }
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "dev={}", self.dev.get());
         let mut out = out.indent(2);
 
@@ -502,67 +502,67 @@ impl EntryOps for jset_entry_dev_usage<Unvalidated> {
     }
 }
 
-impl EntryOps for jset_entry_log<Unvalidated> {
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+impl EntryOps for JsetEntryLog<Unvalidated> {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         let len = self.d.iter().position(|&b| b == 0).unwrap_or(self.d.len());
         out.write_bytes(&self.d[..len]);
     }
 }
 
-impl EntryOps for jset_entry_datetime<Unvalidated> {
+impl EntryOps for JsetEntryDatetime<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_datetime_bad_size);
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         DateTime(self.seconds.get() as i64).to_text(out);
     }
 }
 
-impl EntryOps for jset_entry_rewind_limit<Unvalidated> {
+impl EntryOps for JsetEntryRewindLimit<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_rewind_limit_bad_size);
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "seq {}", self.seq.get());
     }
 }
 
-impl EntryOps for jset_entry_rewind<Unvalidated> {
+impl EntryOps for JsetEntryRewind<Unvalidated> {
     const SIZE: Size = Size::AtLeast(id::journal_entry_rewind_bad_size);
 
-    fn to_text(&self, _e: &jset_entry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
+    fn to_text(&self, _e: &JsetEntry<Unvalidated>, out: &mut Printbuf, _fs: Option<&Fs>) {
         prt!(out, "from {} to {}", self.from.get(), self.to.get());
     }
 }
 
 fn entry_validate_typed(ctx: &Ctx<'_>, e: &mut [u8]) -> Result<(), BchError> {
-    jset_entry_by_tag!(head(e).type_, A => entry_validate::<A<Unvalidated>>(ctx, e), _ => Ok(()))
+    JsetEntry_by_tag!(head(e).type_, A => entry_validate::<A<Unvalidated>>(ctx, e), _ => Ok(()))
 }
 
 /// Entry @e - its bytes as read, as long as its u64s says - checked, and
 /// repaired in place: one not in a jset, the superblock's clean section's or a
 /// transaction's.
 pub(crate) fn journal_entry_validate(fs: &Fs, e: &mut [u8], version: MetadataVersion, big_endian: bool,
-                                     from: bkey_validate_context) -> Result<(), BchError>
+                                     from: BkeyValidateContext) -> Result<(), BchError>
 {
     let ctx = Ctx { fs, version, big_endian, jset: None, entry: Some(EntryPos { type_: head(e).type_, offset: 0 }), from };
     entry_validate_typed(&ctx, e)
 }
 
-pub fn journal_entry_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &jset_entry<Unvalidated>) {
+pub fn journal_entry_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &JsetEntry<Unvalidated>) {
     JsetEntryType(e.type_.into()).to_text(out);
 
     if u32::from(e.type_) < JsetEntryType::NR {
         prt!(out, ": ");
         if let Ok(r) = e.typed() {
-            jset_entry_match!(r, a => a.to_text(e, out, fs))
+            JsetEntry_match!(r, a => a.to_text(e, out, fs))
         }
     }
 }
 
-fn jset_head(j: &[u8]) -> &Head<jset> {
+fn jset_head(j: &[u8]) -> &Head<Jset> {
     cast_plain(j).expect("a jset's header")
 }
 
-pub(crate) fn jset_head_mut(j: &mut [u8]) -> &mut Head<jset> {
+pub(crate) fn jset_head_mut(j: &mut [u8]) -> &mut Head<Jset> {
     cast_plain_mut(j).expect("a jset's header")
 }
 
@@ -575,7 +575,7 @@ pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: ValidateFlags)
     let mut off = 0;
     while off < data.len() {
         let rest = &data[off..];
-        let t = rest.get(offset_of!(Head<jset_entry>, type_)).copied();
+        let t = rest.get(offset_of!(Head<JsetEntry>, type_)).copied();
         let len = if rest.len() >= HEAD { HEAD + head(rest).u64s() * 8 } else { usize::MAX };
 
         ctx.from.journal_offset = (off / 8) as c_uint;
@@ -601,16 +601,16 @@ fn dev_or_fs_name<'a>(fs: &'a Fs, dev: &'a Option<DevName>) -> &'a str {
     dev.as_ref().map_or(fs.name(), DevName::as_cstr).to_str().unwrap_or("?")
 }
 
-/// Jset @j - its bytes, as long as its u64s says - checked, its entries
+/// JsetCheck @j - its bytes, as long as its u64s says - checked, its entries
 /// repaired in place.
 pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64, flags: ValidateFlags)
-    -> Result<Jset, BchError>
+    -> Result<JsetCheck, BchError>
 {
     let h = jset_head(j);
     let (seq, version) = (h.seq.get(), h.version.get());
 
     if h.magic.get() != fs.jset_magic() {
-        return Ok(Jset::None);
+        return Ok(JsetCheck::None);
     }
 
     let ctx = Ctx::jset(fs, h, flags);
@@ -630,14 +630,14 @@ pub(crate) fn jset_validate(fs: &Fs, ca: Option<&Dev>, j: &mut [u8], sector: u64
 
     /* last_seq is ignored when JSET_NO_FLUSH is true */
     if !h.no_flush() && jset_last_seq_check(fs, jset_head_mut(j), flags)? {
-        return Ok(Jset::Bad);
+        return Ok(JsetCheck::Bad);
     }
 
     jset_validate_entries(fs, j, flags)?;
-    Ok(Jset::Ok)
+    Ok(JsetCheck::Ok)
 }
 
-pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<jset>, flags: ValidateFlags) -> Result<bool, BchError> {
+pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<Jset>, flags: ValidateFlags) -> Result<bool, BchError> {
     let ctx = Ctx::jset(fs, h, flags);
     let seq = h.seq.get();
 
@@ -649,15 +649,15 @@ pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<jset>, flags: ValidateFl
     Ok(false)
 }
 
-/// Jset @h's header, as read from a bucket with @bucket_sectors_left: cut to
+/// JsetCheck @h's header, as read from a bucket with @bucket_sectors_left: cut to
 /// fit, if it says it's longer.
-pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<jset>, sector: u64,
-                                  bucket_sectors_left: u32) -> Result<Jset, BchError>
+pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<Jset>, sector: u64,
+                                  bucket_sectors_left: u32) -> Result<JsetCheck, BchError>
 {
     let (seq, version) = (h.seq.get(), h.version.get());
 
     if h.magic.get() != fs.jset_magic() {
-        return Ok(Jset::None);
+        return Ok(JsetCheck::None);
     }
 
     let ctx = Ctx::jset(fs, h, ValidateFlags::empty());
@@ -671,13 +671,13 @@ pub(crate) fn jset_validate_early(fs: &Fs, ca: Option<&Dev>, h: &mut Head<jset>,
         return fs.throw(Errcode::EINVAL_journal_validate_version_incompatible);
     }
 
-    let bytes = size_of::<Head<jset>>() + h.u64s() * size_of::<u64>();
+    let bytes = size_of::<Head<Jset>>() + h.u64s() * size_of::<u64>();
     let max = (bucket_sectors_left as usize) << 9;
 
     if journal_entry_err_on!(ctx, bytes > max, jset_past_bucket_end,
                              "{} sector {} seq {}: journal entry too big ({} bytes)", name, sector, seq, bytes) {
         h.set_u64s(h.u64s() - (bytes - max) / 8);
     }
-    Ok(Jset::Ok)
+    Ok(JsetCheck::Ok)
 }
 

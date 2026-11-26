@@ -24,9 +24,9 @@ use log::warn;
 
 use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 use bcachefs_kernel::errcode::Errcode;
-use bcachefs_kernel::format::bch_sb;
-use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::init::dev::{dev_in_fs, bch_sb_handle};
+use bcachefs_kernel::format::Sb;
+use bcachefs_kernel::opts::Opts;
+use bcachefs_kernel::init::dev::{dev_in_fs, SbHandle};
 use bcachefs_kernel::fs::newest;
 use bcachefs_kernel::sb::members;
 use bcachefs_kernel::util::printbuf::DateTime;
@@ -40,11 +40,11 @@ pub struct Divergent {
     expected_seq: u64,
 }
 
-fn seq(sb: &bch_sb) -> u64 {
+fn seq(sb: &Sb) -> u64 {
     sb.seq.get()
 }
 
-fn write_time(sb: &bch_sb) -> u64 {
+fn write_time(sb: &Sb) -> u64 {
     sb.write_time.get()
 }
 
@@ -54,13 +54,13 @@ fn write_time(sb: &bch_sb) -> u64 {
 /// across a genuine fork is arbitrary and quite possibly wrong - a stale
 /// rescue image booted later is newer than the filesystem the user wants. Used
 /// to have something to compare against, never to decide anything.
-fn authoritative(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<usize> {
+fn authoritative(sbs: &[(PathBuf, SbHandle)]) -> Option<usize> {
     newest(sbs.iter().map(|(_, h)| h.sb()))
 }
 
 /// Devices that have diverged, or an empty vec. Never errors: anything that is
 /// not divergence is somebody else's problem, reported at mount.
-pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &bch_opts) -> Vec<Divergent> {
+pub fn find(sbs: &[(PathBuf, SbHandle)], opts: &Opts) -> Vec<Divergent> {
     let Some(best_idx) = authoritative(sbs) else {
         return Vec::new();
     };
@@ -106,7 +106,7 @@ fn name(path: &Path) -> String {
 /// Timestamps first: "that is the rescue boot I did on Tuesday" is how someone
 /// identifies which half is which. The sequence numbers say roughly how much
 /// happened on each side, which is the other half of the judgement.
-pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> String {
+pub fn report(sbs: &[(PathBuf, SbHandle)], divergent: &[Divergent]) -> String {
     use std::fmt::Write;
 
     let mut out = String::new();
@@ -186,7 +186,7 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
 /// untouched on disk, so the other history is still there to mount afterwards.
 /// That is what makes it askable at all. Rewriting a device so it rejoins
 /// needs a mounted filesystem, and is left to the user via [`report`].
-pub fn ask(sb: &bch_sb_handle) -> Result<bool> {
+pub fn ask(sb: &SbHandle) -> Result<bool> {
     let Some(p) = Prompt::detect() else {
         warn!("{NO_ONE_TO_ASK}: cannot ask which history to continue with; refusing");
         return Ok(false);
@@ -234,7 +234,7 @@ const CHOICES: &[Choice<bool>] = &[
 /// counts as "the filesystem" is the arbitrary newest-wins pick that
 /// [`authoritative`] exists to warn about. Naming the device instead of
 /// implying a verdict keeps the prose as neutral as the code.
-fn other_side(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> String {
+fn other_side(sbs: &[(PathBuf, SbHandle)], divergent: &[Divergent]) -> String {
     let surviving = sbs.len() - divergent.len();
 
     match (surviving, authoritative(sbs)) {

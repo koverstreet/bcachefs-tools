@@ -3,7 +3,7 @@
 //! Per-inode io path options: storage, resolution against filesystem defaults,
 //! inheritance, propagation to ancestor snapshots.
 //!
-//! And struct bch_inode_opts, the io options data is written with: the
+//! And struct InodeOpts, the io options data is written with: the
 //! filesystem's, an inode's, and a key's - get_io_opts(), by what the key is,
 //! the options of the inode it's in as of its snapshot for a file's data.
 //!
@@ -23,14 +23,14 @@ use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, Btree
 use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::data::compress::bch_compression_opt;
-use crate::data::reconcile::format::{bch_extent_reconcile, ReconcileOpt_arms};
+use crate::data::reconcile::format::{ExtentReconcile, ReconcileOpt_arms};
 use crate::data::reconcile::work::ReconcileScan;
-use crate::opts::{bch_inode_opts, bch_opts, OptId};
-use crate::posix::inode::bch_inode_unpacked;
+use crate::opts::{InodeOpts, Opts, OptId};
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::inode_format::{InodeOptId, InodeOptId_arms, InodeFlags};
 use crate::posix::logged_ops_format::LoggedOpInodeOptPropagate;
 use crate::data::ptrs::Ptrs;
-use crate::data::reconcile::trigger::{BkeyVReconcile, per_snapshot_io_opts, snapshot_io_opts_entry};
+use crate::data::reconcile::trigger::{BkeyVReconcile, PerSnapshotIoOpts, SnapshotIoOptsEntry};
 use crate::data::reflink::Indirect;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -43,7 +43,7 @@ use crate::posix::{inode, logged_ops};
 use core::ffi::CStr;
 use core::ops::ControlFlow;
 use cstruct_macros::MaybeZeroable;
-use crate::format::{Btree, BkeyType, bkey, CsumOpt, SbCompat};
+use crate::format::{Btree, BkeyType, Bkey, CsumOpt, SbCompat};
 
 /*
  * What changing an inode's options leaves for after the commit: an inode
@@ -52,7 +52,7 @@ use crate::format::{Btree, BkeyType, bkey, CsumOpt, SbCompat};
  */
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]
-pub struct inode_opt_change {
+pub struct InodeOptChange {
     pub reconcile_changed: bool,
     pub propagate: BkeyI<LoggedOpInodeOptPropagate>,
 }
@@ -63,8 +63,8 @@ struct Desc {
     name: &'static CStr,
     /// The filesystem option it is
     opt:  OptId,
-    get:  fn(&bch_inode_unpacked) -> u64,
-    set:  fn(&mut bch_inode_unpacked, u64),
+    get:  fn(&InodeUnpacked) -> u64,
+    set:  fn(&mut InodeUnpacked, u64),
 }
 
 macro_rules! descs {
@@ -120,21 +120,21 @@ impl InodeOpt {
     }
 
     /// Its value on @inode, biased: 0 for not set.
-    pub fn get(self, inode: &bch_inode_unpacked) -> u64 {
+    pub fn get(self, inode: &InodeUnpacked) -> u64 {
         (self.desc().get)(inode)
     }
 
     /// @v biased, 0 for not set.
-    pub fn set(self, inode: &mut bch_inode_unpacked, v: u64) {
+    pub fn set(self, inode: &mut InodeUnpacked, v: u64) {
         (self.desc().set)(inode, v)
     }
 
     /// Whether it's set on @inode itself, not inherited: bi_fields_set.
-    pub fn is_own(self, inode: &bch_inode_unpacked) -> bool {
+    pub fn is_own(self, inode: &InodeUnpacked) -> bool {
         inode.bi_fields_set & (1 << self.0.0) != 0
     }
 
-    pub fn set_own(self, inode: &mut bch_inode_unpacked, own: bool) {
+    pub fn set_own(self, inode: &mut InodeUnpacked, own: bool) {
         let bit = 1 << self.0.0;
         if own {
             inode.bi_fields_set |= bit;
@@ -147,7 +147,7 @@ impl InodeOpt {
 /// Copy the options @dst inherits from @src - everything it hasn't set for
 /// itself, and casefolding only for a directory. Called when a file moves
 /// between directories. Whether anything changed.
-pub fn reinherit_attrs(dst: &mut bch_inode_unpacked, src: &bch_inode_unpacked) -> bool {
+pub fn reinherit_attrs(dst: &mut InodeUnpacked, src: &InodeUnpacked) -> bool {
     let mut ret = false;
 
     for opt in InodeOpt::all() {
@@ -172,8 +172,8 @@ pub fn reinherit_attrs(dst: &mut bch_inode_unpacked, src: &bch_inode_unpacked) -
 }
 
 /// Those @inode sets, with the +1 bias removed.
-pub fn inode_opts_to_opts(inode: &bch_inode_unpacked) -> bch_opts {
-    let mut ret = bch_opts::default();
+pub fn inode_opts_to_opts(inode: &InodeUnpacked) -> Opts {
+    let mut ret = Opts::default();
 
     for opt in InodeOpt::all() {
         let v = opt.get(inode);
@@ -185,7 +185,7 @@ pub fn inode_opts_to_opts(inode: &bch_inode_unpacked) -> bch_opts {
     ret
 }
 
-impl bch_inode_opts {
+impl InodeOpts {
     /// The options that follow from others, and what doesn't combine: as
     /// bch2_io_opts_fixups(), opts.h's - a copy, until opts.c is Rust.
     pub fn fixups(&mut self) {
@@ -219,9 +219,9 @@ impl bch_inode_opts {
 }
 
 /// The filesystem's io options, or for metadata its metadata options.
-pub fn get_fs(fs: &Fs, metadata: bool) -> bch_inode_opts {
+pub fn get_fs(fs: &Fs, metadata: bool) -> InodeOpts {
     let o = &fs.opts;
-    let mut ret = bch_inode_opts::default();
+    let mut ret = InodeOpts::default();
     macro_rules! get {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => { $(ret.$name = o.$name.get() as _;)* };
     }
@@ -243,7 +243,7 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> bch_inode_opts {
 
 /// Each, name=value, comma separated.
 #[cold]
-pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &bch_inode_opts) {
+pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &InodeOpts) {
     macro_rules! values {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => {
             [$((crate::opts::OptId::$name, opts.$name as u64)),*]
@@ -260,8 +260,8 @@ pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &bch_inode_opts) {
 
 /// @inode's io options: its own where it sets them, the filesystem's where it
 /// doesn't, and for each which - as bch2_inode_opts_get_inode().
-pub fn get_inode(fs: &Fs, inode: &bch_inode_unpacked) -> bch_inode_opts {
-    let mut ret = bch_inode_opts::default();
+pub fn get_inode(fs: &Fs, inode: &InodeUnpacked) -> InodeOpts {
+    let mut ret = InodeOpts::default();
 
     macro_rules! get {
         ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
@@ -305,29 +305,6 @@ pub fn get_inode(fs: &Fs, inode: &bch_inode_unpacked) -> bch_inode_opts {
 
 // ── A key's io options ───────────────────────────────────────────────────
 
-/// A walk's per_snapshot_io_opts, Rust's: C's CLASS(per_snapshot_io_opts).
-/// Made as per_snapshot_io_opts_init() makes it - the change cookie one
-/// behind, so the first get_io_opts() takes the filesystem's.
-pub struct PerSnapshotIoOpts(per_snapshot_io_opts);
-
-impl PerSnapshotIoOpts {
-    pub fn new(fs: &Fs) -> Self {
-        let mut s = per_snapshot_io_opts::default();
-        s.fs_io_opts.change_cookie = fs.opt_change_cookie.get().wrapping_sub(1);
-        PerSnapshotIoOpts(s)
-    }
-}
-
-impl core::ops::Deref for PerSnapshotIoOpts {
-    type Target = per_snapshot_io_opts;
-    fn deref(&self) -> &per_snapshot_io_opts { &self.0 }
-}
-
-impl core::ops::DerefMut for PerSnapshotIoOpts {
-    fn deref_mut(&mut self) -> &mut per_snapshot_io_opts { &mut self.0 }
-}
-
-
 /// The io options @k's data is written with: a btree node pointer's, the
 /// filesystem's metadata options; a file's data, its inode's, as of its
 /// snapshot; reflinked data, the filesystem's, with those its reconcile entry
@@ -335,8 +312,8 @@ impl core::ops::DerefMut for PerSnapshotIoOpts {
 ///
 /// @s caches them across a scan in key order: the filesystem's, and every
 /// snapshot version of the inode it's on.
-pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>, k: BkeySC<'_>)
-    -> Result<bch_inode_opts, BchError>
+pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>, k: BkeySC<'_>)
+    -> Result<InodeOpts, BchError>
 {
     enum Mode { Metadata, Reflink, User }
     let fs = t.fs();
@@ -393,7 +370,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts
                     iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, inode_k| {
                         if let Some(inode_k) = inode_k.arm::<inode::Inodes>() {
                             let inode = inode::unpack(fs, inode_k);
-                            let e = snapshot_io_opts_entry {
+                            let e = SnapshotIoOptsEntry {
                                 snapshot: inode_k.k.p.snapshot,
                                 io_opts:  get_inode(fs, &inode),
                             };
@@ -520,8 +497,8 @@ fn snapshot_is_master_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<
  * @dst agreeing skips the write, not the climb.
  */
 fn merge_into_ancestor(
-    src:           &bch_inode_unpacked,
-    dst:           &mut bch_inode_unpacked,
+    src:           &InodeUnpacked,
+    dst:           &mut InodeUnpacked,
     claimed:       &[u64; NR],
     src_is_master: bool,
 ) -> bool {
@@ -553,7 +530,7 @@ fn merge_into_ancestor(
 
 /// The inode at @iter's position, if there's one.
 fn peek_inode<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
-    -> Result<Option<bch_inode_unpacked>, BchError>
+    -> Result<Option<InodeUnpacked>, BchError>
 {
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     Ok(k.arm::<inode::Inodes>().map(|k| inode::unpack(t.fs(), k)))
@@ -683,7 +660,7 @@ fn propagate_start(
     snapshot: u32,
     op:       &mut BkeyI<LoggedOpInodeOptPropagate>,
 ) -> Result<(), BchError> {
-    op.k = bkey::new();
+    op.k = Bkey::new();
 
     if t.fs().snapshots.parent(snapshot).is_none() {
         return Ok(());
@@ -705,11 +682,11 @@ fn propagate_finish(trans: &TransGuard<'_>, op: &mut BkeyI<LoggedOpInodeOptPropa
     logged_ops::finish(trans, op.as_ref(), ret, CommitOpts::new())
 }
 
-impl inode_opt_change {
+impl InodeOptChange {
     /// At the start of the transaction: a restart discards the logged op.
     pub fn new() -> Self {
         let mut ch = Self::default();
-        ch.propagate.k = bkey::new();
+        ch.propagate.k = Bkey::new();
         ch
     }
 
@@ -720,8 +697,8 @@ impl inode_opt_change {
     pub fn record(
         &mut self,
         t:        &TransAttempt<'_, '_>,
-        old:      &bch_extent_reconcile,
-        inode:    &bch_inode_unpacked,
+        old:      &ExtentReconcile,
+        inode:    &InodeUnpacked,
         snapshot: u32,
     ) -> Result<(), BchError> {
         let new = inode::reconcile_opts_get(t.fs(), inode);
@@ -765,7 +742,7 @@ impl inode_opt_change {
 ///
 /// No logged op - fsck reruns from the start anyway, and a begin in its climb
 /// would invalidate check_inodes()'s iterator.
-pub fn check_propagated(t: &TransAttempt<'_, '_>, inode: &bch_inode_unpacked) -> Result<(), BchError> {
+pub fn check_propagated(t: &TransAttempt<'_, '_>, inode: &InodeUnpacked) -> Result<(), BchError> {
     if !inode.flag(InodeFlags::has_inode_opts) {
         return Ok(());
     }

@@ -8,8 +8,8 @@ use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_UNLOCKED;
 use crate::btree::path::{NodePtr, PathIdx, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::c;
-use crate::btree::key_cache::{bkey_cached, BKEY_CACHED_ACCESSED, BKEY_CACHED_IMMEDIATE_FLUSH,
-    bkey_cached_key};
+use crate::btree::key_cache::{BkeyCached, BKEY_CACHED_ACCESSED, BKEY_CACHED_IMMEDIATE_FLUSH,
+    BkeyCachedKey};
 use crate::data_structures::cuckoo::Entry;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
@@ -20,7 +20,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
 impl BtreeTrans<'_> {
-    fn btree_path_cached_set(&self, paths: &mut Paths<'_>, idx: PathIdx, ck: &bkey_cached, held: SixHold<'_>) {
+    fn btree_path_cached_set(&self, paths: &mut Paths<'_>, idx: PathIdx, ck: &BkeyCached, held: SixHold<'_>) {
         paths[idx].put_level(0, &ck.c, held);
         paths[idx].lock_taken(0);
     }
@@ -66,7 +66,7 @@ impl BtreeTrans<'_> {
 
         ck.c.level.set(0);
         ck.c.btree_id.set(btree.0 as u8);
-        ck.key.set(bkey_cached_key { btree_id: btree.0, pos });
+        ck.key.set(BkeyCachedKey { btree_id: btree.0, pos });
         ck.flags.store(1 << BKEY_CACHED_ACCESSED, Relaxed);
 
         let ret = (|| {
@@ -205,7 +205,7 @@ impl BtreeTrans<'_> {
 
             let held = self.node_lock(paths, idx, &ck.c, 0, lock_want)?;
 
-            if ck.key.get() != (bkey_cached_key { btree_id: btree.0, pos }) {
+            if ck.key.get() != (BkeyCachedKey { btree_id: btree.0, pos }) {
                 drop(held);
                 continue;
             }

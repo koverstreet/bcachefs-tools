@@ -2,14 +2,14 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::bch_val;
+use crate::format::Val;
 use crate::types::Le64;
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Lru {
-    pub v: bch_val,
+    pub v: Val,
     pub idx: Le64,
 }
 

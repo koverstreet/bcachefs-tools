@@ -24,13 +24,13 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::data::ec::format::Stripe;
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::data::reconcile::format::{RECONCILE_SCAN_COOKIE_device, RECONCILE_SCAN_COOKIE_fs,
     RECONCILE_SCAN_COOKIE_metadata, RECONCILE_SCAN_COOKIE_pending, RECONCILE_SCAN_COOKIE_stripes};
-use crate::data::reconcile::trigger::{per_snapshot_io_opts, SetNeedsReconcileCtx};
+use crate::data::reconcile::trigger::{PerSnapshotIoOpts, SetNeedsReconcileCtx};
 use crate::data::reconcile::work::ReconcileScan;
 use crate::data::reflink_format::ReflinkP;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::data::ec::stripe::WidenCache;
 use crate::data::moving::{key_sectors, MovingCtxt};
@@ -38,7 +38,7 @@ use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{BchError, Errcode};
 use crate::posix::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
-use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::os::kthread::Kthread;
 use crate::util::Printbuf;
@@ -355,8 +355,8 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &ReconcileScan, s: &mut PerSnapshotIo
         res.put();
         stop(fs)?;
 
-        let opts = get_io_opts(t, Some(&mut **s), k)?;
-        update_opts(t, Some(&mut **s), &opts, iter, level, k, scan)?;
+        let opts = get_io_opts(t, Some(&mut *s), k)?;
+        update_opts(t, Some(&mut *s), &opts, iter, level, k, scan)?;
 
         if let Some(refs) = k.arm::<ReflinkP>()
             .filter(|p| start.inode != 0 && p.v().may_update_options())
@@ -370,7 +370,7 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &ReconcileScan, s: &mut PerSnapshotIo
 /// The indirect extents a reflink pointer holds references on, @refs, given
 /// @opts - its inode's: do_reconcile_scan_indirect().
 fn scan_indirect(trans: &TransGuard<'_>, scan: &ReconcileScan, res: &DiskReservation<'_>, refs: Range<u64>,
-                 s: &mut PerSnapshotIoOpts, opts: &bch_inode_opts) -> Result<(), BchError>
+                 s: &mut PerSnapshotIoOpts, opts: &InodeOpts) -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(trans, Btree::reflink, pos(0, refs.start),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
@@ -379,7 +379,7 @@ fn scan_indirect(trans: &TransGuard<'_>, scan: &ReconcileScan, res: &DiskReserva
             return Err(Errcode::fc_break.into());
         }
         res.put();
-        update_opts(t, Some(&mut **s), opts, iter, 0, k, scan)
+        update_opts(t, Some(&mut *s), opts, iter, 0, k, scan)
     })
 }
 
@@ -393,7 +393,7 @@ fn scan_device(ctxt: &MovingCtxt<'_>, scan: &ReconcileScan, dev: u32, last_flush
     let mut bps = BpScanIter::new(Btree::backpointers, pos(dev.into(), 0), None);
 
     bps.for_each(trans, pos(dev.into(), u64::MAX), last_flushed.borrow(), |t, bp, last_flushed| {
-        ctxt.stats().set_pos(bbpos { btree: Btree::backpointers, pos: bp.k.p });
+        ctxt.stats().set_pos(Bbpos { btree: Btree::backpointers, pos: bp.k.p });
         stop(fs)?;
         scan_bp(t, scan, bp, last_flushed)?;
         t.commit(Some(&DiskReservation::new(fs)), NO_ENOSPC)
@@ -446,7 +446,7 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
 }
 
 /// update_reconcile_opts(), for a scan: traced as the scan's.
-fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>, opts: &bch_inode_opts,
+fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>, opts: &InodeOpts,
                iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, scan: &ReconcileScan) -> Result<(), BchError>
 {
     let fs = t.fs();

@@ -11,7 +11,7 @@
 
 use std::fs::OpenOptions;
 
-use bcachefs_kernel::bcachefs_ioctl::bch_ioctl_unpoison;
+use bcachefs_kernel::bcachefs_ioctl::IoctlUnpoison;
 use clap::Parser;
 
 use crate::wrappers::ioctl::{ioctl_w, BCHFS_IOC_UNPOISON};
@@ -78,7 +78,7 @@ fn cmd_unpoison(cli: Cli) -> anyhow::Result<()> {
         .write(true)
         .open(&cli.file)?;
 
-    let arg = bch_ioctl_unpoison {
+    let arg = IoctlUnpoison {
         offset: cli.offset,
         len,
         flags:  0,

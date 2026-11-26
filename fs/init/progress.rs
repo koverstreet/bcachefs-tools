@@ -18,7 +18,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::{iter::{BtreeIter, BtreeNodeRef, TransAttempt}, bbpos::bbpos};
+use crate::btree::{iter::{BtreeIter, BtreeNodeRef, TransAttempt}, bbpos::Bbpos};
 use crate::bcachefs_ioctl::ProgressUnit;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -46,7 +46,7 @@ use crate::format::Btree;
  */
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct progress_indicator {
+pub struct ProgressIndicator {
     pub(crate) state: SeqLock<crate::init::progress::ProgressState>,
 }
 
@@ -79,7 +79,7 @@ const PRINT_INTERVAL: u64 = 10 * 1_000_000_000;
 pub(crate) struct ProgressState {
     msg:        Option<&'static CStr>,
     units:      ProgressUnit,
-    pos:        bbpos,
+    pos:        Bbpos,
     /// local_clock() at which it's next due to print
     next_print: u64,
     seen:       u64,
@@ -187,7 +187,7 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
     total
 }
 
-impl Default for progress_indicator {
+impl Default for ProgressIndicator {
     fn default() -> Self {
         // zeroed, an indicator is valid, and nothing in it - a SeqLock
         // of plain data - cares where it lives
@@ -195,7 +195,7 @@ impl Default for progress_indicator {
     }
 }
 
-impl progress_indicator {
+impl ProgressIndicator {
     /// Whether it has a total - an estimate of its work's size - to show.
     pub fn has_total(&self) -> bool {
         self.status().2 != 0
@@ -253,7 +253,7 @@ impl progress_indicator {
         let Some((b, end)) = iter.node(t).map(|l| (BtreeNodeRef::from(l.node()), l.key().k.p)) else {
             return Ok(());
         };
-        let pos = bbpos { btree: iter.btree(), pos: end };
+        let pos = Bbpos { btree: iter.btree(), pos: end };
 
         let print = self.state.write(|s| {
             s.seen += (b.addr() != s.last_node && pos > s.pos) as u64;
@@ -297,7 +297,7 @@ impl progress_indicator {
 }
 
 /// How far the work has got: as bch2_progress_to_text().
-impl ToText for progress_indicator {
+impl ToText for ProgressIndicator {
     fn to_text(&self, out: &mut Printbuf) {
         self.state.read().to_text(out)
     }
@@ -307,12 +307,12 @@ impl ToText for progress_indicator {
 /// c->recovery.progress - one for the whole filesystem, as passes run one at a
 /// time - or the caller's own.
 pub struct Progress<'f> {
-    p: &'f progress_indicator,
+    p: &'f ProgressIndicator,
 }
 
 impl<'f> Progress<'f> {
     /// @p, init()ed: its btrees as masks, a bit per btree id.
-    pub fn new(p: &'f progress_indicator, fs: &Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64)
+    pub fn new(p: &'f ProgressIndicator, fs: &Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64)
         -> Self
     {
         p.init_masks(fs, Some(msg), leaf_mask, inner_mask);

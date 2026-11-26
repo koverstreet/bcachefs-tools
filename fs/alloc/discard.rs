@@ -45,7 +45,7 @@
 use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
-use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket, bch_dev_usage};
+use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket, DevUsage};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
 use crate::alloc::lru::LruPos;
@@ -93,7 +93,7 @@ use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_discards {
+pub struct FsDiscards {
     #[pin]
     pub(crate) work: ReffedWork<do_discards_work, crate::field!(super.writes)>,
     #[pin]
@@ -296,7 +296,7 @@ pub(crate) fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {
     }
 }
 
-impl bch_fs_discards {
+impl FsDiscards {
     /// Whether a discard of @bucket could be issued, with none in flight for
     /// it and room on its device.
     fn check(&self, bucket: Bpos, fastpath: bool) -> Result<(), NotAdded> {
@@ -756,7 +756,7 @@ fn do_discards(fs: &Fs) {
     }
 }
 
-pub(crate) fn do_discards_work(d: &bch_fs_discards) {
+pub(crate) fn do_discards_work(d: &FsDiscards) {
     do_discards(d.container())
 }
 
@@ -850,7 +850,7 @@ fn dev_is_rw(ca: &Dev) -> bool {
 /// moved: stopping short of reserved_sectors leaves no space writable now,
 /// with cached buckets sitting unreclaimed.
 impl Dev {
-    pub fn should_invalidate_buckets(&self, u: &bch_dev_usage) -> u64 {
+    pub fn should_invalidate_buckets(&self, u: &DevUsage) -> u64 {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
             .max(self.buckets_reserved(Watermark::stripe));
         let want_free = reserved + (self.mi.get().nbuckets >> 5);

@@ -13,7 +13,7 @@ use core::ffi::c_int;
 use crate::alloc::{accounting, capacity::avail_factor};
 use crate::c;
 use crate::format::{BCACHEFS_STATFS_MAGIC, BCH_REPLICAS_MAX};
-use crate::opts::{bch_opts_mask, OPT_SHOW_MOUNT_STYLE, OptFlags};
+use crate::opts::{OptsMask, OPT_SHOW_MOUNT_STYLE, OptFlags};
 use crate::posix::{dirent_format::BCH_NAME_MAX, inode_opts};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::{Fs, FsFlag};
@@ -125,7 +125,7 @@ impl SuperOps for Fs {
     fn show_options(&self, m: &SeqFile, _root: Dentry<'_>) -> Result<(), BchError> {
         let mut out = Printbuf::new();
         // No superblock: with the filesystem, every option's to_text reads it
-        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&bch_opts_mask::load(&self.mount_opts)),
+        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&OptsMask::load(&self.mount_opts)),
                                   OptFlags::mount.bits(), OptFlags::hidden.bits(),
                                   OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {

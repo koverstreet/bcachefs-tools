@@ -72,7 +72,7 @@
  *
  *   bc->lock         — list membership, hash table mutation, counters
  *   bc->root_lock    — roots_known[]/roots_extra slot
- *   b->c.lock        — per-node six_lock (read/intent/write)
+ *   b->c.lock        — per-node SixLock (read/intent/write)
  *   bc->alloc_lock   — cmpxchg'd task pointer; serialises cannibalize so
  *                      only one thread reclaims under memory pressure
  *
@@ -102,7 +102,7 @@ pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 
 use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeyI, BkeySC, BkeyVal, BKEY_U64S};
-use crate::data_structures::{dst_room::DstRoom, fast_list::fast_list};
+use crate::data_structures::{dst_room::DstRoom, fast_list::FastList};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
 use crate::btree::node::{BtreeNode, NodeContents, BtreeNodeFlags};
@@ -111,8 +111,8 @@ use crate::util::place::{Contained, PlacedDrop};
 use crate::os::{shrinker::{Shrink, Shrinker}, sched::current};
 use crate::util::sleep::Sleep;
 use crate::c;
-use crate::btree::bch_fs_btree;
-use crate::btree::bbpos::bbpos;
+use crate::btree::FsBtree;
+use crate::btree::bbpos::Bbpos;
 use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
@@ -177,18 +177,18 @@ pub type BtreeNodeList = crate::list!(BtreeNode, list);
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct btree_cache_list {
+pub struct BtreeCacheList {
     pub clean: BtreeNodeList,
     pub dirty: BtreeNodeList,
 }
 
 /// live[idx]'s shrinker: not bc->lock's, as the lists are - the shrinker
 /// runs without it.
-#[placed(bch_fs_btree_cache.shrinkers[], index = idx: u32)]
+#[placed(FsBtreeCache.shrinkers[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct btree_cache_shrinker {
+pub struct BtreeCacheShrinker {
     pub(crate) shrink: Shrinker<Self>,
 }
 
@@ -197,7 +197,7 @@ pub struct btree_cache_shrinker {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct BtreeCacheLists {
-    pub live: [btree_cache_list; 2],
+    pub live: [BtreeCacheList; 2],
     pub freeable: BtreeNodeList,
     pub freed_pcpu: BtreeNodeList,
     pub freed_nonpcpu: BtreeNodeList,
@@ -205,8 +205,8 @@ pub struct BtreeCacheLists {
     pub nr_vmalloc: usize,
     pub nr_by_btree: [usize; Btree::NR as usize],
 
-    pub pinned_nodes_start: bbpos,
-    pub pinned_nodes_end: bbpos,
+    pub pinned_nodes_start: Bbpos,
+    pub pinned_nodes_end: Bbpos,
     /* btree id mask: 0 for leaves, 1 for interior */
     pub pinned_nodes_mask: [u64; 2],
 
@@ -226,7 +226,7 @@ pub type BtreeCacheGuard<'a> =
     ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive, crate::locking::Exclusive, BtreeCacheLockAt>;
 
 /// bc->lock's place, for what it covers to name.
-pub type BtreeCacheLockAt = crate::at!(bch_fs_btree_cache.lock);
+pub type BtreeCacheLockAt = crate::at!(FsBtreeCache.lock);
 
 crate::published! {
     /// A live list's nodes, clean and dirty: changed with its list, read
@@ -258,11 +258,11 @@ impl BtreeCacheLive {
     }
 }
 
-#[placed(bch_fs_btree.cache)]
+#[placed(FsBtree.cache)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_btree_cache {
+pub struct FsBtreeCache {
     #[pin]
     #[init(crate::new_lock!(<- BtreeRoots::init(), ::pin_init::zeroed(), "&bc->root_lock"))]
     pub roots: Locked<Mutex, BtreeRoots, BtreeRootsLive>,
@@ -287,7 +287,7 @@ pub struct bch_fs_btree_cache {
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
     pub lock: crate::util::place::Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
     #[pin]
-    pub shrinkers: [btree_cache_shrinker; 2],
+    pub shrinkers: [BtreeCacheShrinker; 2],
 
     /*
      * Every struct btree the cache has, whatever its state: to walk them all
@@ -296,8 +296,8 @@ pub struct bch_fs_btree_cache {
      * aren't the cache's, and are freed while we run: they're not on it.
      */
     #[pin]
-    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_fs_btree_cache_init))]
-    pub nodes: fast_list,
+    #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_fs_btree_cache_init))]
+    pub nodes: FastList,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     #[pin]
@@ -344,7 +344,7 @@ pub struct bch_fs_btree_cache {
  * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
  */
 #[repr(C)]
-pub struct btree_evicted_size {
+pub struct BtreeEvictedSize {
     /* a power of 2 of them; none until btree_init_rw() */
     pub entries: SetOnce<Box<[AtomicU64]>>,
 }
@@ -353,7 +353,7 @@ pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
 pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << BTREE_EVICTED_SIZE_HASH_BITS) - 1;
 
 
-impl btree_evicted_size {
+impl BtreeEvictedSize {
     fn pack(hash: u64, live_u64s: u16) -> u64 {
         ((hash & BTREE_EVICTED_SIZE_HASH_MASK) << 16) | u64::from(live_u64s)
     }
@@ -427,7 +427,7 @@ pub fn node_key_hash_val(k: &DstRoom<BkeyI>) -> u64 {
 
 pub const BTREE_WRITE_IO_LIMIT: u32 = 64;
 
-impl bch_fs_btree_cache {
+impl FsBtreeCache {
     pub fn update_throttle(&self) {
         let (live, dirty) = (self.lock.nr_live(), self.lock.nr_dirty());
         let throttle = self.nr_in_flight_inner.load(Relaxed) > BTREE_WRITE_IO_LIMIT as isize ||
@@ -544,7 +544,7 @@ impl BtreeTrans<'_> {
 /// What a node costs to recreate, by live list: a pinned one, 4x.
 const SEEKS_MULT: [c_int; 2] = [1, 4];
 
-impl Shrink for btree_cache_shrinker {
+impl Shrink for BtreeCacheShrinker {
     fn shrinker(&self) -> &Shrinker<Self> {
         &self.shrink
     }
@@ -558,13 +558,13 @@ impl Shrink for btree_cache_shrinker {
     }
 }
 
-impl PlacedDrop for btree_cache_shrinker {
+impl PlacedDrop for BtreeCacheShrinker {
     unsafe fn placed_drop(&self) {
         unsafe { self.shrink.unregister() }
     }
 }
 
-impl bch_fs_btree_cache {
+impl FsBtreeCache {
     pub fn shrinkers_register(&self, fs: &Fs) -> Result<(), BchError> {
         let seeks = c_int::from(fs.opts.btree_cache_shrinker_seeks.get());
         let lists = ["btree_cache", "btree_cache-pinned"].into_iter().zip(SEEKS_MULT);
@@ -604,7 +604,7 @@ impl Fs {
 
 // ── Text ─────────────────────────────────────────────────────────────────
 
-pub fn bch2_btree_id_level_to_text(out: &mut Printbuf, btree: Btree, level: c_uint) {
+pub fn btree_id_level_to_text(out: &mut Printbuf, btree: Btree, level: c_uint) {
     prt!(out, "btree={btree} level={level}");
 }
 
@@ -621,7 +621,7 @@ pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uin
     bkey_val_to_text(out, Some(fs), k);
 }
 
-pub fn bch2_btree_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
+pub fn btree_node_pos_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     let k = b.key_peek();
     btree_pos_to_text(out, fs, Btree(b.c.btree_id.get().into()), b.c.level.get().into(), BkeySC::from(&*k))
 }
@@ -658,7 +658,7 @@ fn prt_btree_cache_line(out: &mut Printbuf, fs: &Fs, label: &str, nr: usize) {
     prt!(out, "{label}\t{} ({nr})\n", HumanReadable(nr as u64 * u64::from(fs.opts.btree_node_size.get())));
 }
 
-impl ToText for bch_fs_btree_cache {
+impl ToText for FsBtreeCache {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
         let fs = self.container().container();

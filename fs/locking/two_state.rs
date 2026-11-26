@@ -14,7 +14,7 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
  */
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct two_state_lock_t {
+pub struct TwoStateLock {
     pub v: AtomicIsize,
     /// Woken as the last holder unlocks
     wait: EventCount,
@@ -29,9 +29,9 @@ pub trait TwoState {
     const S: bool;
 }
 
-impl two_state_lock_t {
+impl TwoStateLock {
     pub const fn new() -> Self {
-        two_state_lock_t { v: AtomicIsize::new(0), wait: EventCount::new() }
+        TwoStateLock { v: AtomicIsize::new(0), wait: EventCount::new() }
     }
 
     fn trylock(&self, s: bool) -> bool {
@@ -92,7 +92,7 @@ impl two_state_lock_t {
 }
 
 pub struct TwoStateGuard<'a, S: TwoState> {
-    lock: &'a two_state_lock_t,
+    lock: &'a TwoStateLock,
     _s:   PhantomData<S>,
 }
 

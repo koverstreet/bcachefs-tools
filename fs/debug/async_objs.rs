@@ -20,7 +20,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::data_structures::fast_list::fast_list;
+use crate::data_structures::fast_list::FastList;
 use crate::errcode::Errcode;
 use crate::fs::Fs;
 use crate::util::{task::TaskList, Printbuf};
@@ -41,10 +41,10 @@ pub enum AsyncObjKind {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct async_obj_list {
+pub struct AsyncObjList {
     #[pin]
-    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_async_obj_init))]
-    pub list: fast_list,
+    #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_async_obj_init))]
+    pub list: FastList,
 }
 
 use core::ptr::NonNull;
@@ -63,7 +63,7 @@ pub unsafe trait AsyncObj {
 
 /// An object's place on its list.
 pub struct AsyncObjSlot {
-    list: Option<NonNull<fast_list>>,
+    list: Option<NonNull<FastList>>,
     idx:  core::ffi::c_uint,
 }
 
@@ -130,7 +130,7 @@ pub mod lists {
 use core::ffi::{c_void, CStr};
 use core::ptr::NonNull;
 
-use super::{async_obj_list, AsyncObj};
+use super::{AsyncObjList, AsyncObj};
 use crate::data::{read::Rbio, update_task::Update};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -172,19 +172,19 @@ macro_rules! list_table {
 }
 AsyncObjKind_arms!(list_table);
 
-impl async_obj_list {
+impl AsyncObjList {
     /// The filesystem it's one of the async_objs[] of.
     fn fs(&self) -> &Fs {
         self.container()
     }
 }
 
-enum AsyncObjList {}
+enum AsyncObjListFile {}
 
-impl DebugFile for AsyncObjList {
-    type Obj = async_obj_list;
+impl DebugFile for AsyncObjListFile {
+    type Obj = AsyncObjList;
 
-    async fn show(list: &async_obj_list, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(list: &AsyncObjList, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = list.fs();
         let (_, to_text) = LISTS[list.idx.get() as usize];
 
@@ -208,7 +208,7 @@ pub(crate) fn debugfs_init(fs: &Fs, parent: Dir<'_>) {
     let Some(dir) = parent.subdir(c"async_objs") else { return };
     for (list, (name, _)) in fs.async_objs.iter().zip(LISTS) {
         // SAFETY: debug_exit() removes them first
-        unsafe { dir.file::<AsyncObjList>(name, list) };
+        unsafe { dir.file::<AsyncObjListFile>(name, list) };
     }
 }
 }

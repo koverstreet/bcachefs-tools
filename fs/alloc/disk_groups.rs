@@ -65,14 +65,14 @@
  */
 
 use crate::btree::bkey::ValidateFlags;
-use crate::alloc::disk_groups_format::{bch_disk_group, bch_disk_group_flags,
-    bch_sb_field_disk_groups, BCH_SB_LABEL_SIZE};
-use crate::init::dev::{bch_devs_mask, bch_sb_buf};
+use crate::alloc::disk_groups_format::{bch_disk_group, DiskGroupFlags,
+    SbFieldDiskGroups, BCH_SB_LABEL_SIZE};
+use crate::init::dev::{DevsMask, bch_sb_buf};
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 use crate::init::dev::CONGESTED_MAX;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, bch_sb};
+use crate::format::{DataType, Sb};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::Guard as _;
 use crate::opts::OptFn;
@@ -93,7 +93,7 @@ pub struct DiskGroup {
     pub deleted: bool,
     pub parent: u16,
     pub label: [u8; BCH_SB_LABEL_SIZE as usize],
-    pub devs: bch_devs_mask,
+    pub devs: DevsMask,
 }
 
 /// c->disk_groups, published under RCU.
@@ -188,8 +188,8 @@ fn disk_path_to_text_in<G: GroupEntry>(out: &mut Printbuf, groups: &[G], mut v: 
     }
 }
 
-fn sb_groups<S: SbState>(sb: &bch_sb<S>) -> &[bch_disk_group] {
-    S::field::<bch_sb_field_disk_groups>(sb).map_or(&[], |g| &g.entries)
+fn sb_groups<S: SbState>(sb: &Sb<S>) -> &[bch_disk_group] {
+    S::field::<SbFieldDiskGroups>(sb).map_or(&[], |g| &g.entries)
 }
 
 /// "ssd.fast." is "ssd.fast".
@@ -220,8 +220,8 @@ fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), Bch
         return Ok(());
     }
 
-    let u64s = sb_field_u64s::<bch_sb_field_disk_groups>(nr + n - free);
-    let groups = sb.field_resize::<bch_sb_field_disk_groups>(u64s)
+    let u64s = sb_field_u64s::<SbFieldDiskGroups>(nr + n - free);
+    let groups = sb.field_resize::<SbFieldDiskGroups>(u64s)
         .ok_or(BchError::from(Errcode::ENOSPC_disk_label_add))?;
 
     for g in &mut groups.entries[nr..] {
@@ -232,7 +232,7 @@ fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), Bch
 
 /// In the first deleted slot: groups_reserve() first.
 fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32 {
-    let groups = sb.field_mut::<bch_sb_field_disk_groups>()
+    let groups = sb.field_mut::<SbFieldDiskGroups>()
         .expect("disk groups section: reserved");
     let i = groups.entries.iter().position(|g| g.deleted())
         .expect("disk groups section: reserved");
@@ -242,7 +242,7 @@ fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32
     g.label[..name.len()].copy_from_slice(name);
     g.flags0.set_deleted(false);
     g.flags0.set_parent(parent);
-    g.flags0.set_data_allowed(bch_disk_group_flags::DATA_ALLOWED_MAX);
+    g.flags0.set_data_allowed(DiskGroupFlags::DATA_ALLOWED_MAX);
 
     i as u32
 }
@@ -265,17 +265,17 @@ impl Fs {
         disk_path_to_text(out, Some(self), v);
     }
 
-    fn group_devs<'g>(&'g self, g: u32, rcu: &'g ReadGuard) -> Option<&'g bch_devs_mask> {
+    fn group_devs<'g>(&'g self, g: u32, rcu: &'g ReadGuard) -> Option<&'g DevsMask> {
         self.disk_groups.read(rcu).get(g as usize).filter(|e| !e.deleted).map(|e| &e.devs)
     }
 
     /// The devices that take @data_type writes now, in @target - all of them
     /// if @target names no devices.
-    pub fn target_rw_devs(&self, data_type: DataType, target: Target) -> bch_devs_mask {
-        let mut devs = bch_devs_mask { d: self.allocator.rw_devs[data_type].load() };
+    pub fn target_rw_devs(&self, data_type: DataType, target: Target) -> DevsMask {
+        let mut devs = self.allocator.rw_devs[data_type].load();
         let rcu = read_lock();
         if let Some(t) = self.target_to_mask(target, &rcu) {
-            devs.d.and(&t.d);
+            devs.and(&t);
         }
         devs
     }
@@ -285,14 +285,14 @@ impl Fs {
     /// its own. This caps stripe width when failure domains are a hard
     /// requirement - a stripe can't have more blocks than domains to spread
     /// them across.
-    pub fn target_nr_domains(&self, devs: &bch_devs_mask) -> u32 {
+    pub fn target_nr_domains(&self, devs: &DevsMask) -> u32 {
         let rcu = read_lock();
         let domain = |dev| self.dev_failure_domain(dev, &rcu);
 
-        devs.d.iter()
+        devs.iter()
             .filter(|&i| match domain(i) {
                 0 => true,
-                d => !devs.d.iter().take_while(|&j| j < i).any(|j| domain(j) == d),
+                d => !devs.iter().take_while(|&j| j < i).any(|j| domain(j) == d),
             })
             .count() as u32
     }
@@ -305,11 +305,11 @@ impl Fs {
         {
             let now = crate::os::kernel::local_clock();
             let rcu = read_lock();
-            let rw = bch_devs_mask { d: self.allocator.rw_devs[DataType::user].load() };
+            let rw = self.allocator.rw_devs[DataType::user].load();
             let devs = self.target_to_mask(Target::decode(target.into()), &rcu).unwrap_or(&rw);
 
             let (mut nr, mut total) = (0u64, 0u64);
-            for ca in self.devs_rcu_in(devs.d.iter(), &rcu) {
+            for ca in self.devs_rcu_in(devs.iter(), &rcu) {
                 total += u64::from(ca.congested_read(now));
                 nr += 1;
             }
@@ -320,7 +320,7 @@ impl Fs {
         false
     }
 
-    pub fn target_to_mask<'g>(&'g self, target: Target, rcu: &'g ReadGuard) -> Option<&'g bch_devs_mask> {
+    pub fn target_to_mask<'g>(&'g self, target: Target, rcu: &'g ReadGuard) -> Option<&'g DevsMask> {
         match target {
             Target::Null     => None,
             Target::Dev(d)   => self.dev_rcu(d, rcu).map(|ca| &ca.self_mask),
@@ -336,7 +336,7 @@ impl Fs {
         match target {
             Target::Null     => false,
             Target::Dev(d)   => dev == d,
-            Target::Group(g) => self.group_devs(g, rcu).is_some_and(|m| m.d.test(dev as usize)),
+            Target::Group(g) => self.group_devs(g, rcu).is_some_and(|m| m.test(dev as usize)),
         }
     }
 
@@ -368,10 +368,10 @@ impl Fs {
     /// ascending fills empty domains first, then doubles up. A device with no
     /// failure domain (id 0) always keys 0: it never shares a domain, so it
     /// sorts first and is never excluded.
-    pub(crate) fn dev_domain_key(&self, chosen: &bch_devs_mask, dev: u32, rcu: &ReadGuard) -> u64 {
+    pub(crate) fn dev_domain_key(&self, chosen: &DevsMask, dev: u32, rcu: &ReadGuard) -> u64 {
         match self.dev_failure_domain(dev as usize, rcu) {
             0 => 0,
-            d => chosen.d.iter().filter(|&i| self.dev_failure_domain(i, rcu) == d).count() as u64,
+            d => chosen.iter().filter(|&i| self.dev_failure_domain(i, rcu) == d).count() as u64,
         }
     }
 }
@@ -413,7 +413,7 @@ fn disk_path_to_text(out: &mut Printbuf, fs: Option<&Fs>, v: u32) {
     disk_path_to_text_in(out, groups, v);
 }
 
-fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, target: Target) {
+fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &Sb<S>, target: Target) {
     match target {
         Target::Null => write!(out, "none"),
         Target::Dev(d) => {
@@ -429,7 +429,7 @@ fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, target: Tar
 
 // ── The table ────────────────────────────────────────────────────────────
 
-fn groups_to_cpu(dst: &mut [DiskGroup], src: &[bch_disk_group], sb: &bch_sb) {
+fn groups_to_cpu(dst: &mut [DiskGroup], src: &[bch_disk_group], sb: &Sb) {
     for (d, s) in dst.iter_mut().zip(src.iter()) {
         d.deleted = s.flags0.deleted();
         d.parent  = s.flags0.parent() as u16;
@@ -444,7 +444,7 @@ fn groups_to_cpu(dst: &mut [DiskGroup], src: &[bch_disk_group], sb: &bch_sb) {
         let mut g = m.group() as usize;
         for _ in 0..dst.len() {
             let Some(d) = g.checked_sub(1).and_then(|g| dst.get_mut(g)) else { break };
-            d.devs.d.set(i as usize);
+            d.devs.set(i as usize);
             g = d.parent as usize;
         }
     }
@@ -454,7 +454,7 @@ pub(crate) fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     // more groups than a member's 8 bit group field can name
     sb.fs_member_mut(dev).set_group(v.try_into().map_err(|_| BchError::from(Errcode::ENOSPC_disk_label_add))?);
-    bch_sb_field_disk_groups::<Validated>::to_cpu(fs, sb)
+    SbFieldDiskGroups::<Validated>::to_cpu(fs, sb)
 }
 
 /// As a member's group field: index + 1, 0 for none.
@@ -465,7 +465,7 @@ fn dev_label_resolve(sb: &mut (impl SbResize + ?Sized), name: &[u8]) -> Result<u
     Ok(sb.disk_path_find_or_create(name)? + 1)
 }
 
-pub fn disk_path_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, v: u32) {
+pub fn disk_path_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &Sb<S>, v: u32) {
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
 
@@ -485,7 +485,7 @@ impl Fs {
                 disk_path_to_text_in(out, groups, i as u32);
 
                 write!(out, " devs");
-                for ca in self.devs_rcu_in(e.devs.d.iter(), &rcu) {
+                for ca in self.devs_rcu_in(e.devs.iter(), &rcu) {
                     write!(out, " {ca}");
                 }
             } else {
@@ -580,7 +580,7 @@ fn invalid() -> Result<(), BchError> {
 }
 
 /// Parents are walked, so must be in range; a deleted parent is allowed.
-fn disk_groups_validate<S: SbState>(sb: &bch_sb<S>, groups: &[bch_disk_group], err: &mut Printbuf)
+fn disk_groups_validate<S: SbState>(sb: &Sb<S>, groups: &[bch_disk_group], err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let nr = groups.len();
@@ -624,14 +624,14 @@ fn disk_groups_validate<S: SbState>(sb: &bch_sb<S>, groups: &[bch_disk_group], e
     Ok(())
 }
 
-impl SbFieldOps for bch_sb_field_disk_groups<Validated> {
-    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_disk_groups<Unvalidated>,
+impl SbFieldOps for SbFieldDiskGroups<Validated> {
+    fn validate(sb: &Sb<Unvalidated>, f: &SbFieldDiskGroups<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         disk_groups_validate(sb, &f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_disk_groups<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                f: &SbFieldDiskGroups<Unvalidated>) {
         for (i, g) in f.entries.iter().enumerate() {
             if i > 0 {
                 write!(out, " ");
@@ -649,7 +649,7 @@ impl SbFieldOps for bch_sb_field_disk_groups<Validated> {
 
     /// The table. Without a disk groups section it's left as it is.
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let Some(groups) = sb.field::<bch_sb_field_disk_groups>() else {
+        let Some(groups) = sb.field::<SbFieldDiskGroups>() else {
             return Ok(());
         };
         let src = &groups.entries;
@@ -663,22 +663,22 @@ impl SbFieldOps for bch_sb_field_disk_groups<Validated> {
 mod tests {
     use super::*;
     use crate::c;
-    use crate::init::dev::bch_sb_handle;
-    use crate::sb::members_format::{bch_member, bch_sb_field_members_v2};
+    use crate::init::dev::SbHandle;
+    use crate::sb::members_format::{Member, SbFieldMembersV2};
     use crate::util::vstructs::Head;
 
-    fn new_sb() -> bch_sb_handle {
-        let mut sb = bch_sb_handle::default();
+    fn new_sb() -> SbHandle {
+        let mut sb = SbHandle::default();
         sb.sb_realloc(0).unwrap();
         sb
     }
 
     /// (alive, group) per member, group an index + 1.
-    fn add_members(sb: &mut bch_sb_handle, members: &[(bool, u8)]) {
-        let bytes = size_of::<Head<bch_sb_field_members_v2>>() +
-                    size_of::<bch_member>() * members.len();
-        let mi = sb.field_resize::<bch_sb_field_members_v2>((bytes / 8) as u32).unwrap();
-        mi.member_bytes = (size_of::<bch_member>() as u16).into();
+    fn add_members(sb: &mut SbHandle, members: &[(bool, u8)]) {
+        let bytes = size_of::<Head<SbFieldMembersV2>>() +
+                    size_of::<Member>() * members.len();
+        let mi = sb.field_resize::<SbFieldMembersV2>((bytes / 8) as u32).unwrap();
+        mi.member_bytes = (size_of::<Member>() as u16).into();
         sb.sb_mut().nr_devices = members.len() as u8;
 
         for (i, &(alive, group)) in members.iter().enumerate() {
@@ -708,7 +708,7 @@ mod tests {
         out.as_str().to_owned()
     }
 
-    fn validate(sb: &bch_sb_handle, groups: &[bch_disk_group]) -> Result<(), String> {
+    fn validate(sb: &SbHandle, groups: &[bch_disk_group]) -> Result<(), String> {
         let mut err = Printbuf::new();
         disk_groups_validate(sb.sb(), groups, &mut err).map_err(|e| {
             assert_eq!(e, Errcode::invalid_sb_disk_groups.into());
@@ -745,7 +745,7 @@ mod tests {
         let groups = sb_groups(sb.sb());
         assert_eq!(groups.iter().map(|g| g.parent()).collect::<Vec<_>>(), [0, 1, 1, 0]);
         assert!(groups.iter().all(|g| !g.deleted() &&
-            g.flags0.data_allowed() == bch_disk_group_flags::DATA_ALLOWED_MAX));
+            g.flags0.data_allowed() == DiskGroupFlags::DATA_ALLOWED_MAX));
         assert_eq!(path(groups, 2), "ssd.slow");
     }
 
@@ -770,7 +770,7 @@ mod tests {
         let mut sb = new_sb();
         sb.disk_path_find_or_create(b"a_longer_label").unwrap();
         sb.disk_path_find_or_create(b"b").unwrap();
-        sb.field_mut::<bch_sb_field_disk_groups>().unwrap().entries[0].flags0.set_deleted(true);
+        sb.field_mut::<SbFieldDiskGroups>().unwrap().entries[0].flags0.set_deleted(true);
 
         assert_eq!(sb.disk_path_find(b"a_longer_label"), None);
         assert_eq!(sb.disk_path_find_or_create(b"c").unwrap(), 0);
@@ -803,7 +803,7 @@ mod tests {
         add_members(&mut sb, &[(true, 1)]);
         let mut dst = [DiskGroup::default(); 2];
         groups_to_cpu(&mut dst, &groups, sb.sb());
-        assert!(dst.iter().all(|d| d.devs.d.test(0)));
+        assert!(dst.iter().all(|d| d.devs.test(0)));
     }
 
     #[test]
@@ -815,7 +815,7 @@ mod tests {
         let mut dst = [DiskGroup::default(); 3];
         groups_to_cpu(&mut dst, &groups, sb.sb());
 
-        let devs = |g: usize| dst[g].devs.d.iter().collect::<Vec<_>>();
+        let devs = |g: usize| dst[g].devs.iter().collect::<Vec<_>>();
         assert_eq!((devs(0), devs(1), devs(2)), (vec![0], vec![0], vec![1]));
         assert_eq!((dst[1].parent, dst[1].label), (1, label("fast")));
     }

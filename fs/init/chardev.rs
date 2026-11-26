@@ -36,16 +36,16 @@
 use crate::init::passes::RecoveryPass;
 use crate::c;
 use crate::bcachefs_ioctl::{BCH_BY_INDEX, BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED,
-    BCH_FORCE_IF_METADATA_LOST, bch_ioctl_data_progress, bch_ioctl_dev_usage,
-    bch_ioctl_dev_usage_type, bch_ioctl_dev_usage_v2, bch_ioctl_disk, bch_ioctl_disk_get_idx,
-    bch_ioctl_disk_resize, bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
-    bch_ioctl_disk_resize_v2, bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2,
-    bch_ioctl_disk_v2, bch_ioctl_err_msg, bch_ioctl_fs_usage, bch_ioctl_query_accounting,
-    BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR, bch_ioctl_query_accounting_v2, bch_ioctl_query_btree_keys,
+    BCH_FORCE_IF_METADATA_LOST, IoctlDataProgress, IoctlDevUsage,
+    IoctlDevUsageType, IoctlDevUsageV2, IoctlDisk, IoctlDiskGetIdx,
+    IoctlDiskResize, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2,
+    IoctlDiskResizeV2, IoctlDiskSetState, IoctlDiskSetStateV2,
+    IoctlDiskV2, IoctlErrMsg, IoctlFsUsage, IoctlQueryAccounting,
+    BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR, IoctlQueryAccountingV2, IoctlQueryBtreeKeys,
     BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots, BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts,
-    BCH_IOCTL_QUERY_BTREE_KEYS_prev, BCH_IOCTL_QUERY_BTREE_KEYS_slots, bch_ioctl_query_uuid,
-    bch_ioctl_read_super, BCH_READ_DEV, DataEvent, DataOp, DataProgressDataTypeSpecial,
-    IoctlDataEventRet, bch_ioctl_data, BCH_IOCTL_DATA, bch_ioctl_data_event, BCH_IOCTL_DEV_USAGE,
+    BCH_IOCTL_QUERY_BTREE_KEYS_prev, BCH_IOCTL_QUERY_BTREE_KEYS_slots, IoctlQueryUuid,
+    IoctlReadSuper, BCH_READ_DEV, DataEvent, DataOp, DataProgressDataTypeSpecial,
+    IoctlDataEventRet, IoctlData, BCH_IOCTL_DATA, IoctlDataEvent, BCH_IOCTL_DEV_USAGE,
     BCH_IOCTL_DEV_USAGE_V2, BCH_IOCTL_DISK_ADD, BCH_IOCTL_DISK_ADD_v2, BCH_IOCTL_DISK_GET_IDX,
     BCH_IOCTL_DISK_OFFLINE, BCH_IOCTL_DISK_OFFLINE_v2, BCH_IOCTL_DISK_ONLINE,
     BCH_IOCTL_DISK_ONLINE_v2, BCH_IOCTL_DISK_REMOVE, BCH_IOCTL_DISK_REMOVE_v2,
@@ -191,11 +191,11 @@ fn accounting_read_done(fs: &Fs) -> bool {
             (1 << RecoveryPass::accounting_read as u32) != 0
 }
 
-fn query_uuid(fs: &Fs) -> Result<bch_ioctl_query_uuid, BchError> {
-    Ok(bch_ioctl_query_uuid { uuid: __uuid_t { b: fs.sb.user_uuid.each_ref().map(|b| b.get()) } })
+fn query_uuid(fs: &Fs) -> Result<IoctlQueryUuid, BchError> {
+    Ok(IoctlQueryUuid { uuid: __uuid_t { b: fs.sb.user_uuid.each_ref().map(|b| b.get()) } })
 }
 
-fn fs_usage(fs: &Fs, user: UserArg<bch_ioctl_fs_usage>) -> Result<(), BchError> {
+fn fs_usage(fs: &Fs, user: UserArg<IoctlFsUsage>) -> Result<(), BchError> {
     if !accounting_read_done(fs) {
         return fs.throw(Errcode::EINVAL_ioctl_fs_usage_accounting_not_read);
     }
@@ -205,10 +205,10 @@ fn fs_usage(fs: &Fs, user: UserArg<bch_ioctl_fs_usage>) -> Result<(), BchError> 
     if (entries_bytes as usize) < replicas.len() {
         return Err(Errcode::ERANGE_fs_usage_buf.into());
     }
-    user.bytes_at(offset_of!(bch_ioctl_fs_usage, replicas), replicas.len()).writer().write_slice(&replicas)?;
+    user.bytes_at(offset_of!(IoctlFsUsage, replicas), replicas.len()).writer().write_slice(&replicas)?;
 
     let u = fs.usage_read_short();
-    let mut arg = bch_ioctl_fs_usage {
+    let mut arg = IoctlFsUsage {
         capacity:              u.capacity,
         used:                  u.used,
         online_reserved:       fs.online_reserved(),
@@ -223,7 +223,7 @@ fn fs_usage(fs: &Fs, user: UserArg<bch_ioctl_fs_usage>) -> Result<(), BchError> 
 
 /// Both versions: @arg's inputs in, its outputs out, the accounting keys to
 /// @dst. v1's outputs are a prefix of v2's.
-fn query_accounting(fs: &Fs, arg: &mut bch_ioctl_query_accounting_v2,
+fn query_accounting(fs: &Fs, arg: &mut IoctlQueryAccountingV2,
                     dst: impl FnOnce(usize) -> UserSlice) -> Result<(), BchError> {
     use crate::alloc::accounting_format::DiskAccountingType as T;
 
@@ -279,15 +279,15 @@ fn query_accounting(fs: &Fs, arg: &mut bch_ioctl_query_accounting_v2,
     Ok(())
 }
 
-fn query_accounting_v1(fs: &Fs, user: UserArg<bch_ioctl_query_accounting>) -> Result<(), BchError> {
+fn query_accounting_v1(fs: &Fs, user: UserArg<IoctlQueryAccounting>) -> Result<(), BchError> {
     let mut arg = user.read()?;
-    let mut v2 = bch_ioctl_query_accounting_v2 {
+    let mut v2 = IoctlQueryAccountingV2 {
         accounting_u64s:       arg.accounting_u64s,
         accounting_types_mask: arg.accounting_types_mask,
         ..Default::default()
     };
     query_accounting(fs, &mut v2,
-        |len| user.bytes_at(offset_of!(bch_ioctl_query_accounting, accounting), len))?;
+        |len| user.bytes_at(offset_of!(IoctlQueryAccounting, accounting), len))?;
 
     arg.capacity        = v2.capacity;
     arg.used            = v2.used;
@@ -296,15 +296,15 @@ fn query_accounting_v1(fs: &Fs, user: UserArg<bch_ioctl_query_accounting>) -> Re
     user.write(&arg)
 }
 
-fn query_accounting_v2(fs: &Fs, user: UserArg<bch_ioctl_query_accounting_v2>) -> Result<(), BchError> {
+fn query_accounting_v2(fs: &Fs, user: UserArg<IoctlQueryAccountingV2>) -> Result<(), BchError> {
     let mut arg = user.read()?;
     query_accounting(fs, &mut arg,
-        |len| user.bytes_at(offset_of!(bch_ioctl_query_accounting_v2, accounting), len))?;
+        |len| user.bytes_at(offset_of!(IoctlQueryAccountingV2, accounting), len))?;
     user.write(&arg)
 }
 
 /* obsolete, didn't allow for new data types: */
-fn dev_usage(fs: &Fs, arg: &mut bch_ioctl_dev_usage) -> Result<(), BchError> {
+fn dev_usage(fs: &Fs, arg: &mut IoctlDevUsage) -> Result<(), BchError> {
     if arg.flags & !BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
         return fs.throw(Errcode::EINVAL_ioctl_dev_usage_bad_flags);
     }
@@ -322,7 +322,7 @@ fn dev_usage(fs: &Fs, arg: &mut bch_ioctl_dev_usage) -> Result<(), BchError> {
     Ok(())
 }
 
-fn dev_usage_v2(fs: &Fs, user: UserVstruct<bch_ioctl_dev_usage_v2>) -> Result<(), BchError> {
+fn dev_usage_v2(fs: &Fs, user: UserVstruct<IoctlDevUsageV2>) -> Result<(), BchError> {
     if !accounting_read_done(fs) {
         return fs.throw(Errcode::EINVAL_ioctl_dev_usage_v2_accounting_not_read);
     }
@@ -341,7 +341,7 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<bch_ioctl_dev_usage_v2>) -> Result<()
 
     let d = user.tail(&arg);
     for i in 0..d.len() {
-        d.set(i, &bch_ioctl_dev_usage_type {
+        d.set(i, &IoctlDevUsageType {
             buckets:    src.d[i].buckets,
             sectors:    src.d[i].sectors,
             fragmented: src.d[i].fragmented,
@@ -350,7 +350,7 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<bch_ioctl_dev_usage_v2>) -> Result<()
     Ok(())
 }
 
-fn read_super(fs: &Fs, arg: bch_ioctl_read_super) -> Result<(), BchError> {
+fn read_super(fs: &Fs, arg: IoctlReadSuper) -> Result<(), BchError> {
     admin(fs)?;
     if arg.flags & !(BCH_BY_INDEX | BCH_READ_DEV) != 0 || arg.pad != 0 {
         return fs.throw(Errcode::EINVAL_ioctl_read_super_bad_flags);
@@ -386,7 +386,7 @@ fn huge_decode_dev(dev: u64) -> u32 {
     major << c::MINORBITS | minor
 }
 
-fn disk_get_idx(fs: &Fs, arg: bch_ioctl_disk_get_idx) -> Result<c_int, BchError> {
+fn disk_get_idx(fs: &Fs, arg: IoctlDiskGetIdx) -> Result<c_int, BchError> {
     let dev = huge_decode_dev(arg.dev);
     admin(fs)?;
     if dev == 0 {
@@ -401,7 +401,7 @@ fn disk_get_idx(fs: &Fs, arg: bch_ioctl_disk_get_idx) -> Result<c_int, BchError>
     }
 }
 
-fn query_btree_keys(fs: &Fs, arg: &mut bch_ioctl_query_btree_keys) -> Result<(), BchError> {
+fn query_btree_keys(fs: &Fs, arg: &mut IoctlQueryBtreeKeys) -> Result<(), BchError> {
     const FLAGS: [(u32, BtreeIterFlags); 4] = [
         (BCH_IOCTL_QUERY_BTREE_KEYS_slots,              BtreeIterFlags::SLOTS),
         (BCH_IOCTL_QUERY_BTREE_KEYS_prev,               BtreeIterFlags::PREV),
@@ -466,7 +466,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut bch_ioctl_query_btree_keys) -> Result<(),
 
 pub(crate) enum ErrMsg {
     Log,
-    User(bch_ioctl_err_msg),
+    User(IoctlErrMsg),
 }
 
 impl ErrMsg {
@@ -485,7 +485,7 @@ impl ErrMsg {
 
 /// What fits of @err, @ret's error appended, to the user's buffer @dst: @ret,
 /// or the copy's error.
-pub(crate) fn copy_err_msg(dst: &bch_ioctl_err_msg, err: &mut Printbuf, ret: Result<(), BchError>)
+pub(crate) fn copy_err_msg(dst: &IoctlErrMsg, err: &mut Printbuf, ret: Result<(), BchError>)
     -> Result<(), BchError>
 {
     if let Err(e) = &ret {
@@ -505,33 +505,33 @@ pub(crate) trait V2 {
     fn split(self) -> (Self::V1, ErrMsg);
 }
 
-impl V2 for bch_ioctl_disk_v2 {
-    type V1 = bch_ioctl_disk;
-    fn split(self) -> (bch_ioctl_disk, ErrMsg) {
-        (bch_ioctl_disk { flags: self.flags, pad: self.pad, dev: self.dev }, ErrMsg::User(self.err))
+impl V2 for IoctlDiskV2 {
+    type V1 = IoctlDisk;
+    fn split(self) -> (IoctlDisk, ErrMsg) {
+        (IoctlDisk { flags: self.flags, pad: self.pad, dev: self.dev }, ErrMsg::User(self.err))
     }
 }
 
-impl V2 for bch_ioctl_disk_set_state_v2 {
-    type V1 = bch_ioctl_disk_set_state;
-    fn split(self) -> (bch_ioctl_disk_set_state, ErrMsg) {
-        (bch_ioctl_disk_set_state { flags: self.flags, new_state: self.new_state, pad: self.pad, dev: self.dev },
+impl V2 for IoctlDiskSetStateV2 {
+    type V1 = IoctlDiskSetState;
+    fn split(self) -> (IoctlDiskSetState, ErrMsg) {
+        (IoctlDiskSetState { flags: self.flags, new_state: self.new_state, pad: self.pad, dev: self.dev },
          ErrMsg::User(self.err))
     }
 }
 
-impl V2 for bch_ioctl_disk_resize_v2 {
-    type V1 = bch_ioctl_disk_resize;
-    fn split(self) -> (bch_ioctl_disk_resize, ErrMsg) {
-        (bch_ioctl_disk_resize { flags: self.flags, pad: self.pad, dev: self.dev, nbuckets: self.nbuckets },
+impl V2 for IoctlDiskResizeV2 {
+    type V1 = IoctlDiskResize;
+    fn split(self) -> (IoctlDiskResize, ErrMsg) {
+        (IoctlDiskResize { flags: self.flags, pad: self.pad, dev: self.dev, nbuckets: self.nbuckets },
          ErrMsg::User(self.err))
     }
 }
 
-impl V2 for bch_ioctl_disk_resize_journal_v2 {
-    type V1 = bch_ioctl_disk_resize_journal;
-    fn split(self) -> (bch_ioctl_disk_resize_journal, ErrMsg) {
-        (bch_ioctl_disk_resize_journal { flags: self.flags, pad: self.pad, dev: self.dev, nbuckets: self.nbuckets },
+impl V2 for IoctlDiskResizeJournalV2 {
+    type V1 = IoctlDiskResizeJournal;
+    fn split(self) -> (IoctlDiskResizeJournal, ErrMsg) {
+        (IoctlDiskResizeJournal { flags: self.flags, pad: self.pad, dev: self.dev, nbuckets: self.nbuckets },
          ErrMsg::User(self.err))
     }
 }
@@ -560,7 +560,7 @@ fn admin(fs: &Fs) -> Result<(), BchError> {
     if capable(Capability::SysAdmin) { Ok(()) } else { fs.throw(Errcode::EPERM_non_admin) }
 }
 
-fn disk_add(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
+fn disk_add(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -572,7 +572,7 @@ fn disk_add(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Resu
     msg.report(&mut err, ret, |ret, err| bch_err_msg!(fs, ret, "{}", err))
 }
 
-fn disk_remove(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
+fn disk_remove(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags & !FORCE_FLAGS != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -589,7 +589,7 @@ fn disk_remove(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> R
     })
 }
 
-fn disk_online(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
+fn disk_online(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -606,7 +606,7 @@ fn disk_online(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> R
     })
 }
 
-fn disk_offline(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
+fn disk_offline(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags & !FORCE_FLAGS != 0 || a.pad != 0 {
         return fs.throw(bad_flags);
@@ -623,7 +623,7 @@ fn disk_offline(fs: &Fs, a: bch_ioctl_disk, msg: ErrMsg, bad_flags: Errcode) -> 
     })
 }
 
-fn disk_set_state(fs: &Fs, a: bch_ioctl_disk_set_state, msg: ErrMsg, bad_args: Errcode)
+fn disk_set_state(fs: &Fs, a: IoctlDiskSetState, msg: ErrMsg, bad_args: Errcode)
     -> Result<(), BchError>
 {
     admin(fs)?;
@@ -638,7 +638,7 @@ fn disk_set_state(fs: &Fs, a: bch_ioctl_disk_set_state, msg: ErrMsg, bad_args: E
     msg.report(&mut err, ret, |ret, _| bch_err_msg_dev!(&ca, ret, "setting device state"))
 }
 
-fn disk_resize(fs: &Fs, a: bch_ioctl_disk_resize, msg: ErrMsg, bad_flags: Errcode)
+fn disk_resize(fs: &Fs, a: IoctlDiskResize, msg: ErrMsg, bad_flags: Errcode)
     -> Result<(), BchError>
 {
     admin(fs)?;
@@ -657,7 +657,7 @@ fn disk_resize(fs: &Fs, a: bch_ioctl_disk_resize, msg: ErrMsg, bad_flags: Errcod
     })
 }
 
-fn disk_resize_journal(fs: &Fs, a: bch_ioctl_disk_resize_journal, msg: ErrMsg,
+fn disk_resize_journal(fs: &Fs, a: IoctlDiskResizeJournal, msg: ErrMsg,
                        bad_flags: Errcode, too_big: Errcode) -> Result<(), BchError> {
     admin(fs)?;
     if a.flags & !BCH_BY_INDEX != 0 || a.pad != 0 {
@@ -681,7 +681,7 @@ struct DataJob {
     /// Its memory, by a ref on its kobject: the file can be read after the
     /// filesystem's stopped
     fs:    RefGuard<Placed<Kobject, crate::at!(Fs.kobj)>>,
-    arg:   bch_ioctl_data,
+    arg:   IoctlData,
     /// The thread's, read() reads as it goes
     stats: MoveStats,
 }
@@ -706,12 +706,12 @@ impl FileOps for DataJob {
     type Inode = Any;
 
     fn read(&self, _file: &File<Self::Data>, buf: &mut UserBuf) -> Result<(), BchError> {
-        type Event = bch_ioctl_data_event;
+        type Event = IoctlDataEvent;
         let fs = &self.fs;
         let stats = &self.stats;
         let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
 
-        let mut p = bch_ioctl_data_progress::default();
+        let mut p = IoctlDataProgress::default();
         p.data_type                 = data_type.0 as u8;
         p.btree_id                  = pos.btree.0 as u8;
         p.pos                       = pos.pos;
@@ -746,7 +746,7 @@ impl FileOps for DataJob {
         bytes[offset_of!(Event, type_)] = DataEvent::BCH_DATA_EVENT_PROGRESS.0 as u8;
         bytes[offset_of!(Event, ret)]   = ret.0 as u8;
         let at = offset_of!(Event, payload);
-        bytes[at..at + size_of::<bch_ioctl_data_progress>()].copy_from_slice(plain_bytes(&p));
+        bytes[at..at + size_of::<IoctlDataProgress>()].copy_from_slice(plain_bytes(&p));
 
         let bytes = plain_bytes(&e);
         if buf.copy_to(bytes) != bytes.len() {
@@ -756,7 +756,7 @@ impl FileOps for DataJob {
     }
 }
 
-fn data(fs: &Fs, arg: bch_ioctl_data) -> Result<c_int, BchError> {
+fn data(fs: &Fs, arg: IoctlData) -> Result<c_int, BchError> {
     let write_ref = fs.require(fs.writes.tryget(), Errcode::erofs_no_writes_ioctl_data)?;
 
     if !capable(Capability::SysAdmin) {
@@ -896,7 +896,7 @@ impl Fs {
 }
 
 /// Failed, module exit undoes what was done.
-pub fn bch2_chardev_init(m: &ThisModule) -> Result<(), BchError> {
+pub fn chardev_module_init(m: &ThisModule) -> Result<(), BchError> {
     CHRDEV.register::<Ctl>(m)?;
     CLASS.register(m)?;
     let dev = Device::create(&CLASS, CHRDEV.dev(MINOR_GLOBAL), NAME)?;
@@ -904,7 +904,7 @@ pub fn bch2_chardev_init(m: &ThisModule) -> Result<(), BchError> {
     Ok(())
 }
 
-pub fn bch2_chardev_exit(m: &ModuleExit) {
+pub fn chardev_module_exit(m: &ModuleExit) {
     let global = MINORS.lock().global.take();
     drop(global);
     CLASS.unregister(m);

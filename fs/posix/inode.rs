@@ -39,13 +39,13 @@ use crate::data_structures::dst_room::DstRoom;
 use crate::os::{unicode::UnicodeMap, kernel::random_u64};
 use crate::util::vstructs::{plain_bytes_mut, Unvalidated, Validated};
 use crate::c;
-use crate::data::reconcile::format::bch_extent_reconcile;
+use crate::data::reconcile::format::ExtentReconcile;
 use crate::posix::dirent_format::{BCH_DT_MAX, DT_SUBVOL};
 use crate::posix::inode_format::{BLOCKDEV_INODE_MAX, Inode, InodeAllocCursor, InodeGeneration,
     InodeOptId, InodeV2, InodeV3, INODEv3_FIELDS_START_INITIAL, InodeOptId_arms, InodeFlags,
     BCH_INODE_FIELDS_v3};
 use crate::posix::logged_ops_format::LoggedOpsInum;
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::{Fs, FsFlag};
 use crate::posix::dirent::{self, DirentTarget};
@@ -69,7 +69,7 @@ use core::ffi::CStr;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable, TypeInfo};
 use crate::types::Le64;
 use crate::util::projections::Volatile;
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, SbFeature, bkey, Deleted, StrHashKind,
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, SbFeature, Bkey, Deleted, StrHashKind,
     Whiteout};
 
 #[allow(non_camel_case_types)]
@@ -79,7 +79,7 @@ macro_rules! __bch_inode_unpacked_0 {
     ([$($(#[$m:meta])* pub $f:ident: $ft:ty),* $(,)?] $(($_name:tt, $_bits:tt)),* $(,)?) => { ::paste::paste! {
         #[repr(C)]
         #[derive(Clone, Copy, Debug, Default, MaybeZeroable, TypeInfo, BitfieldMembers)]
-        pub struct bch_inode_unpacked {
+        pub struct InodeUnpacked {
             $($(#[$m])* pub $f: $ft,)*
             $(pub $_name: [<u $_bits>],)*
         }
@@ -97,25 +97,25 @@ macro_rules! __bch_inode_unpacked_0 {
         impl VolatileInodeUnpacked {
             /// Each field as it is: not all of them as of one moment, if
             /// it's written meanwhile.
-            pub fn get(&self) -> bch_inode_unpacked {
-                bch_inode_unpacked {
+            pub fn get(&self) -> InodeUnpacked {
+                InodeUnpacked {
                     $($f: self.$f.get(),)*
                     $($_name: self.$_name.get(),)*
                 }
             }
 
             /// By its one writer.
-            pub fn set(&self, v: &bch_inode_unpacked) {
+            pub fn set(&self, v: &InodeUnpacked) {
                 $(self.$f.set(v.$f);)*
                 $(self.$_name.set(v.$_name);)*
             }
         }
 
         const _: () = {
-            assert!(size_of::<VolatileInodeUnpacked>() == size_of::<bch_inode_unpacked>());
-            assert!(align_of::<VolatileInodeUnpacked>() == align_of::<bch_inode_unpacked>());
-            $(assert!(offset_of!(VolatileInodeUnpacked, $f) == offset_of!(bch_inode_unpacked, $f));)*
-            $(assert!(offset_of!(VolatileInodeUnpacked, $_name) == offset_of!(bch_inode_unpacked, $_name));)*
+            assert!(size_of::<VolatileInodeUnpacked>() == size_of::<InodeUnpacked>());
+            assert!(align_of::<VolatileInodeUnpacked>() == align_of::<InodeUnpacked>());
+            $(assert!(offset_of!(VolatileInodeUnpacked, $f) == offset_of!(InodeUnpacked, $f));)*
+            $(assert!(offset_of!(VolatileInodeUnpacked, $_name) == offset_of!(InodeUnpacked, $_name));)*
         };
     } };
 }
@@ -173,7 +173,7 @@ const V3_FIELDS_OFFSET: usize = offset_of!(InodeV3, repr.fields);
 /// field that doesn't decode, or is too big for its field in @u.
 #[allow(unused_assignments)]
 fn unpack_fields(
-    u:         &mut bch_inode_unpacked,
+    u:         &mut InodeUnpacked,
     v3:        bool,
     mut in_:   &[u8],
     nr_fields: usize,
@@ -247,9 +247,9 @@ fn v1_field(in_: &[u8], _bits: u32) -> Option<(u128, usize)> {
 // shrink nothing
 #[allow(clippy::type_complexity, clippy::result_large_err)]
 fn try_unpack(k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>)
-    -> Result<bch_inode_unpacked, (bch_inode_unpacked, usize)>
+    -> Result<InodeUnpacked, (InodeUnpacked, usize)>
 {
-    let mut u = bch_inode_unpacked {
+    let mut u = InodeUnpacked {
         bi_inum:     k.k.p.offset,
         bi_snapshot: k.k.p.snapshot,
         ..Default::default()
@@ -315,7 +315,7 @@ fn try_unpack(k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>)
 ///
 /// Not the value's to_text: an inode's unpacks it, and would fail here again.
 #[cold]
-fn unpack_error(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>, u: &bch_inode_unpacked,
+fn unpack_error(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>, u: &InodeUnpacked,
                 fieldnr: usize) {
     macro_rules! names {
         ($($name:ident = $bits:literal,)*) => { &[$(stringify!($name),)*] };
@@ -351,7 +351,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>, u: 
 
 /// Unpack @k. A field that doesn't decode is reported, and left zero with the
 /// fields after it.
-pub fn unpack<S: KeyState>(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, S>>) -> bch_inode_unpacked {
+pub fn unpack<S: KeyState>(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, S>>) -> InodeUnpacked {
     let k = k.family_as_read();
     try_unpack(k).unwrap_or_else(|(u, fieldnr)| {
         unpack_error(fs, k, &u, fieldnr);
@@ -379,7 +379,7 @@ fn v3_mut(k: &mut BkeyI) -> &mut InodeV3<Validated> {
 /// @inode packed, as an inode_v3 key at snapshot 0 - the caller's to set.
 /// The key ends at the last nonzero field, and has_inode_opts is recomputed -
 /// pack is what maintains it.
-pub fn pack(inode: &bch_inode_unpacked) -> DstRoom<BkeyI, [u64; INODE_ROOM_U64S]> {
+pub fn pack(inode: &InodeUnpacked) -> DstRoom<BkeyI, [u64; INODE_ROOM_U64S]> {
     let mut out = DstRoom::<BkeyI, [u64; INODE_ROOM_U64S]>::default();
 
     let mut flags = inode.flags();
@@ -498,7 +498,7 @@ pub trait BkeyVInode: BkeyV<V = Inodes> {
 
 impl<K: BkeyV<V = Inodes>> BkeyVInode for K {}
 
-impl bkey {
+impl Bkey {
     /// Whether it's an inode, of any version: as C's bkey_is_inode().
     pub fn is_inode(&self) -> bool {
         <Inodes as BkeyFamily>::contains(self)
@@ -509,7 +509,7 @@ impl bkey {
 
 /// The inode at @iter's position: ENOENT_inode if there isn't one.
 fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
-    -> Result<bch_inode_unpacked, BchError>
+    -> Result<InodeUnpacked, BchError>
 {
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
     let Some(k) = k.arm::<Inodes>() else {
@@ -524,11 +524,11 @@ fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
 fn __peek_snapshot<'a>(
     t:        &TransAttempt<'a, '_>,
     iter:     &mut BtreeIter<'a>,
-    inum:     subvol_inum,
+    inum:     SubvolInum,
     snapshot: u32,
     flags:    BtreeIterFlags,
     warn:     Option<&CStr>,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     *iter = BtreeIter::new(t, Btree::inodes, spos(0, inum.inum, snapshot),
                            flags | BtreeIterFlags::CACHED);
     let ret = peek_slot(t, iter);
@@ -545,10 +545,10 @@ fn __peek_snapshot<'a>(
 pub(crate) fn __peek<'a>(
     t:     &TransAttempt<'a, '_>,
     iter:  &mut BtreeIter<'a>,
-    inum:  subvol_inum,
+    inum:  SubvolInum,
     flags: BtreeIterFlags,
     warn:  Option<&CStr>,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     // C passes @warn on as the bool saying whether to warn:
     let snapshot = match warn {
         Some(_) => subvolume::get_snapshot(t, inum.subvol as u32)?,
@@ -562,9 +562,9 @@ pub(crate) fn __peek<'a>(
 pub fn peek<'a>(
     t:     &TransAttempt<'a, '_>,
     iter:  &mut BtreeIter<'a>,
-    inum:  subvol_inum,
+    inum:  SubvolInum,
     flags: BtreeIterFlags,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     __peek(t, iter, inum, flags, None)
 }
 
@@ -573,10 +573,10 @@ pub fn peek<'a>(
 pub fn peek_snapshot<'a>(
     t:        &TransAttempt<'a, '_>,
     iter:     &mut BtreeIter<'a>,
-    inum:     subvol_inum,
+    inum:     SubvolInum,
     snapshot: u32,
     flags:    BtreeIterFlags,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     __peek_snapshot(t, iter, inum, snapshot, flags, None)
 }
 
@@ -587,7 +587,7 @@ pub fn find_by_inum_snapshot(
     inum:     u64,
     snapshot: u32,
     flags:    BtreeIterFlags,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     let mut iter = BtreeIter::new(t, Btree::inodes, spos(0, inum, snapshot), flags);
     peek_slot(t, &mut iter)
 }
@@ -597,10 +597,10 @@ pub fn find_by_inum_snapshot(
 /// the caller's transaction attempt.
 pub fn find_by_inum_in_snapshot(
     t:        &TransAttempt<'_, '_>,
-    inum:     subvol_inum,
+    inum:     SubvolInum,
     snapshot: u32,
     warn:     Option<&CStr>,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     let mut iter = BtreeIter::uninit(t.trans());
     __peek_snapshot(t, &mut iter, inum, snapshot, BtreeIterFlags::empty(), warn)
 }
@@ -610,24 +610,24 @@ pub fn find_by_inum_in_snapshot(
 /// __func__. In the caller's transaction attempt.
 pub fn find_by_inum_trans(
     t:    &TransAttempt<'_, '_>,
-    inum: subvol_inum,
+    inum: SubvolInum,
     warn: &CStr,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     let mut iter = BtreeIter::uninit(t.trans());
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), Some(warn))
 }
 
 /// find_by_inum_trans(), logging nothing: as
 /// bch2_inode_find_by_inum_nowarn_trans().
-pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: subvol_inum)
-    -> Result<bch_inode_unpacked, BchError>
+pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum)
+    -> Result<InodeUnpacked, BchError>
 {
     let mut iter = BtreeIter::uninit(t.trans());
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), None)
 }
 
 /// The inode @inum, in its own transaction: as bch2_inode_find_by_inum().
-pub fn find_by_inum(fs: &Fs, inum: subvol_inum) -> Result<bch_inode_unpacked, BchError> {
+pub fn find_by_inum(fs: &Fs, inum: SubvolInum) -> Result<InodeUnpacked, BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| find_by_inum_trans(t, inum, c"bch2_inode_find_by_inum"))
 }
@@ -643,7 +643,7 @@ pub fn find_oldest_snapshot(
     t:        &TransAttempt<'_, '_>,
     inum:     u64,
     snapshot: u32,
-) -> Result<bch_inode_unpacked, BchError> {
+) -> Result<InodeUnpacked, BchError> {
     let fs = t.fs();
     let mut root = None;
 
@@ -674,7 +674,7 @@ pub fn find_oldest_snapshot(
 /// authoritative version wants find_oldest_snapshot() instead - a
 /// descendant's other fields are not a valid stand-in for an ancestor's.
 pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
-    -> Result<bch_inode_unpacked, BchError>
+    -> Result<InodeUnpacked, BchError>
 {
     let fs = t.fs();
 
@@ -693,7 +693,7 @@ pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
 
 /// @inode packed, in transaction memory - at no snapshot, which is for the
 /// caller to set: as pack().
-fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &bch_inode_unpacked)
+fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &InodeUnpacked)
     -> Result<TransBkey<'a, 't>, BchError>
 {
     t.bkey_copy(&pack(inode))
@@ -704,7 +704,7 @@ fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &bch_inode_unpacked)
 pub fn write_flags<'t>(
     t:     &TransAttempt<'_, 't>,
     iter:  &mut BtreeIter<'t>,
-    inode: &mut bch_inode_unpacked,
+    inode: &mut InodeUnpacked,
     flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     let mut k = pack_trans(t, inode)?;
@@ -717,14 +717,14 @@ pub fn write_flags<'t>(
 pub fn write<'t>(
     t:     &TransAttempt<'_, 't>,
     iter:  &mut BtreeIter<'t>,
-    inode: &mut bch_inode_unpacked,
+    inode: &mut InodeUnpacked,
 ) -> Result<(), BchError> {
     write_flags(t, iter, inode, UpdateTriggerFlags::empty())
 }
 
 /// Queue writing back @inode, at its own snapshot, for fsck repair - the
 /// caller commits: as __bch2_fsck_write_inode().
-pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked)
+pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
     let mut k = pack_trans(t, inode)?;
@@ -734,7 +734,7 @@ pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked)
 }
 
 /// As fsck_write(), committed: as bch2_fsck_write_inode().
-pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut bch_inode_unpacked)
+pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -744,7 +744,7 @@ pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut bch_inode_unpacked)
 /// Write @inode, in its own commit, through the key cache, at snapshot
 /// U32_MAX - the root snapshot a new filesystem starts with: for copying a
 /// tree in at format time.
-pub fn write_cached(fs: &Fs, inode: &bch_inode_unpacked) -> Result<(), BchError> {
+pub fn write_cached(fs: &Fs, inode: &InodeUnpacked) -> Result<(), BchError> {
     let mut packed = pack(inode);
     packed.k.p.snapshot = u32::MAX;
     fs.btree_insert(
@@ -858,7 +858,7 @@ impl BkeyOps for InodeGeneration {
 }
 
 /// @inode's fields, a line each, after a newline.
-fn fields_to_text(out: &mut Printbuf, inode: &bch_inode_unpacked) {
+fn fields_to_text(out: &mut Printbuf, inode: &InodeUnpacked) {
     out.newline();
 
     let d_type = (inode.bi_mode as u32 >> 12) & 15;
@@ -888,7 +888,7 @@ fn fields_to_text(out: &mut Printbuf, inode: &bch_inode_unpacked) {
     inode_fields_v3!(field);
 }
 
-impl ToText for bch_inode_unpacked {
+impl ToText for InodeUnpacked {
     /// By number and snapshot, then its fields: as
     /// bch2_inode_unpacked_to_text().
     fn to_text(&self, out: &mut Printbuf) {
@@ -1017,7 +1017,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
 pub fn create<'a>(
     t:        &TransAttempt<'a, '_>,
     iter:     &mut BtreeIter<'a>,
-    inode:    &mut bch_inode_unpacked,
+    inode:    &mut InodeUnpacked,
     snapshot: u32,
     is_32bit: bool,
 ) -> Result<(), BchError> {
@@ -1261,7 +1261,7 @@ static INODE: Trigger = Trigger(trigger);
 fn may_delete_deleted_inode(
     t:                   &TransAttempt<'_, '_>,
     p:                   Bpos,
-    inode:               &mut bch_inode_unpacked,
+    inode:               &mut InodeUnpacked,
     from_deleted_inodes: bool,
 ) -> Result<bool, BchError> {
 
@@ -1359,15 +1359,15 @@ fn may_delete_deleted_inode(
 }
 
 /// may_delete_deleted_inode(), for inode @inum: as may_delete_deleted_inum().
-fn may_delete_deleted_inum(t: &TransAttempt<'_, '_>, inum: subvol_inum,
-                           inode: &mut bch_inode_unpacked) -> Result<bool, BchError> {
+fn may_delete_deleted_inum(t: &TransAttempt<'_, '_>, inum: SubvolInum,
+                           inode: &mut InodeUnpacked) -> Result<bool, BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
     may_delete_deleted_inode(t, spos(0, inum.inum, snapshot), inode, false)
 }
 
 /// Delete inode @inum's keys in @btree, a commit each: as
 /// bch2_inode_delete_keys(). An extent is deleted whole.
-fn delete_keys(trans: &TransGuard<'_>, inum: subvol_inum, btree: Btree)
+fn delete_keys(trans: &TransGuard<'_>, inum: SubvolInum, btree: Btree)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -1394,7 +1394,7 @@ fn delete_keys(trans: &TransGuard<'_>, inum: subvol_inum, btree: Btree)
 
 /// Delete the inode @inum's key, and its damage record; its snapshot. As
 /// bch2_inode_rm_trans(). It not being there is an inconsistency.
-fn rm_trans(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<u32, BchError> {
+fn rm_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<u32, BchError> {
     let fs = t.fs();
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
@@ -1416,10 +1416,10 @@ fn rm_trans(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<u32, BchError
 /// the versions in ancestor snapshots nothing else sees: as bch2_inode_rm().
 /// The VFS asking for an inode that may not be deleted is a bug, logged
 /// with the inode, and counted.
-pub fn rm(fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
+pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
 
-    let mut inode = bch_inode_unpacked::default();
+    let mut inode = InodeUnpacked::default();
     let mut ret = lockrestart_do(&trans, |t| may_delete_deleted_inum(t, inum, &mut inode));
 
     if matches!(&ret, Err(e) if !e.matches(c::EIO) && !e.matches(c::EROFS)) {
@@ -1572,7 +1572,7 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
             let Some(k) = iter.peek_max_type(t, SPOS_MAX, flags)? else { return Ok(None) };
             let p = k.k.p;
 
-            let mut inode = bch_inode_unpacked::default();
+            let mut inode = InodeUnpacked::default();
             let delete = may_delete_deleted_inode(t, p, &mut inode, true)?;
 
             // may_delete_deleted_inode() can have queued updates - an fsck
@@ -1626,8 +1626,8 @@ crate::recovery_pass!(kill_i_generation_keys => kill_i_generation_keys);
 
 /// Start a new inode: zeroed, but for its hash type - per the str_hash
 /// option - and a random hash seed. As bch2_inode_init_early().
-pub fn init_early(fs: &Fs, inode: &mut bch_inode_unpacked) {
-    *inode = bch_inode_unpacked::default();
+pub fn init_early(fs: &Fs, inode: &mut InodeUnpacked) {
+    *inode = InodeUnpacked::default();
     inode.set_str_hash(crate::posix::str_hash::new_inode_type(fs));
     inode.bi_hash_seed = random_u64().into();
 }
@@ -1640,13 +1640,13 @@ pub fn init_early(fs: &Fs, inode: &mut bch_inode_unpacked) {
 #[allow(clippy::too_many_arguments)]
 pub fn init_late(
     fs:     &Fs,
-    inode:  &mut bch_inode_unpacked,
+    inode:  &mut InodeUnpacked,
     now:    u64,
     uid:    c::uid_t,
     gid:    c::gid_t,
     mode:   c::umode_t,
     rdev:   c::dev_t,
-    parent: Option<&bch_inode_unpacked>,
+    parent: Option<&InodeUnpacked>,
 ) {
     inode.bi_mode  = mode;
     inode.bi_uid   = uid;
@@ -1689,9 +1689,9 @@ pub fn init(
     gid:    c::gid_t,
     mode:   c::umode_t,
     rdev:   c::dev_t,
-    parent: Option<&bch_inode_unpacked>,
-) -> bch_inode_unpacked {
-    let mut inode = bch_inode_unpacked::default();
+    parent: Option<&InodeUnpacked>,
+) -> InodeUnpacked {
+    let mut inode = InodeUnpacked::default();
     init_early(fs, &mut inode);
     init_late(fs, &mut inode, fs.current_time(), uid, gid, mode, rdev, parent);
     inode
@@ -1701,7 +1701,7 @@ pub fn init(
 
 /// The unicode map directory @inode's names are casefolded with, if it's
 /// casefolded: for its bch_hash_info.
-pub fn cf_encoding<'f>(fs: &'f Fs, inode: &bch_inode_unpacked) -> Option<&'f UnicodeMap> {
+pub fn cf_encoding<'f>(fs: &'f Fs, inode: &InodeUnpacked) -> Option<&'f UnicodeMap> {
     fs.cf_encoding.as_ref().filter(|_| inode.casefold(fs))
 }
 
@@ -1710,8 +1710,8 @@ pub fn cf_encoding<'f>(fs: &'f Fs, inode: &bch_inode_unpacked) -> Option<&'f Uni
 /// which marks the filesystem as using it.
 pub fn set_casefold(
     t:     &TransAttempt<'_, '_>,
-    inum:  subvol_inum,
-    inode: &mut bch_inode_unpacked,
+    inum:  SubvolInum,
+    inode: &mut InodeUnpacked,
     v:     u32,
 ) -> Result<(), BchError> {
     let fs = t.fs();
@@ -1740,22 +1740,22 @@ pub fn set_casefold(
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,
 /// and for each whether @inode set it or inherited it. An option too big for
-/// its field in bch_extent_reconcile - only a corrupt inode's - is warned
+/// its field in ExtentReconcile - only a corrupt inode's - is warned
 /// about and truncated, as C's bitfield assignments truncate: the write it's
 /// read for goes ahead, the one that corrects it too.
-pub fn reconcile_opts_get(fs: &Fs, inode: &bch_inode_unpacked) -> bch_extent_reconcile {
+pub fn reconcile_opts_get(fs: &Fs, inode: &InodeUnpacked) -> ExtentReconcile {
     let opts = crate::posix::inode_opts::get_inode(fs, inode);
 
-    for (name, v) in bch_extent_reconcile::too_big(&opts) {
+    for (name, v) in ExtentReconcile::too_big(&opts) {
         bch_warn!(fs, "inode {}: io option {name} = {v} doesn't fit in bch_extent_reconcile, truncated",
                   inode.bi_inum);
     }
-    bch_extent_reconcile::from_io_opts(&opts)
+    ExtentReconcile::from_io_opts(&opts)
 }
 
 // ── The unpacked inode ───────────────────────────────────────────────────
 
-impl bch_inode_unpacked {
+impl InodeUnpacked {
     /// The link count as the VFS counts it - bi_nlink leaves out the links
     /// every inode has, two for a directory - and 0 if it's unlinked: as
     /// bch2_inode_nlink_get().
@@ -1866,7 +1866,7 @@ const BCH_LINK_MAX: u32 = u32::MAX;
 
 /// One more link to @inode - or none less, for an unlinked inode coming
 /// back: as bch2_inode_nlink_inc(). too_many_links at BCH_LINK_MAX.
-pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked)
+pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
     if inode.flag(InodeFlags::unlinked) {
@@ -1887,7 +1887,7 @@ pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked)
 /// pass that recounts it - check_dirents for a directory, check_nlinks
 /// otherwise. In fsck, if that pass has already run, scheduling it returns the
 /// error that rewinds recovery to it, for the caller to pass up.
-pub fn nlink_add(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked, delta: i32)
+pub fn nlink_add(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked, delta: i32)
     -> Result<(), BchError>
 {
     match inode.bi_nlink.checked_add_signed(delta) {
@@ -1900,7 +1900,7 @@ pub fn nlink_add(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked, delta
 }
 
 #[cold]
-fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked, delta: i32)
+fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked, delta: i32)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -1925,7 +1925,7 @@ fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked, 
 /// One link fewer to @inode - unlinked, when it had none left: as
 /// bch2_inode_nlink_dec(). An unlinked inode losing a link is a transaction
 /// inconsistency, and changes nothing.
-pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked) {
+pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked) {
     let unlinked = inode.flag(InodeFlags::unlinked);
 
     if unlinked && inode.bi_nlink != 0 {
@@ -1949,8 +1949,8 @@ pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked) {
 mod tests {
     use super::*;
 
-    fn sample() -> bch_inode_unpacked {
-        bch_inode_unpacked {
+    fn sample() -> InodeUnpacked {
+        InodeUnpacked {
             bi_inum:      4096,
             bi_hash_seed: 0x0123_4567_89ab_cdef.into(),
             bi_size:      12345,
@@ -2019,7 +2019,7 @@ mod tests {
     /// A field whose value doesn't fit it: Err at that field.
     #[test]
     fn unpack_field_too_big() {
-        let mut packed = pack(&bch_inode_unpacked { bi_inum: 4096, ..Default::default() });
+        let mut packed = pack(&InodeUnpacked { bi_inum: 4096, ..Default::default() });
 
         // The four 96 bit timestamps, zero: two bytes each. Then bi_uid,
         // 32 bits, given 2^40:

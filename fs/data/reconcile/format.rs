@@ -3,15 +3,15 @@
 #![allow(non_camel_case_types)]
 
 use crate::data::extents_format::ExtentEntryType;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use cstruct_macros::{bitfield, bch_enum};
 
 /*
  * rebalance on disk data structures:
  *
- * extents will contain a bch_extent_reconcile if they have background
+ * extents will contain a ExtentReconcile if they have background
  * processing pending; additionally, indirect extents will always have a
- * bch_extent_reconcile if they had any io path options set on the inode, since
+ * ExtentReconcile if they had any io path options set on the inode, since
  * we don't (yet) have backpointers that would let us look up the "owning" inode
  * of an indirect extent to recover the io path options.
  *
@@ -41,20 +41,20 @@ use cstruct_macros::{bitfield, bch_enum};
  *    BTREE_ID_reflink needs to be processed.
  *
  *  BTREE_ID_reconcile_hipri:
- *    If bch_extent_reconcile.hipri is set, the extent will be tracked here
+ *    If ExtentReconcile.hipri is set, the extent will be tracked here
  *    instead of BTREE_ID_reconcile_work and processed ahead of extents in
  *    BTREE_ID_reconcile_work; this is so that we can evacuate failed devices
  *    before other work.
  *
  *  BTREE_ID_reconcile_pending:
  *    If we'd like to move an extent to a specific target, but can't because the
- *    target is full, we set bch_extent_reconcile.pending and switch to tracking
+ *    target is full, we set ExtentReconcile.pending and switch to tracking
  *    it here; pending rebalance work is re-attempted on device resize, add, or
  *    label change.
  */
 
 #[bitfield(u64)]
-pub struct bch_extent_rebalance_v1 {
+pub struct ExtentRebalanceV1 {
     #[bits(default = 1 << ExtentEntryType::rebalance_v1.0)]
     pub(self) type_:                   u6,
     unused:                            u3,
@@ -75,7 +75,7 @@ pub struct bch_extent_rebalance_v1 {
 }
 
 #[bitfield(u64)]
-pub struct bch_extent_reconcile {
+pub struct ExtentReconcile {
     #[bits(default = 1 << ExtentEntryType::reconcile.0)]
     pub(self) type_:                   u8,
     unused:                            u2,
@@ -100,7 +100,7 @@ pub struct bch_extent_reconcile {
 }
 
 #[bitfield(u64)]
-pub struct bch_extent_reconcile_bp {
+pub struct ExtentReconcileBp {
     #[bits(default = 1 << ExtentEntryType::reconcile_bp.0)]
     pub(self) type_: u9,
     idx:   u55,
@@ -118,11 +118,11 @@ pub enum ReconcileOpt {
     promote_target,
 }
 
-impl bch_extent_reconcile {
+impl ExtentReconcile {
     /// An entry with @opts' reconcile options, and whether the inode set
     /// each: io_opts_to_reconcile_opts(). Truncated to the entry's fields,
     /// as C's bitfield assignments truncate.
-    pub fn from_io_opts(opts: &bch_inode_opts) -> Self {
+    pub fn from_io_opts(opts: &InodeOpts) -> Self {
         let mut r = Self::new();
         macro_rules! opts {
             ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { $(
@@ -137,7 +137,7 @@ impl bch_extent_reconcile {
 
     /// Each of @opts' reconcile options too big for its field - what
     /// from_io_opts() truncates - as (name, value).
-    pub fn too_big(opts: &bch_inode_opts) -> impl Iterator<Item = (&'static str, u64)> {
+    pub fn too_big(opts: &InodeOpts) -> impl Iterator<Item = (&'static str, u64)> {
         macro_rules! opts {
             ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { [$(
                 (stringify!($name), u64::from(opts.$name), Self::[<$name:upper _BITS>]),

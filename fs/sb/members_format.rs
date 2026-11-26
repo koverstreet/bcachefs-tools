@@ -41,7 +41,7 @@ pub enum MemberErrorType {
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
-pub struct bch_member {
+pub struct Member {
     pub uuid: __uuid_t,
     pub nbuckets: Le64, /* device size */
     pub first_bucket: Le16, /* index of first bucket used */
@@ -51,7 +51,7 @@ pub struct bch_member {
     pub last_mount: Le64, /* time_t */
 
     #[members]
-    pub flags: bch_member_flags,
+    pub flags: MemberFlags,
     pub iops: [Le32; 4],
     pub errors: [Le64; MemberErrorType::NR as usize],
     pub errors_at_reset: [Le64; MemberErrorType::NR as usize],
@@ -75,7 +75,7 @@ pub struct bch_member {
      * failure domain, and allocation spreads replicas - and, for erasure
      * coding, requires stripe blocks - across domains. A flat, intrinsic
      * device property with no relationship to the disk_groups label tree.
-     * Interned to a small id in memory (bch_member_cpu.failure_domain) for
+     * Interned to a small id in memory (MemberCpu.failure_domain) for
      * the allocation path.
      */
     pub failure_domain: [u8; 32],
@@ -96,7 +96,7 @@ pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
 pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 
 #[bitfield(Le64)]
-pub struct bch_member_flags {
+pub struct MemberFlags {
     #[bits(4)]  state:              MemberState,
     /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
     __:                             u10,
@@ -142,15 +142,15 @@ pub enum MemberInitialized {
 #[whole(tail = _members: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_members_v1 {
-    pub _members: [bch_member; 0], //Members are now variable size
+pub struct SbFieldMembersV1 {
+    pub _members: [Member; 0], //Members are now variable size
 }
 
 #[whole(tail = _members: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_members_v2 {
+pub struct SbFieldMembersV2 {
     pub member_bytes: Le16, //size of single member entry
     pub pad: [u8; 6],
-    pub _members: [bch_member; 0],
+    pub _members: [Member; 0],
 }

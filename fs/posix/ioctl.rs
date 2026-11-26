@@ -13,18 +13,18 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::bcachefs_ioctl::{bch_ioctl_get_damage, bch_ioctl_readdir_flags, bch_ioctl_snapshot_node,
-    bch_ioctl_snapshot_node_v2, bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
-    bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path, bch_ioctl_unpoison, BCH_READDIR_damaged,
-    BCH_READDIR_recursive, BCH_READDIR_subvolumes_only, bch_ioctl_readdir_entry_head,
-    bch_ioctl_subvol_dirent_head};
+use crate::bcachefs_ioctl::{IoctlGetDamage, IoctlReaddirFlags, IoctlSnapshotNode,
+    IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2,
+    IoctlSubvolReaddir, IoctlSubvolToPath, IoctlUnpoison, BCH_READDIR_damaged,
+    BCH_READDIR_recursive, BCH_READDIR_subvolumes_only, IoctlReaddirEntryHead,
+    IoctlSubvolDirentHead};
 use crate::data::extents_format::{bch_extent_flags, ExtentFlags};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::reflink_format::ReflinkP;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::posix::dirent_format::DT_SUBVOL;
 use crate::snapshots::format::{SnapshotState, SnapshotTree, SubvolumeState};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::posix::dirent::{self, Dirent};
@@ -116,7 +116,7 @@ impl Entries {
 
 /// BCHFS_IOC_GET_DAMAGE's: inode @inum's damage, as its subvolume sees it.
 /// The count is the true one, however few entries the caller had room for.
-pub fn get_damage(fs: &Fs, inum: subvol_inum, user: UserVstruct<bch_ioctl_get_damage>)
+pub fn get_damage(fs: &Fs, inum: SubvolInum, user: UserVstruct<IoctlGetDamage>)
     -> Result<(), BchError>
 {
     let mut arg = user.head()?;
@@ -142,7 +142,7 @@ pub fn get_damage(fs: &Fs, inum: subvol_inum, user: UserVstruct<bch_ioctl_get_da
 
 /*
  * BCHFS_IOC_READDIR_FLAGS lists a directory's entries that pass its filter
- * into the caller's buffer, as bch_ioctl_readdir_entry records, and returns
+ * into the caller's buffer, as IoctlReaddirEntry records, and returns
  * a cursor, pos, to resume from: a full buffer ends the call, not the
  * listing - unless the next entry wouldn't fit even an empty one, which is
  * ERANGE: a recursive listing's names are paths, of any length.
@@ -162,8 +162,8 @@ const READDIR_FLAGS_ALL: u32 =
 
 /// Whether @flags' filter keeps dirent @d, in @dir - whose snapshot is @view
 /// - pointing at @target.
-fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: subvol_inum, view: u32,
-                  d: Dirent<'_>, target: subvol_inum) -> Result<bool, BchError> {
+fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: SubvolInum, view: u32,
+                  d: Dirent<'_>, target: SubvolInum) -> Result<bool, BchError> {
     match flags & !BCH_READDIR_recursive {
         0 => Ok(true),
         BCH_READDIR_damaged => {
@@ -180,7 +180,7 @@ fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: subvol_inum, view: 
     }
 }
 
-fn readdir_plain(fs: &Fs, dir: subvol_inum, flags: u32, out: &mut Entries, pos: u64)
+fn readdir_plain(fs: &Fs, dir: SubvolInum, flags: u32, out: &mut Entries, pos: u64)
     -> Result<u64, BchError>
 {
     let trans = btree_trans!(fs);
@@ -196,7 +196,7 @@ fn readdir_plain(fs: &Fs, dir: subvol_inum, flags: u32, out: &mut Entries, pos: 
         let next = k.k.p.offset + 1;
 
         if readdir_filter(t, flags, dir, view, d, target)? &&
-           !out.emit(t, d.name().as_bytes(), |reclen| bch_ioctl_readdir_entry_head {
+           !out.emit(t, d.name().as_bytes(), |reclen| IoctlReaddirEntryHead {
                reclen, d_type: d.d_type(), inum: target.inum, ..Default::default()
            })? {
             return Ok(ControlFlow::Break(()));
@@ -210,7 +210,7 @@ fn readdir_plain(fs: &Fs, dir: subvol_inum, flags: u32, out: &mut Entries, pos: 
 /// A recursive listing: the directory, its path, and what qualifies a
 /// candidate.
 struct Recursive<A> {
-    dir:        subvol_inum,
+    dir:        SubvolInum,
     dir_path:   Printbuf,
     path:       Printbuf,
     accessible: A,
@@ -225,11 +225,11 @@ enum Emitted {
 
 impl<A> Recursive<A>
 where
-    A: FnMut(&TransAttempt<'_, '_>, subvol_inum) -> Result<bool, BchError>,
+    A: FnMut(&TransAttempt<'_, '_>, SubvolInum) -> Result<bool, BchError>,
 {
     /// Qualify @n and emit it, named by its path from the directory: not the
     /// directory itself, whose path from itself is empty.
-    fn emit(&mut self, t: &TransAttempt<'_, '_>, n: subvol_inum, d_type: u8)
+    fn emit(&mut self, t: &TransAttempt<'_, '_>, n: SubvolInum, d_type: u8)
         -> Result<Emitted, BchError>
     {
         if !namei::inum_is_descendant(t, n, self.dir)? {
@@ -252,7 +252,7 @@ where
             return Ok(Emitted::Skipped);
         }
 
-        let hdr = |reclen| bch_ioctl_readdir_entry_head { reclen, d_type, inum: n.inum, ..Default::default() };
+        let hdr = |reclen| IoctlReaddirEntryHead { reclen, d_type, inum: n.inum, ..Default::default() };
         Ok(if self.out.emit(t, name, hdr)? { Emitted::Yes } else { Emitted::Full })
     }
 
@@ -282,7 +282,7 @@ where
                 if k.k.key_type() != BkeyType::damage {
                     last_handled = inum;
                 } else {
-                    let n = subvol_inum { subvol: self.dir.subvol, inum };
+                    let n = SubvolInum { subvol: self.dir.subvol, inum };
                     match self.emit(t, n, c::DT_UNKNOWN as u8)? {
                         Emitted::Full    => return Ok(ControlFlow::Break(())),
                         Emitted::Yes     => last_handled = inum,
@@ -318,7 +318,7 @@ where
 
             if let Some(s) = subvolume::val(k) {
                 if s.state_decoded() == Some(SubvolumeState::live) {
-                    let n = subvol_inum { subvol, inum: s.inode.get() };
+                    let n = SubvolInum { subvol, inum: s.inode.get() };
                     if let Emitted::Full = self.emit(t, n, DT_SUBVOL as u8)? {
                         return Ok(ControlFlow::Break(()));
                     }
@@ -334,10 +334,10 @@ where
 /// BCHFS_IOC_READDIR_FLAGS's: see above. @dir is the directory - ENOTDIR if
 /// @is_dir says it isn't one - and @accessible whether the caller may see
 /// what a recursive listing found.
-pub fn readdir_flags<A>(fs: &Fs, dir: subvol_inum, is_dir: bool, accessible: A,
-                        user: UserArg<bch_ioctl_readdir_flags>) -> Result<(), BchError>
+pub fn readdir_flags<A>(fs: &Fs, dir: SubvolInum, is_dir: bool, accessible: A,
+                        user: UserArg<IoctlReaddirFlags>) -> Result<(), BchError>
 where
-    A: FnMut(&TransAttempt<'_, '_>, subvol_inum) -> Result<bool, BchError>,
+    A: FnMut(&TransAttempt<'_, '_>, SubvolInum) -> Result<bool, BchError>,
 {
     let arg = user.read()?;
     if arg.pad != 0 || arg.used != 0 || arg.flags & !READDIR_FLAGS_ALL != 0 {
@@ -347,7 +347,7 @@ where
         return fs.throw(Errcode::ENOTDIR_readdir_flags);
     }
 
-    type Q = bch_ioctl_readdir_flags;
+    type Q = IoctlReaddirFlags;
     let mut out = Entries::new(arg.buf, arg.buf_size);
 
     // only what the call moved: an unrecursive cursor is one word
@@ -381,16 +381,16 @@ fn relative(path: &[u8]) -> &[u8] {
 }
 
 /// BCH_IOCTL_SUBVOLUME_LIST's: the subvolumes whose parent is @parent, the
-/// file's, by their paths from its root, as bch_ioctl_subvol_dirent entries -
+/// file's, by their paths from its root, as IoctlSubvolDirent entries -
 /// those @accessible says the caller may reach. The cursor is a subvolume
 /// id; a subvolume whose path can't be found is skipped. ERANGE if the next
 /// entry wouldn't fit even an empty buffer: a path's length has no limit.
 pub fn subvolume_list<A>(fs: &Fs, parent: u32, mut accessible: A,
-                         user: UserArg<bch_ioctl_subvol_readdir>) -> Result<(), BchError>
+                         user: UserArg<IoctlSubvolReaddir>) -> Result<(), BchError>
 where
-    A: FnMut(&TransAttempt<'_, '_>, subvol_inum, u32) -> Result<bool, BchError>,
+    A: FnMut(&TransAttempt<'_, '_>, SubvolInum, u32) -> Result<bool, BchError>,
 {
-    type Q = bch_ioctl_subvol_readdir;
+    type Q = IoctlSubvolReaddir;
     let arg = user.read()?;
     if arg.pad != 0 {
         return fs.throw(Errcode::EINVAL_subvol_readdir_pad);
@@ -409,7 +409,7 @@ where
             }
             let child = k.k.p.offset as u32;
             let s = subvolume::get(t, child, true)?;
-            let root = subvol_inum { subvol: child.into(), inum: s.inode.get() };
+            let root = SubvolInum { subvol: child.into(), inum: s.inode.get() };
 
             let found = accessible(t, root, parent)? && {
                 path.reset();
@@ -421,7 +421,7 @@ where
 
             if found {
                 let otime = fs.time_to_timespec(s.otime.lo.get() as i64);
-                let hdr = |reclen| bch_ioctl_subvol_dirent_head {
+                let hdr = |reclen| IoctlSubvolDirentHead {
                     reclen,
                     subvolid:        child,
                     flags:           s.flags.into_bits().get(),
@@ -446,7 +446,7 @@ where
 
 /// BCH_IOCTL_SUBVOLUME_TO_PATH's: subvolume @subvolid's path from the
 /// filesystem's root, with its NUL; ERANGE if the buffer won't hold it.
-pub fn subvolume_to_path(fs: &Fs, user: UserArg<bch_ioctl_subvol_to_path>) -> Result<(), BchError> {
+pub fn subvolume_to_path(fs: &Fs, user: UserArg<IoctlSubvolToPath>) -> Result<(), BchError> {
     let arg = user.read()?;
     if arg.buf_size == 0 {
         return fs.throw(Errcode::EINVAL_subvol_to_path_no_buf);
@@ -458,7 +458,7 @@ pub fn subvolume_to_path(fs: &Fs, user: UserArg<bch_ioctl_subvol_to_path>) -> Re
         lockrestart_do(&trans, |t| {
             path.reset();
             let s = subvolume::get(t, arg.subvolid, false)?;
-            let root = subvol_inum { subvol: arg.subvolid.into(), inum: s.inode.get() };
+            let root = SubvolInum { subvol: arg.subvolid.into(), inum: s.inode.get() };
             namei::inum_to_path(t, root, &mut path)
         })?;
     }
@@ -524,7 +524,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
             }
 
             let id = k.k.p.offset as u32;
-            let mut node = bch_ioctl_snapshot_node_v2 {
+            let mut node = IoctlSnapshotNodeV2 {
                 id,
                 parent:   s.parent(),
                 children: s.children(),
@@ -557,11 +557,11 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
 }
 
 /// BCH_IOCTL_SNAPSHOT_TREE's: see snapshot_tree().
-pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<bch_ioctl_snapshot_tree_query>)
+pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<IoctlSnapshotTreeQuery>)
     -> Result<(), BchError>
 {
-    type Q = bch_ioctl_snapshot_tree_query;
-    const NODE: usize = size_of::<bch_ioctl_snapshot_node>();
+    type Q = IoctlSnapshotTreeQuery;
+    const NODE: usize = size_of::<IoctlSnapshotNode>();
 
     let arg = user.read()?;
     if arg.pad != 0 {
@@ -581,11 +581,11 @@ pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<bch_ioctl_snapshot_t
 /// BCH_IOCTL_SNAPSHOT_TREE_v2's: see snapshot_tree().
 /// The node size is negotiated: the smaller of the caller's and ours, and
 /// ours returned first.
-pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<bch_ioctl_snapshot_tree_query_v2>)
+pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<IoctlSnapshotTreeQueryV2>)
     -> Result<(), BchError>
 {
-    type Q = bch_ioctl_snapshot_tree_query_v2;
-    const NODE: usize = size_of::<bch_ioctl_snapshot_node_v2>();
+    type Q = IoctlSnapshotTreeQueryV2;
+    const NODE: usize = size_of::<IoctlSnapshotNodeV2>();
 
     let arg = user.read()?;
     // a caller that doesn't say its node size can't be given nodes: we'd
@@ -624,7 +624,7 @@ pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<bch_ioctl_snapshot_t
 
 /// Bring the indirect extents in @range of the reflink btree in line with
 /// @opts: their reconcile state, each commit its own.
-fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &bch_inode_opts, range: Range<u64>)
+fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &InodeOpts, range: Range<u64>)
     -> Result<(), BchError>
 {
     let res = DiskReservation::new(fs);
@@ -642,7 +642,7 @@ fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &bch_inode_opts
 
 /// BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS's: set may_update_options on
 /// @inum's reflink_ps, an admin's to do, and propagate their options.
-pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
+pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
         return fs.throw(Errcode::EPERM_non_admin);
     }
@@ -674,7 +674,7 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: subvol_inum) -> Result<(), B
 /// BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS's: propagate the options of @inum's
 /// reflink_ps - all of them, which may update. A reflink_p that may not is
 /// skipped for an admin, and an error otherwise.
-pub fn reflink_p_propagate_opts(fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
+pub fn reflink_p_propagate_opts(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     let flags = BtreeIterFlags::TRIM;
     let mut iter = BtreeIter::new(&trans, Btree::extents, bkey::pos(inum.inum, 0), flags);
@@ -730,7 +730,7 @@ fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, ReflinkP>) -> Result
 /// argument's checked. no_enospc: it's a recovery path, and a full
 /// filesystem mustn't be why the owner can't get at data that's still
 /// there.
-pub fn unpoison(fs: &Fs, inum: subvol_inum, owner: impl FnOnce() -> bool, arg: bch_ioctl_unpoison)
+pub fn unpoison(fs: &Fs, inum: SubvolInum, owner: impl FnOnce() -> bool, arg: IoctlUnpoison)
     -> Result<(), BchError>
 {
     if arg.flags != 0 || arg.pad != 0 {

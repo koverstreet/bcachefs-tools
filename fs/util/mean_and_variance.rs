@@ -47,7 +47,7 @@ use cstruct_macros::MaybeZeroable;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 #[cfg_attr(test, derive(PartialEq))]
-pub struct mean_and_variance {
+pub struct MeanAndVariance {
     pub n: i64,
     pub sum: i64,
     pub median: i64,
@@ -76,7 +76,7 @@ fn sgm_median_mad_step(median: &mut i64, mad: &mut u64, x: i64, weight: u8) {
     }
 }
 
-impl mean_and_variance {
+impl MeanAndVariance {
     /// @x added. @weight 0 is the all-time schedule, a step of MAD/n;
     /// otherwise it's the weighted one's shift, a half-life of 2^weight
     /// samples.
@@ -119,7 +119,7 @@ impl mean_and_variance {
 mod tests {
     use super::*;
 
-    fn feed(s: &mut mean_and_variance, x: i64, weight: u8, times: usize) {
+    fn feed(s: &mut MeanAndVariance, x: i64, weight: u8, times: usize) {
         for _ in 0..times {
             s.update(x, weight);
         }
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        let mut s = mean_and_variance::default();
+        let mut s = MeanAndVariance::default();
 
         feed(&mut s, 2, 0, 2);
         assert_eq!((s.mean(), s.n), (2, 2));
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn weighted_constant() {
-        let mut s = mean_and_variance::default();
+        let mut s = MeanAndVariance::default();
         feed(&mut s, 100, 8, 4096);
         assert_eq!(s.median(), 100);
         assert!(s.mad() <= 4, "mad {}", s.mad());
@@ -152,7 +152,7 @@ mod tests {
     /// monotonically while only fed samples above it.
     #[test]
     fn weighted_step() {
-        let mut s = mean_and_variance::default();
+        let mut s = MeanAndVariance::default();
         s.update(100, 8);
 
         let mut prev = s.median();
@@ -167,7 +167,7 @@ mod tests {
     /// One huge outlier grows the MAD by at most a step, ~mad/256.
     #[test]
     fn weighted_outlier() {
-        let mut s = mean_and_variance::default();
+        let mut s = MeanAndVariance::default();
         feed(&mut s, 100, 8, 1024);
 
         let before = s.mad();

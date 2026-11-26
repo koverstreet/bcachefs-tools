@@ -9,11 +9,11 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed};
 use crate::alloc::{discard::discard_opt_enabled, foreground::Watermark};
 use crate::util::alloc::flags;
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
-use crate::journal::buckets::journal_device;
+use crate::journal::buckets::JournalDevice;
 use crate::sb::members::DevWriteRefKind;
-use crate::util::time_stats::{bch2_time_stats, TimeStat};
+use crate::util::time_stats::{TimeStats, TimeStat};
 use crate::journal::buckets::JournalBucketStage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard};
-use crate::journal::journal::{JournalFlag as Journal, JournalGuard, journal, JournalCycleFlags};
+use crate::journal::journal::{JournalFlag, JournalGuard, Journal, JournalCycleFlags};
 use crate::journal::pins::JournalPinType::{JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache, JOURNAL_PIN_TYPE_NR};
 use self::JournalSpaceFrom::{self as SpaceFrom, *};
 use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead};
@@ -21,7 +21,7 @@ use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature, BCH_REPLICAS_MAX};
 use crate::fs::{Dev, FsFlag};
-use crate::journal::pins::{PinsRead, journal_entry_pin};
+use crate::journal::pins::{PinsRead, JournalEntryPin};
 use crate::locking::{ExclusiveGuard, Guard as _, MemallocFlags, Mutex};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
@@ -40,7 +40,7 @@ use cstruct_macros::{bch_enum, MaybeZeroable};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct journal_space {
+pub struct JournalSpace {
     /* Units of 512 bytes sectors: */
     pub next_entry: c_uint, /* How big the next journal entry can be */
     pub total: c_uint,
@@ -73,7 +73,7 @@ fn round_down(x: u32, m: u32) -> u32 {
     x / m * m
 }
 
-impl journal {
+impl Journal {
     /// The lowest watermark it takes reservations at, read without the
     /// journal's lock, which it's written under.
     pub fn watermark(&self) -> Watermark {
@@ -137,11 +137,11 @@ impl journal {
             });
         }
 
-        self.flags.set(Journal::med_on_space, med_on_space);
+        self.flags.set(JournalFlag::med_on_space, med_on_space);
 
-        self.flags.set(Journal::low_on_space, low_on_space);
-        self.flags.set(Journal::low_on_pin, low_on_pin);
-        self.flags.set(Journal::low_on_wb, low_on_wb);
+        self.flags.set(JournalFlag::low_on_space, low_on_space);
+        self.flags.set(JournalFlag::low_on_pin, low_on_pin);
+        self.flags.set(JournalFlag::low_on_wb, low_on_wb);
 
         let old = self.lock.hot.watermark.get();
         g.published().hot.watermark.set(watermark);
@@ -157,7 +157,7 @@ impl journal {
         self.async_wait.wake();
     }
 
-    fn dev_space_available(&self, g: &JournalGuard<'_>, ca: &Dev, from: SpaceFrom) -> journal_space {
+    fn dev_space_available(&self, g: &JournalGuard<'_>, ca: &Dev, from: SpaceFrom) -> JournalSpace {
         let fs = self.fs();
         let ja = &ca.journal;
         let bucket_size_aligned = round_down(ca.mi.get().bucket_size.into(), fs.block_sectors());
@@ -199,7 +199,7 @@ impl journal {
         let capped = |sectors: u64, mem_limit: usize| sectors.min((mem_limit >> 9) as u64) as u32;
 
         if from == journal_space_total {
-            return journal_space {
+            return JournalSpace {
                 next_entry: bucket_size_aligned,
                 total:      capped(u64::from(bucket_size_aligned) * u64::from(ja.nr()), mem_limit),
             };
@@ -243,16 +243,16 @@ impl journal {
 
         let mem_limit = mem_limit.saturating_sub(g.dirty_entry_bytes);
 
-        journal_space {
+        JournalSpace {
             next_entry: sectors,
             total:      capped(u64::from(sectors) + u64::from(buckets) * u64::from(bucket_size_aligned), mem_limit),
         }
     }
 
-    fn space_available_from(&self, g: &JournalGuard<'_>, nr_devs_want: usize, from: SpaceFrom) -> journal_space {
+    fn space_available_from(&self, g: &JournalGuard<'_>, nr_devs_want: usize, from: SpaceFrom) -> JournalSpace {
         let fs = self.fs();
         /* one past: an insert comes before the truncate */
-        let mut largest = ArrayVec::<journal_space, { BCH_REPLICAS_MAX as usize + 1 }>::new();
+        let mut largest = ArrayVec::<JournalSpace, { BCH_REPLICAS_MAX as usize + 1 }>::new();
         let mut nr_devs = 0;
         let mut min_bucket_size = u32::MAX;
 
@@ -285,7 +285,7 @@ impl journal {
         }
 
         if nr_devs < nr_devs_want {
-            return journal_space::default();
+            return JournalSpace::default();
         }
 
         /*
@@ -326,7 +326,7 @@ impl journal {
 
                 if should_discard &&
                     fs.flags.get(FsFlag::rw_init_done) &&
-                    self.flags.get(Journal::running) &&
+                    self.flags.get(JournalFlag::running) &&
                     self.error().is_ok() {
                     ja.discard.queue(&self.discard_wq);
                 }
@@ -369,7 +369,7 @@ impl journal {
         let may_skip_flush = space(journal_space_clean_ondisk).next_entry < clean_ondisk &&
             clean.wrapping_sub(clean_ondisk) <= total / 8 &&
             u64::from(clean_ondisk) * 2 > u64::from(clean);
-        self.flags.set(Journal::may_skip_flush, may_skip_flush);
+        self.flags.set(JournalFlag::may_skip_flush, may_skip_flush);
 
         self.set_watermark(g);
 
@@ -468,7 +468,7 @@ impl journal {
     }
 
     /* ensure journal pin callback is no longer running */
-    pub fn pin_flush(&self, pin: &journal_entry_pin) {
+    pub fn pin_flush(&self, pin: &JournalEntryPin) {
         assert!(pin.seq.get() == 0, "flushing journal pin at seq {}, still pinned", pin.seq.get());
 
         let Ok(()) = self.pin_flush_wait.wait_until(Sleep::UNINTERRUPTIBLE,
@@ -599,7 +599,7 @@ impl journal {
              * make sure to flush at least one journal pin:
              */
             let min_nr = (time_after(jiffies(), self.reclaim_lock.last_flushed.get().wrapping_add(delay)) ||
-                          self.flags.get(Journal::med_on_space) ||
+                          self.flags.get(JournalFlag::med_on_space) ||
                           btree_cache_dirty * 2 > btree_cache_live) as usize;
 
             let min_key_cache = kc.nr_keys_need_flush().min(128);
@@ -744,7 +744,7 @@ impl journal {
          */
         let _j = self.lock.lock();
         let last_seq = self.lock.last_seq.get();
-        !self.flags.get(Journal::replay_done) ||
+        !self.flags.get(JournalFlag::replay_done) ||
             last_seq > seq_to_flush ||
             last_seq == self.pin_range().pin_back.get()
     }
@@ -754,7 +754,7 @@ impl journal {
         /* time_stats this */
         let mut did_work = false;
 
-        if !self.flags.get(Journal::running) {
+        if !self.flags.get(JournalFlag::running) {
             return false;
         }
 
@@ -928,7 +928,7 @@ impl journal {
 }
 
 #[cold]
-fn time_stats_summary_to_text(out: &mut Printbuf, name: &str, stats: &bch2_time_stats) {
+fn time_stats_summary_to_text(out: &mut Printbuf, name: &str, stats: &TimeStats) {
     let (n, mean, max) = {
         let s = stats.lock.lock();
         (s.duration_stats.n, s.duration_stats.mean(), s.max_duration)
@@ -941,12 +941,12 @@ fn time_stats_summary_to_text(out: &mut Printbuf, name: &str, stats: &bch2_time_
  * Advance the discard cursor as long as it points to buckets that are no longer
  * dirty, issuing discards if necessary:
  */
-pub(crate) fn discard_work(ja: &journal_device) {
+pub(crate) fn discard_work(ja: &JournalDevice) {
     let ca = ja.container();
     ca.fs().journal.dev_do_discards(ca);
 }
 
-fn reclaim_thread(j: &journal, me: &KthreadSelf<'_>) {
+fn reclaim_thread(j: &Journal, me: &KthreadSelf<'_>) {
     let fs = j.fs();
 
     Kthread::set_freezable();
@@ -983,7 +983,7 @@ fn reclaim_thread(j: &journal, me: &KthreadSelf<'_>) {
  * Until it's kicked, or stopped, or next_reclaim - with no timeout while the
  * journal's empty: whatever opens an entry wakes it
  */
-fn reclaim_sleep(j: &journal, me: &KthreadSelf<'_>, kicks: u32) {
+fn reclaim_sleep(j: &Journal, me: &KthreadSelf<'_>, kicks: u32) {
     /* unlocked: front and back read apart, so compared, not subtracted */
     let empty_now = || {
         let r = j.pin_range();

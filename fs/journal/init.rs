@@ -9,8 +9,8 @@ use crate::c;
 use crate::alloc::replicas::DevlistEntry;
 use crate::util::{alloc::Flags, sleep::Sleep};
 use crate::btree::bkey::prelude::*;
-use crate::journal::journal::{journal, JOURNAL_ENTRY_SIZE_MIN, journal_res_state_bits,
-    JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK, JOURNAL_STATE_BUF_NR, JournalFlag as Journal};
+use crate::journal::journal::{Journal, JOURNAL_ENTRY_SIZE_MIN, JournalResStateBits,
+    JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK, JOURNAL_STATE_BUF_NR, JournalFlag};
 use crate::journal::write::jset_buf_alloc;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::fifo::FifoRead;
@@ -51,7 +51,7 @@ use cstruct_macros::MaybeZeroable;
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct journal_start_info {
+pub struct JournalStartInfo {
     pub last_seq: u64,
     pub replay_end: u64,
     pub cur_seq: u64,
@@ -59,7 +59,7 @@ pub struct journal_start_info {
 }
 
 
-impl journal {
+impl Journal {
     /* startup/shutdown: */
 
     fn writing_to_device(&self, dev_idx: u32) -> bool {
@@ -77,7 +77,7 @@ impl journal {
     }
 
     pub fn stop(&self) {
-        if !self.flags.get(Journal::running) {
+        if !self.flags.get(JournalFlag::running) {
             return;
         }
 
@@ -100,7 +100,7 @@ impl journal {
         self.stop_thread.store((-(c::EROFS as isize)) as *mut c::task_struct, Relaxed);
 
         let fs = self.fs();
-        let replay_done = self.error().is_ok() && self.flags.get(Journal::replay_done);
+        let replay_done = self.error().is_ok() && self.flags.get(JournalFlag::replay_done);
         let (last_empty_seq, dirty_entry_bytes) = {
             let g = self.lock.lock();
             (g.last_empty_seq, g.dirty_entry_bytes)
@@ -126,11 +126,11 @@ impl journal {
         }
 
         if self.error().is_ok() {
-            self.flags.set(Journal::running, false);
+            self.flags.set(JournalFlag::running, false);
         }
     }
 
-    pub fn start(&self, info: journal_start_info) -> Result<(), BchError> {
+    pub fn start(&self, info: JournalStartInfo) -> Result<(), BchError> {
         let fs = self.fs();
 
         /* Don't reuse sequence numbers that are blacklisted */
@@ -190,7 +190,7 @@ impl journal {
             if seq_devs.nr != 0 {
                 let r = DevlistEntry::new(DataType::journal, seq_devs);
 
-                fsck_err_on!(fs, !self.flags.get(Journal::degraded) && !fs.replicas_marked(&r),
+                fsck_err_on!(fs, !self.flags.get(JournalFlag::degraded) && !fs.replicas_marked(&r),
                              id::journal_entry_replicas_not_marked,
                              "superblock not marked as containing replicas for journal entry {}\n{}",
                              seq, *r)?;
@@ -211,7 +211,7 @@ impl journal {
 
             g.last_flush_write = jiffies();
             let r = &self.lock.hot.reservations;
-            let mut s = journal_res_state_bits::from_bits(r.load(Relaxed));
+            let mut s = JournalResStateBits::from_bits(r.load(Relaxed));
             s.set_idx((fs.journal_cur_seq() & JOURNAL_STATE_BUF_MASK as u64) as u8);
             r.store(s.into_bits(), Relaxed);
         }
@@ -227,9 +227,9 @@ impl journal {
         let mut g = self.lock.lock();
         self.space_available(&mut g);
 
-        self.flags.set(Journal::need_flush_write, true);
-        self.flags.set(Journal::running, true);
-        self.flags.set(Journal::replay_done, true);
+        self.flags.set(JournalFlag::need_flush_write, true);
+        self.flags.set(JournalFlag::running, true);
+        self.flags.set(JournalFlag::replay_done, true);
     }
 
     /* init/exit: */

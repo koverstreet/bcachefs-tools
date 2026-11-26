@@ -2,11 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::data::reconcile::format::{bch_extent_reconcile, bch_extent_reconcile_bp};
+use crate::data::reconcile::format::{ExtentReconcile, ExtentReconcileBp};
 use crate::types::{Le8, Le16, Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
-use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, CompressionType,
+use crate::format::{Bpos, Csum, BCH_REPLICAS_MAX, Val, BKEY_U64s, CompressionType,
     CsumType};
 
 /* DOC_LATEX(extent-checksums)
@@ -61,9 +61,9 @@ use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, Compre
  */
 
 /*
- * In extent bkeys, the value is a list of pointers (bch_extent_ptr), optionally
- * preceded by checksum/compression information (bch_extent_crc32 or
- * bch_extent_crc64).
+ * In extent bkeys, the value is a list of pointers (ExtentPtr), optionally
+ * preceded by checksum/compression information (ExtentCrc32 or
+ * ExtentCrc64).
  *
  * One major determining factor in the format of extents is how we handle and
  * represent extents that have been partially overwritten and thus trimmed:
@@ -77,7 +77,7 @@ use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, Compre
  *
  * Thus an extent that is not checksummed or compressed will consist only of a
  * list of bch_extent_ptrs, with none of the fields in
- * bch_extent_crc32/bch_extent_crc64.
+ * ExtentCrc32/ExtentCrc64.
  *
  * When an extent is checksummed or compressed, it's not possible to read only
  * the data that is currently live: we have to read the entire extent that was
@@ -86,14 +86,14 @@ use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, Compre
  *
  * Thus, in addition to the current size of the extent in struct bkey, we need
  * to store the size of the originally allocated space - this is the
- * compressed_size and uncompressed_size fields in bch_extent_crc32/64. Also,
+ * compressed_size and uncompressed_size fields in ExtentCrc32/64. Also,
  * when the extent is trimmed, instead of modifying the offset field of the
  * pointer, we keep a second smaller offset field - "offset into the original
  * extent of the currently live region".
  *
  * The other major determining factor is replication and data migration:
  *
- * Each pointer may have its own bch_extent_crc32/64. When doing a replicated
+ * Each pointer may have its own ExtentCrc32/64. When doing a replicated
  * write, we will initially write all the replicas in the same format, with the
  * same checksum type and compression format - however, when copygc runs later (or
  * tiering/cache promotion, anything that moves data), it is not in general
@@ -117,17 +117,17 @@ use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, Compre
  * type of a given entry with a scheme similar to utf8 (except we're encoding a
  * type, not a size), encoding the type in the position of the first set bit:
  *
- * bch_extent_crc32	- 0b1
- * bch_extent_ptr	- 0b10
- * bch_extent_crc64	- 0b100
+ * ExtentCrc32	- 0b1
+ * ExtentPtr	- 0b10
+ * ExtentCrc64	- 0b100
  *
- * We do it this way because bch_extent_crc32 is _very_ constrained on bits (and
- * bch_extent_crc64 is the least constrained).
+ * We do it this way because ExtentCrc32 is _very_ constrained on bits (and
+ * ExtentCrc64 is the least constrained).
  *
- * Then, each bch_extent_crc32/64 applies to the pointers that follow after it,
- * until the next bch_extent_crc32/64.
+ * Then, each ExtentCrc32/64 applies to the pointers that follow after it,
+ * until the next ExtentCrc32/64.
  *
- * If there are no bch_extent_crcs preceding a bch_extent_ptr, then that pointer
+ * If there are no bch_extent_crcs preceding a ExtentPtr, then that pointer
  * is neither checksummed nor compressed.
  */
 
@@ -135,20 +135,20 @@ use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, Compre
 #[nr]
 #[repr(u32)]
 pub enum ExtentEntryType {
-    ptr = 0,
-    crc32 = 1,
-    crc64 = 2,
-    crc128 = 3,
-    stripe_ptr = 4,
-    rebalance_v1 = 5,
-    flags = 6,
-    reconcile = 7,
-    reconcile_bp = 8,
+    ptr(crate::data::extents_format::ExtentPtr) = 0,
+    crc32(crate::data::extents_format::ExtentCrc32) = 1,
+    crc64(crate::data::extents_format::ExtentCrc64) = 2,
+    crc128(crate::data::extents_format::ExtentCrc128) = 3,
+    stripe_ptr(crate::data::extents_format::ExtentStripePtr) = 4,
+    rebalance_v1(crate::data::reconcile::format::ExtentRebalanceV1) = 5,
+    flags(crate::data::extents_format::bch_extent_flags) = 6,
+    reconcile(crate::data::reconcile::format::ExtentReconcile) = 7,
+    reconcile_bp(crate::data::reconcile::format::ExtentReconcileBp) = 8,
 }
 
 /* Compressed/uncompressed size are stored biased by 1: */
 #[bitfield(u64, align = 8)]
-pub struct bch_extent_crc32 {
+pub struct ExtentCrc32 {
     #[bits(default = 1 << ExtentEntryType::crc32.0)]
     pub(self) type_:       u2,
     compressed_size_raw:   u7,
@@ -166,10 +166,10 @@ pub const CRC32_NONCE_MAX: u32 = 0;
 nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
-    pub struct bch_extent_crc64 {
+    pub struct ExtentCrc64 {
         #[members]
         #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_crc64_bits {
+        pub bits: pub struct ExtentCrc64Bits {
             #[bits(default = 1 << ExtentEntryType::crc64.0)]
             pub(self) type_:       u3,
             compressed_size_raw:   u9,
@@ -190,10 +190,10 @@ pub const CRC64_NONCE_MAX: u32 = (1 << 10) - 1;
 nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
-    pub struct bch_extent_crc128 {
+    pub struct ExtentCrc128 {
         #[members]
         #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_crc128_bits {
+        pub bits: pub struct ExtentCrc128Bits {
             #[bits(default = 1 << ExtentEntryType::crc128.0)]
             pub(self) type_:       u4,
             compressed_size_raw:   u13,
@@ -203,7 +203,7 @@ nest! {
             #[bits(4)] csum_type:  CsumType,
             #[bits(4)] compression_type: CompressionType,
         },
-        pub csum: bch_csum,
+        pub csum: Csum,
     }
 }
 
@@ -214,7 +214,7 @@ pub const CRC128_NONCE_MAX: u32 = (1 << 13) - 1;
  * @reservation - pointer hasn't been written to, just reserved
  */
 #[bitfield(u64, align = 8)]
-pub struct bch_extent_ptr {
+pub struct ExtentPtr {
     #[bits(default = 1 << ExtentEntryType::ptr.0)]
     pub(self) type_:      u1,
     cached:     u1,
@@ -226,7 +226,7 @@ pub struct bch_extent_ptr {
 }
 
 #[bitfield(u64)]
-pub struct bch_extent_stripe_ptr {
+pub struct ExtentStripePtr {
     #[bits(default = 1 << ExtentEntryType::stripe_ptr.0)]
     pub(self) type_:      u5,
     block:      u8,
@@ -262,17 +262,17 @@ pub struct bch_extent_entry {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct BtreePtr {
-    pub v: bch_val,
+    pub v: Val,
 
     pub _data: [u64; 0],
-    pub start: [bch_extent_ptr; 0],
+    pub start: [ExtentPtr; 0],
 }
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct BtreePtrV2 {
-    pub v: bch_val,
+    pub v: Val,
 
     /* the node in memory: written racing readers, in a node's keys */
     pub mem_ptr: crate::util::projections::Volatile<u64>,
@@ -282,7 +282,7 @@ pub struct BtreePtrV2 {
     pub flags: BtreePtrV2Flags,
     pub min_key: Bpos,
     pub _data: [u64; 0],
-    pub start: [bch_extent_ptr; 0],
+    pub start: [ExtentPtr; 0],
 }
 
 #[bitfield(Le16)]
@@ -295,7 +295,7 @@ pub struct BtreePtrV2Flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Extent {
-    pub v: bch_val,
+    pub v: Val,
 
     pub _data: [u64; 0],
     pub start: [bch_extent_entry; 0],
@@ -304,8 +304,8 @@ pub struct Extent {
 /* Maximum size (in u64s) a single pointer could be: */
 #[allow(non_upper_case_globals)]
 pub const BKEY_EXTENT_PTR_U64s_MAX: usize =
-    (size_of::<bch_extent_crc128>() +
-     size_of::<bch_extent_ptr>()) / size_of::<u64>();
+    (size_of::<ExtentCrc128>() +
+     size_of::<ExtentPtr>()) / size_of::<u64>();
 
 /*
  * Maximum possible size of an entire extent value:
@@ -336,16 +336,16 @@ pub const BKEY_EXTENT_U64s_MAX: usize = BKEY_U64s + BKEY_EXTENT_VAL_U64s_MAX;
 #[allow(non_upper_case_globals)]
 pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
     (size_of::<BtreePtrV2>() +
-     size_of::<bch_extent_ptr>() * BCH_REPLICAS_MAX as usize * 2 +
-     size_of::<bch_extent_reconcile>() +
-     size_of::<bch_extent_reconcile_bp>()) / size_of::<u64>();
+     size_of::<ExtentPtr>() * BCH_REPLICAS_MAX as usize * 2 +
+     size_of::<ExtentReconcile>() +
+     size_of::<ExtentReconcileBp>()) / size_of::<u64>();
 #[allow(non_upper_case_globals)]
 pub const BKEY_BTREE_PTR_U64s_MAX: usize = BKEY_U64s + BKEY_BTREE_PTR_VAL_U64s_MAX;
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Reservation {
-    pub v: bch_val,
+    pub v: Val,
 
     pub generation: Le32,
     pub nr_replicas: u8,
@@ -356,7 +356,7 @@ pub struct Reservation {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineData {
-    pub v: bch_val,
+    pub v: Val,
     pub data: [u8; 0],
 }
 
@@ -378,7 +378,7 @@ pub struct InlineDataCsum {
     pub flags: u8,
     pub pad: [u8; 2],
     pub offset: Le32,
-    pub csum: bch_csum,
+    pub csum: Csum,
 }
 
 pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
@@ -387,7 +387,7 @@ pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineDataV2 {
-    pub v: bch_val,
+    pub v: Val,
     pub csum: InlineDataCsum,
     pub data: [u8; 0],
 }

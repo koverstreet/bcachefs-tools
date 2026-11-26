@@ -11,13 +11,13 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys,
-    journal_key, journal_keys};
+    journal_key, JournalKeys};
 use crate::c;
-use crate::journal::init::journal_start_info;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::journal::init::JournalStartInfo;
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs, FsFlag as Flag};
 use crate::init::error::{self, id};
@@ -38,8 +38,8 @@ use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans
 use crate::bcachefs_ioctl::ProgressUnit as Units;
 use core::cmp::Ordering;
 use core::sync::atomic::Ordering::Relaxed;
-use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature, SbFeatures, bch_sb_field_clean,
-    bkey, BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, ErrorAction, FsUsageType, jset_entry, MetadataVersion,
+use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature, SbFeatures, SbFieldClean,
+    Bkey, BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, ErrorAction, FsUsageType, JsetEntry, MetadataVersion,
     SbCompat, ScrubJournalOpt, VersionUpgradeOpt, JsetEntryRef, SbCompats};
 use zerocopy::IntoBytes;
 
@@ -240,7 +240,7 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
 
 /* journal replay: */
 
-fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, k: &journal_key)
+fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &JournalKeys, k: &journal_key)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -250,7 +250,7 @@ fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, k:
                                       BtreeIterFlags::INTENT);
     iter.iter().traverse(t)?;
 
-    let mut u = bkey::default();
+    let mut u = Bkey::default();
     let old = iter.iter().path_peek_slot(t, &mut u);
 
     /* Has this delta already been applied to the btree? */
@@ -270,7 +270,7 @@ fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, k:
     t.update(iter.iter(), new, UpdateTriggerFlags::NORUN)
 }
 
-fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, idx: usize) -> Result<(), BchError> {
+fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &JournalKeys, idx: usize) -> Result<(), BchError> {
     let fs = t.fs();
     let k = &jk.keys()[idx];
     let mut iter_flags = BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS;
@@ -314,7 +314,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, idx: usize) -
     }
 
     if bk.k.key_type() == BkeyType::accounting {
-        let val = &bk.as_bytes()[size_of::<bkey>()..];
+        let val = &bk.as_bytes()[size_of::<Bkey>()..];
         return t.subbuf_push(&t.trans().accounting, &bk.k, val.len() / size_of::<u64>(),
                              |v| v.as_mut_bytes().copy_from_slice(val));
     }
@@ -325,7 +325,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, idx: usize) -
 
 #[cold]
 #[inline(never)]
-fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &journal_keys, idx: usize,
+fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &JournalKeys, idx: usize,
                               iter_flags: BtreeIterFlags) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -516,7 +516,7 @@ crate::recovery_pass!(journal_replay => journal_replay);
 
 /* journal replay early: */
 
-fn journal_replay_entry_early(fs: &Fs, entry: &jset_entry) -> Result<(), BchError> {
+fn journal_replay_entry_early(fs: &Fs, entry: &JsetEntry) -> Result<(), BchError> {
     match entry.typed() {
         Ok(JsetEntryRef::btree_root(e)) => {
             let Some(k) = e.entries().next() else { return Ok(()) };
@@ -564,7 +564,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &jset_entry) -> Result<(), BchErro
     Ok(())
 }
 
-fn journal_replay_early(fs: &Fs, clean: Option<&bch_sb_field_clean<crate::util::vstructs::Validated>>)
+fn journal_replay_early(fs: &Fs, clean: Option<&SbFieldClean<crate::util::vstructs::Validated>>)
     -> Result<(), BchError>
 {
     if let Some(clean) = clean {
@@ -655,7 +655,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
 crate::recovery_pass!(set_may_go_rw => set_may_go_rw);
 
 fn recovery(fs: &Fs) -> Result<(), BchError> {
-    let mut journal_start = journal_start_info::default();
+    let mut journal_start = JournalStartInfo::default();
 
     let mut clean = if fs.sb.clean.get() != 0 {
         let c = fs.read_superblock_clean()?;
@@ -1107,7 +1107,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
      * journal_res_get() will crash if called before this has
      * set up the journal.pin FIFO and journal.cur pointer:
      */
-    fs.journal.start(journal_start_info { cur_seq: 1, ..Default::default() })?;
+    fs.journal.start(JournalStartInfo { cur_seq: 1, ..Default::default() })?;
 
     set_may_go_rw(fs)?;
     journal_replay(fs)?;
@@ -1125,14 +1125,14 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
                                      CommitFlags::empty(), BtreeIterFlags::empty()),
                  "creating root directory")?;
 
-    let mut lostfound_inode = bch_inode_unpacked::default();
+    let mut lostfound_inode = InodeUnpacked::default();
     inode::init_early(fs, &mut lostfound_inode);
 
     let mut new_subvol = Subvolume::default();
     bch_err_msg!(fs, trans_commit_do(fs, None, CommitFlags::empty(), |t| {
-        namei::create_trans(t, subvol_inum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
+        namei::create_trans(t, SubvolInum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
                             Some(OsStr::from_bytes(b"lost+found")), 0, 0, (c::S_IFDIR | 0o700) as c::umode_t, 0,
-                            None, None, subvol_inum::default(), 0)
+                            None, None, SubvolInum::default(), 0)
     }), "creating lost+found")?;
 
     passes::set_pass_done(fs, passes::LAST);

@@ -8,7 +8,7 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::posix::{inode::bch_inode_unpacked, inode, dirent::{Dirent, DirentTarget}};
+use crate::posix::{inode::InodeUnpacked, inode, dirent::{Dirent, DirentTarget}};
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
@@ -146,7 +146,7 @@ pub struct InodeWalker {
 /// deleted in that snapshot - and what the pass has counted against it.
 #[derive(Clone, Copy)]
 pub struct WalkerEntry {
-    pub inode:    bch_inode_unpacked,
+    pub inode:    InodeUnpacked,
     pub whiteout: bool,
     pub count:    u64,
 }
@@ -155,7 +155,7 @@ impl WalkerEntry {
     fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
         let (inode, whiteout) = match k.arm::<inode::Inodes>() {
             Some(i) => (inode::unpack(fs, i), false),
-            None    => (bch_inode_unpacked {
+            None    => (InodeUnpacked {
                 bi_inum:     k.k.p.offset,
                 bi_snapshot: k.k.p.snapshot,
                 ..Default::default()
@@ -167,7 +167,7 @@ impl WalkerEntry {
 
 /// The live inode version a key belongs to, from InodeWalker::walk().
 pub struct Walked<'w> {
-    pub inode:            &'w mut bch_inode_unpacked,
+    pub inode:            &'w mut InodeUnpacked,
     /// The first key walked in this inode: per-inode state such as the
     /// bch_hash_info is set up here. Reading it clears it.
     pub first_this_inode: bool,
@@ -832,7 +832,7 @@ fn count_inode_keys(
 /// with the ancestor's other descendants, and the repair goes in @snapshot
 /// instead, as a version of its own. Written in place, it would change what
 /// every other view of the ancestor sees.
-pub fn own_version(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked, snapshot: u32) {
+pub fn own_version(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked, snapshot: u32) {
     if inode.bi_snapshot != snapshot && snapshot::is_ancestor(t, snapshot, inode.bi_snapshot) {
         inode.bi_snapshot = snapshot;
     }
@@ -848,7 +848,7 @@ pub fn fsck_update_backpointers(
 ) -> Result<(), BchError> {
     let Some(d) = Dirent::new(BkeySC::from(new)) else { return Ok(()) };
     let (dir, offset) = (new.k.p.inode, new.k.p.offset);
-    let points_here = |i: &bch_inode_unpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
+    let points_here = |i: &InodeUnpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
 
     match d.target() {
         // A subvolume dirent's backpointer lives on the child subvolume's root
@@ -926,10 +926,10 @@ impl Fs {
 #[cfg(kernel)]
 pub mod ioctl {
     use super::*;
-    use crate::bcachefs_ioctl::{bch_ioctl_fsck_offline, bch_ioctl_fsck_online};
+    use crate::bcachefs_ioctl::{IoctlFsckOffline, IoctlFsckOnline};
     use crate::format::ErrorAction;
     use crate::fs::FsFlag;
-    use crate::opts::{bch_opts, FsckErrOpt, OptId};
+    use crate::opts::{Opts, FsckErrOpt, OptId};
     use core::sync::atomic::Ordering::{Relaxed, Release};
     use crate::fs::{OpenFs, RoRef};
     use crate::init::registry::{self, Claim, FsHandle, Opener};
@@ -942,14 +942,14 @@ pub mod ioctl {
     use kernel::ffi::c_int;
 
     /// The options at user address @addr, or none if it's 0.
-    fn user_opts(addr: u64) -> Result<bch_opts, BchError> {
+    fn user_opts(addr: u64) -> Result<Opts, BchError> {
         match addr {
-            0 => Ok(bch_opts::default()),
+            0 => Ok(Opts::default()),
             _ => parse_mount_opts_cstr(None, UserStr::read(addr, 1 << 16)?.as_cstr(), false),
         }
     }
 
-    pub fn fsck_offline(user: UserVstruct<bch_ioctl_fsck_offline>) -> Result<c_int, BchError> {
+    pub fn fsck_offline(user: UserVstruct<IoctlFsckOffline>) -> Result<c_int, BchError> {
         let arg = user.head()?;
 
         if arg.flags != 0 {
@@ -1026,7 +1026,7 @@ pub mod ioctl {
         ret
     }
 
-    pub fn fsck_online(fs: &Fs, arg: bch_ioctl_fsck_online) -> Result<c_int, BchError> {
+    pub fn fsck_online(fs: &Fs, arg: IoctlFsckOnline) -> Result<c_int, BchError> {
         if arg.flags != 0 {
             return fs.throw(Errcode::EINVAL_fsck_online_bad_flags);
         }
@@ -1043,7 +1043,7 @@ pub mod ioctl {
         crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
-    fn fsck_online_thread(fs_ref: RoRef, opts: bch_opts, stdio: &StdioRedirect) -> c_int {
+    fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &StdioRedirect) -> c_int {
         let fs: &Fs = &fs_ref;
         let mut buf = Printbuf::new();
 

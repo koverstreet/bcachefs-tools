@@ -8,7 +8,7 @@ use crate::btree::bkey::ValidateFlags;
 use crate::fs::Dev;
 use core::ops::Range;
 
-use crate::format::{bch_sb, bch_sb_field_journal, bch_sb_field_journal_v2};
+use crate::format::{Sb, SbFieldJournal, SbFieldJournalV2};
 use crate::util::{vstructs::{Unvalidated, Validated}, alloc::Vec, Printbuf};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard, FsFlag};
@@ -23,7 +23,7 @@ fn invalid() -> BchError {
 
 /// @runs are on the device and don't overlap - so they total no more than
 /// its nbuckets, which members validation, first, has capped below u32.
-fn runs_validate<S: SbState>(sb: &bch_sb<S>, mut runs: Vec<Range<u64>>, err: &mut Printbuf)
+fn runs_validate<S: SbState>(sb: &Sb<S>, mut runs: Vec<Range<u64>>, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     runs.sort_unstable_by_key(|r| r.start);
@@ -50,8 +50,8 @@ fn runs_validate<S: SbState>(sb: &bch_sb<S>, mut runs: Vec<Range<u64>>, err: &mu
     Ok(())
 }
 
-impl SbFieldOps for bch_sb_field_journal<Validated> {
-    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_journal<Unvalidated>,
+impl SbFieldOps for SbFieldJournal<Validated> {
+    fn validate(sb: &Sb<Unvalidated>, f: &SbFieldJournal<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let mut runs = Vec::with_capacity(f.buckets.len())?;
         for b in &f.buckets {
@@ -60,8 +60,8 @@ impl SbFieldOps for bch_sb_field_journal<Validated> {
         runs_validate(sb, runs, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_journal<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                f: &SbFieldJournal<Unvalidated>) {
         prt!(out, "Buckets: ");
         for b in &f.buckets {
             prt!(out, " {}", b.get());
@@ -70,8 +70,8 @@ impl SbFieldOps for bch_sb_field_journal<Validated> {
     }
 }
 
-impl SbFieldOps for bch_sb_field_journal_v2<Validated> {
-    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_journal_v2<Unvalidated>,
+impl SbFieldOps for SbFieldJournalV2<Validated> {
+    fn validate(sb: &Sb<Unvalidated>, f: &SbFieldJournalV2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let mut runs = Vec::with_capacity(f.d.len())?;
         for d in &f.d {
@@ -85,8 +85,8 @@ impl SbFieldOps for bch_sb_field_journal_v2<Validated> {
         runs_validate(sb, runs, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
-                f: &bch_sb_field_journal_v2<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
+                f: &SbFieldJournalV2<Unvalidated>) {
         prt!(out, "Buckets: ");
         for d in &f.d {
             prt!(out, " {}-{}", d.start.get(), d.start.get().wrapping_add(d.nr.get()));
@@ -108,14 +108,14 @@ pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets
     let mut dev_sb = fs.dev_sb_mut(sb, ca).expect("journal buckets: a device with no superblock");
 
     if buckets.is_empty() {
-        dev_sb.field_delete::<bch_sb_field_journal>();
-        dev_sb.field_delete::<bch_sb_field_journal_v2>();
+        dev_sb.field_delete::<SbFieldJournal>();
+        dev_sb.field_delete::<SbFieldJournalV2>();
         return Ok(());
     }
 
     let runs = || buckets.chunk_by(|a, b| a + 1 == *b);
-    let u64s = sb_field_u64s::<bch_sb_field_journal_v2>(runs().count());
-    let Some(j) = dev_sb.field_resize::<bch_sb_field_journal_v2>(u64s) else {
+    let u64s = sb_field_u64s::<SbFieldJournalV2>(runs().count());
+    let Some(j) = dev_sb.field_resize::<SbFieldJournalV2>(u64s) else {
         return fs.throw(Errcode::ENOSPC_sb_journal);
     };
 
@@ -124,7 +124,7 @@ pub(crate) fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &Dev, buckets
         d.nr    = Le64::new(run.len() as u64);
     }
 
-    dev_sb.field_delete::<bch_sb_field_journal>();
+    dev_sb.field_delete::<SbFieldJournal>();
     Ok(())
 }
 
@@ -139,10 +139,10 @@ pub(crate) fn sb_journal_sort(fs: &Fs) -> Result<(), BchError> {
 
     for ca in fs.online_members() {
         let Some(dev_sb) = fs.dev_sb(&sb, &ca) else { continue };
-        let Some(j) = dev_sb.field::<bch_sb_field_journal_v2>() else { continue };
+        let Some(j) = dev_sb.field::<SbFieldJournalV2>() else { continue };
 
         if !j.d.is_sorted_by_key(|d| d.start.get()) ||
-           dev_sb.field::<bch_sb_field_journal>().is_some() {
+           dev_sb.field::<SbFieldJournal>().is_some() {
             // As C: if it fails, the superblock's as it was, and still valid
             let _ = buckets::sort(fs, &mut sb, &ca);
             dirty = true;

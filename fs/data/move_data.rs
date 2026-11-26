@@ -45,23 +45,23 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::alloc::foreground::BCH_WATERMARK_MASK;
-use crate::alloc::write_point::write_point_specifier;
-use crate::bcachefs_ioctl::{DataOp, DataProgressDataTypeSpecial, bch_ioctl_data,
-    bch_ioctl_data_scrub};
-use crate::btree::bbpos::bbpos;
-use crate::data::extents::{extent_ptr_decoded, ReadFlags};
-use crate::data::reconcile::trigger::{per_snapshot_io_opts, SetNeedsReconcileCtx};
-use crate::opts::bch_inode_opts;
+use crate::alloc::write_point::WritePointSpecifier;
+use crate::bcachefs_ioctl::{DataOp, DataProgressDataTypeSpecial, IoctlData,
+    IoctlDataScrub};
+use crate::btree::bbpos::Bbpos;
+use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
+use crate::data::reconcile::trigger::{PerSnapshotIoOpts, SetNeedsReconcileCtx};
+use crate::opts::InodeOpts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode as err, ret_to_c, BchError};
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
-use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt, move_bucket_key};
+use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt, MoveBucketKey};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::scrub_journal::BadRef;
-use crate::data::update::{fail_should_trace, is_scrub, data_update_opts, DataUpdateType};
-use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::data::update::{fail_should_trace, is_scrub, DataUpdateOpts, DataUpdateType};
+use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::os::kernel::current_id;
 use crate::util::Printbuf;
@@ -72,16 +72,16 @@ use crate::format::{Bpos, Btree, DataType, BkeyType, Backpointer, CsumType};
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
 /// in, and whether to. In the walk's attempt, so it can look things up - an
 /// error, or a restart, is the walk's.
-pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &bch_inode_opts,
-                              &mut data_update_opts) -> Result<bool, BchError> + 'p;
+pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &InodeOpts,
+                              &mut DataUpdateOpts) -> Result<bool, BchError> + 'p;
 
 // ── Moving a key ─────────────────────────────────────────────────────────
 
-/// A btree node rewrite has no data_update, whose exit traces an extent's
+/// A btree node rewrite has no DataUpdate, whose exit traces an extent's
 /// move: so a btree node's is traced here. @k is a copy - the rewrite frees
 /// the node the key was in.
 #[cold]
-fn move_btree_node_trace(fs: &Fs, opts: &bch_inode_opts, data_opts: &data_update_opts, k: BkeySC<'_>,
+fn move_btree_node_trace(fs: &Fs, opts: &InodeOpts, data_opts: &DataUpdateOpts, k: BkeySC<'_>,
                          ret: Result<(), BchError>) {
     let sectors = fs.btree_sectors().into();
     let msg = |out: &mut Printbuf| {
@@ -112,8 +112,8 @@ impl<'a> Moving<'a> {
         &self,
         t:         &TransAttempt<'_, 'a>,
         bucket:    Option<&BucketMoves>,
-        opts:      &bch_inode_opts,
-        data_opts: &data_update_opts,
+        opts:      &InodeOpts,
+        data_opts: &DataUpdateOpts,
         iter:      &BtreeIter<'_>,
         level:     u32,
         k:         BkeySC<'_>,
@@ -150,7 +150,7 @@ impl<'a> Moving<'a> {
         }
     }
 
-    fn move_btree_node(&self, t: &TransAttempt<'_, 'a>, opts: &bch_inode_opts, data_opts: &data_update_opts,
+    fn move_btree_node(&self, t: &TransAttempt<'_, 'a>, opts: &InodeOpts, data_opts: &DataUpdateOpts,
                        iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>) -> Result<(), BchError> {
         use crate::alloc::foreground::Watermark as wm;
         let fs = t.fs();
@@ -195,7 +195,7 @@ impl Mover<'_, '_> {
     /// @k moved, if it's data the predicate picks: its io options - cached
     /// across a walk in key order by @s - and reconcile options, committed
     /// first.
-    fn move_key(&mut self, t: &TransAttempt<'_, '_>, mut s: Option<&mut per_snapshot_io_opts>,
+    fn move_key(&mut self, t: &TransAttempt<'_, '_>, mut s: Option<&mut PerSnapshotIoOpts>,
                 iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>) -> Result<(), BchError> {
         if !k.k.extent_is_direct_data() {
             return Ok(());
@@ -206,7 +206,7 @@ impl Mover<'_, '_> {
         update_reconcile_opts(t, s, &opts, iter, level, k, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
         t.commit_lazy(Some(&DiskReservation::new(fs)), CommitFlags::NO_ENOSPC)?;
 
-        let mut data_opts = data_update_opts { read_dev: u32::MAX, ..::pin_init::zeroed() };
+        let mut data_opts = DataUpdateOpts { read_dev: u32::MAX, ..::pin_init::zeroed() };
         let ret = (self.pred)(t, iter.btree(), k, &opts, &mut data_opts);
 
         fs.event_add_trace(events::data_update_pred, k.k.size.into(), |out| {
@@ -232,8 +232,8 @@ impl Moving<'_> {
     /// returning once the moves are issued.
     pub fn move_data_btree(&self, btree: Btree, levels: Range<u32>, start: Bpos, end: Bpos,
                            name: &str,
-                           mut pred: impl FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &bch_inode_opts,
-                                                &mut data_update_opts) -> Result<bool, BchError>)
+                           mut pred: impl FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &InodeOpts,
+                                                &mut DataUpdateOpts) -> Result<bool, BchError>)
         -> Result<(), BchError>
     {
         let trans = self.trans();
@@ -242,7 +242,7 @@ impl Moving<'_> {
         let mut mover = Mover { moving: self, bucket: None, name, pred: &mut pred };
 
         self.stats().at.data_type.set(DataType::user);
-        self.stats().set_pos(bbpos { btree, pos: start });
+        self.stats().set_pos(Bbpos { btree, pos: start });
 
         BtreeLevels { btree, levels, start, end }.for_each(trans, |t, iter, level, k| {
             let sectors = key_sectors(fs, k);
@@ -391,8 +391,8 @@ impl PhysWalker<'_, '_> {
 
 /// The evacuates' predicate: the pointers @kill picks moved, to the
 /// background target.
-fn evacuate_ptrs(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, io_opts: &bch_inode_opts,
-                 data_opts: &mut data_update_opts, mut kill: impl FnMut(&extent_ptr_decoded) -> bool)
+fn evacuate_ptrs(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, io_opts: &InodeOpts,
+                 data_opts: &mut DataUpdateOpts, mut kill: impl FnMut(&ExtentPtrDecoded) -> bool)
     -> Result<bool, BchError>
 {
     data_opts.target = io_opts.background_target;
@@ -491,7 +491,7 @@ impl Moving<'_> {
     /// generation, as @data_opts say: its backpointers walked, each extent's
     /// move issued - returning once the reads are. Each move holds a ref on
     /// @moves until its update is done.
-    pub fn evacuate_bucket(&self, moves: &BucketMoves, key: move_bucket_key, data_opts: data_update_opts)
+    pub fn evacuate_bucket(&self, moves: &BucketMoves, key: MoveBucketKey, data_opts: DataUpdateOpts)
         -> Result<(), BchError>
     {
         let fs = self.trans().fs();
@@ -536,8 +536,8 @@ impl Moving<'_> {
 
 /// Scrub: one replica on @arg's device read and checked - of a btree node,
 /// any; of an extent, a checksummed one.
-fn scrub(fs: &Fs, stats: &MoveStats, arg: bch_ioctl_data_scrub) -> Result<(), BchError> {
-    let ctxt = MovingCtxt::new(fs, stats, write_point_specifier::hashed(current_id()), false)?;
+fn scrub(fs: &Fs, stats: &MoveStats, arg: IoctlDataScrub) -> Result<(), BchError> {
+    let ctxt = MovingCtxt::new(fs, stats, WritePointSpecifier::hashed(current_id()), false)?;
     stats.at.data_type.set(DataType(DataProgressDataTypeSpecial::DATA_PROGRESS_DATA_TYPE_phys.0));
 
     let _ = ctxt.trans().write_buffer_flush_sync();
@@ -567,7 +567,7 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: bch_ioctl_data_scrub) -> Result<(), Bc
 }
 
 /// The ioctl's data job @op, counted into @stats. Scrub is the only op.
-pub fn data_job(fs: &Fs, stats: &MoveStats, op: &bch_ioctl_data) -> Result<(), BchError> {
+pub fn data_job(fs: &Fs, stats: &MoveStats, op: &IoctlData) -> Result<(), BchError> {
     stats.reset();
 
     match DataOp(op.op.into()) {

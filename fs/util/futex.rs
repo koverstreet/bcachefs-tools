@@ -58,11 +58,11 @@ futex_word!(AtomicU8: u8, AtomicU32: u32, AtomicUsize: usize);
 const BUCKET_BITS: u32 = 8;
 
 #[repr(align(64))]
-struct Bucket(WaitList<usize>);
+struct WaitBucket(WaitList<usize>);
 
-struct Table([Bucket; 1 << BUCKET_BITS]);
+struct Table([WaitBucket; 1 << BUCKET_BITS]);
 
-// Zeroed, until bch2_futex_init() - before anything can wait - makes each
+// Zeroed, until futex_init() - before anything can wait - makes each
 // bucket's lock a lock.
 static TABLE: Table = unsafe { core::mem::zeroed() };
 
@@ -79,7 +79,7 @@ fn waitlist<W: FutexWord>(w: &W) -> (&'static WaitList<usize>, usize) {
 }
 
 /// Before anything can wait: at module init, in both builds.
-pub fn bch2_futex_init() {
+pub fn futex_init() {
     let key = crate::lock_class_key!();
 
     for b in &TABLE.0 {

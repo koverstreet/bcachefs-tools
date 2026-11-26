@@ -31,7 +31,7 @@ use crate::data::ec::format::Stripe;
 use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_END, BCH_LRU_BUCKET_FRAGMENTATION_OLD,
     BCH_LRU_BUCKET_FRAGMENTATION_START, BCH_LRU_READ_MAX, BCH_LRU_STRIPE_FRAGMENTATION,
     BCH_LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::errcode::BchError;
 use crate::init::{error::{id, BkeyValidate}, progress::Progress};
 use crate::{bkey_fsck_err_on, fsck_err};
@@ -141,13 +141,13 @@ impl LruPos {
     }
 
     /// The key the entry is for: lru_pos_to_bp().
-    pub fn backing(self) -> bbpos {
+    pub fn backing(self) -> Bbpos {
         match self.lru_id().lru_type() {
-            LruType::stripe_fragmentation | LruType::stripe_reuse => bbpos {
+            LruType::stripe_fragmentation | LruType::stripe_reuse => Bbpos {
                 btree: Btree::stripes,
                 pos:   pos(0, self.target),
             },
-            _ => bbpos {
+            _ => Bbpos {
                 btree: Btree::alloc,
                 pos:   u64_to_bucket(self.target),
             },
@@ -358,8 +358,8 @@ fn pin_backing(trans: &TransGuard<'_>, pins: &BtreeCachePins<'_>, lru: LruId) ->
         }
     };
     let mask = 1 << btree.0;
-    let end = bbpos { btree, pos: end };
-    let pinned_end = pins.pin(trans, mask, mask, bbpos { btree, pos: start }..=end)?;
+    let end = Bbpos { btree, pos: end };
+    let pinned_end = pins.pin(trans, mask, mask, Bbpos { btree, pos: start }..=end)?;
 
     if pinned_end != end {
         let fs = trans.fs();

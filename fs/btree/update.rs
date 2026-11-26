@@ -6,14 +6,14 @@
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::{BtreeNodeType, journal_overlay};
-use crate::btree::bkey::{BkeyV, bch2_bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt,
+use crate::btree::bkey::{BkeyV, bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt,
     bkey_merge, BkeyI, BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
 use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
 use crate::btree::write_buffer::insert_checks;
 use crate::journal::journal::JournalFlag;
-use crate::data::{durability::BkeyVDurability, extents::{bch2_cut_back_s, bch2_cut_front_s}};
+use crate::data::{durability::BkeyVDurability, extents::{cut_back_s, cut_front_s}};
 use crate::debug::trace::events;
 use crate::prt;
 use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
@@ -31,8 +31,7 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
 use cstruct_macros::{bch_enum, MaybeZeroable, bitfield, BitfieldMembers};
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, bch_val, bkey, bkey_i, Deleted,
-    jset_entry, Set, JsetEntryType, BtreeFlags};
+use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, Val, Bkey, Deleted, JsetEntry, Set, JsetEntryType, BtreeFlags};
 use zerocopy::IntoBytes;
 use nestify::nest;
 
@@ -40,13 +39,13 @@ use nestify::nest;
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
-    pub struct btree_insert_entry {
+    pub struct BtreeInsertEntry {
         pub flags: c_uint,
         pub sort_order: u8,
         pub bkey_type: u8,
         #[members]
         #>[bitfield(u16)]
-        pub bits: pub struct btree_insert_entry_bits {
+        pub bits: pub struct BtreeInsertEntryBits {
             #[bits(8)] pub btree_id: Btree,
             level:                     u3,
             cached:                    bool,
@@ -63,19 +62,19 @@ nest! {
         pub old_btree_u64s: u8,
         k_buf_u64s: u8,
         pub path: PathIdx,
-        k: *mut bkey_i,
+        k: *mut BkeyI<Val>,
         /* key being overwritten: */
-        pub old_k: bkey,
-        pub old_v: *const bch_val,
+        pub old_k: Bkey,
+        pub old_v: *const Val,
         pub ip_allocated: c_ulong,
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
-pub struct btree_trans_commit_hook {
-    pub fn_: Option<unsafe fn(&TransAttempt<'_, '_>, *mut btree_trans_commit_hook) -> Result<(), BchError>>,
-    pub next: *mut btree_trans_commit_hook,
+pub struct BtreeTransCommitHook {
+    pub fn_: Option<unsafe fn(&TransAttempt<'_, '_>, *mut BtreeTransCommitHook) -> Result<(), BchError>>,
+    pub next: *mut BtreeTransCommitHook,
 }
 
 /*
@@ -98,12 +97,12 @@ const fn node_type_in(bkey_type: u8, mask: u64) -> bool {
 /// good as one is, until the attempt's over - or an update's already queued.
 #[derive(Clone, Copy)]
 pub(crate) struct QueuedKey {
-    k:        NonNull<bkey_i>,
+    k:        NonNull<BkeyI<Val>>,
     buf_u64s: u8,
 }
 
 impl QueuedKey {
-    pub(crate) fn as_ptr(self) -> *mut bkey_i {
+    pub(crate) fn as_ptr(self) -> *mut BkeyI<Val> {
         self.k.as_ptr()
     }
 }
@@ -115,16 +114,16 @@ impl<V: ?Sized> From<&mut TransBkey<'_, '_, V>> for QueuedKey {
     }
 }
 
-impl btree_insert_entry {
+impl BtreeInsertEntry {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(key: QueuedKey, path: PathIdx, btree: Btree, level: u32, cached: bool,
                       flags: c_uint, ip: c_ulong) -> Self {
-        let mut bits = btree_insert_entry_bits::default();
+        let mut bits = BtreeInsertEntryBits::default();
         bits.set_btree_id(btree);
         bits.set_level(level as u8);
         bits.set_cached(cached);
 
-        btree_insert_entry {
+        BtreeInsertEntry {
             flags,
             sort_order:     btree.trigger_order(),
             bkey_type:      BtreeNodeType::of(level, btree).0 as u8,
@@ -133,7 +132,7 @@ impl btree_insert_entry {
             k_buf_u64s:     key.buf_u64s,
             path,
             k:              key.k.as_ptr(),
-            old_k:          bkey::new(),
+            old_k:          Bkey::new(),
             old_v:          core::ptr::null(),
             ip_allocated:   ip,
         }
@@ -145,7 +144,7 @@ impl btree_insert_entry {
 
     /// The key, for a trigger to change in place: it may be one the update's
     /// caller lent.
-    pub(crate) fn key_ptr(&self) -> *mut bkey_i {
+    pub(crate) fn key_ptr(&self) -> *mut BkeyI<Val> {
         self.k
     }
 
@@ -186,7 +185,7 @@ pub enum TransCommitFlagBit {
     /// don't attempt to take a ref on c->writes
     no_check_rw,
     /// don't take a journal reservation, instead pin journal entry
-    /// referred to by trans->journal_res.seq
+    /// referred to by trans->JournalRes.seq
     no_journal_res,
     /// don't drop noop updates
     no_skip_noops,
@@ -206,7 +205,7 @@ pub enum TransCommitFlagBit {
 /// snapshot of an extents btree, once the filesystem has the feature, which
 /// this asks for; a snapshot the table doesn't have is a leaf, as C took it.
 /// Any other deletion's is KEY_TYPE_whiteout.
-pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &bkey) -> BkeyType {
+pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &Bkey) -> BkeyType {
     if btree.is_extents_snapshots() &&
        k.key_type().is_deleted() &&
        fs.snapshots.is_leaf(k.p.snapshot) != Ok(false) &&
@@ -217,7 +216,7 @@ pub fn extent_whiteout_type(fs: &Fs, btree: Btree, k: &bkey) -> BkeyType {
     }
 }
 
-fn insert_entry_cmp(l: &btree_insert_entry, r: &btree_insert_entry) -> Ordering {
+fn insert_entry_cmp(l: &BtreeInsertEntry, r: &BtreeInsertEntry) -> Ordering {
     l.sort_order.cmp(&r.sort_order)
         .then(l.bits.cached().cmp(&r.bits.cached()))
         .then(r.bits.level().cmp(&l.bits.level()))
@@ -228,11 +227,11 @@ fn insert_entry_cmp(l: &btree_insert_entry, r: &btree_insert_entry) -> Ordering 
  * bch2_btree_path_peek_slot() for a cached iterator might return a key in a
  * different snapshot:
  */
-pub(crate) fn peek_slot_exact(path: &BtreePath, u: &mut bkey) -> *const bch_val {
+pub(crate) fn peek_slot_exact(path: &BtreePath, u: &mut Bkey) -> *const Val {
     match path.peek_slot(u) {
         Some(KeyVal(v)) if u.p == path.pos => v,
         _ => {
-            *u = bkey::new();
+            *u = Bkey::new();
             u.p = path.pos;
             core::ptr::null()
         }
@@ -335,28 +334,28 @@ impl Fs {
  */
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct btree_trans_subbuf<T: ?Sized> {
+pub struct BtreeTransSubbuf<T: ?Sized> {
     base:     u16,
     u64s:     u16,
     size:     u16,
     _entries: PhantomData<T>,
 }
 
-impl<T: ?Sized> Clone for btree_trans_subbuf<T> {
+impl<T: ?Sized> Clone for BtreeTransSubbuf<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: ?Sized> Copy for btree_trans_subbuf<T> {}
+impl<T: ?Sized> Copy for BtreeTransSubbuf<T> {}
 
-impl<T: ?Sized> Default for btree_trans_subbuf<T> {
+impl<T: ?Sized> Default for BtreeTransSubbuf<T> {
     fn default() -> Self {
         Self { base: 0, u64s: 0, size: 0, _entries: PhantomData }
     }
 }
 
-impl<T: ?Sized> btree_trans_subbuf<T> {
+impl<T: ?Sized> BtreeTransSubbuf<T> {
     pub fn u64s(&self) -> usize {
         usize::from(self.u64s)
     }
@@ -404,7 +403,7 @@ unsafe impl<T: ?Sized> Container for Subbuf<T> {
 }
 
 /* Validated keys: the thin walk, as a Validated container's keys are walked */
-impl btree_trans_subbuf<BkeyI> {
+impl BtreeTransSubbuf<BkeyI> {
     pub fn iter<R>(self, t: &TransAttempt<'_, '_>, f: impl FnOnce(ViewEntries<'_, BkeyI>) -> R) -> R {
         self.with(t.trans(), |s| f(ViewEntries::of(s)))
     }
@@ -414,14 +413,14 @@ impl btree_trans_subbuf<BkeyI> {
     }
 }
 
-impl btree_trans_subbuf<jset_entry<Validated>> {
+impl BtreeTransSubbuf<JsetEntry<Validated>> {
     pub fn iter<R>(self, t: &TransAttempt<'_, '_>,
-                   f: impl FnOnce(ValidatedEntries<'_, jset_entry<Validated>>) -> R) -> R {
+                   f: impl FnOnce(ValidatedEntries<'_, JsetEntry<Validated>>) -> R) -> R {
         self.with(t.trans(), |s| f(ValidatedEntries::of(s)))
     }
 
     pub fn iter_mut<R>(self, t: &TransAttempt<'_, '_>,
-                       f: impl FnOnce(ValidatedEntriesMut<'_, jset_entry<Validated>>) -> R) -> R {
+                       f: impl FnOnce(ValidatedEntriesMut<'_, JsetEntry<Validated>>) -> R) -> R {
         self.with_mut(t.trans(), |s| f(ValidatedEntriesMut::of(s)))
     }
 }
@@ -436,7 +435,7 @@ impl TransAttempt<'_, '_> {
 
     /// An entry with header @head at the sub-buffer's end, and @tail_u64s past
     /// it for @tail to write - as long as @head says, which is checked.
-    pub fn subbuf_push<T: SelfSized + Unsized + DstHead<Head: Plain> + ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>,
+    pub fn subbuf_push<T: SelfSized + Unsized + DstHead<Head: Plain> + ?Sized>(&self, cell: &Cell<BtreeTransSubbuf<T>>,
                                                                             head: &T::Head, tail_u64s: usize,
                                                                             tail: impl FnOnce(&mut [u64]))
         -> Result<(), BchError>
@@ -457,7 +456,7 @@ impl TransAttempt<'_, '_> {
 
     /// The first of the sub-buffer's keys @f takes, for @f to change - and
     /// gone, if @f says Some(true): whether @f took one.
-    pub fn subbuf_find_mut(&self, cell: &Cell<btree_trans_subbuf<BkeyI>>,
+    pub fn subbuf_find_mut(&self, cell: &Cell<BtreeTransSubbuf<BkeyI>>,
                            mut f: impl FnMut(&mut BkeyI) -> Option<bool>)
         -> bool
     {
@@ -472,31 +471,31 @@ impl TransAttempt<'_, '_> {
         found.is_some()
     }
 
-    fn subbuf_alloc<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, u64s: usize)
+    fn subbuf_alloc<T: ?Sized>(&self, cell: &Cell<BtreeTransSubbuf<T>>, u64s: usize)
         -> Result<NonNull<[u64]>, BchError>
     {
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             self.subbuf_grow(cell, u64s)?;
         } else {
-            cell.set(btree_trans_subbuf { u64s: buf.u64s + u64s as u16, ..buf });
+            cell.set(BtreeTransSubbuf { u64s: buf.u64s + u64s as u16, ..buf });
         }
         let buf = cell.get();
         Ok(self.trans().mem_with(|m| m.range(usize::from(buf.base + buf.u64s) - u64s, u64s)))
     }
 
-    pub fn subbuf_reserve<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, u64s: usize)
+    pub fn subbuf_reserve<T: ?Sized>(&self, cell: &Cell<BtreeTransSubbuf<T>>, u64s: usize)
         -> Result<(), BchError>
     {
         let buf = cell.get();
         if usize::from(buf.u64s) + u64s > usize::from(buf.size) {
             self.subbuf_grow(cell, u64s)?;
-            cell.set(btree_trans_subbuf { u64s: buf.u64s, ..cell.get() });
+            cell.set(BtreeTransSubbuf { u64s: buf.u64s, ..cell.get() });
         }
         Ok(())
     }
 
-    fn subbuf_grow<T: ?Sized>(&self, buf: &Cell<btree_trans_subbuf<T>>, u64s: usize) -> Result<(), BchError> {
+    fn subbuf_grow<T: ?Sized>(&self, buf: &Cell<BtreeTransSubbuf<T>>, u64s: usize) -> Result<(), BchError> {
         let b = buf.get();
         let new_top = usize::from(b.u64s) + u64s;
         assert!(new_top.next_power_of_two() <= u16::MAX as usize,
@@ -511,20 +510,20 @@ impl TransAttempt<'_, '_> {
         });
         assert!(base <= u16::MAX as usize, "transaction sub-buffer at u64 {base}: past a u16 of them");
 
-        buf.set(btree_trans_subbuf { base: base as u16, u64s: new_top as u16, size: new_size as u16, ..b });
+        buf.set(BtreeTransSubbuf { base: base as u16, u64s: new_top as u16, size: new_size as u16, ..b });
         Ok(())
     }
 
-    fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<btree_trans_subbuf<T>>, range: Range<usize>) {
+    fn subbuf_remove<T: ?Sized>(&self, cell: &Cell<BtreeTransSubbuf<T>>, range: Range<usize>) {
         let len = range.len();
         cell.get().with_mut(self.trans(), |s| s.u64s.copy_within(range.end.., range.start));
-        cell.set(btree_trans_subbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
+        cell.set(BtreeTransSubbuf { u64s: cell.get().u64s - len as u16, ..cell.get() });
     }
 
     fn journal_entry_add_bytes(&self, ty: JsetEntryType, btree: u8, level: u8, data: &[u8])
         -> Result<(), BchError>
     {
-        let mut h = Head::<jset_entry>::default();
+        let mut h = Head::<JsetEntry>::default();
         h.type_ = ty.0 as u8;
         h.btree_id = btree;
         h.level = level;
@@ -584,13 +583,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         #[repr(C)]
         struct Hook<F> {
-            h: btree_trans_commit_hook,
+            h: BtreeTransCommitHook,
             f: F,
         }
 
         /// # Safety
         /// @h is the first field of a Hook<F>.
-        unsafe fn run<F>(t: &TransAttempt<'_, '_>, h: *mut btree_trans_commit_hook) -> Result<(), BchError>
+        unsafe fn run<F>(t: &TransAttempt<'_, '_>, h: *mut BtreeTransCommitHook) -> Result<(), BchError>
         where
             F: Fn(&TransAttempt<'_, '_>) -> Result<(), BchError>,
         {
@@ -606,7 +605,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let hook = self.kmalloc(size_of::<Hook<F>>())?.as_mut_ptr() as *mut Hook<F>;
         unsafe {
             hook.write(Hook {
-                h: btree_trans_commit_hook { fn_: Some(run::<F>), next: hooks.get() },
+                h: BtreeTransCommitHook { fn_: Some(run::<F>), next: hooks.get() },
                 f,
             });
             hooks.set(&raw mut (*hook).h);
@@ -694,7 +693,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if !back_split {
             let mut update = self.bkey_alloc(BKEY_U64S as u32)?;
             let k = update.k_mut();
-            *k = bkey::new();
+            *k = Bkey::new();
             k.p = old.k.p;
             k.p.snapshot = new.k.p.snapshot;
 
@@ -748,7 +747,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if front_split {
             let mut update = self.bkey_make_mut_noupdate(old)?;
 
-            bch2_cut_back_s(new_start, BkeyS::from(&mut update));
+            cut_back_s(new_start, BkeyS::from(&mut update));
 
             self.insert_snapshot_whiteouts(btree, old.k.p, update.k().p)?;
             self.insert_nonextent(btree, update, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags)?;
@@ -758,8 +757,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if middle_split {
             let mut update = self.bkey_make_mut_noupdate(old)?;
 
-            bch2_cut_front_s(fs, new_start, BkeyS::from(&mut update));
-            bch2_cut_back_s(new.k.p, BkeyS::from(&mut update));
+            cut_front_s(fs, new_start, BkeyS::from(&mut update));
+            cut_back_s(new.k.p, BkeyS::from(&mut update));
 
             self.insert_snapshot_whiteouts(btree, old.k.p, update.k().p)?;
             self.insert_nonextent(btree, update, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags)?;
@@ -772,7 +771,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             if back_split && new.k.key_type().is_deleted() {
                 let mut update = self.bkey_alloc(BKEY_U64S as u32)?;
                 let k = update.k_mut();
-                *k = bkey::new();
+                *k = Bkey::new();
                 k.p = new.k.p;
                 k.set_key_type(extent_whiteout_type(fs, btree, new.k));
 
@@ -783,7 +782,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if back_split {
             let mut update = self.bkey_make_mut_noupdate(old)?;
 
-            bch2_cut_front_s(fs, new.k.p, BkeyS::from(&mut update));
+            cut_front_s(fs, new.k.p, BkeyS::from(&mut update));
 
             self.update_by_path(&mut self.trans().paths(), iter.path, QueuedKey::from(&mut update),
                                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | flags, crate::ret_ip!());
@@ -808,7 +807,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             let mut advance = false;
             if bkey_eq(k.k.p, insert.k().start_pos()) {
-                if bch2_bkey_maybe_mergable(k.k, insert.k()) {
+                if bkey_maybe_mergable(k.k, insert.k()) {
                     self.extent_front_merge(it, k, &mut insert, flags)?;
                 }
 
@@ -859,7 +858,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
             let Some((it, k)) = iter.peek_with(self, &mut self.trans().paths(), |i, t, p| i.peek_max_in(t, p, end))?
             else { break 'out };
-            if bch2_bkey_maybe_mergable(insert.k(), k.k) {
+            if bkey_maybe_mergable(insert.k(), k.k) {
                 self.extent_back_merge(it, &mut insert, k)?;
             }
         }
@@ -1019,7 +1018,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let path = &paths[path_idx];
         let (btree, level) = (path.btree_id(), u32::from(path.level()));
-        let n = btree_insert_entry::new(key, path_idx, btree, level, path.cached(), flags.bits(), ip);
+        let n = BtreeInsertEntry::new(key, path_idx, btree, level, path.cached(), flags.bits(), ip);
         let k_p = n.key().k.p;
 
         ebug_assert!(path.should_be_locked(), "update by path {path_idx}, which isn't locked");
@@ -1065,7 +1064,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             u.path         = n.path;
             u.ip_allocated = n.ip_allocated;
         } else {
-            let mut old_k = bkey::new();
+            let mut old_k = Bkey::new();
             let old_v = peek_slot_exact(&paths[path_idx], &mut old_k);
 
             let u = paths.insert_update(i, n);
@@ -1203,7 +1202,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
      * mutating @new (it's the deleted-dummy stub).
      */
     pub(crate) fn update_grow(&self, btree: Btree, level: u32, pos: Bpos, needed_u64s: u32)
-        -> Result<*mut bkey_i, BchError>
+        -> Result<*mut BkeyI<Val>, BchError>
     {
         let mut paths = self.trans().paths();
         let i = paths.update_keys()
@@ -1265,7 +1264,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             if k.k.key_type().is_deleted() {
                 let mut update = self.bkey_alloc(BKEY_U64S as u32)?;
                 let k = update.k_mut();
-                *k = bkey::new();
+                *k = Bkey::new();
                 k.p = pos;
                 k.set_key_type(BkeyType::whiteout);
 
@@ -1324,7 +1323,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn bit_mod_iter(&self, iter: &BtreeIter<'a>, set: bool) -> Result<(), BchError> {
         let mut k = self.bkey_alloc(BKEY_U64S as u32)?;
         let h = k.k_mut();
-        *h = bkey::new();
+        *h = Bkey::new();
         h.set_key_type(if set { BkeyType::set } else { BkeyType::deleted });
         h.p = iter.pos();
         if iter.is_extents() {
@@ -1417,7 +1416,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         let mut k = self.bkey_alloc(BKEY_U64S as u32)?;
-        *k.k_mut() = bkey::new();
+        *k.k_mut() = Bkey::new();
         k.k_mut().p = iter.pos();
         self.update(iter, k, flags)
     }

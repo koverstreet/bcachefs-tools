@@ -6,7 +6,7 @@
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
-use crate::data::{ec::format::Stripe, ec::bch_fs_ec, ec::stripe::STRIPE_LRU_POS_EMPTY};
+use crate::data::{ec::format::Stripe, ec::FsEc, ec::stripe::STRIPE_LRU_POS_EMPTY};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::debug::trace::events;
@@ -56,7 +56,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
 /// STRIPE_LRU_POS_EMPTY, ahead of every one with data: it walks just those.
 ///
 /// XXX: can we kill this and delete stripes from the trigger?
-pub(crate) fn delete_empty_stripes(ec: &bch_fs_ec) {
+pub(crate) fn delete_empty_stripes(ec: &FsEc) {
     let fs = ec.container();
     let trans = btree_trans!(fs);
     let at = |offset| LruPos::new(LruId::StripeFragmentation.id(), STRIPE_LRU_POS_EMPTY, offset).to_bpos();

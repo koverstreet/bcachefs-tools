@@ -22,11 +22,11 @@ use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation, Reserva
 use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, SbFeature, BCH_JOURNAL_BUCKETS_MIN, bch_sb, bch_sb_field_journal,
-    bch_sb_field_journal_v2};
+use crate::format::{DataType, SbFeature, BCH_JOURNAL_BUCKETS_MIN, Sb, SbFieldJournal,
+    SbFieldJournalV2};
 use crate::fs::{Dev, Fs, SbLockGuard, FsFlag};
 use crate::journal::sb::buckets_to_sb;
-use crate::journal::journal::{JournalGuard, journal, JournalLockAt};
+use crate::journal::journal::{JournalGuard, Journal, JournalLockAt};
 use crate::locking::{Guard as _, LockedBy, Locked, Mutex};
 use crate::util::{alloc::Vec, projections::Volatile, Printbuf, late::Late};
 use crate::os::{kernel::totalram_bytes, bio::BioSet, workqueue::ReffedWork};
@@ -53,7 +53,7 @@ pub enum JournalBucketStage {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct journal_device {
+pub struct JournalDevice {
     #[pin]
     #[init(crate::journal::buckets::new())]
     pub buckets: JournalBuckets,
@@ -355,7 +355,7 @@ impl Dev {
     }
 }
 
-impl journal {
+impl Journal {
     /// Whether @ring's discard cursor should move: not past a retired bucket,
     /// whose removal is queued instead.
     pub(crate) fn should_discard_bucket(&self, ring: &JournalRing) -> bool {
@@ -369,7 +369,7 @@ impl journal {
     }
 }
 
-impl journal_device {
+impl JournalDevice {
     pub fn nr(&self) -> u32 {
         self.buckets.get()
     }
@@ -380,16 +380,16 @@ fn enomem(fs: &Fs) -> impl Fn(crate::util::alloc::AllocError) -> BchError + '_ {
 }
 
 /* journal_v2's runs, or v1's buckets if there's no v2 */
-fn sb_buckets(sb: &bch_sb) -> impl Iterator<Item = u64> + '_ {
-    let v2 = sb.field::<bch_sb_field_journal_v2>();
-    let v1 = sb.field::<bch_sb_field_journal>().filter(|_| v2.is_none());
+fn sb_buckets(sb: &Sb) -> impl Iterator<Item = u64> + '_ {
+    let v2 = sb.field::<SbFieldJournalV2>();
+    let v1 = sb.field::<SbFieldJournal>().filter(|_| v2.is_none());
 
     v2.into_iter().flat_map(|j| &j.d).flat_map(|d| d.start.get()..d.start.get() + d.nr.get())
         .chain(v1.into_iter().flat_map(|j| &j.buckets).map(|b| b.get()))
 }
 
 /// @ca's buckets, from its superblock @sb: at device online.
-pub fn load(ca: &Dev, sb: &bch_sb) -> Result<(), BchError> {
+pub fn load(ca: &Dev, sb: &Sb) -> Result<(), BchError> {
     let fs = ca.fs();
     let enomem = |_| fs.err(Errcode::ENOMEM_dev_journal_init);
     let mut buckets = Vec::from_elem(0, sb_buckets(sb).count()).map_err(enomem)?;
@@ -658,7 +658,7 @@ pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
  * ours to discard - out of the ring and the superblock: a worker's, as
  * neither reclaim nor the write path's discards may take sb_lock
  */
-pub(crate) fn drop_retired(j: &journal) {
+pub(crate) fn drop_retired(j: &Journal) {
     let fs = j.fs();
     for ca in fs.members() {
         while splice(fs, &mut fs.sb_lock(), &ca, 1, &[], |ring| Ok(ring.retired_awaiting_discard()))

@@ -18,7 +18,7 @@ use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion, BCH_BKEY_
 /// A pointer, against the rest of the key and its device: extent_ptr_validate().
 /// One to a device that isn't there passes - check_fix_ptrs() repairs it.
 fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTypes, Unvalidated>>,
-                       ptr: &bch_extent_ptr,
+                       ptr: &ExtentPtr,
                        size_ondisk: u32) -> Result<(), BchError> {
     if u32::from(ptr.dev()) == BCH_SB_MEMBER_INVALID {
         return Ok(());
@@ -195,7 +195,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 /// A pointer: its device, bucket and offset, if the device is there, and how
 /// stale it is once bucket gens are valid - on a new filesystem, or after
 /// alloc_read; before, the table is zeroes.
-pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &bch_extent_ptr,
+pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &ExtentPtr,
                                  rcu: &ReadGuard) {
     match fs.and_then(|fs| Some((fs, fs.dev_rcu(ptr.dev().into(), rcu)?))) {
         None => write!(out, "{}:{} gen {}", ptr.dev(), ptr.offset(), ptr.generation()),
@@ -230,7 +230,7 @@ fn csum_word_raw(w: Le64) -> u64 {
     u64::from_ne_bytes(w.get().to_le_bytes())
 }
 
-fn crc_unpacked_to_text(out: &mut Printbuf, crc: &bch_extent_crc_unpacked) {
+fn crc_unpacked_to_text(out: &mut Printbuf, crc: &ExtentCrcUnpacked) {
     write!(out, "c_size {} size {} offset {} nonce {} csum {} {:x}:{:x}  compress ",
            crc.compressed_size, crc.uncompressed_size, crc.offset, crc.nonce,
            crc.csum_type.get(),
@@ -314,8 +314,8 @@ macro_rules! ptrs_ops {
     };
 }
 pub(crate) use ptrs_ops;
-use crate::data::extents::bch_extent_crc_unpacked;
-use crate::data::extents_format::{bch_extent_ptr, BKEY_BTREE_PTR_VAL_U64s_MAX, BtreePtr, BtreePtrV2,
+use crate::data::extents::ExtentCrcUnpacked;
+use crate::data::extents_format::{ExtentPtr, BKEY_BTREE_PTR_VAL_U64s_MAX, BtreePtr, BtreePtrV2,
     Extent, ExtentEntryType};
 use crate::fs::FsFlag;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;

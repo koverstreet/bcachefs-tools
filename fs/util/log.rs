@@ -15,20 +15,13 @@
 #[cfg(kernel)]
 use crate::c;
 use crate::fs::{Dev, Fs};
-use crate::opts::bch_opts;
+use crate::opts::Opts;
 use crate::errcode::BchError;
 use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
 use core::ffi::CStr;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
+use cstruct_macros::bch_enum;
 
-#[repr(C)]
-#[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_log_msg {
-    pub c: *mut Fs,
-    pub loglevel: u8,
-    pub m: Printbuf,
-}
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -83,7 +76,7 @@ pub fn log_no_fs(level: LogLevel, msg: &dyn ToText) {
 /// @msg at @level, as it stands, where @opts says: its stdio redirect,
 /// in-kernel, if it has one - a fsck through the ioctl's - else printk().
 /// Of no filesystem, before there's one: bch2_print_opts().
-pub fn log_opts(opts: &bch_opts, level: LogLevel, msg: &dyn ToText) {
+pub fn log_opts(opts: &Opts, level: LogLevel, msg: &dyn ToText) {
     #[cfg(kernel)]
     if opts.stdio != 0 {
         let mut buf = Printbuf::new();

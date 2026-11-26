@@ -39,7 +39,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::alloc::format::AllocV4;
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::data::extents_format::BtreePtrV2;
 use crate::data::reflink_format::ReflinkP;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
@@ -64,11 +64,11 @@ use cstruct_macros::{Init, MaybeZeroable};
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType, MetadataVersion, Backpointer};
 
-/// A bucket_bitmap's words: replaced by a copy when the device grows.
+/// A BucketBitmap's words: replaced by a copy when the device grows.
 pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::bitmap::AtomicULong>;
 
 crate::published! {
-    /// A bucket_bitmap's bits: read without its lock - by copygc, while a
+    /// A BucketBitmap's bits: read without its lock - by copygc, while a
     /// check sets and frees them - so they're atomic words under RCU.
     #[derive(MaybeZeroable)]
     pub struct BucketBits {
@@ -85,7 +85,7 @@ crate::published! {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct bucket_bitmap {
+pub struct BucketBitmap {
     #[pin]
     #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
     pub bits: Locked<Mutex, (), BucketBits>,
@@ -934,7 +934,7 @@ crate::recovery_pass!(check_extents_to_backpointers => check_extents_to_backpoin
 
 // ── fsck: check_backpointers_to_extents ──────────────────────────────────
 
-fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<bbpos>,
+fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<Bbpos>,
                          bp: BkeySC<'_, Backpointer>, last_flushed: WbFlush<'_>)
     -> Result<(), BchError>
 {
@@ -955,14 +955,14 @@ fn check_bucket_backpointers_to_extents(trans: &TransGuard<'_>, ca: &Dev, bucket
 
     BpScanIter::new(Btree::backpointers, *range.start(), None)
         .for_each(trans, *range.end(), last_flushed, |t, bp, last_flushed| {
-            check_one_backpointer(t, &(bbpos::MIN..=bbpos::MAX), bp, last_flushed)
+            check_one_backpointer(t, &(Bbpos::MIN..=Bbpos::MAX), bp, last_flushed)
         })?;
 
     // make sure bad backpointers that were deleted are visible
     trans.write_buffer_flush_sync()
 }
 
-fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<bbpos>)
+fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<Bbpos>)
     -> Result<(), BchError>
 {
     let mut last_flushed = WbMaybeFlush::new();
@@ -982,24 +982,24 @@ fn check_backpointers_to_extents(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let pins = fs.btree_cache_pins();
     let leaves = 1 << Btree::extents.0 | 1 << Btree::reflink.0;
-    let mut start = bbpos::MIN;
+    let mut start = Bbpos::MIN;
 
     loop {
-        let end = pins.pin(&trans, leaves, !0, start..=bbpos::MAX)?;
+        let end = pins.pin(&trans, leaves, !0, start..=Bbpos::MAX)?;
 
-        if start == bbpos::MIN && end != bbpos::MAX {
+        if start == Bbpos::MIN && end != Bbpos::MAX {
             crate::bch_verbose!(fs, "bch2_check_backpointers_to_extents(): extents do not fit in ram, \
                                      running in multiple passes with {} nodes per pass",
                                 pins.budget() / u64::from(fs.opts.btree_node_size.get()));
         }
 
-        if start != bbpos::MIN || end != bbpos::MAX {
+        if start != Bbpos::MIN || end != Bbpos::MAX {
             crate::bch_verbose!(fs, "check_backpointers_to_extents(): {start}-{end}");
         }
 
         check_backpointers_to_extents_pass(fs, &trans, start..=end)?;
 
-        if end == bbpos::MAX {
+        if end == Bbpos::MAX {
             return Ok(());
         }
         start = end.successor();
@@ -1010,7 +1010,7 @@ crate::recovery_pass!(check_backpointers_to_extents => check_backpointers_to_ext
 
 // ── Bucket bitmaps ───────────────────────────────────────────────────────
 
-impl bucket_bitmap {
+impl BucketBitmap {
     pub fn nr(&self) -> u64 {
         self.bits.nr.get()
     }

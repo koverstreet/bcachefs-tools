@@ -25,12 +25,12 @@ use crate::util::vstructs::{Unvalidated, cast_mut, cast_plain_slice, cast_plain_
     plain_bytes, plain_bytes_mut, Validated};
 use crate::data::ec::format::Stripe;
 use crate::data::ec::trigger::GcStripeData;
-use crate::data::extents::extent_ptr_decoded;
-use crate::data::extents_format::bch_extent_ptr;
+use crate::data::extents::ExtentPtrDecoded;
+use crate::data::extents_format::ExtentPtr;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, bch_csum, bkey, BKEY_U64s_MAX, CsumType};
+use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, Csum, Bkey, BKEY_U64s_MAX, CsumType};
 use crate::fs::Fs;
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
@@ -85,7 +85,7 @@ impl Stripe {
     }
 
     fn ptrs_bytes(&self) -> usize {
-        usize::from(self.nr_blocks) * size_of::<bch_extent_ptr>()
+        usize::from(self.nr_blocks) * size_of::<ExtentPtr>()
     }
 
     fn csums_at(&self) -> Option<Range<usize>> {
@@ -113,11 +113,11 @@ impl Stripe {
 /// stripe, which validate passes on purpose - csums() and blockcounts() are
 /// None, and the stripe can't be updated.
 impl Stripe<Validated> {
-    pub fn block_ptrs(&self) -> &[bch_extent_ptr] {
+    pub fn block_ptrs(&self) -> &[ExtentPtr] {
         cast_plain_slice(&self.ptrs[..self.ptrs_bytes()]).expect("a stripe's pointers, aligned")
     }
 
-    pub fn block_ptrs_mut(&mut self) -> &mut [bch_extent_ptr] {
+    pub fn block_ptrs_mut(&mut self) -> &mut [ExtentPtr] {
         let n = self.ptrs_bytes();
         cast_plain_slice_mut(&mut self.ptrs[..n]).expect("a stripe's pointers, aligned")
     }
@@ -202,7 +202,7 @@ impl Stripe<Validated> {
 }
 
 /// A stripe's checksums: a 2D array of [block][granule], each csum_bytes
-/// wide - the low bytes of a bch_csum.
+/// wide - the low bytes of a Csum.
 pub struct StripeCsums<B> {
     bytes:      B,
     csum_bytes: usize,
@@ -219,8 +219,8 @@ impl<B> StripeCsums<B> {
 
 impl<B: AsRef<[u8]>> StripeCsums<B> {
     /// stripe_csum_get().
-    pub fn get(&self, block: u32, granule: u32) -> bch_csum {
-        let mut csum = bch_csum::default();
+    pub fn get(&self, block: u32, granule: u32) -> Csum {
+        let mut csum = Csum::default();
         plain_bytes_mut(&mut csum)[..self.csum_bytes].copy_from_slice(&self.bytes.as_ref()[self.at(block, granule)]);
         csum
     }
@@ -228,7 +228,7 @@ impl<B: AsRef<[u8]>> StripeCsums<B> {
 
 impl<B: AsMut<[u8]>> StripeCsums<B> {
     /// stripe_csum_set().
-    pub fn set(&mut self, block: u32, granule: u32, csum: bch_csum) {
+    pub fn set(&mut self, block: u32, granule: u32, csum: Csum) {
         let at = self.at(block, granule);
         self.bytes.as_mut()[at].copy_from_slice(&plain_bytes(&csum)[..self.csum_bytes]);
     }
@@ -252,7 +252,7 @@ pub fn stripe_reuse_lru(new: &Stripe<Validated>) -> Option<RangeInclusive<LruPos
 
 /// Whether @p is the data block its stripe_ptr names in @s:
 /// bch2_ptr_matches_stripe(). A block past the value matches nothing.
-pub fn ptr_matches_stripe(s: BkeySC<'_, Stripe<Validated>>, p: &extent_ptr_decoded) -> bool {
+pub fn ptr_matches_stripe(s: BkeySC<'_, Stripe<Validated>>, p: &ExtentPtrDecoded) -> bool {
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
     let v = s.v();
@@ -266,7 +266,7 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, Stripe<Validated>>, p: &extent_ptr_decod
 }
 
 /// ptr_matches_stripe(), against gc's copy of the stripe, locked.
-pub fn ptr_matches_stripe_m(m: &GcStripeData, p: &extent_ptr_decoded) -> bool {
+pub fn ptr_matches_stripe_m(m: &GcStripeData, p: &ExtentPtrDecoded) -> bool {
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
     // unsigned, as C's
@@ -276,7 +276,7 @@ pub fn ptr_matches_stripe_m(m: &GcStripeData, p: &extent_ptr_decoded) -> bool {
 }
 
 /// Whether @data_ptr is in the block of @sectors at @stripe_ptr.
-pub(crate) fn ptr_in_block(stripe_ptr: &bch_extent_ptr, data_ptr: &bch_extent_ptr, sectors: u64) -> bool {
+pub(crate) fn ptr_in_block(stripe_ptr: &ExtentPtr, data_ptr: &ExtentPtr, sectors: u64) -> bool {
     let invalid = BCH_SB_MEMBER_INVALID as u8;
     (data_ptr.dev() == stripe_ptr.dev() || data_ptr.dev() == invalid || stripe_ptr.dev() == invalid) &&
         data_ptr.generation() == stripe_ptr.generation() &&
@@ -361,7 +361,7 @@ impl BkeyOps for Stripe {
 
         let tail = &val[STRIPE_PTRS..];
         let ptrs = &tail[..s.ptrs_bytes().min(tail.len()) / 8 * 8];
-        let ptrs: &[bch_extent_ptr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
+        let ptrs: &[ExtentPtr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
         let counts = if s.csum_granularity_bits < 31 { s.blockcounts_at() } else { None };
 
         for (i, ptr) in ptrs.iter().enumerate() {
@@ -418,7 +418,7 @@ impl<'k> Block<'k> {
         self.idx
     }
 
-    pub(crate) fn ptr(self) -> bch_extent_ptr {
+    pub(crate) fn ptr(self) -> ExtentPtr {
         self.s.v().block_ptrs()[usize::from(self.idx)]
     }
 
@@ -559,7 +559,7 @@ impl StripeKey {
     /// as long as @v says. Past the header it's as it was - zeroed, for a new
     /// stripe.
     pub(crate) fn init(&mut self, v: &Stripe) {
-        let mut k = bkey::new();
+        let mut k = Bkey::new();
         k.set_key_type(BkeyType::stripe);
         k.set_val_bytes(v.val_u64s() as usize * size_of::<u64>());
 
@@ -568,7 +568,7 @@ impl StripeKey {
     }
 
     /// Its header, to edit: its position, say.
-    pub(crate) fn k_mut(&mut self) -> &mut bkey {
+    pub(crate) fn k_mut(&mut self) -> &mut Bkey {
         &mut self.room.k
     }
 

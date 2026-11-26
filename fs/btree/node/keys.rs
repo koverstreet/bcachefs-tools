@@ -8,7 +8,7 @@ use super::bset::BsetTree;
 use super::{BtreeNode, NodeContents};
 use crate::types::L1_CACHE_BYTES;
 use crate::btree::bkey::{BkeyP, BkeySC};
-use crate::format::{Bpos, bkey, bset, btree_node};
+use crate::format::{Bpos, Bkey, Bset, btree_node};
 use crate::util::vstructs::{cast_plain, plain_bytes, Head};
 
 pub struct Keys<'a> {
@@ -179,12 +179,12 @@ impl<'a> Keys<'a> {
     }
 
     /// Just the key at @k, not the value.
-    pub fn unpack(&self, k: u16) -> bkey {
+    pub fn unpack(&self, k: u16) -> Bkey {
         self.contents().unpack_key_at(self.buf, k)
     }
 
     /// The key at @k unpacked into @u, the value where it is.
-    pub fn disassemble<'u>(&self, k: u16, u: &'u mut bkey) -> BkeySC<'u> where 'a: 'u {
+    pub fn disassemble<'u>(&self, k: u16, u: &'u mut Bkey) -> BkeySC<'u> where 'a: 'u {
         self.key_at(k).disassembled(&self.contents().format, self.unpack(k), u)
     }
 
@@ -218,7 +218,7 @@ impl<'a> Keys<'a> {
         keys_in(self.buf, r.start, r.end)
     }
 
-    pub fn bset(&self, t: &BsetTree) -> &'a Head<bset> {
+    pub fn bset(&self, t: &BsetTree) -> &'a Head<Bset> {
         cast_plain(plain_bytes(&self.buf[t.data_offset as usize..]))
             .unwrap_or_else(|| panic!("no bset at offset {} of a {} u64 node", t.data_offset, self.buf.len()))
     }

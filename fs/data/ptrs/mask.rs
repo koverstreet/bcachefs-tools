@@ -1,5 +1,5 @@
 //! Pointer masks: sets of one key's pointers, a bit per pointer by its index
-//! among them - how the data update path names pointers (data_update_opts'
+//! among them - how the data update path names pointers (DataUpdateOpts'
 //! ptrs_kill, ptrs_kill_ec, ptrs_io_error), and what reconcile's plan and the
 //! durability droppers pass around.
 //!
@@ -19,7 +19,7 @@
 //! other.
 //!
 //! Masks stay within their key's pointers - assume() clips - so C's ~m is
-//! except(m). At rest, in data_update_opts, a mask is raw bits relative to a
+//! except(m). At rest, in DataUpdateOpts, a mask is raw bits relative to a
 //! key nobody edits: bits() erases one, and assume() brands bits with their
 //! key. Those two are where correctness is the caller's.
 
@@ -27,9 +27,9 @@ use super::*;
 use crate::btree::bkey::BkeyFamily;
 use core::marker::PhantomData;
 use core::ops::{BitAnd, BitOr, BitOrAssign};
-use crate::data::extents_format::bch_extent_ptr;
+use crate::data::extents_format::ExtentPtr;
 use crate::format::BCH_BKEY_PTRS_MAX;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 
 const _: () = assert!(BCH_BKEY_PTRS_MAX <= u16::BITS);
 
@@ -154,14 +154,14 @@ impl<'id, K: BkeyV<V: PtrsBkey>> Branded<'id, K> {
     /// Its pointers on the devices of @other's pointers that @which takes:
     /// of_dev() of each - which of this key's a write to them would conflict
     /// with.
-    pub fn on_devs_of(&self, fs: &Fs, other: &impl BkeyVPtrs, mut which: impl FnMut(&bch_extent_ptr) -> bool)
+    pub fn on_devs_of(&self, fs: &Fs, other: &impl BkeyVPtrs, mut which: impl FnMut(&ExtentPtr) -> bool)
         -> PtrMask<'id>
     {
         other.ptrs(fs).filter(|p| which(p)).fold(self.none(), |m, p| m | self.of_dev(fs, p.dev().into()))
     }
 
     /// The pointers of @m.
-    pub fn ptrs_in<'a>(&'a self, fs: &'a Fs, m: PtrMask<'id>) -> impl Iterator<Item = &'a bch_extent_ptr> + 'a {
+    pub fn ptrs_in<'a>(&'a self, fs: &'a Fs, m: PtrMask<'id>) -> impl Iterator<Item = &'a ExtentPtr> + 'a {
         let bits = m.bits;
         self.k.ptrs(fs).take(16).enumerate().filter(move |(i, _)| bits & (1 << i) != 0).map(|(_, p)| p)
     }
@@ -179,7 +179,7 @@ impl<'id, K: BkeyV<V: PtrsBkey>> Branded<'id, K> {
 /// The edits that keep the numbering.
 impl<'id, K: BkeyVMut<V: PtrsBkey>> Branded<'id, K> {
     /// Its pointers, to edit in place - not to drop.
-    pub fn ptrs_mut<'a>(&'a mut self, fs: &'a Fs) -> impl Iterator<Item = &'a mut bch_extent_ptr> + 'a {
+    pub fn ptrs_mut<'a>(&'a mut self, fs: &'a Fs) -> impl Iterator<Item = &'a mut ExtentPtr> + 'a {
         self.k.ptrs_mut(fs)
     }
 
@@ -222,7 +222,7 @@ impl<'id, K: BkeyVMut<V: PtrsBkey>> Branded<'id, K> {
     /// set_cached() each pointer of @m, the highest first. The mask is read as
     /// devices before any is made cached - set_cached() can drop cached
     /// pointers anywhere in the key, moving the ones after them.
-    pub fn set_ptrs_cached_mask(mut self, fs: &Fs, opts: &bch_inode_opts, m: PtrMask<'id>) -> K {
+    pub fn set_ptrs_cached_mask(mut self, fs: &Fs, opts: &InodeOpts, m: PtrMask<'id>) -> K {
         let devs: ArrayVec<u32, { BCH_BKEY_PTRS_MAX as usize }> =
             self.ptrs_in(fs, m).map(|p| u32::from(p.dev())).collect();
 

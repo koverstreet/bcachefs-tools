@@ -19,7 +19,7 @@ use crate::os::posix_acl::AclType;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
-use crate::posix::str_hash::bch_hash_info;
+use crate::posix::str_hash::HashInfo;
 use crate::posix::xattr_format::Xattr;
 use crate::posix::check::{InodeWalker, SnapshotsSeen};
 use crate::errcode::BchError;
@@ -34,7 +34,7 @@ use crate::format::Btree;
 struct CheckXattrs<'f> {
     s:         SnapshotsSeen,
     inode:     InodeWalker,
-    hash_info: bch_hash_info<'f>,
+    hash_info: HashInfo<'f>,
 }
 
 /// The inode flag a POSIX ACL xattr needs.

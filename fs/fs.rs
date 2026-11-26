@@ -5,47 +5,46 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::{RecoveryPass, bch_fs_recovery};
-use crate::btree::{node::BtreeNode, bch_fs_btree, check_allocations::bch_fs_gc};
+use crate::init::passes::{RecoveryPass, FsRecovery};
+use crate::btree::{node::BtreeNode, FsBtree, check_allocations::FsGc};
 use crate::c;
-use crate::alloc::capacity::{bch_fs_capacity, MarkLockAt};
-use crate::alloc::discard::bch_fs_discards;
-use crate::alloc::gc_gens::bch_fs_gc_gens;
+use crate::alloc::capacity::{FsCapacity, MarkLockAt};
+use crate::alloc::discard::FsDiscards;
+use crate::alloc::gc_gens::FsGcGens;
 use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
-use crate::data::{copygc::bch_fs_copygc, ec::bch_fs_ec, reconcile::bch_fs_reconcile};
-use crate::debug::async_objs::{async_obj_list, AsyncObjKind};
+use crate::data::{copygc::FsCopygc, ec::FsEc, reconcile::FsReconcile};
+use crate::debug::async_objs::{AsyncObjList, AsyncObjKind};
 #[cfg(CONFIG_DEBUG_FS)]
-use crate::debug::debug::btree_debug;
-use crate::journal::journal::{journal, journal_entry_res};
-use crate::opts::{AtomicOptsMask, bch_opts, OPT_SHOW_MOUNT_STYLE, OptFlags, PublishedOpts,
+use crate::debug::debug::BtreeDebug;
+use crate::journal::journal::{Journal, JournalEntryRes};
+use crate::opts::{AtomicOptsMask, Opts, OPT_SHOW_MOUNT_STYLE, OptFlags, PublishedOpts,
     PublishedOptsWriter};
-use crate::posix::{logged_ops::bch_fs_logged_ops, quota::Quotas};
-use crate::sb::members_format::{bch_member, BCH_SB_MEMBERS_MAX};
-use crate::snapshots::{bch_fs_snapshots, subvolume::subvol_inum};
-use crate::util::clock::io_clock;
+use crate::posix::{logged_ops::FsLoggedOps, quota::Quotas};
+use crate::sb::members_format::{Member, BCH_SB_MEMBERS_MAX};
+use crate::snapshots::{FsSnapshots, subvolume::SubvolInum};
+use crate::util::clock::IoClock;
 #[cfg(kernel)]
-use crate::vfs::bch_fs_vfs;
+use crate::vfs::FsVfs;
 #[cfg(kernel)]
-use crate::vfs::fdm::fdm_hash;
+use crate::vfs::fdm::FdmHash;
 use crate::errcode::{Errcode, ret_to_c, BchError};
-use crate::alloc::foreground::{allocator_foreground_init, bch_fs_allocator};
+use crate::alloc::foreground::{allocator_foreground_init, FsAllocator};
 use crate::alloc::replicas::{can_write_with_devs, WriteCheck};
-use crate::btree::{init::btree_init, journal_overlay::{journal_keys_put_initial, journal_keys}};
+use crate::btree::{init::btree_init, journal_overlay::{journal_keys_put_initial, JournalKeys}};
 use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
 use crate::data::reconcile::work::reconcile_exit;
 use crate::debug::{sysfs::{FsDir, FS_GROUPS}, trace::events};
-use crate::init::dev::{dev_exit, dev_in_fs, AtomicDevsMask, bch_devs_mask, bch_fs_sb,
-    bch_sb_handle};
-use crate::init::error::{free_fsck_errs, bch_fs_errors};
+use crate::init::dev::{dev_exit, dev_in_fs, AtomicDevsMask, FsSb, SbHandle};
+use crate::init::error::{free_fsck_errs, FsErrors};
 use crate::init::registry::register;
 use crate::posix::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Locked, LockedBy, Mutex, MutexNoio, Noio, PercpuRwsemNoio, RwSem, Shared, SharedGuard};
 use crate::{bch_verbose, prt};
-use crate::sb::counters::{counters_init, bch_fs_counters};
-use crate::sb::io::{read_super, sb_to_fs, Holder, bch_sb_cpu, SbWriteFlags};
+use crate::sb::counters::{counters_init, FsCounters};
+use crate::sb::io::{read_super, sb_to_fs, Holder, SbCpu, SbWriteFlags};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevKobjRef, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::{Printbuf, ToText};
@@ -79,26 +78,26 @@ use crate::os::unicode::UnicodeMap;
 use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
 use crate::sb::{counters::recent_counters, members::btree_bitmap_gc_schedule};
 use crate::types::bits_to_longs;
-use crate::util::{projections::Volatile, time_stats::{TimeStatsArray, bch2_time_stats, TimeStat}};
+use crate::util::{projections::Volatile, time_stats::{TimeStatsArray, TimeStats, TimeStat}};
 #[cfg(kernel)]
 use kernel::sync::SetOnce;
 #[cfg(not(kernel))]
 use bcachefs_shim::sync::SetOnce;
-use crate::format::{Bpos, Btree, MemberState, MetadataVersion, SbFeature, bch_key, bch_sb,
-    jset_entry_rewind_limit, SbCompat};
+use crate::format::{Bpos, Btree, MemberState, MetadataVersion, SbFeature, Key, Sb,
+    JsetEntryRewindLimit, SbCompat};
 
 /// sb_lock, held: the superblock, and c->sb, which it publishes
 pub type SbLockGuard<'a> =
-    ExclusiveGuard<'a, Noio<Mutex>, bch_fs_sb, bch_sb_cpu, Exclusive, crate::at!(Fs.sb)>;
+    ExclusiveGuard<'a, Noio<Mutex>, FsSb, SbCpu, Exclusive, crate::at!(Fs.sb)>;
 
 impl SbLockGuard<'_> {
-    pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut bch_member {
+    pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut Member {
         self.member_mut(dev_idx)
             .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
     }
 
     /// The superblock, and @F of each of the filesystem's devices, at once.
-    pub(crate) fn split_devs<F>(&mut self) -> (&mut bch_fs_sb, DevPieces<'_, crate::at!(Fs.sb), F>)
+    pub(crate) fn split_devs<F>(&mut self) -> (&mut FsSb, DevPieces<'_, crate::at!(Fs.sb), F>)
     where
         F: crate::util::place::Path<Dev>,
         F::To: crate::locking::AsLockedBy<L = crate::at!(Fs.sb)> + 'static,
@@ -194,7 +193,7 @@ pub enum FsFlag {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
-#[init_args(options: &bch_opts)]
+#[init_args(options: &Opts)]
 pub struct Fs {
     #[pin]
     #[init(unsafe { Kobject::new::<Fs>() })]
@@ -300,7 +299,7 @@ pub struct Fs {
     /// publishes.
     #[pin]
     #[init(crate::new_lock!(Default::default(), ::pin_init::zeroed(), "&c->sb_lock"))]
-    pub sb: Placed<MutexNoio<bch_fs_sb, bch_sb_cpu>, crate::at!(Fs.sb)>,
+    pub sb: Placed<MutexNoio<FsSb, SbCpu>, crate::at!(Fs.sb)>,
     pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
         bits_to_longs(MetadataVersion::CURRENT.minor() as usize) }>,
     #[init(SetOnce::new())]
@@ -320,24 +319,24 @@ pub struct Fs {
     pub(crate) maybe_schedule_btree_bitmap_gc: DelayedWork<btree_bitmap_gc_schedule, crate::field!(ro_ref)>,
 
     #[pin]
-    #[init(crate::util::alloc::init_or(bch_fs_counters::init(), Errcode::ENOMEM_fs_counters_init))]
-    pub counters: bch_fs_counters,
+    #[init(crate::util::alloc::init_or(FsCounters::init(), Errcode::ENOMEM_fs_counters_init))]
+    pub counters: FsCounters,
     #[pin]
     pub(crate) counters_recent: DelayedWork<recent_counters, crate::field!(ro_ref)>,
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub times: TimeStatsArray<bch2_time_stats, { TimeStat::NR as usize }>,
+    pub times: TimeStatsArray<TimeStats, { TimeStat::NR as usize }>,
     #[pin]
-    #[init(bch_fs_errors::init())]
-    pub errors: bch_fs_errors,
+    #[init(FsErrors::init())]
+    pub errors: FsErrors,
 
     /* What's in flight, for debugfs: debug/async_objs.rs */
     #[pin]
-    pub async_objs: [async_obj_list; AsyncObjKind::NR as usize],
+    pub async_objs: [AsyncObjList; AsyncObjKind::NR as usize],
 
     #[pin]
     #[late]
-    pub journal: journal,
+    pub journal: Journal,
     pub journal_replay_seq_start: Volatile<u64>,
     /*
      * Journal scrub: where its first flush range starts - the newest flush
@@ -347,28 +346,28 @@ pub struct Fs {
     pub journal_replay_seq_end: Volatile<u64>,
     pub journal_entries_base_seq: Volatile<u64>,
     #[pin]
-    #[init(AtomicRef::pin_init(journal_keys::init()))]
-    pub journal_keys: Placed<AtomicRef<journal_keys>, crate::at!(Fs.journal_keys)>,
+    #[init(AtomicRef::pin_init(JournalKeys::init()))]
+    pub journal_keys: Placed<AtomicRef<JournalKeys>, crate::at!(Fs.journal_keys)>,
     /// The blacklist, in memory: journal/seq_blacklist.rs's alone, rebuilt
     /// under sb_lock.
     pub(crate) journal_seq_blacklist: LockedBy<(), crate::journal::seq_blacklist::JournalSeqBlacklist, crate::at!(Fs.sb)>,
 
     #[pin]
-    pub recovery: bch_fs_recovery,
+    pub recovery: FsRecovery,
 
     #[pin]
-    #[init(bch_fs_logged_ops::init())]
-    pub logged_ops: bch_fs_logged_ops,
+    #[init(FsLoggedOps::init())]
+    pub logged_ops: FsLoggedOps,
 
     #[pin]
     #[placed_args(options)]
     #[late]
-    pub btree: bch_fs_btree,
+    pub btree: FsBtree,
 
     #[pin]
-    #[init(bch_fs_gc::init())]
-    pub gc: bch_fs_gc,
-    pub gc_gens: bch_fs_gc_gens,
+    #[init(FsGc::init())]
+    pub gc: FsGc,
+    pub gc_gens: FsGcGens,
 
     /// The in-memory accounting table, under mark_lock.
     #[pin]
@@ -380,15 +379,15 @@ pub struct Fs {
     pub(crate) replicas: PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>,
     pub disk_groups: LockedBy<(), crate::alloc::disk_groups::DiskGroups, crate::at!(Fs.sb)>,
     #[pin]
-    #[init(bch_fs_capacity::init())]
-    pub capacity: bch_fs_capacity,
+    #[init(FsCapacity::init())]
+    pub capacity: FsCapacity,
     #[pin]
-    pub allocator: bch_fs_allocator,
+    pub allocator: FsAllocator,
     #[pin]
-    pub discards: bch_fs_discards,
+    pub discards: FsDiscards,
 
     #[pin]
-    pub snapshots: bch_fs_snapshots,
+    pub snapshots: FsSnapshots,
 
     /*
      * Use a dedicated wq for write ref holder tasks. Required to avoid
@@ -404,10 +403,10 @@ pub struct Fs {
     pub promotes_in_flight: core::sync::atomic::AtomicU32,
 
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| io_clock::init()))]
-    pub io_clock: [io_clock; 2],
-    pub super_entries_journal_res: journal_entry_res,
-    pub rewind_limit_res: journal_entry_res,
+    #[init(::pin_init::pin_init_array_from_fn(|_| IoClock::init()))]
+    pub io_clock: [IoClock; 2],
+    pub super_entries_journal_res: JournalEntryRes,
+    pub rewind_limit_res: JournalEntryRes,
 
     /* IO PATH */
     #[late(Workqueue::new(c"bcachefs",
@@ -425,7 +424,7 @@ pub struct Fs {
     #[pin]
     #[init(crate::data::nocow_locking::NocowLocks::new())]
     pub(crate) nocow_locks: crate::data::nocow_locking::NocowLocks,
-    /// The data updates in flight, by data_update_key.
+    /// The data updates in flight, by DataUpdateKey.
     #[pin]
     #[init(::pin_init::zeroed::<crate::data::update::InFlightTable>())]
     pub(crate) update_table: crate::data::update::InFlightTable,
@@ -447,13 +446,13 @@ pub struct Fs {
     #[init(::pin_init::zeroed::<crate::data::compress::Compress>())]
     pub(crate) compress: crate::data::compress::Compress,
     #[pin]
-    pub reconcile: bch_fs_reconcile,
+    pub reconcile: FsReconcile,
     #[pin]
-    #[init(bch_fs_copygc::init())]
+    #[init(FsCopygc::init())]
     #[late]
-    pub copygc: bch_fs_copygc,
+    pub copygc: FsCopygc,
     #[pin]
-    pub ec: bch_fs_ec,
+    pub ec: FsEc,
 
     /// gc's count of references to indirect extents: reflink.rs's alone.
     #[pin]
@@ -462,12 +461,12 @@ pub struct Fs {
 
     #[cfg(kernel)]
     #[pin]
-    #[init(bch_fs_vfs::init())]
+    #[init(FsVfs::init())]
     #[late]
-    pub vfs: bch_fs_vfs,
+    pub vfs: FsVfs,
     #[cfg(kernel)]
-    #[init(fdm_hash::init())]
-    pub fdm_table: fdm_hash,
+    #[init(FdmHash::init())]
+    pub fdm_table: FdmHash,
 
     /// The in-memory quotas: quota.rs's alone.
     #[pin]
@@ -480,7 +479,7 @@ pub struct Fs {
     pub fs_debug_dir: Option<crate::os::debugfs::DebugDir>,
     #[cfg(CONFIG_DEBUG_FS)]
     #[pin]
-    pub btree_debug: [btree_debug; Btree::NR as usize],
+    pub btree_debug: [BtreeDebug; Btree::NR as usize],
 }
 
 impl Fs {
@@ -538,7 +537,7 @@ impl Fs {
     }
 
     /// Never unset once set
-    pub fn encryption_key(&self) -> Option<&bch_key> {
+    pub fn encryption_key(&self) -> Option<&Key> {
         self.sb.encryption_key.get()
     }
 
@@ -667,7 +666,7 @@ impl Fs {
 
     /// A logged op, resumed after a crash. Block granular: zeroing the rest of
     /// the last block is the caller's, as the VFS does in the page cache.
-    pub fn truncate(&self, inum: subvol_inum, new_i_size: u64) -> Result<(), BchError> {
+    pub fn truncate(&self, inum: SubvolInum, new_i_size: u64) -> Result<(), BchError> {
         crate::data::io_misc::truncate(self, inum, new_i_size, &mut 0)
     }
 
@@ -788,8 +787,8 @@ impl Fs {
 /// The filesystem @sbs are the devices of, with options @opts: Fs::init()'s
 /// fields, the rest from init_from(). It takes the devices it attaches,
 /// leaving their handles zeroed; on failure, it's exited.
-fn alloc(sbs: &mut Vec<bch_sb_handle>, opts: &bch_opts, holder: Arc<Holder>,
-         user_key: Option<&bch_key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
+fn alloc(sbs: &mut Vec<SbHandle>, opts: &Opts, holder: Arc<Holder>,
+         user_key: Option<&Key>, out: &mut Printbuf) -> Result<OpenFs, BchError> {
     let mut b = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::ENOMEM_fs_alloc)?;
     // nothing else reaches it till init_from() registers it; if init_early()
     // fails, the OpenFs exits it
@@ -808,7 +807,7 @@ const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
 impl Fs {
     /// What's set while nothing else can reach it: its @holder, its superblock,
     /// and its name.
-    fn init_early(mut self: Pin<&mut Self>, sbs: &Vec<bch_sb_handle>, opts: &bch_opts,
+    fn init_early(mut self: Pin<&mut Self>, sbs: &Vec<SbHandle>, opts: &Opts,
                   holder: Arc<Holder>) -> Result<(), BchError> {
         *self.as_mut().project().holder = Some(holder);
         self.stdio.store(opts.stdio as usize as *mut _, Relaxed);
@@ -845,7 +844,7 @@ impl Fs {
         Ok(())
     }
 
-    fn init_from(&self, sbs: &mut Vec<bch_sb_handle>, user_key: Option<&bch_key>, out: &mut Printbuf)
+    fn init_from(&self, sbs: &mut Vec<SbHandle>, user_key: Option<&Key>, out: &mut Printbuf)
         -> Result<(), BchError>
     {
         blacklist_table_initialize(self)?;
@@ -884,7 +883,7 @@ impl Fs {
         self.journal_entry_res_resize(&self.super_entries_journal_res,
             crate::journal::write::PREP_ENTRIES_U64S as c_uint);
         self.journal_entry_res_resize(&self.rewind_limit_res,
-            crate::journal::entries::entry_u64s::<jset_entry_rewind_limit>() as c_uint);
+            crate::journal::entries::entry_u64s::<JsetEntryRewindLimit>() as c_uint);
 
         {
             let state = self.state_lock_write();
@@ -1055,13 +1054,13 @@ impl OpenFs {
     }
 
     /// @key unwraps the superblock's key, instead of the keyring
-    pub fn open<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut bch_opts,
-                    key: Option<&bch_key>) -> Result<OpenFs, BchError> {
+    pub fn open<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut Opts,
+                    key: Option<&Key>) -> Result<OpenFs, BchError> {
         Self::claim(devs, opts, &Holder::new()?)?.open(opts, key)
     }
 
     /// The open's first half: @devs claimed for @holder, and read
-    pub fn claim<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut bch_opts,
+    pub fn claim<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut Opts,
                      holder: &Arc<Holder>) -> Result<Claimed, BchError> {
         let mut out = Printbuf::new();
         out.indent_add_nextline(2);
@@ -1072,8 +1071,8 @@ impl OpenFs {
         }
     }
 
-    fn claim_to<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut bch_opts,
-                    holder: &Arc<Holder>, out: &mut Printbuf) -> Result<Vec<bch_sb_handle>, BchError> {
+    fn claim_to<'a>(devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut Opts,
+                    holder: &Arc<Holder>, out: &mut Printbuf) -> Result<Vec<SbHandle>, BchError> {
         if devs.len() == 0 {
             return Err(Errcode::EINVAL_open_no_devices.into());
         }
@@ -1108,7 +1107,7 @@ fn open_failed(e: BchError, out: &mut Printbuf) -> BchError {
 
 /// An open's first half: its devices claimed and read, the dead ones dropped
 pub struct Claimed {
-    sbs:    Vec<bch_sb_handle>,
+    sbs:    Vec<SbHandle>,
     holder: Arc<Holder>,
     out:    Printbuf,
 }
@@ -1121,7 +1120,7 @@ impl Claimed {
     }
 
     /// @key unwraps the superblock's key, instead of the keyring
-    pub fn open(mut self, opts: &mut bch_opts, key: Option<&bch_key>) -> Result<OpenFs, BchError> {
+    pub fn open(mut self, opts: &mut Opts, key: Option<&Key>) -> Result<OpenFs, BchError> {
         match self.open_to(opts, key) {
             Err(e) => Err(open_failed(e, &mut self.out)),
             Ok(fs) => {
@@ -1133,7 +1132,7 @@ impl Claimed {
         }
     }
 
-    fn open_to(&mut self, opts: &mut bch_opts, key: Option<&bch_key>) -> Result<OpenFs, BchError> {
+    fn open_to(&mut self, opts: &mut Opts, key: Option<&Key>) -> Result<OpenFs, BchError> {
         let out = &mut self.out;
         let sbs = &mut self.sbs;
 
@@ -1285,7 +1284,7 @@ fn teardown(fs: &Fs) {
 
 /// Which is the filesystem's superblock: the newest - highest seq, then write
 /// time - and of those, the first, as C took it
-pub fn newest<'a>(sbs: impl IntoIterator<Item = &'a bch_sb>) -> Option<usize> {
+pub fn newest<'a>(sbs: impl IntoIterator<Item = &'a Sb>) -> Option<usize> {
     sbs.into_iter()
         .map(|sb| core::cmp::Reverse((sb.seq.get(), sb.write_time.get())))
         .enumerate()
@@ -1294,7 +1293,7 @@ pub fn newest<'a>(sbs: impl IntoIterator<Item = &'a bch_sb>) -> Option<usize> {
 }
 
 /// Newest first, without those removed from the filesystem or split from it
-pub fn filter_dead(sbs: &mut Vec<bch_sb_handle>, opts: &bch_opts,
+pub fn filter_dead(sbs: &mut Vec<SbHandle>, opts: &Opts,
                    mut out: Option<&mut Printbuf>) -> Result<(), BchError> {
     let Some(best) = newest(sbs.iter().map(|h| h.sb())) else {
         return Ok(());
@@ -1446,7 +1445,7 @@ impl Fs {
             // mount.bcachefs asks whoever is at the machine - so it's the
             // error code, not prose. degraded=yes starts while every replica
             // set has a readable copy; past that, only degraded=very.
-            let online = bch_devs_mask { d: self.devs_online.load() };
+            let online = self.devs_online.load();
             return self.throw(if self.can_read_fs_with_devs(&online, BCH_FORCE_IF_DEGRADED, Some(err)) {
                 Errcode::insufficient_devices_data_intact
             } else {
@@ -1454,8 +1453,8 @@ impl Fs {
             });
         };
 
-        let online = bch_devs_mask { d: self.devs_online.load() };
-        let rw = bch_devs_mask { d: self.allocator.rw_devs[0].load() };
+        let online = self.devs_online.load();
+        let rw = self.allocator.rw_devs[0].load();
         if !self.can_read_fs_with_devs(&online, flags, Some(&mut *err)) ||
            (self.opts().read_only.get() == 0 &&
             !can_write_with_devs(self, &rw, WriteCheck::BCH_WRITE_CHECK_start, flags, err)) {

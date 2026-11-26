@@ -2,8 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::sb::errors_format::bch_sb_field_error_entry_v2;
-use crate::format::bch_val;
+use crate::sb::errors_format::SbFieldErrorEntryV2;
+use crate::format::Val;
 use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
 
 /*
@@ -13,16 +13,16 @@ use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
  * between repair and bookkeeping.
  *
  * The value is the same records the errors superblock section keeps,
- * sorted by error id: bch_sb_field_error_entry_v2 packs the id, a
+ * sorted by error id: SbFieldErrorEntryV2 packs the id, a
  * saturating occurrence count and the times of first and last
  * occurrence (BCH_SB_ERROR_ENTRY_V2_ID/NR/FIRST/LAST). One vocabulary
  * for "what happened": the sb section counts per-filesystem, damage
  * keys count per-inode.
  */
-#[whole(tail = entries: [bch_sb_field_error_entry_v2], bkey)]
+#[whole(tail = entries: [SbFieldErrorEntryV2], bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Damage {
-    pub v: bch_val,
-    pub entries: [bch_sb_field_error_entry_v2; 0],
+    pub v: Val,
+    pub entries: [SbFieldErrorEntryV2; 0],
 }

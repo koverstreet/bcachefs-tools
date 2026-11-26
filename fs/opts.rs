@@ -35,7 +35,7 @@ use crate::init::{dev::bch_sb_buf, passes_format::RecoveryPass};
 use crate::posix::dirent_format::{BCH_DT_MAX, DT_SUBVOL};
 use crate::errcode::{Errcode, BchError};
 use crate::posix::inode_opts::InodeOpt;
-use crate::sb::{io::SbState, members, members_format::{MemberState, bch_member, bch_member_flags}};
+use crate::sb::{io::SbState, members, members_format::{MemberState, Member, MemberFlags}};
 use crate::prt;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, plain_bytes_mut, Unvalidated};
 use crate::util::log::{log_no_fs, LogLevel};
@@ -46,8 +46,8 @@ use crate::os::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
 use crate::posix::inode_format::InodeOptId_arms;
 use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt,
-    WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR, bch_sb, bch_sb_head, bch_sb_field_ext,
-    bch_sb_field_ext_flags0, DegradedAction, ScrubJournalOpt, DataType};
+    WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR, Sb, SbHead, SbFieldExt,
+    SbFieldExtFlags0, DegradedAction, ScrubJournalOpt, DataType};
 use crate::types::bits_to_longs;
 use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
 
@@ -102,17 +102,17 @@ pub enum FsckErrOpt {
     ask = 3,
 }
 
-/* how many options a bch_opts_mask has room for */
+/* how many options a OptsMask has room for */
 pub const BCH_OPTS_MAX: u32 = 128;
 
 /* options, by OptId: which are set */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
-pub struct bch_opts_mask {
+pub struct OptsMask {
     pub d: [c_ulong; bits_to_longs(BCH_OPTS_MAX as usize)],
 }
 
-/// A bch_opts_mask that changes while it's read: PublishedOpts', and
+/// A OptsMask that changes while it's read: PublishedOpts', and
 /// c->mount_opts.
 pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_to_longs(BCH_OPTS_MAX as usize) }>;
 
@@ -125,11 +125,11 @@ pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Options)]
-pub struct bch_opts {
+pub struct Opts {
     /// Filesystem block size
     #[opt(uint(512, 1 << 15),
           flags = fs | format | human_readable | must_be_pow_2 | sb_field_sectors,
-          sb = bch_sb.block_size,
+          sb = Sb.block_size,
           default = 4 << 10,
           hint = "size")]
     pub block_size: u16,
@@ -137,7 +137,7 @@ pub struct bch_opts {
     /// Btree node size, default 256k
     #[opt(uint(512, 1 << 19),
           flags = fs | format | human_readable | must_be_pow_2 | sb_field_sectors,
-          sb = bch_sb::btree_node_size,
+          sb = Sb::btree_node_size,
           default = 256 << 10,
           hint = "size")]
     pub btree_node_size: u32,
@@ -145,21 +145,21 @@ pub struct bch_opts {
     /// Action to take on filesystem error
     #[opt(str(ErrorAction),
           flags = fs | format | mount | runtime,
-          sb = bch_sb::error_action,
+          sb = Sb::error_action,
           default = ErrorAction::fix_safe.0)]
     pub errors: u8,
 
     /// Number of consecutive write errors allowed before kicking out a device
     #[opt(uint(1, 300),
           flags = fs | format | mount | runtime,
-          sb = bch_sb::write_error_timeout,
+          sb = Sb::write_error_timeout,
           default = 30)]
     pub write_error_timeout: u16,
 
     /// Number of metadata replicas (journal and btree)
     #[opt(uint(1, BCH_REPLICAS_MAX),
           flags = fs | format | mount_old | runtime,
-          sb = bch_sb::meta_replicas_want,
+          sb = Sb::meta_replicas_want,
           default = 1,
           hint = "#")]
     pub metadata_replicas: u8,
@@ -167,14 +167,14 @@ pub struct bch_opts {
     /// Number of journal replicas, if not metadata_replicas
     #[opt(uint(0, BCH_REPLICAS_MAX),
           flags = fs | format | runtime,
-          sb = bch_sb_field_ext::journal_replicas,
+          sb = SbFieldExt::journal_replicas,
           hint = "#")]
     pub journal_replicas: u8,
 
     /// Number of data replicas
     #[opt(uint(1, BCH_REPLICAS_MAX),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::data_replicas_want,
+          sb = Sb::data_replicas_want,
           default = 1,
           hint = "#")]
     pub data_replicas: u8,
@@ -182,7 +182,7 @@ pub struct bch_opts {
     /// Maximum size of checksummed/compressed extents
     #[opt(uint(4096, 2 << 20),
           flags = fs | format | human_readable | must_be_pow_2 | sb_field_sectors | sb_field_ilog2,
-          sb = bch_sb::encoded_extent_max_bits,
+          sb = Sb::encoded_extent_max_bits,
           default = 256 << 10,
           hint = "size")]
     pub encoded_extent_max: u32,
@@ -190,80 +190,80 @@ pub struct bch_opts {
     /// Checksum type for metadata writes
     #[opt(str(CsumOpt),
           flags = fs | format | mount_old | runtime,
-          sb = bch_sb::meta_csum_type,
+          sb = Sb::meta_csum_type,
           default = CsumOpt::crc32c.0)]
     pub metadata_checksum: u8,
 
     /// Checksum type for data writes
     #[opt(str(CsumOpt),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::data_csum_type,
+          sb = Sb::data_csum_type,
           default = CsumOpt::crc32c.0)]
     pub data_checksum: u8,
 
     /// Number of read retries on checksum error
-    #[opt(uint(0, 32), flags = fs | format | mount | runtime, sb = bch_sb::csum_err_retry_nr, default = 3)]
+    #[opt(uint(0, 32), flags = fs | format | mount | runtime, sb = Sb::csum_err_retry_nr, default = 3)]
     pub checksum_err_retry_nr: u8,
 
     /// Compression type for data writes
     #[opt(with(crate::data::compress::OPT),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::compression_type,
+          sb = Sb::compression_type,
           default = CompressionOpt::none.0)]
     pub compression: u8,
 
     /// Compression type for background moves
     #[opt(with(crate::data::compress::OPT),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::background_compression_type,
+          sb = Sb::background_compression_type,
           default = CompressionOpt::none.0)]
     pub background_compression: u8,
 
     /// Hash function for directory entries and xattrs
     #[opt(str(StrHashOpt),
           flags = fs | format | mount | runtime,
-          sb = bch_sb::str_hash_type,
+          sb = Sb::str_hash_type,
           default = StrHashOpt::siphash.0)]
     pub str_hash: u8,
 
     /// Device or label for metadata writes
     #[opt(with(crate::alloc::disk_groups::TARGET_OPT),
           flags = fs | format | mount_old | runtime,
-          sb = bch_sb::metadata_target,
+          sb = Sb::metadata_target,
           hint = "(target)")]
     pub metadata_target: u16,
 
     /// Device or label for foreground writes
     #[opt(with(crate::alloc::disk_groups::TARGET_OPT),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::foreground_target,
+          sb = Sb::foreground_target,
           hint = "(target)")]
     pub foreground_target: u16,
 
     /// Device or label to move data to in the background
     #[opt(with(crate::alloc::disk_groups::TARGET_OPT),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::background_target,
+          sb = Sb::background_target,
           hint = "(target)")]
     pub background_target: u16,
 
     /// Device or label to promote data to on read
     #[opt(with(crate::alloc::disk_groups::TARGET_OPT),
           flags = fs | inode | format | mount_old | runtime,
-          sb = bch_sb::promote_target,
+          sb = Sb::promote_target,
           hint = "(target)")]
     pub promote_target: u16,
 
     /// Enable erasure coding (RAID5/6; data replicas are capped at 3)
-    #[opt(bool, flags = fs | inode | format | mount_old | runtime, sb = bch_sb::erasure_code)]
+    #[opt(bool, flags = fs | inode | format | mount_old | runtime, sb = Sb::erasure_code)]
     pub erasure_code: u16,
 
     /// Cap data blocks per EC stripe (0 = use all active devs)
-    #[opt(uint(0, 15), flags = fs | format | mount | runtime, sb = bch_sb::ec_max_data_blocks)]
+    #[opt(uint(0, 15), flags = fs | format | mount | runtime, sb = Sb::ec_max_data_blocks)]
     pub ec_max_data_blocks: u8,
 
     /// Dirent lookups are casefolded
-    #[opt(bool, flags = fs | inode | format, sb = bch_sb::casefold)]
+    #[opt(bool, flags = fs | inode | format, sb = Sb::casefold)]
     pub casefold: u8,
 
     /// Disable casefolding filesystem wide
@@ -271,17 +271,17 @@ pub struct bch_opts {
     pub casefold_disabled: u8,
 
     /// Constrain inode numbers to 32 bits
-    #[opt(bool, flags = fs | inode | format | mount | runtime, sb = bch_sb::inode_32bit)]
+    #[opt(bool, flags = fs | inode | format | mount | runtime, sb = Sb::inode_32bit)]
     pub inodes_32bit: u8,
 
     /// Shard new inode numbers by CPU id
-    #[opt(uint(0, 8), flags = fs | format, sb = bch_sb::shard_inums_nbits)]
+    #[opt(uint(0, 8), flags = fs | format, sb = Sb::shard_inums_nbits)]
     pub shard_inode_numbers_bits: u8,
 
     /// Percentage of disk space to reserve for copygc
     #[opt(uint(5, 20),
           flags = fs | format | mount | runtime,
-          sb = bch_sb::gc_reserve,
+          sb = Sb::gc_reserve,
           default = 8,
           hint = "%")]
     pub gc_reserve_percent: u8,
@@ -290,16 +290,16 @@ pub struct bch_opts {
     /// Takes precedence over gc_reserve_percent if set
     #[opt(uint(0, u64::MAX),
           flags = fs | format | mount | runtime | human_readable | sb_field_sectors,
-          sb = bch_sb::gc_reserve_bytes,
+          sb = Sb::gc_reserve_bytes,
           hint = "%")]
     pub gc_reserve_bytes: u64,
 
     /// Percentage of disk space to reserve for superuser
-    #[opt(uint(0, 100), flags = fs | format | mount, sb = bch_sb::root_reserve, hint = "%")]
+    #[opt(uint(0, 100), flags = fs | format | mount, sb = Sb::root_reserve, hint = "%")]
     pub root_reserve_percent: u8,
 
     /// Store full 128 bits of cryptographic MACs, instead of 80
-    #[opt(bool, flags = fs | format | mount | runtime, sb = bch_sb::macs_128_bit)]
+    #[opt(bool, flags = fs | format | mount | runtime, sb = Sb::macs_128_bit)]
     pub wide_macs: u8,
 
     /// Enable inline data extents
@@ -307,41 +307,41 @@ pub struct bch_opts {
     pub inline_data: u8,
 
     /// Promote whole extents, instead of just part being read
-    #[opt(bool, flags = fs | mount | runtime, sb = bch_sb::promote_whole_extents, default = true)]
+    #[opt(bool, flags = fs | mount | runtime, sb = Sb::promote_whole_extents, default = true)]
     pub promote_whole_extents: u8,
 
     /// Enable POSIX acls
-    #[opt(bool, flags = fs | format | mount, sb = bch_sb::posix_acl, default = true)]
+    #[opt(bool, flags = fs | format | mount, sb = Sb::posix_acl, default = true)]
     pub acl: u8,
 
     /// Enable user quotas
-    #[opt(bool, flags = fs | format | mount, sb = bch_sb::usrquota)]
+    #[opt(bool, flags = fs | format | mount, sb = Sb::usrquota)]
     pub usrquota: u8,
 
     /// Enable group quotas
-    #[opt(bool, flags = fs | format | mount, sb = bch_sb::grpquota)]
+    #[opt(bool, flags = fs | format | mount, sb = Sb::grpquota)]
     pub grpquota: u8,
 
     /// Enable project quotas
-    #[opt(bool, flags = fs | format | mount, sb = bch_sb::prjquota)]
+    #[opt(bool, flags = fs | format | mount, sb = Sb::prjquota)]
     pub prjquota: u8,
 
     /// Allow mounting in degraded mode
     #[opt(str(DegradedAction),
           flags = fs | mount,
-          sb = bch_sb::degraded_action,
+          sb = Sb::degraded_action,
           default = DegradedAction::ask.0)]
     pub degraded: u8,
 
     /// Write fewer copies than asked for rather than returning ENOSPC; the default does so only while a device is missing or not read-write
     #[opt(str(WriteDegradedAction),
           flags = fs | mount | format | runtime,
-          sb = bch_sb::write_degraded_action,
+          sb = Sb::write_degraded_action,
           default = WriteDegradedAction::degraded.0)]
     pub write_degraded: u8,
 
     /// Seconds to wait at mount for member devices that haven't appeared yet, before applying the degraded action; 0 means use the built-in default
-    #[opt(uint(0, 3600), flags = fs | mount | format | runtime, sb = bch_sb_field_ext::missing_dev_timeout)]
+    #[opt(uint(0, 3600), flags = fs | mount | format | runtime, sb = SbFieldExt::missing_dev_timeout)]
     pub missing_dev_timeout: u32,
 
     /// Trust udev when scanning for member devices
@@ -361,28 +361,28 @@ pub struct bch_opts {
     pub verbose: u8,
 
     /// Delay in milliseconds before automatic journal commits
-    #[opt(uint(1, u32::MAX), flags = fs | mount | runtime, sb = bch_sb::journal_flush_delay, default = 1000)]
+    #[opt(uint(1, u32::MAX), flags = fs | mount | runtime, sb = Sb::journal_flush_delay, default = 1000)]
     pub journal_flush_delay: u32,
 
     /// Disable journal flush on sync/fsync
     /// If enabled, writes can be lost, but only since the
     /// last journal write (default 1 second)
-    #[opt(bool, flags = fs | mount | runtime, sb = bch_sb::journal_flush_disabled)]
+    #[opt(bool, flags = fs | mount | runtime, sb = Sb::journal_flush_disabled)]
     pub journal_flush_disabled: u8,
 
     /// Issue writes from background data moves (copygc,
     /// rebalance) with FUA, making them durable on
     /// completion rather than relying on the journal's
     /// periodic cache flush
-    #[opt(bool, flags = fs | mount | runtime, sb = bch_sb::move_writes_fua)]
+    #[opt(bool, flags = fs | mount | runtime, sb = Sb::move_writes_fua)]
     pub move_writes_fua: u8,
 
     /// Delay in milliseconds before automatic journal reclaim
-    #[opt(uint(0, u32::MAX), flags = fs | mount | runtime, sb = bch_sb::journal_reclaim_delay, default = 100)]
+    #[opt(uint(0, u32::MAX), flags = fs | mount | runtime, sb = Sb::journal_reclaim_delay, default = 100)]
     pub journal_reclaim_delay: u32,
 
     /// Delay seconds before writing back dirty data, overriding vm sysctls
-    #[opt(uint(0, u16::MAX), flags = fs | mount | runtime, sb = bch_sb::writeback_timeout)]
+    #[opt(uint(0, u16::MAX), flags = fs | mount | runtime, sb = Sb::writeback_timeout)]
     pub writeback_timeout: u16,
 
     /// Maximum Amount of IO to keep in flight by the move path
@@ -429,18 +429,18 @@ pub struct bch_opts {
     pub journal_rewind: u64,
 
     /// Percentage of filesystem capacity to leave undiscarded for journal rewind
-    #[opt(uint(0, 10), flags = fs | mount, sb = bch_sb_field_ext::discard_buffer, default = 4)]
+    #[opt(uint(0, 10), flags = fs | mount, sb = SbFieldExt::discard_buffer, default = 4)]
     pub journal_rewind_discard_buffer_percent: u8,
 
     /// Scrub data written in the last few journal entries during recovery
-    #[opt(str(ScrubJournalOpt), flags = fs | mount, sb = bch_sb::scrub_journal,
+    #[opt(str(ScrubJournalOpt), flags = fs | mount, sb = Sb::scrub_journal,
           default = ScrubJournalOpt::unclean.0)]
     pub scrub_recent_journal_entries: u8,
 
     /// Maximum time in seconds the journal scrub will rewind (default 10)
     #[opt(uint(0, 3600),
           flags = fs | mount | format,
-          sb = bch_sb_field_ext::scrub_max_rewind_secs,
+          sb = SbFieldExt::scrub_max_rewind_secs,
           default = 10)]
     pub scrub_journal_max_rewind_secs: u32,
 
@@ -475,14 +475,14 @@ pub struct bch_opts {
     /// Log transaction function names in journal
     #[opt(bool,
           flags = fs | format | mount | runtime | nodoc,
-          sb = bch_sb::journal_transaction_names,
+          sb = Sb::journal_transaction_names,
           default = true)]
     pub journal_transaction_names: u8,
 
     /// Default timeout in seconds for stuck allocator messages
     #[opt(uint(0, u16::MAX),
           flags = fs | format | mount | runtime | nodoc,
-          sb = bch_sb::allocator_stuck_timeout,
+          sb = Sb::allocator_stuck_timeout,
           default = 30)]
     pub allocator_stuck_timeout: u16,
 
@@ -516,7 +516,7 @@ pub struct bch_opts {
     /// allowing any new features to be used
     #[opt(str(VersionUpgradeOpt),
           flags = fs | mount | runtime,
-          sb = bch_sb::version_upgrade,
+          sb = Sb::version_upgrade,
           default = VersionUpgradeOpt::compatible.0)]
     pub version_upgrade: u8,
 
@@ -530,7 +530,7 @@ pub struct bch_opts {
     /// Nocow mode: Writes will be done in place when possible.
     /// Snapshots and reflink will still cause writes to be COW
     /// Implicitly disables data checksumming, compression and encryption
-    #[opt(bool, flags = fs | format | mount | runtime | inode, sb = bch_sb::nocow)]
+    #[opt(bool, flags = fs | format | mount | runtime | inode, sb = Sb::nocow)]
     pub nocow: u8,
 
     /// Enable nocow mode: enables runtime locking in
@@ -549,7 +549,7 @@ pub struct bch_opts {
     pub reconcile_enabled: u8,
 
     /// Enable reconcile while on mains power only
-    #[opt(bool, flags = fs | mount | runtime, sb = bch_sb::rebalance_ac_only)]
+    #[opt(bool, flags = fs | mount | runtime, sb = Sb::rebalance_ac_only)]
     pub reconcile_on_ac_only: u8,
 
     /// Enable automatic snapshot deletion: disable for debugging, or to
@@ -564,14 +564,14 @@ pub struct bch_opts {
     /// Device state
     #[opt(str(MemberState),
           flags = device | runtime,
-          sb = bch_member::state,
+          sb = Member::state,
           default = MemberState::rw.0)]
     pub state: u64,
 
     /// Device label: position in the label tree
     #[opt(with(crate::alloc::disk_groups::LABEL_OPT),
           flags = device | format | runtime,
-          sb = bch_member::group,
+          sb = Member::group,
           hint = "(label)")]
     pub label: u16,
 
@@ -585,15 +585,15 @@ pub struct bch_opts {
     /// Specifies the bucket size; must be greater than the btree node size
     #[opt(uint(0, i64::MAX),
           flags = device | human_readable | sb_field_sectors,
-          sb = bch_member.bucket_size,
+          sb = Member.bucket_size,
           hint = "size")]
     pub bucket_size: u32,
 
     /// Data written to this device will be considered
     /// to have already been replicated n times
-    #[opt(uint(0, bch_member_flags::DURABILITY_MAX - 1),
+    #[opt(uint(0, MemberFlags::DURABILITY_MAX - 1),
           flags = device | runtime | sb_field_one_bias,
-          sb = bch_member::durability,
+          sb = Member::durability,
           default = 1,
           hint = "n")]
     pub durability: u8,
@@ -601,17 +601,17 @@ pub struct bch_opts {
     /// Allowed data types for this device: journal, btree, and/or user
     #[opt(bitfield(DataType, DataTypes_bits::journal | DataTypes_bits::btree | DataTypes_bits::user),
           flags = device | format,
-          sb = bch_member::data_allowed,
+          sb = Member::data_allowed,
           default = DataTypes_bits::journal | DataTypes_bits::btree | DataTypes_bits::user,
           hint = "types")]
     pub data_allowed: u8,
 
     /// Enable discard/TRIM support
-    #[opt(bool, flags = mount | fs | device | runtime, sb = bch_member::discard, default = true)]
+    #[opt(bool, flags = mount | fs | device | runtime, sb = Member::discard, default = true)]
     pub discard: u8,
 
     /// Disk is rotational; different behaviour for reconcile
-    #[opt(bool, flags = device | runtime, sb = bch_member::rotational)]
+    #[opt(bool, flags = device | runtime, sb = Member::rotational)]
     pub rotational: u8,
 
     /// BTREE_ITER_prefetch causes btree nodes to be
@@ -626,15 +626,15 @@ pub struct bch_opts {
     ///  evicted nodes is expensive (pinned nodes use 4x)
     #[opt(uint(1, 100),
           flags = fs | mount | runtime,
-          sb = bch_sb_field_ext::btree_cache_shrinker_seeks,
+          sb = SbFieldExt::btree_cache_shrinker_seeks,
           default = 2)]
     pub btree_cache_shrinker_seeks: u8,
 
     /// Per-device readahead window size; summed across
     ///  all devices to set the filesystem readahead
-    #[opt(uint(0, bch_sb_field_ext_flags0::DEV_READAHEAD_MAX << 9),
+    #[opt(uint(0, SbFieldExtFlags0::DEV_READAHEAD_MAX << 9),
           flags = fs | mount | runtime | human_readable | sb_field_sectors,
-          sb = bch_sb_field_ext::dev_readahead,
+          sb = SbFieldExt::dev_readahead,
           default = 2 << 20,
           hint = "size")]
     pub dev_readahead: u64,
@@ -643,12 +643,12 @@ pub struct bch_opts {
     ///  EC stripe buffers
     #[opt(uint(1, 25),
           flags = fs | mount | runtime,
-          sb = bch_sb_field_ext::ec_stripe_buf_limit,
+          sb = SbFieldExt::ec_stripe_buf_limit,
           default = 5,
           hint = "%")]
     pub ec_stripe_buf_limit: u8,
 
-    pub defined: bch_opts_mask,
+    pub defined: OptsMask,
 }
 
 /* inode opts: */
@@ -666,7 +666,7 @@ macro_rules! __bch_inode_opts_1 {
             #[allow(non_camel_case_types)]
             enum Bit { $($_name,)* }
 
-            impl bch_inode_opts {
+            impl InodeOpts {
                 $(
                     pub fn [<$_name _from_inode>](&self) -> bool {
                         crate::types::c_bit(&self.__bch_inode_opts_bits, Bit::$_name as usize)
@@ -681,7 +681,7 @@ macro_rules! __bch_inode_opts_1 {
 
         #[repr(C)]
         #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
-        pub struct bch_inode_opts {
+        pub struct InodeOpts {
             $($acc)*
             pub __bch_inode_opts_bits: [u8; ([$(stringify!($_name)),*].len() * 1).div_ceil(8)],
 
@@ -694,10 +694,10 @@ InodeOptId_arms!(__bch_inode_opts_0 [pub __bch_inode_opts_align: [u64; 0],]);
 pub const NR: usize = OptId::NR as usize;
 
 /// By OptId: bch_opts' #[opt]s.
-pub static OPTS: [Opt; NR] = bch_opts::TABLE;
+pub static OPTS: [Opt; NR] = Opts::TABLE;
 
 /// Each option's default, all defined.
-pub const DEFAULTS: bch_opts = bch_opts::DEFAULTS;
+pub const DEFAULTS: Opts = Opts::DEFAULTS;
 
 
 // ── Names ────────────────────────────────────────────────────────────────
@@ -732,7 +732,7 @@ pub struct OptFn {
     pub parse:    fn(fs: Option<&Fs>, val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchError>,
     /// Against @fs, or without one @sb: a target's, a label's names are
     /// theirs.
-    pub to_text:  fn(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&bch_sb<Unvalidated>>, v: u64),
+    pub to_text:  fn(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&Sb<Unvalidated>>, v: u64),
     pub validate: Option<fn(v: u64, err: Option<&mut Printbuf>) -> Result<(), BchError>>,
 }
 
@@ -747,8 +747,8 @@ pub enum OptType {
     /// A string in a member's char[] field, which it's set and shown through:
     /// not a value.
     StrMember {
-        get:     fn(&bch_member) -> &[u8],
-        get_mut: fn(&mut bch_member) -> &mut [u8],
+        get:     fn(&Member) -> &[u8],
+        get_mut: fn(&mut Member) -> &mut [u8],
         size:    usize,
     },
 }
@@ -777,7 +777,7 @@ pub trait SbOpt: Sync {
     /// A member's: a device option's.
     fn member(&self) -> bool;
     /// None if the struct it's on isn't there: no ext section, no member @dev.
-    fn get(&self, sb: &bch_sb<Unvalidated>, dev: u32) -> Option<u64>;
+    fn get(&self, sb: &Sb<Unvalidated>, dev: u32) -> Option<u64>;
     /// Whether it changed: None if the struct it's on isn't there, Err if @v
     /// doesn't fit in the field.
     fn set(&self, sb: &mut bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError>;
@@ -789,14 +789,14 @@ pub trait SbOpt: Sync {
 /// in one that is.
 pub trait OptHost: 'static {
     const MEMBER: bool;
-    fn with<R>(sb: &bch_sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R>;
+    fn with<R>(sb: &Sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R>;
     fn with_mut<R>(sb: &mut bch_sb_buf, dev: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R>;
 }
 
-impl OptHost for bch_sb_head {
+impl OptHost for SbHead {
     const MEMBER: bool = false;
 
-    fn with<R>(sb: &bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
+    fn with<R>(sb: &Sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
         Some(f(sb))
     }
 
@@ -807,10 +807,10 @@ impl OptHost for bch_sb_head {
 
 /// Read, a copy: a section written before the struct grew has its missing
 /// fields zero, as a validated one's arm reads.
-impl OptHost for bch_sb_field_ext {
+impl OptHost for SbFieldExt {
     const MEMBER: bool = false;
 
-    fn with<R>(sb: &bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
+    fn with<R>(sb: &Sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
         let src = Unvalidated::field::<Self>(sb)?.as_bytes();
         let mut ext = Self::default();
         let dst = plain_bytes_mut(&mut ext);
@@ -825,10 +825,10 @@ impl OptHost for bch_sb_field_ext {
 }
 
 /// A member that's alive: bch2_member_exists().
-impl OptHost for bch_member {
+impl OptHost for Member {
     const MEMBER: bool = true;
 
-    fn with<R>(sb: &bch_sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
+    fn with<R>(sb: &Sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
         members::sb_member(sb, dev).filter(|m| m.alive()).map(|m| f(&m))
     }
 
@@ -850,7 +850,7 @@ impl<T: OptHost + ?Sized> SbOpt for Field<T> {
         T::MEMBER
     }
 
-    fn get(&self, sb: &bch_sb<Unvalidated>, dev: u32) -> Option<u64> {
+    fn get(&self, sb: &Sb<Unvalidated>, dev: u32) -> Option<u64> {
         T::with(sb, dev, |t| (self.get)(t))
     }
 
@@ -953,7 +953,7 @@ impl Opt {
 
     /// A BCH_OPT_STR_MEMBER option's value: the string in member @m's field,
     /// up to a NUL.
-    pub fn member_str<'a>(&self, m: &'a bch_member) -> &'a [u8] {
+    pub fn member_str<'a>(&self, m: &'a Member) -> &'a [u8] {
         let OptType::StrMember { get, .. } = self.ty else {
             panic!("{}: not a member string option", self.name);
         };
@@ -963,7 +963,7 @@ impl Opt {
 
 // ── bch_opts ─────────────────────────────────────────────────────────────
 
-impl bch_opts_mask {
+impl OptsMask {
     pub const fn test(&self, id: OptId) -> bool {
         let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
         self.d[i / bits] >> (i % bits) & 1 != 0
@@ -1146,7 +1146,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
 /// One mount option, @name=@val, into @opts if it's given: an unknown
 /// option is skipped, and one that can't be parsed before the filesystem is
 /// open goes into @parse_later, if it's given, to parse then.
-pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut bch_opts>,
+pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut Opts>,
                            parse_later: Option<&mut Printbuf>, name: &[u8], val: Option<&[u8]>,
                            err: &mut Printbuf) -> Result<(), BchError> {
     let name_str = core::str::from_utf8(name).ok();
@@ -1210,7 +1210,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut bch_opts>,
 /// A mount option string, comma separated, into @opts: what can only be
 /// parsed with the filesystem open into @parse_later, as
 /// parse_one_mount_opt().
-pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut bch_opts, mut parse_later: Option<&mut Printbuf>,
+pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut Opts, mut parse_later: Option<&mut Printbuf>,
                              options: &[u8], ignore_unknown: bool) -> Result<(), BchError> {
     // sys_fsconfig() occasionally hands us a list starting with a comma
     let options = options.strip_prefix(b",").unwrap_or(options);
@@ -1237,14 +1237,14 @@ pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut bch_opts, mut parse_lat
 /// @optstr parsed into fresh options: what can only be parsed on a running
 /// filesystem too, if @fs is given.
 pub fn parse_mount_opts_cstr(fs: Option<&Fs>, optstr: &CStr, ignore_unknown: bool)
-        -> Result<bch_opts, BchError> {
+        -> Result<Opts, BchError> {
     let mut opts = Default::default();
     parse_mount_opts_into(fs, &mut opts, None, optstr.to_bytes(), ignore_unknown)?;
     Ok(opts)
 }
 
 pub fn parse_mount_opts(fs: Option<&Fs>, optstr: Option<&str>, ignore_unknown: bool)
-        -> Result<bch_opts, BchError> {
+        -> Result<Opts, BchError> {
     let mut opts = Default::default();
     if let Some(s) = optstr {
         parse_mount_opts_into(fs, &mut opts, None, s.as_bytes(), ignore_unknown)?;
@@ -1253,7 +1253,7 @@ pub fn parse_mount_opts(fs: Option<&Fs>, optstr: Option<&str>, ignore_unknown: b
 }
 
 #[cfg(feature = "std")]
-pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool) -> Result<bch_opts, BchError> {
+pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool) -> Result<Opts, BchError> {
     parse_mount_opts(None, Some(&opts.join(",")), ignore_unknown)
 }
 
@@ -1262,7 +1262,7 @@ pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool) -> Result<bch
 /// @flags: OPT_SHOW_*. Against @fs, or without one @sb: a target's, a
 /// label's names are theirs.
 #[cold]
-pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&bch_sb<Unvalidated>>, opt: &Opt, v: u64,
+pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&Sb<Unvalidated>>, opt: &Opt, v: u64,
                    flags: u32) {
     if flags & OPT_SHOW_MOUNT_STYLE != 0 {
         if let OptType::Bool = opt.ty {
@@ -1300,8 +1300,8 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&bch_sb<Unval
 /// flagged with any of @show_mask and none of @hide_mask, and of @mask if
 /// it's given.
 #[cold]
-pub fn opts_to_text(out: &mut Printbuf, opts: &bch_opts, fs: Option<&Fs>, sb: Option<&bch_sb<Unvalidated>>,
-                    mask: Option<&bch_opts_mask>, show_mask: u32, hide_mask: u32, flags: u32) {
+pub fn opts_to_text(out: &mut Printbuf, opts: &Opts, fs: Option<&Fs>, sb: Option<&Sb<Unvalidated>>,
+                    mask: Option<&OptsMask>, show_mask: u32, hide_mask: u32, flags: u32) {
     let mut first = true;
 
     for opt in &OPTS {
@@ -1337,7 +1337,7 @@ fn warn_no_member(opt: &Opt, dev: u32) {
 
 /// Option @id as the superblock has it - a device option, as member @dev's:
 /// 0 if it doesn't.
-pub fn opt_from_sb(sb: &bch_sb<Unvalidated>, id: OptId, dev: Option<u32>) -> u64 {
+pub fn opt_from_sb(sb: &Sb<Unvalidated>, id: OptId, dev: Option<u32>) -> u64 {
     let opt = id.opt();
     let v = match dev {
         None => opt.fs_field().and_then(|f| f.get(sb, 0)).unwrap_or(0),
@@ -1354,7 +1354,7 @@ pub fn opt_from_sb(sb: &bch_sb<Unvalidated>, id: OptId, dev: Option<u32>) -> u64
 
 /// The filesystem defaults @sb has, into @opts - every one it has,
 /// defined.
-pub fn opts_from_sb(opts: &mut bch_opts, sb: &bch_sb<Unvalidated>) {
+pub fn opts_from_sb(opts: &mut Opts, sb: &Sb<Unvalidated>) {
     for opt in OPTS.iter().filter(|o| o.fs_field().is_some()) {
         opts.set(opt.id, opt_from_sb(sb, opt.id, None));
     }
@@ -1362,7 +1362,7 @@ pub fn opts_from_sb(opts: &mut bch_opts, sb: &bch_sb<Unvalidated>) {
 
 /// Whether the filesystem defaults @sb has are valid, as options: an
 /// invalid one said in @out.
-pub fn opts_validate_sb(sb: &bch_sb<Unvalidated>, out: &mut Printbuf) -> Result<(), BchError> {
+pub fn opts_validate_sb(sb: &Sb<Unvalidated>, out: &mut Printbuf) -> Result<(), BchError> {
     for opt in OPTS.iter().filter(|o| o.fs_field().is_some()) {
         let mut err = Printbuf::new();
         if let Err(e) = opt_validate(opt, opt_from_sb(sb, opt.id, None), Some(&mut err)) {
@@ -1374,7 +1374,7 @@ pub fn opts_validate_sb(sb: &bch_sb<Unvalidated>, out: &mut Printbuf) -> Result<
 }
 
 /// A filesystem's options: @sb's, valid, and the mount's @opts over them
-pub fn fs_opts(sb: &bch_sb<Unvalidated>, opts: &bch_opts, out: &mut Printbuf) -> Result<bch_opts, BchError> {
+pub fn fs_opts(sb: &Sb<Unvalidated>, opts: &Opts, out: &mut Printbuf) -> Result<Opts, BchError> {
     opts_validate_sb(sb, out)?;
 
     let mut fs_opts = DEFAULTS;

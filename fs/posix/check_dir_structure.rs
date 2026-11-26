@@ -31,13 +31,13 @@ use crate::btree::iter::{
 use crate::c;
 use crate::posix::inode_format::InodeFlags;
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::subvolume::SubvolInum;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::{error::id, progress::Progress};
 use crate::snapshots::subvolume;
 use crate::posix::dirent::{self, Dirent};
-use crate::posix::inode::{Inodes, bch_inode_unpacked};
+use crate::posix::inode::{Inodes, InodeUnpacked};
 use crate::util::{alloc::Vec, Printbuf, log::LogMsg};
 use crate::{bch_err_fn, bch_err_msg, bch_warn, here, inode_fsck_err, prt};
 use crate::format::Btree;
@@ -46,7 +46,7 @@ use crate::format::Btree;
 fn dirent_points_to_inode(
     fs:    &Fs,
     k:     BkeySC<'_>,
-    inode: &mut bch_inode_unpacked,
+    inode: &mut InodeUnpacked,
 ) -> Result<(), BchError> {
     let d = Dirent::new(k).expect("dirent lookups only return dirents");
 
@@ -60,7 +60,7 @@ fn dirent_points_to_inode(
 
 fn remove_backpointer(
     t:     &TransAttempt<'_, '_>,
-    inode: &mut bch_inode_unpacked,
+    inode: &mut InodeUnpacked,
 ) -> Result<(), BchError> {
     if !inode.has_backpointer() {
         return Ok(());
@@ -81,7 +81,7 @@ fn remove_backpointer(
 }
 
 /// @root: the subvolume and its root inode.
-fn reattach_subvol(t: &TransAttempt<'_, '_>, root: subvol_inum) -> Result<(), BchError> {
+fn reattach_subvol(t: &TransAttempt<'_, '_>, root: SubvolInum) -> Result<(), BchError> {
     let fs = t.fs();
 
     let mut inode = inode::find_by_inum_trans(t, root, here!())?;
@@ -113,7 +113,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
     let mut parent_iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN,
                                          BtreeIterFlags::empty());
 
-    let start = subvol_inum {
+    let start = SubvolInum {
         subvol: k.k.p.offset,
         inum:   start_sv.inode.get(),
     };
@@ -132,7 +132,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
         subvol_path.push(s.k.p.offset as u32)?;
 
-        let root = subvol_inum { subvol: s.k.p.offset, inum: sv.inode.get() };
+        let root = SubvolInum { subvol: s.k.p.offset, inum: sv.inode.get() };
 
         inode::find_by_inum_trans(t, root, here!())?;
 

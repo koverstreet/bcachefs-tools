@@ -19,7 +19,7 @@ use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::data::ec::head::StripeBlockMask;
-use crate::format::{bch_csum, CsumType};
+use crate::format::{Csum, CsumType};
 use crate::sb::{members_format::MemberErrorType, errors::SbErrorId};
 use crate::data::ec::stripe::{shape, Shape, StripeKey, MAX_BLOCKS};
 use crate::errcode::{Errcode, BchError};
@@ -127,8 +127,8 @@ pub struct StripeBuf {
     pub(crate) data:   [Option<IoBuf>; MAX_BLOCKS],
     /// Stale when we read the stripe key: an alloc inconsistency
     pub(crate) stale:  StripeBlockMask,
-    pub(crate) csum_good: [bch_csum; MAX_BLOCKS],
-    pub(crate) csum_bad:  [bch_csum; MAX_BLOCKS],
+    pub(crate) csum_good: [Csum; MAX_BLOCKS],
+    pub(crate) csum_bad:  [Csum; MAX_BLOCKS],
 }
 
 impl StripeBuf {
@@ -166,8 +166,8 @@ impl StripeBuf {
             err:       [[None; MAX_BLOCKS]; 2],
             data:      [const { None }; MAX_BLOCKS],
             stale:     Default::default(),
-            csum_good: [bch_csum::default(); MAX_BLOCKS],
-            csum_bad:  [bch_csum::default(); MAX_BLOCKS],
+            csum_good: [Csum::default(); MAX_BLOCKS],
+            csum_bad:  [Csum::default(); MAX_BLOCKS],
         }? BchError).chain(|buf| {
             fs.stripe_buf_mem_get(bytes * blocks.count_ones() as usize, wait)?;
             // charged for all of @blocks: a drop on the way out frees what it
@@ -367,7 +367,7 @@ pub(crate) fn blocks_in(mask: u32) -> impl Iterator<Item = usize> {
 
 /// Block @block's checksum over the granule at @offset - sectors into the
 /// stripe - as far as the buffer goes, or the stripe does.
-pub(crate) fn block_checksum(s: BkeySC<'_, Stripe<Validated>>, b: &StripeBuf, block: u32, offset: u32) -> bch_csum {
+pub(crate) fn block_checksum(s: BkeySC<'_, Stripe<Validated>>, b: &StripeBuf, block: u32, offset: u32) -> Csum {
     let sh = b.shape(s);
     let granularity = 1u32 << sh.csum_granularity_bits;
     let end = b.offset + b.size;

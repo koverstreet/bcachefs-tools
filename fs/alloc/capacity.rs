@@ -27,14 +27,14 @@
 //! its reservation (account_disk_usage_change()); the write puts
 //! the rest.
 //!
-//! bch_fs_capacity is made by its Init and freed by its drop: its locks, and
+//! FsCapacity is made by its Init and freed by its drop: its locks, and
 //! the per-cpu counters, whose online reservations must all be put by then.
 
 
 use crate::fs::{Dev, FsFlag, Fs};
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::alloc::buckets::{bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short,
+use crate::alloc::buckets::{FsPlaceable, FsUsageBase, FsUsageShort,
     ReservationFlags, RESERVE_FACTOR};
 use crate::alloc::foreground::open_bucket;
 use crate::errcode::{Errcode, BchError};
@@ -62,16 +62,16 @@ use cstruct_macros::{Fieldwise, Init, MaybeZeroable, TypeInfo};
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct bch_fs_capacity_counters {
-    pub usage: bch_fs_usage_base,
+pub struct FsCapacityCounters {
+    pub usage: FsUsageBase,
     /* Indexed by disk_res_slot(); physical sectors, not data size */
     pub online_reserved: [u64; BCH_REPLICAS_MAX as usize],
 }
 
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_fs_capacity_pcpu {
-    pub counters: bch_fs_capacity_counters,
+pub struct FsCapacityPcpu {
+    pub counters: FsCapacityCounters,
     /*
      * The reservation caches, by disk_res_slot(): slots, each changed by
      * its own CPU and reset by a recompute's
@@ -83,7 +83,7 @@ pub struct bch_fs_capacity_pcpu {
 #[pin_data(PinnedDrop)]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_capacity {
+pub struct FsCapacity {
     /* sectors: recalc_capacity()'s, under state_lock, read without it */
     pub capacity: crate::util::projections::Volatile<u64>,
     pub reserved: crate::util::projections::Volatile<u64>,
@@ -104,7 +104,7 @@ pub struct bch_fs_capacity {
     pub sectors_available_lock: Locked<SpinLockIrq, (), Placement>,
 
     #[init(PerCpu::init())]
-    pub pcpu: PerCpu<bch_fs_capacity_pcpu>,
+    pub pcpu: PerCpu<FsCapacityPcpu>,
 
     #[pin]
     #[init(new_lock!((), "&c->capacity.mark_lock"))]
@@ -112,7 +112,7 @@ pub struct bch_fs_capacity {
 }
 
 /// mark_lock's place, for what it covers to name.
-pub type MarkLockAt = crate::at!(bch_fs_capacity.mark_lock);
+pub type MarkLockAt = crate::at!(FsCapacity.mark_lock);
 
 
 // ── Capacity ─────────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ pub(crate) fn avail_factor(r: u64) -> u64 {
 
 impl Fs {
     /// Sectors in use by kind, every CPU's count summed.
-    pub fn usage_base(&self) -> bch_fs_usage_base {
+    pub fn usage_base(&self) -> FsUsageBase {
         percpu_field!(self.capacity.pcpu.get(), counters.usage).sum_nonnegative()
     }
 
@@ -301,7 +301,7 @@ impl Fs {
     }
 
     /// Capacity, and how much of it is used and free, in sectors.
-    pub fn usage_read_short(&self) -> bch_fs_usage_short {
+    pub fn usage_read_short(&self) -> FsUsageShort {
         let _mark = self.mark_lock().read();
         // one sweep over the CPUs, for both
         let b = percpu_field!(self.capacity.pcpu.get(), counters).sum_nonnegative();
@@ -313,7 +313,7 @@ impl Fs {
         let reserved = b.usage.reserved + b.online_reserved.iter().sum::<u64>();
         let used     = capacity.min(data + reserve_factor(reserved));
 
-        bch_fs_usage_short { capacity, used, free: capacity - used }
+        FsUsageShort { capacity, used, free: capacity - used }
     }
 }
 
@@ -552,13 +552,13 @@ impl DevFreeDist {
     /// in the bucket counts - come off the way the slowpath drew them, from
     /// their slot upwards; usage.reserved has no count, so it comes off the
     /// top.
-    fn partition(&self, b: &bch_fs_capacity_counters) -> [u64; REPLICAS_MAX] {
+    fn partition(&self, b: &FsCapacityCounters) -> [u64; REPLICAS_MAX] {
         self.partition_stages(b)[2]
     }
 
     /// partition(), stage by stage: placeable, less what's reserved, less the
     /// reserve factor's margin - for the ENOSPC trace to show where it went.
-    fn partition_stages(&self, b: &bch_fs_capacity_counters) -> [[u64; REPLICAS_MAX]; 3] {
+    fn partition_stages(&self, b: &FsCapacityCounters) -> [[u64; REPLICAS_MAX]; 3] {
         let mut out = [0; REPLICAS_MAX];
         let mut above = 0;
 
@@ -589,7 +589,7 @@ impl DevFreeDist {
 /// to be explained from what decided it.
 struct FreeSpace {
     dist:     DevFreeDist,
-    counters: bch_fs_capacity_counters,
+    counters: FsCapacityCounters,
 }
 
 impl FreeSpace {
@@ -628,7 +628,7 @@ impl Fs {
 
     /// Free space by the replica count it's placeable at, eventually and now,
     /// less what's reserved.
-    pub fn sectors_placeable(&self) -> bch_fs_placeable {
+    pub fn sectors_placeable(&self) -> FsPlaceable {
         let _mark = self.mark_lock().read();
         let (eventual, now) = self.free_dists();
 
@@ -641,7 +641,7 @@ impl Fs {
             }
             out
         };
-        bch_fs_placeable { eventual: at_or_above(&eventual), now: at_or_above(&now) }
+        FsPlaceable { eventual: at_or_above(&eventual), now: at_or_above(&now) }
     }
 }
 
@@ -1021,7 +1021,7 @@ impl Drop for DiskReservation<'_> {
 // ── Teardown ─────────────────────────────────────────────────────────────
 
 #[pinned_drop]
-impl PinnedDrop for bch_fs_capacity {
+impl PinnedDrop for FsCapacity {
     fn drop(self: Pin<&mut Self>) {
         if self.pcpu.allocated() {
             let online_reserved = crate::percpu_field!(self.pcpu.get(), counters.online_reserved).sum();

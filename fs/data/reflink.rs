@@ -37,7 +37,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkP,
     ReflinkPIdxFlags, ReflinkV};
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_one;
 use crate::errcode::{Errcode, BchError};
@@ -58,7 +58,7 @@ use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::MaybeZeroable;
 use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature,
-    BCH_REPLICAS_MAX, bkey};
+    BCH_REPLICAS_MAX, Bkey};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags_bits::indirect }>;
 
@@ -69,7 +69,7 @@ pub type Indirect = FamilyVal<IndirectTypes>;
 
 pub static REFCOUNT: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::indirect, "refcount");
 
-fn refcount_offset(k: &bkey) -> usize {
+fn refcount_offset(k: &Bkey) -> usize {
     REFCOUNT.of(k).expect("an indirect extent's type has a refcount")
 }
 
@@ -102,7 +102,7 @@ pub trait BkeyVIndirect: BkeyV<V = Indirect> {
 
 impl<K: BkeyV<V = Indirect>> BkeyVIndirect for K {}
 
-impl bkey {
+impl Bkey {
     /// The type a direct extent of its type is, made indirect: deleted for a
     /// type that has none, as bkey_type_to_indirect() returns 0.
     pub fn indirect_type(&self) -> BkeyType {
@@ -778,7 +778,7 @@ pub fn make_extent_indirect<'a, 't>(
     }
 
     /*
-     * A non-degraded extent carries no bch_extent_reconcile entry - for a
+     * A non-degraded extent carries no ExtentReconcile entry - for a
      * data extent that's fine, reconcile re-derives the io options from the
      * inode each pass. But once it's indirect there's no inode to derive
      * from, so snapshot the inode's options onto the reflink_v now;
@@ -805,7 +805,7 @@ pub fn make_extent_indirect<'a, 't>(
     let mut r_v = t.bkey_alloc(r_v_buf_u64s)?;
 
     let k = r_v.k_mut();
-    *k = bkey::new();
+    *k = Bkey::new();
     k.type_    = orig.k().indirect_type().0 as u8;
     k.p        = reflink_iter.pos();
     k.resize(orig.k().size);
@@ -848,9 +848,9 @@ pub fn make_extent_indirect<'a, 't>(
 #[allow(clippy::too_many_arguments)]
 pub fn remap_range(
     fs:                          &Fs,
-    dst_inum:                    subvol_inum,
+    dst_inum:                    SubvolInum,
     dst_offset:                  u64,
-    src_inum:                    subvol_inum,
+    src_inum:                    SubvolInum,
     src_offset:                  u64,
     remap_sectors:               u64,
     mut new_i_size:              u64,

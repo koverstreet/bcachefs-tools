@@ -19,15 +19,15 @@ use crate::btree::bkey::{BkeySC, ValidateFlags, BkeyI, BKEY_U64S};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::btree::write_buffer;
 use crate::c;
-use crate::alloc::dev_select::dev_stripe_state;
-use crate::alloc::foreground::{dev_alloc_list, Watermark};
-use crate::data::extents::bch_io_failures;
-use crate::data::extents_format::bch_extent_ptr;
-use crate::init::dev::{bch_devs_list, bch_devs_mask, DevFlag};
+use crate::alloc::dev_select::DevStripeState;
+use crate::alloc::foreground::{DevAllocList, Watermark};
+use crate::data::ptrs::IoFailures;
+use crate::data::extents_format::ExtentPtr;
+use crate::init::dev::{DevsList, DevsMask, DevFlag};
 use crate::sb::{members_format::BCH_SB_MEMBERS_MAX, members::{DevIoRef, DevWriteRefKind}};
 use crate::util::time_stats::TimeStat;
 use crate::journal::buckets::JournalBucketStage::JOURNAL_BUCKET_cur;
-use crate::journal::journal::{JournalFlag as Journal, JournalGuard, journal, journal_buf,
+use crate::journal::journal::{JournalFlag, JournalGuard, Journal, JournalBuf,
     JournalCycleFlags};
 use crate::journal::reclaim::JournalSpaceFrom::journal_space_discarded;
 use crate::journal::flush_wait::{buf_waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
@@ -36,8 +36,8 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead, dst_room::DstRoom};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, BCH_REPLICAS_MAX, bkey, jset, jset_entry_datetime,
-    jset_entry_rewind_limit, MetadataVersion, JsetEntryType, BkeyType};
+use crate::format::{DataType, BCH_REPLICAS_MAX, Bkey, Jset, JsetEntryDatetime,
+    JsetEntryRewindLimit, MetadataVersion, JsetEntryType, BkeyType};
 use crate::fs::{Dev, Fs};
 use crate::journal::entries::{entry_u64s, EntryWriter};
 use crate::journal::pins::PinsRead;
@@ -72,7 +72,7 @@ use super::journal::{JournalLockAt, WritesInFlightAt};
 /// nothing: the two go from j->free_buf to an open entry's buf, side by side;
 /// the buffer into the write as it starts, then its task, and back as it's
 /// done.
-pub type JsetBuf = DstRoom<jset<Unvalidated>, Box<MappedPages>>;
+pub type JsetBuf = DstRoom<Jset<Unvalidated>, Box<MappedPages>>;
 
 impl JsetBuf {
     pub fn new(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
@@ -89,15 +89,15 @@ impl JsetBuf {
         self.capacity() as c_uint
     }
 
-    pub fn as_ptr(&self) -> *mut Head<jset> {
+    pub fn as_ptr(&self) -> *mut Head<Jset> {
         self.storage().as_non_null().as_ptr().cast()
     }
 
-    pub fn head(&self) -> &Head<jset> {
+    pub fn head(&self) -> &Head<Jset> {
         cast_plain(self.bytes()).expect("a journal buffer, a jset's header at its start")
     }
 
-    pub fn head_mut(&mut self) -> &mut Head<jset> {
+    pub fn head_mut(&mut self) -> &mut Head<Jset> {
         cast_plain_mut(self.bytes_mut()).expect("a journal buffer, a jset's header at its start")
     }
 
@@ -105,25 +105,25 @@ impl JsetBuf {
     ///
     /// # Safety
     /// j->lock is held, and nothing else refers to the header.
-    unsafe fn header_mut(&self) -> &mut Head<jset> {
+    unsafe fn header_mut(&self) -> &mut Head<Jset> {
         unsafe { &mut *self.as_ptr() }
     }
 
     /// Where the body's first @u64s are, the entries, without the header: for
     /// the write buffer's flush, which has them by buf_lock.
     pub(crate) fn entries_ptr(&self, u64s: usize) -> NonNull<[u8]> {
-        let hdr = mem::size_of::<Head<jset>>();
+        let hdr = mem::size_of::<Head<Jset>>();
         let d = self.storage().as_non_null();
         assert!(hdr + u64s * 8 <= d.len(), "journal entries of {u64s} u64s past a buffer of {} bytes", d.len());
         let entries = d.cast::<u8>().map_addr(|a| a.checked_add(hdr).expect("a journal buffer's entries, within it"));
         NonNull::slice_from_raw_parts(entries, u64s * 8)
     }
 
-    pub fn jset(&self) -> &jset<Unvalidated> {
+    pub fn jset(&self) -> &Jset<Unvalidated> {
         self
     }
 
-    pub fn jset_mut(&mut self) -> &mut jset<Unvalidated> {
+    pub fn jset_mut(&mut self) -> &mut Jset<Unvalidated> {
         self
     }
 
@@ -164,7 +164,7 @@ impl BufJset {
         g.get_mut_of(&self.0).take().expect("a journal write's buffer, in its buf")
     }
 
-    pub fn header<'g>(&'g self, g: &'g mut JournalGuard<'_>) -> &'g mut Head<jset> {
+    pub fn header<'g>(&'g self, g: &'g mut JournalGuard<'_>) -> &'g mut Head<Jset> {
         let data = (*g).get_of(&self.0).as_ref().expect("an open journal entry's buffer");
         unsafe { data.header_mut() }
     }
@@ -187,7 +187,7 @@ impl BufJset {
 }
 
 #[bitfield(u16)]
-pub struct journal_buf_bits {
+pub struct JournalBufBits {
     separate_flush:             bool,
     need_flush_to_write_buffer: bool,
     write_started:              bool,
@@ -209,7 +209,7 @@ pub type JournalKey = DstRoom<BkeyI, [u64; BKEY_U64S + BCH_REPLICAS_MAX as usize
 impl JournalKey {
     pub fn empty() -> Self {
         let mut key = Self::default();
-        key.k = bkey::new();
+        key.k = Bkey::new();
         key.k.set_key_type(BkeyType::extent);
         key
     }
@@ -218,11 +218,11 @@ impl JournalKey {
 #[derive(::pin_init::Zeroable)]
 pub struct WriteAlloc {
     /* The round robin over devices journal writes take: */
-    pub stripe: dev_stripe_state,
+    pub stripe: DevStripeState,
     /* Failure domain keys scratch for journal_write_alloc(): */
     pub wp_domain_keys: [u64; BCH_SB_MEMBERS_MAX as usize],
     /* The devices the last journal write went to, which the next one prefers: */
-    pub wp_prev_devs: bch_devs_mask,
+    pub wp_prev_devs: DevsMask,
 }
 
 /// A journal write's ref on the journal, held to the end of write_done().
@@ -261,11 +261,11 @@ struct Allocated {
 /// done.
 pub struct Written {
     /* the buf written, for its done */
-    buf:          &'static journal_buf,
+    buf:          &'static JournalBuf,
     /* the entry's buffer, the write's from write_start() on */
     data:         JsetBuf,
-    devs:         bch_devs_list,
-    failed:       bch_io_failures,
+    devs:         DevsList,
+    failed:       IoFailures,
     /* preflushes go to every rw member with unflushed writes */
     flush_failed: PreflushErrs,
     /* no keys, and its last_seq its own: nothing at or before it to replay */
@@ -273,7 +273,7 @@ pub struct Written {
 }
 
 impl Written {
-    fn new(buf: &'static journal_buf, data: JsetBuf) -> Self {
+    fn new(buf: &'static JournalBuf, data: JsetBuf) -> Self {
         Written {
             buf,
             data,
@@ -322,7 +322,7 @@ impl JsetBuf {
     }
 }
 
-impl journal_buf {
+impl JournalBuf {
     pub fn must_not_flush(&self) -> bool {
         self.wait_word().load(Relaxed) == JOURNAL_BUF_NOFLUSH
     }
@@ -362,7 +362,7 @@ fn write_of(w: &Option<MaybeRcuAlloc<JournalWrite>>) -> &JournalWrite {
     w.as_deref().expect("a journal buf's write, made with its buffer")
 }
 
-impl journal {
+impl Journal {
     fn last_unallocated_seq(&self, g: &JournalGuard<'_>) -> u64 {
         self.in_flight.locked(g).iter_indexed()
             .find(|(_, buf)| !g.get_of(&buf.bits).write_allocated())
@@ -370,12 +370,12 @@ impl journal {
     }
 }
 
-fn advance_devs_to_next_bucket(j: &journal, devs: &bch_devs_mask, sectors: u32, seq: u64) {
+fn advance_devs_to_next_bucket(j: &Journal, devs: &DevsMask, sectors: u32, seq: u64) {
     let fs = j.fs();
     let rcu = read_lock();
     let mut g = j.lock.lock();
 
-    for i in devs.d.iter() {
+    for i in devs.iter() {
         let Some(ca) = fs.dev_rcu(i as u32, &rcu) else { continue };
         let ja = &ca.journal;
         let bucket_size: u32 = ca.mi.get().bucket_size.into();
@@ -399,22 +399,22 @@ const JOURNAL_DEV_STICKINESS: u64 = 8;
 fn dev_score(a: &WriteAlloc, ca: &Dev) -> u64 {
     let latency = ca.cur_latency[WRITE].load(Relaxed) as u64 + 1;
 
-    if a.wp_prev_devs.d.test(ca.dev_idx.into()) {
+    if a.wp_prev_devs.test(ca.dev_idx.into()) {
         latency
     } else {
         latency * JOURNAL_DEV_STICKINESS
     }
 }
 
-fn __write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64, cas: &mut Cas,
-                 devs: &bch_devs_mask, sectors: u32, replicas: &mut u32, replicas_want: u32) {
+fn __write_alloc(j: &Journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64, cas: &mut Cas,
+                 devs: &DevsMask, sectors: u32, replicas: &mut u32, replicas_want: u32) {
     let fs = j.fs();
 
     /* the devices its key has a pointer to */
-    let mut chosen = bch_devs_mask::default();
+    let mut chosen = DevsMask::default();
     if let Some(k) = BkeySC::from(&**key).arm::<Ptrs>() {
         for ptr in k.ptrs(fs) {
-            chosen.d.set(ptr.dev().into());
+            chosen.set(ptr.dev().into());
         }
     }
 
@@ -424,7 +424,7 @@ fn __write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64
          * one pick per sort, since each pick changes the occupancy
          * the next should avoid:
          */
-        let mut devs_sorted = ::pin_init::zeroed::<dev_alloc_list>();
+        let mut devs_sorted = ::pin_init::zeroed::<DevAllocList>();
         fs.dev_alloc_list_devs(&mut a.stripe, devs, &chosen, &mut a.wp_domain_keys, &mut devs_sorted);
 
         /* The lowest score in the best failure domain, ties in sort order: */
@@ -442,7 +442,7 @@ fn __write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64
              * already using it:
              */
             if ja.nr() == 0 ||
-                chosen.d.test(cand.dev_idx.into()) ||
+                chosen.test(cand.dev_idx.into()) ||
                 sectors > ja.sectors_free.get() ||
                 ca.as_ref().is_some_and(|ca| dev_score(a, &cand) >= dev_score(a, ca)) {
                 continue;
@@ -475,9 +475,9 @@ fn __write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64
         crate::warn_once!(offset == ca.prev_journal_sector.get(), fs, "journal write to {}:{offset} again", ca.dev_idx);
         ca.prev_journal_sector.set(offset);
 
-        crate::data::extents::bkey_append_ptr(key, bch_extent_ptr::new().with_offset(offset).with_dev(ca.dev_idx))
+        crate::data::extents::bkey_append_ptr(key, ExtentPtr::new().with_offset(offset).with_dev(ca.dev_idx))
             .expect("a journal key's pointers fit in key_pad");
-        chosen.d.set(ca.dev_idx.into());
+        chosen.set(ca.dev_idx.into());
 
         /* Stash ca alongside the just-appended ptr; submit + no_io
          * walk @key.k.u64s ptrs in order, so the index lines up. */
@@ -489,7 +489,7 @@ fn __write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64
     }
 }
 
-fn write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, data: &JsetBuf, cas: &mut Cas,
+fn write_alloc(j: &Journal, a: &mut WriteAlloc, key: &mut JournalKey, data: &JsetBuf, cas: &mut Cas,
                replicas: &mut u32) -> Result<(), BchError>
 {
     let fs = j.fs();
@@ -506,7 +506,7 @@ fn write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, data: &Jse
 
         /* The last write's devices, if out of room, move to their next bucket: */
         let mut prev = devs;
-        prev.d.and(&a.wp_prev_devs.d);
+        prev.and(&a.wp_prev_devs);
         advance_devs_to_next_bucket(j, &prev, sectors, seq);
 
         __write_alloc(j, a, key, seq, cas, &devs, sectors, replicas, replicas_want);
@@ -533,10 +533,10 @@ fn write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, data: &Jse
     assert!(nr_ptrs <= BCH_REPLICAS_MAX as usize, "journal write to {nr_ptrs} devices");
 
     if *replicas != 0 {
-        a.wp_prev_devs = bch_devs_mask::default();
+        a.wp_prev_devs = DevsMask::default();
         if let Some(k) = BkeySC::from(&**key).arm::<Ptrs>() {
             for ptr in k.ptrs(fs) {
-                a.wp_prev_devs.d.set(ptr.dev().into());
+                a.wp_prev_devs.set(ptr.dev().into());
             }
         }
     }
@@ -548,7 +548,7 @@ fn write_alloc(j: &journal, a: &mut WriteAlloc, key: &mut JournalKey, data: &Jse
     }
 }
 
-fn buf_realloc(j: &journal, data: &mut JsetBuf) {
+fn buf_realloc(j: &Journal, data: &mut JsetBuf) {
     let fs = j.fs();
 
     /* we aren't holding j->lock: */
@@ -594,7 +594,7 @@ fn replicas_refs_put(fs: &Fs, refs: &mut ReplicasRefs) {
     refs.clear();
 }
 
-fn update_last_seq_ondisk(j: &journal, pins: &PinsRead<'_>, g: &mut JournalGuard<'_>, last_seq_ondisk: u64,
+fn update_last_seq_ondisk(j: &Journal, pins: &PinsRead<'_>, g: &mut JournalGuard<'_>, last_seq_ondisk: u64,
                           refs: &mut ReplicasRefs) -> Result<(), BchError> {
     assert!(last_seq_ondisk <= j.pin_range().pin_back.get(),
             "journal last_seq_ondisk {last_seq_ondisk} past pin_back {}", j.pin_range().pin_back.get());
@@ -610,7 +610,7 @@ fn update_last_seq_ondisk(j: &journal, pins: &PinsRead<'_>, g: &mut JournalGuard
                 None => refs.try_push((devs_r, 1)).map_err(|_| j.fs().err(Errcode::ENOMEM_journal_buf))?,
             }
 
-            pins.seq_set_devs(seq, &bch_devs_list::default());
+            pins.seq_set_devs(seq, &DevsList::default());
         }
 
         let mut bytes = pins.seq_take_bytes(seq) as usize;
@@ -650,7 +650,7 @@ fn update_last_seq_ondisk(j: &journal, pins: &PinsRead<'_>, g: &mut JournalGuard
  * past our seq, and let going-RO mark the FS clean before our refs are
  * actually put.
  */
-fn last_uncompleted_write_seq(j: &journal, g: &JournalGuard<'_>, seq_completing: u64) -> u64 {
+fn last_uncompleted_write_seq(j: &Journal, g: &JournalGuard<'_>, seq_completing: u64) -> u64 {
     let in_flight = j.in_flight.locked(g);
     let Some(front) = in_flight.peek_front() else { return 0 };
     let seq = in_flight.front_idx();
@@ -658,7 +658,7 @@ fn last_uncompleted_write_seq(j: &journal, g: &JournalGuard<'_>, seq_completing:
     if g.get_of(&front.bits).write_done() || seq == seq_completing { seq } else { 0 }
 }
 
-fn write_done(w: &journal_buf, written: Written) {
+fn write_done(w: &JournalBuf, written: Written) {
     let j = w.journal();
     let fs = j.fs();
     let mut err = Ok(());
@@ -691,7 +691,7 @@ fn write_done(w: &journal_buf, written: Written) {
 
     if unlikely(write_failed || flush_failed) {
         fs.replicas_entry_put_many(&DevlistEntry::new(DataType::journal, pins.seq_devs(seq_wrote)), 1);
-        pins.seq_set_devs(seq_wrote, &bch_devs_list::default());
+        pins.seq_set_devs(seq_wrote, &DevsList::default());
     }
 
     if pins.seq_devs(seq_wrote).nr == 0 && !written.empty {
@@ -856,7 +856,7 @@ struct Completed {
  * buf retired. j->lock is dropped to put the replicas refs last_seq_ondisk
  * releases, so the guard is handed back.
  */
-fn complete_writes<'a>(j: &'a journal, mut g: JournalGuard<'a>, pins: &PinsRead<'_>, seq_wrote: u64)
+fn complete_writes<'a>(j: &'a Journal, mut g: JournalGuard<'a>, pins: &PinsRead<'_>, seq_wrote: u64)
     -> (JournalGuard<'a>, Completed)
 {
     let fs = j.fs();
@@ -926,7 +926,7 @@ fn complete_writes<'a>(j: &'a journal, mut g: JournalGuard<'a>, pins: &PinsRead<
 }
 
 /// In the last bio's endio, of a flush.
-fn wake_flush_waiters(w: &journal_buf, written: &Written) {
+fn wake_flush_waiters(w: &JournalBuf, written: &Written) {
     /*
      * Wake up flush waiters early, if there wasn't an error:
      *
@@ -974,7 +974,7 @@ fn write_opf(fs: &Fs, data: &JsetBuf, key: &JournalKey, separate_flush: bool) ->
 
 /// An empty REQ_PREFLUSH to every rw member with unflushed writes, or in
 /// @devs, which the entry's going to, submitted to @g.
-fn write_preflush(w: &journal_buf, devs: &bch_devs_list, g: &Gather<PreflushErrs, waiter::Async>) {
+fn write_preflush(w: &JournalBuf, devs: &DevsList, g: &Gather<PreflushErrs, waiter::Async>) {
     let fs = w.journal().fs();
     let _noio = MemallocFlags::noio();
 
@@ -999,10 +999,10 @@ fn write_preflush(w: &journal_buf, devs: &bch_devs_list, g: &Gather<PreflushErrs
 /// roots - the datetime, and super_entries_add_common()'s: what
 /// super_entries_journal_res reserves.
 pub(crate) const PREP_ENTRIES_U64S: usize =
-    entry_u64s::<jset_entry_datetime>() + crate::sb::clean::COMMON_U64S;
+    entry_u64s::<JsetEntryDatetime>() + crate::sb::clean::COMMON_U64S;
 
 /// The entry compacted, and whether it's empty.
-fn write_prep(j: &journal, w: &journal_buf, data: &mut JsetBuf, closed: &Closed) -> Result<bool, BchError> {
+fn write_prep(j: &Journal, w: &JournalBuf, data: &mut JsetBuf, closed: &Closed) -> Result<bool, BchError> {
     let fs = j.fs();
     let mut wb = None;
     let mut btree_roots_have = 0u64;
@@ -1018,7 +1018,7 @@ fn write_prep(j: &journal, w: &journal_buf, data: &mut JsetBuf, closed: &Closed)
         h.set_no_flush(true);
         h.last_seq.set(0);
     } else {
-        let mut r = jset_entry_rewind_limit::default();
+        let mut r = JsetEntryRewindLimit::default();
         r.seq.set(j.lock.rewind_seq.get().min(seq + 1));
         data.append_entries(|ew| ew.push_entry(0, 0, r).expect("rewind_limit_res's room"));
     }
@@ -1094,7 +1094,7 @@ fn write_prep(j: &journal, w: &journal_buf, data: &mut JsetBuf, closed: &Closed)
     let u64s = data.append_entries(|ew| {
         btree_roots_to_journal_entries(fs, ew, btree_roots_have).expect("root_journal_res's room");
 
-        let mut d = jset_entry_datetime::default();
+        let mut d = JsetEntryDatetime::default();
         d.seconds.set(ktime_get_real_seconds() as u64);
         ew.push_entry(0, 0, d).expect("super_entries_journal_res's room");
 
@@ -1115,7 +1115,7 @@ fn write_prep(j: &journal, w: &journal_buf, data: &mut JsetBuf, closed: &Closed)
     Ok(empty)
 }
 
-fn write_checksum(j: &journal, data: &mut JsetBuf, closed: &Closed) -> Result<(), BchError> {
+fn write_checksum(j: &Journal, data: &mut JsetBuf, closed: &Closed) -> Result<(), BchError> {
     let fs = j.fs();
     let csum_type = fs.meta_checksum_type();
     let mut validate_before_checksum = false;
@@ -1161,7 +1161,7 @@ fn write_checksum(j: &journal, data: &mut JsetBuf, closed: &Closed) -> Result<()
 /// The entry's buffer, out of its write for its task, and what close
 /// settled of it - under buf_lock, held till write_prep() is done: the write
 /// buffer's flush reads the buffer in the write till then.
-fn write_take(w: &journal_buf, seq: u64, _: &BufLockGuard<'_>) -> (Closed, JsetBuf) {
+fn write_take(w: &JournalBuf, seq: u64, _: &BufLockGuard<'_>) -> (Closed, JsetBuf) {
     let mut l = w.journal().lock.lock();
     let bits = l.get_of(&w.bits);
     assert!(bits.write_started(), "journal write of seq {seq} not started");
@@ -1180,7 +1180,7 @@ fn write_take(w: &journal_buf, seq: u64, _: &BufLockGuard<'_>) -> (Closed, JsetB
 
 /// The entry compacted - under @b, its buf_lock, from write_take() - its
 /// devices allocated - returned - and checksummed, its replicas marked.
-fn write_start(w: &journal_buf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, written: &mut Written)
+fn write_start(w: &JournalBuf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, written: &mut Written)
     -> Result<Allocated, BchError>
 {
     let j = w.journal();
@@ -1196,7 +1196,7 @@ fn write_start(w: &journal_buf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, 
     drop(b);
 
     let ret = j.error();
-    if ret.is_err() && j.flags.get(Journal::need_flush_write) {
+    if ret.is_err() && j.flags.get(JournalFlag::need_flush_write) {
         ret?;
     }
 
@@ -1256,7 +1256,7 @@ fn write_start(w: &journal_buf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, 
         let pins = j.pins();
 
         if let Err(e) = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, written.devs)) {
-            pins.seq_set_devs(seq, &bch_devs_list::default());
+            pins.seq_set_devs(seq, &DevsList::default());
             return Err(e);
         }
 
@@ -1268,7 +1268,7 @@ fn write_start(w: &journal_buf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, 
 
 /// write_start()'s error: the filesystem goes emergency read-only, and the
 /// write does no IO.
-fn write_start_err(w: &journal_buf, data: &JsetBuf, e: BchError) {
+fn write_start_err(w: &JournalBuf, data: &JsetBuf, e: BchError) {
     let j = w.journal();
     let fs = j.fs();
     let mut msg = crate::util::log::LogMsg::new(fs);
@@ -1282,7 +1282,7 @@ fn write_start_err(w: &journal_buf, data: &JsetBuf, e: BchError) {
 
 /// A journal entry written: it, where to and what failed, for its done.
 #[in_place(WriteFut)]
-async fn write_task(w: &'static journal_buf, seq: u64) -> Written {
+async fn write_task(w: &'static JournalBuf, seq: u64) -> Written {
     let j = w.journal();
     let fs: &'static Fs = j.fs();
     let wq: &'static Queue = &j.wq;
@@ -1367,7 +1367,7 @@ impl JournalWrite {
     /// The task that writes @buf's entry @seq - its write started under
     /// j->lock, @buf holding this write - made where the last write's was, and
     /// started on the journal's workqueue.
-    fn start(self: Pin<&mut Self>, buf: &'static journal_buf, seq: u64, data: JsetBuf) {
+    fn start(self: Pin<&mut Self>, buf: &'static JournalBuf, seq: u64, data: JsetBuf) {
         let j = buf.journal();
         let w = self.project();
         assert!(w.data.get_mut().replace(data).is_none(), "a journal write started, holding the last one's buffer");
@@ -1389,7 +1389,7 @@ fn write_task_done(_: NonNull<Task<'static, WriteFut>>, written: Written) {
     write_done(written.buf, written);
 }
 
-fn waitlist_splice(from: &journal_buf, to: &journal_buf) -> bool {
+fn waitlist_splice(from: &JournalBuf, to: &JournalBuf) -> bool {
     let Some(waiters) = from.take_waiters(JOURNAL_BUF_NOFLUSH) else { return true };
 
     match to.add_waiters(waiters) {
@@ -1401,7 +1401,7 @@ fn waitlist_splice(from: &journal_buf, to: &journal_buf) -> bool {
     }
 }
 
-fn flush_would_free_space(j: &journal, g: &JournalGuard<'_>, new_last_seq: u64) -> bool {
+fn flush_would_free_space(j: &Journal, g: &JournalGuard<'_>, new_last_seq: u64) -> bool {
     let fs = j.fs();
     let rcu = read_lock();
 
@@ -1409,8 +1409,8 @@ fn flush_would_free_space(j: &journal, g: &JournalGuard<'_>, new_last_seq: u64) 
         .any(|ca| ca.journal_ring(g).would_free(new_last_seq))
 }
 
-impl journal {
-    fn __should_flush(&self, g: &JournalGuard<'_>, w: &journal_buf, seq: u64) -> bool {
+impl Journal {
+    fn __should_flush(&self, g: &JournalGuard<'_>, w: &JournalBuf, seq: u64) -> bool {
         /*
          * If the journal is in an error state - we did an emergency shutdown -
          * we prefer to continue doing journal writes. We just mark them as
@@ -1432,7 +1432,7 @@ impl journal {
         }
 
         /* first write after filesystem was clean? */
-        if self.flags.get(Journal::need_flush_write) {
+        if self.flags.get(JournalFlag::need_flush_write) {
             return true;
         }
 
@@ -1443,7 +1443,7 @@ impl journal {
 
         /* does journal reclaim need a flush? */
         let last_seq = *g.get_of(&w.last_seq);
-        if !self.flags.get(Journal::may_skip_flush) &&
+        if !self.flags.get(JournalFlag::may_skip_flush) &&
             last_seq != self.lock.last_seq_ondisk.get() &&
             flush_would_free_space(self, g, last_seq) {
             return true;
@@ -1493,7 +1493,7 @@ impl journal {
                       g.last_flush_write.wrapping_add(msecs_to_jiffies(self.fs().opts().journal_flush_delay.get().into())))
     }
 
-    fn should_flush(&self, g: &JournalGuard<'_>, w: &journal_buf, seq: u64) -> bool {
+    fn should_flush(&self, g: &JournalGuard<'_>, w: &JournalBuf, seq: u64) -> bool {
         self.__should_flush(g, w, seq) || !w.try_noflush()
     }
 
@@ -1530,7 +1530,7 @@ impl journal {
                  * The word's made a flush then too: it's what completion and
                  * noflush_seq() go by, and write_prep() writes the header from.
                  */
-                w.try_flush() || (self.flags.get(Journal::need_flush_write) && w.flush_noflushed())
+                w.try_flush() || (self.flags.get(JournalFlag::need_flush_write) && w.flush_noflushed())
             } else {
                 false
             }
@@ -1540,7 +1540,7 @@ impl journal {
             g.last_flush_write = jiffies();
             g.nr_flush_writes += 1;
 
-            self.flags.set(Journal::need_flush_write, false);
+            self.flags.set(JournalFlag::need_flush_write, false);
             g.flushes_outstanding += 1;
 
             /*

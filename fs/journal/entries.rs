@@ -6,7 +6,7 @@
 
 use core::mem::size_of;
 
-use crate::format::{jset_entry, JSET_KEYS_U64s, JsetEntryType};
+use crate::format::{JsetEntry, JSET_KEYS_U64s, JsetEntryType};
 use crate::types::ArmOf;
 use crate::util::vstructs::{plain_bytes, Head, Plain};
 use zerocopy::IntoBytes;
@@ -31,7 +31,7 @@ pub const fn entry_u64s<E>() -> usize {
 /// journal_entry_init().
 #[inline(always)]
 fn header(ty: JsetEntryType, btree_id: u8, level: u8, u64s: usize) -> u64 {
-    let mut e = Head::<jset_entry>::default();
+    let mut e = Head::<JsetEntry>::default();
     e.type_ = ty.0 as u8;
     e.btree_id = btree_id;
     e.level = level;
@@ -108,7 +108,7 @@ impl<'a> EntryWriter<'a> {
 
     /// An entry of @e's type, for @btree_id at @level, holding @e:
     /// jset_entry_init(), filled in.
-    pub fn push_entry<E: Plain + ArmOf<jset_entry, Tag = u8>>(&mut self, btree_id: u8, level: u8, e: E)
+    pub fn push_entry<E: Plain + ArmOf<JsetEntry, Tag = u8>>(&mut self, btree_id: u8, level: u8, e: E)
         -> Result<(), NoRoom>
     {
         const { assert!(size_of::<E>() % size_of::<u64>() == 0) };

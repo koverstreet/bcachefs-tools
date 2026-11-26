@@ -11,10 +11,10 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
-use bcachefs_kernel::format::bch_key;
-use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::posix::inode::bch_inode_unpacked;
-use bcachefs_kernel::snapshots::subvolume::subvol_inum;
+use bcachefs_kernel::format::Key;
+use bcachefs_kernel::opts::Opts;
+use bcachefs_kernel::posix::inode::InodeUnpacked;
+use bcachefs_kernel::snapshots::subvolume::SubvolInum;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -23,25 +23,25 @@ use crate::wrappers::io::{self, WriteResult};
 
 /// Userspace extension methods on the core [`Fs`].
 pub trait FsExt {
-    fn open(devs: &[PathBuf], opts: bch_opts) -> Result<OpenFs, BchError>;
-    fn open_with_key(devs: &[PathBuf], opts: bch_opts, user_key: Option<&bch_key>)
+    fn open(devs: &[PathBuf], opts: Opts) -> Result<OpenFs, BchError>;
+    fn open_with_key(devs: &[PathBuf], opts: Opts, user_key: Option<&Key>)
         -> Result<OpenFs, BchError>;
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64)
         -> Result<WriteResult, BchError>;
-    fn read(&self, inum: subvol_inum, offset: u64, inode: &bch_inode_unpacked, buf: &mut [u8])
+    fn read(&self, inum: SubvolInum, offset: u64, inode: &InodeUnpacked, buf: &mut [u8])
         -> Result<(), BchError>;
     fn dev_add(&self, path: &str) -> Result<(), BchError>;
 }
 
 impl FsExt for Fs {
-    fn open(devs: &[PathBuf], opts: bch_opts) -> Result<OpenFs, BchError> {
+    fn open(devs: &[PathBuf], opts: Opts) -> Result<OpenFs, BchError> {
         Self::open_with_key(devs, opts, None)
     }
 
     /// @user_key: the passphrase-derived key, for a passphrase-protected
     /// filesystem. Without it the open looks in the keyring, and failing
     /// that prompts for the passphrase on stdin itself (bch2_request_key()).
-    fn open_with_key(devs: &[PathBuf], mut opts: bch_opts, user_key: Option<&bch_key>)
+    fn open_with_key(devs: &[PathBuf], mut opts: Opts, user_key: Option<&Key>)
         -> Result<OpenFs, BchError>
     {
         let devs: Vec<_> = devs
@@ -60,9 +60,9 @@ impl FsExt for Fs {
 
     fn read(
         &self,
-        inum: subvol_inum,
+        inum: SubvolInum,
         offset: u64,
-        inode: &bch_inode_unpacked,
+        inode: &InodeUnpacked,
         buf: &mut [u8],
     ) -> Result<(), BchError> {
         io::read(self, inum, offset, inode, buf)

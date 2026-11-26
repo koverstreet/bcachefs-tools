@@ -11,12 +11,12 @@ pub const BCH_SB_LABEL_SIZE: u32 = 32;
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_disk_group {
     pub label: [u8; BCH_SB_LABEL_SIZE as usize],
-    pub flags0: bch_disk_group_flags,
+    pub flags0: DiskGroupFlags,
     pub flags1: Le64,
 }
 
 #[bitfield(Le64)]
-pub struct bch_disk_group_flags {
+pub struct DiskGroupFlags {
     deleted:                    bool,
     data_allowed:               u5,
     parent:                     u18,
@@ -26,6 +26,6 @@ pub struct bch_disk_group_flags {
 #[whole(tail = entries: [bch_disk_group])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
-pub struct bch_sb_field_disk_groups {
+pub struct SbFieldDiskGroups {
     pub entries: [bch_disk_group; 0],
 }

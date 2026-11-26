@@ -31,7 +31,7 @@ use pin_init::pin_data;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct btree_debug {}
+pub struct BtreeDebug {}
 
 
 fn may_iterate(fs: &Fs) -> bool {
@@ -40,7 +40,7 @@ fn may_iterate(fs: &Fs) -> bool {
 
 /* btrees/<btree>/ */
 
-impl btree_debug {
+impl BtreeDebug {
     /// The filesystem it's one of the btree_debug[] of.
     fn fs(&self) -> &Fs {
         self.container()
@@ -50,9 +50,9 @@ impl btree_debug {
 enum Keys {}
 
 impl DebugFile for Keys {
-    type Obj = btree_debug;
+    type Obj = BtreeDebug;
 
-    async fn show(bd: &btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(bd: &BtreeDebug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
@@ -78,9 +78,9 @@ impl DebugFile for Keys {
 enum Formats {}
 
 impl DebugFile for Formats {
-    type Obj = btree_debug;
+    type Obj = BtreeDebug;
 
-    async fn show(bd: &btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(bd: &BtreeDebug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
@@ -134,9 +134,9 @@ impl DebugFile for Formats {
 enum BfloatFailed {}
 
 impl DebugFile for BfloatFailed {
-    type Obj = btree_debug;
+    type Obj = BtreeDebug;
 
-    async fn show(bd: &btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(bd: &BtreeDebug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
@@ -485,11 +485,11 @@ pub fn debug_init(fs: &Fs) {
     unsafe { (*fs.as_ptr()).fs_debug_dir = Some(fs_dir) };
 }
 
-pub fn bch2_debug_exit(m: &ModuleExit) {
+pub fn debug_module_exit(m: &ModuleExit) {
     BCH_DEBUG.exit(m)
 }
 
-pub fn bch2_debug_init() -> c_int {
+pub fn debug_module_init() -> c_int {
     BCH_DEBUG.init(c"bcachefs");
     BCH_DEBUG.file::<Tasks>(c"tasks", &TASKS);
     0

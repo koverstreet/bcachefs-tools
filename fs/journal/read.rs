@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::{bkey::ValidateFlags, journal_overlay::{journal_ptr, journal_replay}};
-use crate::format::{Btree, MemberState, Nonce, bch_csum, BCH_REPLICAS_MAX, jset, jset_entry,
-    ScrubJournalOpt, jset_head, JsetEntryRef};
+use crate::btree::{bkey::ValidateFlags, journal_overlay::{JournalPtr, JournalReplay}};
+use crate::format::{Btree, MemberState, Nonce, Csum, BCH_REPLICAS_MAX, Jset, JsetEntry,
+    ScrubJournalOpt, JsetHead, JsetEntryRef};
 use crate::c;
 use crate::alloc::accounting_format::DataTypes;
-use crate::init::{dev::bch_devs_list, error::id};
-use crate::journal::init::journal_start_info;
-use crate::journal::journal::{journal_rewind_range, JournalFlag};
+use crate::init::{dev::DevsList, error::id};
+use crate::journal::init::JournalStartInfo;
+use crate::journal::journal::{JournalRewindRange, JournalFlag};
 use crate::sb::{members_format::MemberErrorType, members::{DevIoRef, DevReadRefKind}};
 use crate::util::{Printbuf, ToText};
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_JOURNAL};
@@ -28,13 +28,13 @@ use crate::os::workqueue::Queue;
 use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
 use core::ops::Range;
 use pin_init::stack_pin_init;
-use super::validate::{self, Jset};
+use super::validate::{self, JsetCheck};
 
 pub use crate::format::JsetEntryType;
 
 // ---- jset helpers ----
 
-impl jset_head {
+impl JsetHead {
     /// The nonce of this journal entry: its seq, in the journal domain.
     pub fn nonce(&self) -> Nonce {
         let seq = self.seq.get();
@@ -51,15 +51,15 @@ impl jset_head {
 
 /// A journal entry's checksum covers all of it past its csum, and its
 /// encryption all of it from encrypted_start.
-impl jset<Unvalidated> {
-    pub fn checksum(&self, fs: &Fs) -> bch_csum {
+impl Jset<Unvalidated> {
+    pub fn checksum(&self, fs: &Fs) -> Csum {
         csum_vstruct(Some(fs), self.csum_type(), self.nonce(), self)
     }
 
     /// Or decrypted: ChaCha20 is its own inverse.
     pub fn encrypt(&mut self, fs: &Fs) -> Result<(), BchError> {
         let (ty, nonce) = (self.csum_type(), self.nonce());
-        let start = core::mem::offset_of!(Head<jset>, encrypted_start);
+        let start = core::mem::offset_of!(Head<Jset>, encrypted_start);
         fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[start..])
     }
 
@@ -80,7 +80,7 @@ impl jset<Unvalidated> {
     }
 }
 
-impl journal_replay {
+impl JournalReplay {
     /// A replay of jset @j, read with checksum @csum_good: no ptrs yet - its
     /// fields zeroed are that.
     fn alloc(fs: &Fs, j: &[u8], csum_good: bool) -> Result<Replay, BchError> {
@@ -94,12 +94,12 @@ impl journal_replay {
     }
 
     /// Not validated until the read's final pass: its readers come after.
-    pub fn jset(&self) -> &jset {
+    pub fn jset(&self) -> &Jset {
         &self.j
     }
 
-    pub(crate) fn jset_unvalidated(&self) -> &jset<Unvalidated> {
-        jset::<Unvalidated>::from_bytes(self.j.as_bytes()).expect("a replay holds its jset")
+    pub(crate) fn jset_unvalidated(&self) -> &Jset<Unvalidated> {
+        Jset::<Unvalidated>::from_bytes(self.j.as_bytes()).expect("a replay holds its jset")
     }
 
     /// Its jset's datetime entry's, in seconds: 0 if it has none.
@@ -115,7 +115,7 @@ impl journal_replay {
         self.ignore_blacklisted || self.ignore_not_dirty
     }
 
-    pub fn ptrs(&self) -> &[journal_ptr] {
+    pub fn ptrs(&self) -> &[JournalPtr] {
         &self.ptrs
     }
 }
@@ -123,15 +123,15 @@ impl journal_replay {
 /// The devices replay @i's copies are on, each once - or, said, none, for more
 /// than BCH_REPLICAS_MAX: no one write puts an entry on more, so they aren't
 /// its replicas, and a crafted image can claim any number.
-pub fn replay_devs(fs: &Fs, i: &journal_replay) -> bch_devs_list {
-    let mut devs = bch_devs_list::default();
+pub fn replay_devs(fs: &Fs, i: &JournalReplay) -> DevsList {
+    let mut devs = DevsList::default();
     for p in i.ptrs() {
         if !devs.has(p.dev) && u32::from(devs.nr) >= BCH_REPLICAS_MAX {
             let mut buf = Printbuf::new();
             journal_ptrs_to_text(&mut buf, fs, i);
             bch_err!(fs, "journal seq {} found on more than {} devices, not tracking its replicas:\n{}",
                      i.j.seq.get(), BCH_REPLICAS_MAX, buf);
-            return bch_devs_list::default();
+            return DevsList::default();
         }
         devs.add(p.dev);
     }
@@ -139,7 +139,7 @@ pub fn replay_devs(fs: &Fs, i: &journal_replay) -> bch_devs_list {
 }
 
 /// kvmalloc()'d, its jset in it: C's journal_replay *, null for an empty slot.
-pub type Replay = ThinBox<journal_replay>;
+pub type Replay = ThinBox<JournalReplay>;
 
 crate::genradix_entry!(Option<Replay>);
 
@@ -233,7 +233,7 @@ pub fn journal_pos_from_member_info_resume(fs: &Fs) {
     }
 }
 
-fn journal_ptr_to_text(out: &mut Printbuf, fs: &Fs, p: &journal_ptr) {
+fn journal_ptr_to_text(out: &mut Printbuf, fs: &Fs, p: &JournalPtr) {
     match fs.dev_get(p.dev.into()) {
         Some(ca) => ca.to_text(out),
         None     => prt!(out, "(invalid dev)"),
@@ -241,7 +241,7 @@ fn journal_ptr_to_text(out: &mut Printbuf, fs: &Fs, p: &journal_ptr) {
     prt!(out, " {}:{}:{} (sector {})", p.dev, p.bucket, p.bucket_offset, p.sector);
 }
 
-pub fn journal_ptrs_to_text(out: &mut Printbuf, fs: &Fs, j: &journal_replay) {
+pub fn journal_ptrs_to_text(out: &mut Printbuf, fs: &Fs, j: &JournalReplay) {
     for (n, p) in j.ptrs().iter().enumerate() {
         if n != 0 {
             prt!(out, " ");
@@ -250,7 +250,7 @@ pub fn journal_ptrs_to_text(out: &mut Printbuf, fs: &Fs, j: &journal_replay) {
     }
 }
 
-fn journal_datetime_to_text(out: &mut Printbuf, j: &jset<Unvalidated>) {
+fn journal_datetime_to_text(out: &mut Printbuf, j: &Jset<Unvalidated>) {
     let t = j.datetime();
     if t != 0 {
         crate::util::printbuf::DateTime(t as i64).to_text(out);
@@ -273,9 +273,9 @@ fn journal_replay_to_text(out: &mut Printbuf, fs: &Fs, j: &Replay) {
     journal_ptrs_to_text(out, fs, j);
 }
 
-fn jset_csum_good(fs: &Fs, j: &jset<Unvalidated>) -> (bool, bch_csum) {
+fn jset_csum_good(fs: &Fs, j: &Jset<Unvalidated>) -> (bool, Csum) {
     if !j.csum_type().valid(fs) {
-        return (false, bch_csum::default());
+        return (false, Csum::default());
     }
 
     let csum = j.checksum(fs);
@@ -311,7 +311,7 @@ fn journal_replay_free(fs: &Fs, slot: &mut Option<Replay>, blacklisted: bool) {
     }
 }
 
-fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut jset<Unvalidated>) -> &'j jset<Unvalidated> {
+fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut Jset<Unvalidated>) -> &'j Jset<Unvalidated> {
     /* Drop overwrites, log entries if we don't need them: */
     let drop = fs.opts.retain_recovery_info.get() == 0 &&
         fs.opts.journal_rewind.get() == 0 &&
@@ -320,10 +320,10 @@ fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut jset<Unvalidated
 
     let j = j.as_bytes_mut();
     if drop {
-        const JSET_HEAD: usize = size_of::<Head<jset>>();
+        const JSET_HEAD: usize = size_of::<Head<Jset>>();
         let (mut src, mut dst) = (JSET_HEAD, JSET_HEAD);
         while src < j.len() {
-            let e = jset_entry::<Unvalidated>::from_bytes(&j[src..]).expect("an entry that fits");
+            let e = JsetEntry::<Unvalidated>::from_bytes(&j[src..]).expect("an entry that fits");
             let (len, ty) = (size_of_val(e), entry_type(e));
             if ty != JsetEntryType::log &&
                ty != JsetEntryType::overwrite {
@@ -333,9 +333,9 @@ fn journal_replay_maybe_drop_overwrites<'j>(fs: &Fs, j: &'j mut jset<Unvalidated
             src += len;
         }
 
-        cast_plain_mut::<Head<jset>>(j).expect("a jset's header").set_u64s((dst - JSET_HEAD) / 8);
+        cast_plain_mut::<Head<Jset>>(j).expect("a jset's header").set_u64s((dst - JSET_HEAD) / 8);
     }
-    jset::<Unvalidated>::from_bytes(j).expect("a jset, as long as its u64s says")
+    Jset::<Unvalidated>::from_bytes(j).expect("a jset, as long as its u64s says")
 }
 
 impl ReadState<'_> {
@@ -360,7 +360,7 @@ impl ReadState<'_> {
      * Given a journal entry we just read, add it to the list of journal entries to
      * be replayed:
      */
-    fn entry_add(&mut self, fs: &Fs, ca: &Dev, entry_ptr: journal_ptr, j: &mut jset<Unvalidated>)
+    fn entry_add(&mut self, fs: &Fs, ca: &Dev, entry_ptr: JournalPtr, j: &mut Jset<Unvalidated>)
         -> Result<(), BchError>
     {
         let mut last_seq = if !j.no_flush() { j.last_seq.get() } else { 0 };
@@ -472,7 +472,7 @@ impl ReadState<'_> {
             }
         }
 
-        let mut i = journal_replay::alloc(fs, bytes, entry_ptr.csum_good)?;
+        let mut i = JournalReplay::alloc(fs, bytes, entry_ptr.csum_good)?;
 
         match slot.take() {
             /* The first ptr should represent the jset we kept: */
@@ -793,11 +793,11 @@ impl<'a> DevReader<'a> {
 
         while offset < end {
             let j = &mut buf[((offset - start) << 9) as usize..];
-            let h = cast_plain_mut::<Head<jset>>(j).expect("a jset's header");
+            let h = cast_plain_mut::<Head<Jset>>(j).expect("a jset's header");
 
             let j = match validate::jset_validate_early(fs, Some(ca), h, offset, (end - offset) as u32)? {
-                Jset::Ok => jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket"),
-                Jset::None | Jset::Bad => {
+                JsetCheck::Ok => Jset::<Unvalidated>::from_bytes_mut(j).expect("a jset, cut to fit its bucket"),
+                JsetCheck::None | JsetCheck::Bad => {
                     if !saw_bad {
                         return Ok(());
                     }
@@ -849,7 +849,7 @@ impl<'a> DevReader<'a> {
                 fs_fatal_error!(fs, "decrypting journal entry: {}", e);
             }
 
-            let ptr = journal_ptr {
+            let ptr = JournalPtr {
                 csum_good,
                 csum,
                 dev:           ca.dev_idx,
@@ -876,7 +876,7 @@ impl<'a> DevReader<'a> {
             return; /* not fatal - bucket may be readable on another device */
         };
 
-        let j = cast_plain::<Head<jset>>(buf).expect("a jset's header");
+        let j = cast_plain::<Head<Jset>>(buf).expect("a jset's header");
         if j.magic.get() != self.fs.jset_magic() {
             return;
         }
@@ -1228,7 +1228,7 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
 enum Newest {
     Nothing,
     NoFlush { cur_seq: u64 },
-    Flush(journal_start_info),
+    Flush(JournalStartInfo),
 }
 
 /*
@@ -1271,7 +1271,7 @@ fn newest_flush(fs: &Fs, entries: &mut JournalEntries) -> Result<Newest, BchErro
 
         validate::jset_last_seq_check(fs, validate::jset_head_mut(i.j.as_bytes_mut()), ValidateFlags::empty())?;
 
-        return Ok(Newest::Flush(journal_start_info {
+        return Ok(Newest::Flush(JournalStartInfo {
             cur_seq,
             last_seq:   i.j.last_seq.get(),
             replay_end: i.seq(),
@@ -1282,7 +1282,7 @@ fn newest_flush(fs: &Fs, entries: &mut JournalEntries) -> Result<Newest, BchErro
     Ok(if cur_seq == 0 { Newest::Nothing } else { Newest::NoFlush { cur_seq } })
 }
 
-pub fn journal_read(fs: &Fs) -> Result<journal_start_info, BchError> {
+pub fn journal_read(fs: &Fs) -> Result<JournalStartInfo, BchError> {
     let bsearch_used = fs.opts.read_entire_journal.get() == 0;
 
     let mut not_rw = fs.not_rw();
@@ -1307,12 +1307,12 @@ pub fn journal_read(fs: &Fs) -> Result<journal_start_info, BchError> {
     let mut info = match newest_flush(fs, state.entries)? {
         Newest::Nothing => {
             bch_info!(fs, "journal read done, but no entries found");
-            return Ok(journal_start_info::default());
+            return Ok(JournalStartInfo::default());
         }
         Newest::NoFlush { cur_seq } => {
             fsck_err_on!(fs, fs.sb.clean.get() == 0, id::dirty_but_no_journal_entries_post_drop_nonflushes,
                          "journal read done, but no entries found after dropping non-flushes")?;
-            return Ok(journal_start_info { cur_seq, ..Default::default() });
+            return Ok(JournalStartInfo { cur_seq, ..Default::default() });
         }
         Newest::Flush(info) => info,
     };
@@ -1397,7 +1397,7 @@ pub fn journal_read(fs: &Fs) -> Result<journal_start_info, BchError> {
     Ok(info)
 }
 
-fn validate_kept(fs: &Fs, rewind_ranges: &mut Vec<journal_rewind_range>, entries: &mut JournalEntries, drop_before: u64)
+fn validate_kept(fs: &Fs, rewind_ranges: &mut Vec<JournalRewindRange>, entries: &mut JournalEntries, drop_before: u64)
     -> Result<(), BchError>
 {
     for i in entries.slots_mut() {
@@ -1414,10 +1414,10 @@ fn validate_kept(fs: &Fs, rewind_ranges: &mut Vec<journal_rewind_range>, entries
         let p = i.ptrs()[0];
         let ca = fs.dev_get(p.dev.into());
         match validate::jset_validate(fs, ca.as_deref(), i.j.as_bytes_mut(), p.sector, ValidateFlags::empty())? {
-            Jset::Ok => {}
+            JsetCheck::Ok => {}
             /* its last_seq was past its seq, and repaired: its entries still need validating */
-            Jset::Bad => validate::jset_validate_entries(fs, i.j.as_bytes_mut(), ValidateFlags::empty())?,
-            Jset::None => unreachable!("a kept entry's magic was checked when it was read"),
+            JsetCheck::Bad => validate::jset_validate_entries(fs, i.j.as_bytes_mut(), ValidateFlags::empty())?,
+            JsetCheck::None => unreachable!("a kept entry's magic was checked when it was read"),
         }
 
         /*
@@ -1437,7 +1437,7 @@ fn validate_kept(fs: &Fs, rewind_ranges: &mut Vec<journal_rewind_range>, entries
                     p.rewind_seq_ondisk.set(r.seq.get());
                 }
                 Ok(JsetEntryRef::rewind(r)) => {
-                    let range = journal_rewind_range { from: r.from.get(), to: r.to.get() };
+                    let range = JournalRewindRange { from: r.from.get(), to: r.to.get() };
                     let _ = rewind_ranges.push(range);
                 }
                 _ => {}
@@ -1461,19 +1461,19 @@ impl Fs {
 // ---- entry type conversion ----
 
 /// Convert entry type byte to the raw journal entry type.
-pub fn entry_type(entry: &Head<jset_entry>) -> JsetEntryType {
+pub fn entry_type(entry: &Head<JsetEntry>) -> JsetEntryType {
     JsetEntryType(entry.type_ as u32)
 }
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.
-pub fn entry_btree_id(entry: &Head<jset_entry>) -> Option<Btree> {
+pub fn entry_btree_id(entry: &Head<JsetEntry>) -> Option<Btree> {
     Btree::from_raw(entry.btree_id as u32)
 }
 
-// ---- jset_entry_log helpers ----
+// ---- JsetEntryLog helpers ----
 
 /// A log entry's message, its NUL padding trimmed - empty for any other entry.
-pub fn entry_log_msg(entry: &jset_entry) -> &[u8] {
+pub fn entry_log_msg(entry: &JsetEntry) -> &[u8] {
     let Ok(JsetEntryRef::log(l)) = entry.typed() else { return &[] };
     let data = &l.d;
     // Trim trailing nulls
@@ -1481,7 +1481,7 @@ pub fn entry_log_msg(entry: &jset_entry) -> &[u8] {
     &data[..len]
 }
 
-pub fn entry_log_str_eq(entry: &jset_entry, s: &str) -> bool {
+pub fn entry_log_str_eq(entry: &JsetEntry, s: &str) -> bool {
     let msg = entry_log_msg(entry);
     msg.len() >= s.len() && &msg[..s.len()] == s.as_bytes()
 }

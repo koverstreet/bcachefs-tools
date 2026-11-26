@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::format::DegradedAction;
 use bcachefs_kernel::sb::{counters_format::PersistentCounter, counters::COUNTERS};
 use bcachefs_kernel::fs::Fs;
@@ -35,12 +35,12 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     };
 
     // scan for member devices
-    let scan_opts = bch_opts::default();
+    let scan_opts = Opts::default();
     let sbs = crate::device_scan::scan_sbs(&cli.device, &scan_opts)?;
     let devs: Vec<PathBuf> = sbs.into_iter().map(|(p, _)| p).collect();
 
     // open fs in nostart mode
-    let mut fs_opts = bch_opts::default();
+    let mut fs_opts = Opts::default();
     fs_opts.set_nostart(true);
     fs_opts.set_will_not_start(true);
     fs_opts.set_degraded(DegradedAction::very);

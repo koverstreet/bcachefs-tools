@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! /// Filesystem block size
-//! #[opt(uint(512, 1 << 15), flags = fs | format | human_readable, sb = bch_sb.block_size,
+//! #[opt(uint(512, 1 << 15), flags = fs | format | human_readable, sb = Sb.block_size,
 //!       default = 4 << 10, hint = "size")]
 //! pub block_size: u16,
 //! ```
@@ -24,7 +24,7 @@
 //! bch_opts::TABLE          each option's Opt (opts.rs), by id
 //! bch_opts::DEFAULTS       each one's default, all defined
 //! get(), set(), defined(), apply()   by id; set() sets it defined, in the
-//!                          field `defined`, a bch_opts_mask
+//!                          field `defined`, an OptsMask
 //! name(), set_name()       each option's value - a bool option's as bool, a
 //!                          string option's as its enum - and setting it,
 //!                          defined
@@ -144,7 +144,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         ("str_member", [m]) => (quote!(#o::OptType::StrMember {
             get: |m| &m.#m,
             get_mut: |m| &mut m.#m,
-            size: #o::size_of_field::<crate::sb::members_format::bch_member, _>(|m| &m.#m),
+            size: #o::size_of_field::<crate::sb::members_format::Member, _>(|m| &m.#m),
         }), quote!(0), quote!(0)),
         (kind, _) => return Err(Error::new_spanned(&a.kind, format!("{name}: #[opt]: {kind}: not an option type"))),
     };
@@ -152,7 +152,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     let flags = &a.flags;
     let flags = quote!(0 #(| #o::OptFlags::#flags.bits())*);
     // the head: what either state of a superblock has its fields on
-    let head = |host: &Ident| match host == "bch_sb" {
+    let head = |host: &Ident| match host == "Sb" {
         true => crate::tokens::derived(host, "head"),
         false => host.clone(),
     };
@@ -430,7 +430,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             pub fn load(&self) -> #name {
                 #name {
                     #(#names: self.#names.get(),)*
-                    defined: bch_opts_mask::load(&self.defined),
+                    defined: OptsMask::load(&self.defined),
                 }
             }
 

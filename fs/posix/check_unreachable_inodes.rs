@@ -17,7 +17,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode::InodeUnpacked;
 use crate::posix::lostfound::{self, inode_should_reattach};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
@@ -50,7 +50,7 @@ struct SubvolRootSeen {
 /// also needs reattaching.
 fn find_oldest_inode_needs_reattach(
     t:     &TransAttempt<'_, '_>,
-    inode: &mut bch_inode_unpacked,
+    inode: &mut InodeUnpacked,
 ) -> Result<(), BchError> {
     // U32_MAX is a root: nothing is older
     let Some(start) = inode.bi_snapshot.checked_add(1) else { return Ok(()) };
@@ -89,7 +89,7 @@ fn find_oldest_inode_needs_reattach(
 /// A copy: the caller holds it across fsck_err(), which can drop locks.
 fn find_attached_dirent_in_descendant<'a, 't>(
     t:     &TransAttempt<'a, 't>,
-    inode: &bch_inode_unpacked,
+    inode: &InodeUnpacked,
 ) -> Result<Option<TransBkey<'a, 't>>, BchError> {
     // A subvolume root's dirent is in the parent subvolume's snapshots
     if inode.bi_subvol != 0 {
@@ -132,8 +132,8 @@ fn find_attached_dirent_in_descendant<'a, 't>(
 /// The first attached version of @inode in a strict descendant snapshot.
 fn attached_descendant_version(
     t:     &TransAttempt<'_, '_>,
-    inode: &bch_inode_unpacked,
-) -> Result<Option<bch_inode_unpacked>, BchError> {
+    inode: &InodeUnpacked,
+) -> Result<Option<InodeUnpacked>, BchError> {
     // Descendants have smaller IDs (and 0 is never one)
     let Some(end) = inode.bi_snapshot.checked_sub(1) else { return Ok(None) };
 
@@ -174,7 +174,7 @@ enum DstSlot {
 fn dst_slot(
     t:     &TransAttempt<'_, '_>,
     pos:   Bpos,
-    inode: &bch_inode_unpacked,
+    inode: &InodeUnpacked,
     flags: BtreeIterFlags,
 ) -> Result<DstSlot, BchError> {
     let mut vis_iter = BtreeIter::new(t, Btree::dirents, pos, flags);
@@ -197,7 +197,7 @@ fn dst_slot(
 /// it's there already - and point the backpointer at it.
 fn reattach_via_descendant_dirent<'a, 't>(
     t:       &TransAttempt<'a, 't>,
-    inode:   &mut bch_inode_unpacked,
+    inode:   &mut InodeUnpacked,
     mut new: TransBkey<'a, 't>,
 ) -> Result<(), BchError> {
     new.k_mut().p.snapshot = inode.bi_snapshot;

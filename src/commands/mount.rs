@@ -9,8 +9,8 @@ use std::{
 };
 
 use anyhow::{ensure, Result};
-use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::init::dev::bch_sb_handle;
+use bcachefs_kernel::opts::Opts;
+use bcachefs_kernel::init::dev::SbHandle;
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::{c, path_to_cstr};
 use clap::Parser;
@@ -270,7 +270,7 @@ fn mount_fs_context(
 ///
 /// Best effort. The filesystem is mounted; failing to pick up a straggler is
 /// worth saying out loud but is not a reason to fail the mount.
-fn online_late_devices(uuid: Uuid, mounted: &HashSet<u8>, opts: &bch_opts) {
+fn online_late_devices(uuid: Uuid, mounted: &HashSet<u8>, opts: &Opts) {
     let use_udev = opts.mount_trusts_udev_or_default();
 
     let found = match device_scan::get_devices_by_uuid(uuid, opts, use_udev) {
@@ -550,7 +550,7 @@ mod tests {
 /// If a user explicitly specifies `unlock_policy` or `passphrase_file` then use
 /// that without falling back to other mechanisms. If these options are not
 /// used, then search for the key or ask for it.
-fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<Unlocked> {
+fn handle_unlock(cli: &Cli, sb: &SbHandle) -> Result<Unlocked> {
     if let Some(policy) = cli.unlock_policy.as_ref() {
         return policy.apply(sb);
     }
@@ -595,8 +595,8 @@ fn is_splitbrain(err: &anyhow::Error) -> bool {
 ///
 /// Consenting leaves the diverged devices out of the mount, which is the
 /// missing-device case, so it answers the degraded question too.
-fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
-    -> Result<Vec<(std::path::PathBuf, bch_sb_handle)>>
+fn scan_or_ask_splitbrain(dev: &String, opts: &mut Opts)
+    -> Result<Vec<(std::path::PathBuf, SbHandle)>>
 {
     let err = match device_scan::scan_sbs_for_mount(dev, opts) {
         Ok(sbs) => return Ok(sbs),
@@ -629,7 +629,7 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
 
 /// What one mount attempt needs, taken from a scan.
 ///
-/// It holds no `bch_sb_handle`: those are open block devices, and the kernel
+/// It holds no `SbHandle`: those are open block devices, and the kernel
 /// opens the members itself. So the scan is consumed here and everything an
 /// attempt - or the question that follows a refused one - could want is copied
 /// out first.
@@ -646,7 +646,7 @@ struct Attempt {
 }
 
 impl Attempt {
-    fn new(sbs: Vec<(PathBuf, bch_sb_handle)>, opts: &bch_opts) -> Attempt {
+    fn new(sbs: Vec<(PathBuf, SbHandle)>, opts: &Opts) -> Attempt {
         let present = device_scan::present_devices(&sbs);
 
         Attempt {
@@ -670,8 +670,8 @@ impl Attempt {
 fn mount_asking_about_degraded(
     cli: &Cli,
     mountpoint: &Path,
-    sbs: Vec<(PathBuf, bch_sb_handle)>,
-    opts: &mut bch_opts,
+    sbs: Vec<(PathBuf, SbHandle)>,
+    opts: &mut Opts,
     parsed: &ParsedMountOptions,
     unlocked: Option<&Unlocked>,
 ) -> Result<()> {

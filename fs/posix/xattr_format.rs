@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::bch_val;
+use crate::format::Val;
 use crate::types::Le16;
 use cstruct_macros::{bch_enum, whole, MaybeZeroable, TypeInfo};
 
@@ -21,7 +21,7 @@ pub enum XattrType {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Xattr {
-    pub v: bch_val,
+    pub v: Val,
     pub x_type: u8,
     pub x_name_len: u8,
     pub x_val_len: Le16,

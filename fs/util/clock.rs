@@ -48,7 +48,7 @@ pub const IO_CLOCK_PCPU_SECTORS: u32 = 128;
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct io_clock {
+pub struct IoClock {
     pub now: AtomicI64,
     #[init(PerCpu::init())]
     pub pcpu_buf: PerCpu<u16>,
@@ -76,7 +76,7 @@ fn reached(now: u64, t: u64) -> bool {
     now.wrapping_sub(t) as i64 >= 0
 }
 
-impl io_clock {
+impl IoClock {
     fn now(&self) -> u64 {
         self.now.load(Relaxed) as u64
     }
@@ -160,7 +160,7 @@ impl io_clock {
     }
 }
 
-impl io_clock {
+impl IoClock {
     /// @sectors of IO done, from task context: into this CPU's batch, or the
     /// clock at once - past a batch, which is a u16, a bucket would wrap it.
     pub fn increment(&self, sectors: u64) {
@@ -195,7 +195,7 @@ impl io_clock {
     }
 }
 
-impl ToText for io_clock {
+impl ToText for IoClock {
     /// The clock, and its waiters, soonest first.
     fn to_text(&self, out: &mut Printbuf) {
         out.tabstop_push(40);

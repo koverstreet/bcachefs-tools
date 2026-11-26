@@ -9,12 +9,12 @@
 
 use crate::btree::bkey::pos;
 use crate::c;
-use crate::alloc::{foreground::{OPEN_BUCKETS_COUNT, Watermark}, write_point::write_point_specifier};
-use crate::opts::bch_inode_opts;
+use crate::alloc::{foreground::{OPEN_BUCKETS_COUNT, Watermark}, write_point::WritePointSpecifier};
+use crate::opts::InodeOpts;
 use crate::util::time_stats::TimeStat;
 use crate::vfs::inode::InodeInfoFlag;
-use crate::vfs::pagecache::{bch_folio_sector, FolioSectorState as SectorState};
-use crate::data::write::{write, WriteBio, WriteFor, bch_write_op, WriteFlags as w};
+use crate::vfs::pagecache::{FolioSector, FolioSectorState as SectorState};
+use crate::data::write::{write, WriteBio, WriteFor, WriteOp, WriteFlags as w};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::posix::inode_opts;
@@ -41,7 +41,7 @@ use pin_init::{pin_data, pin_init};
 struct Io {
     mapping: Mapping,
     #[pin]
-    op:      bch_write_op,
+    op:      WriteOp,
     #[pin]
     wbio:    Bio<Holds<Writeback>>,
 }
@@ -66,7 +66,7 @@ pub fn pools_exit(q: &Quiesced<'_>) {
 
 struct WritepageState {
     io:   Option<IoSlot>,
-    opts: bch_inode_opts,
+    opts: InodeOpts,
 }
 
 /// Its io, not started: ours to fill.
@@ -169,7 +169,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mappi
                                             c::req_op_REQ_OP_WRITE, |b| {
         pin_init!(Io {
             mapping,
-            op   <- bch_write_op::init(fs, opts),
+            op   <- WriteOp::init(fs, opts),
             wbio <- b.init::<BchError, _>(),
         }? BchError)
     }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
@@ -180,7 +180,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mappi
     op.target          = opts.foreground_target;
     op.bits.set_nr_replicas(nr_replicas as u8);
     op.res.nr_replicas.set(res_nr_replicas);
-    op.write_point     = write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
+    op.write_point     = WritePointSpecifier::hashed(inode.ei_last_dirtied.get() as usize);
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
     io.wbio.set_sector(sector);
@@ -219,7 +219,7 @@ fn throttle_writes(fs: &Fs) {
     }
 }
 
-fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [bch_folio_sector]) -> c_int {
+fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [FolioSector]) -> c_int {
     let mapping = folio.mapping().expect("a folio in writeback with no mapping");
     let inode = mapping.inode();
     let fs = inode.fs();
@@ -345,10 +345,10 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     let pool = &fs.vfs.writepage_buf_pool;
     let tmp = {
         let _noio = MemallocFlags::noio();
-        Box::<[bch_folio_sector], _>::try_new_zeroed_slice_in(
-            pool.element_size() / size_of::<bch_folio_sector>(), &**pool)
+        Box::<[FolioSector], _>::try_new_zeroed_slice_in(
+            pool.element_size() / size_of::<FolioSector>(), &**pool)
     }.expect("a pool's allocation: it waits for an element");
-    // zeroed is a bch_folio_sector
+    // zeroed is a FolioSector
     let mut tmp = unsafe { tmp.assume_init() };
     let mut w = WritepageState {
         io:   None,

@@ -100,7 +100,7 @@ pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;
 
-use crate::format::{Bpos, BkeyType, bkey, bkey_format_bits, KEY_FORMAT_CURRENT};
+use crate::format::{Bpos, BkeyType, Bkey, BkeyFormatBits, KEY_FORMAT_CURRENT};
 
 /* DOC_LATEX(bkey-structures)
  *
@@ -179,21 +179,21 @@ use crate::format::{Bpos, BkeyType, bkey, bkey_format_bits, KEY_FORMAT_CURRENT};
  * See \S\ref{bkey-type-list} for the complete list of key types.
  */
 
-pub const BKEY_U64S: usize = core::mem::size_of::<bkey>() / core::mem::size_of::<u64>();
+pub const BKEY_U64S: usize = core::mem::size_of::<Bkey>() / core::mem::size_of::<u64>();
 
 /// The empty key - new()'s, not zeroes, which say it's shorter than itself.
-impl Default for bkey {
+impl Default for Bkey {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl bkey {
+impl Bkey {
     /// Of type deleted, at POS_MIN, with no value: as bkey_init() sets.
     pub fn new() -> Self {
         Self {
             u64s:        BKEY_U64S as u8,
-            format_bits: bkey_format_bits::new().with_format(KEY_FORMAT_CURRENT as u8),
+            format_bits: BkeyFormatBits::new().with_format(KEY_FORMAT_CURRENT as u8),
             ..::pin_init::zeroed()
         }
     }

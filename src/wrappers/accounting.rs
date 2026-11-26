@@ -1,7 +1,7 @@
 use bcachefs_kernel::btree::{bkey::prelude::*, bkey::AnyKey};
 use anyhow::anyhow;
 use bcachefs_kernel::alloc::accounting_format::Accounting;
-use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_query_accounting, bch_ioctl_query_accounting_v2};
+use bcachefs_kernel::bcachefs_ioctl::{IoctlQueryAccounting, IoctlQueryAccountingV2};
 use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
@@ -61,7 +61,7 @@ impl BcachefsHandle {
 
     fn query_accounting_v2(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         let buf = grow_on_erange(1 << 10, MAX_REPLY, |bytes| {
-            let mut buf = IoctlBuf::<bch_ioctl_query_accounting_v2>::with_trailing_bytes(bytes);
+            let mut buf = IoctlBuf::<IoctlQueryAccountingV2>::with_trailing_bytes(bytes);
             buf.hdr_mut().accounting_u64s = (bytes / 8) as u32;
             buf.hdr_mut().accounting_types_mask = type_mask;
             unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING_v2>(&self.ioctl_fd(), buf.as_mut_ptr())? };
@@ -81,7 +81,7 @@ impl BcachefsHandle {
 
     fn query_accounting_v1(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         let buf = grow_on_erange(1 << 10, MAX_REPLY, |bytes| {
-            let mut buf = IoctlBuf::<bch_ioctl_query_accounting>::with_trailing_bytes(bytes);
+            let mut buf = IoctlBuf::<IoctlQueryAccounting>::with_trailing_bytes(bytes);
             buf.hdr_mut().accounting_u64s = (bytes / 8) as u32;
             buf.hdr_mut().accounting_types_mask = type_mask;
             unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(&self.ioctl_fd(), buf.as_mut_ptr())? };

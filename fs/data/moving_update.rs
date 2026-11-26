@@ -21,12 +21,12 @@
 
 use crate::btree::{bkey::{BkeySC, BkeyV}, iter::{BtreeIter, TransAttempt}};
 use crate::c;
-use crate::opts::bch_inode_opts;
+use crate::opts::InodeOpts;
 use crate::errcode::{Errcode, BchError};
 use crate::data::moving::{BucketMove, BucketMoves, Moving, MovingIo};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::scrub_journal::BadRef;
-use crate::data::update::{read_err_benign, IOPRIO_IDLE, data_update, data_update_opts,
+use crate::data::update::{read_err_benign, IOPRIO_IDLE, DataUpdate, DataUpdateOpts,
     DataUpdateType};
 use crate::data::update_task::{self, Body};
 use crate::util::task::{requeue, Resume, Spawn};
@@ -38,7 +38,7 @@ use cstruct_macros::args_stored_once;
 /// extent is data already lost even if it reads back clean, as moving it gives
 /// the bad data a new checksum. Not for the journal scrub, where uncorrected
 /// means a rewind, which can't bring it back.
-fn read_error_stats(u: &data_update, read: &ReadDone, moving: &Moving<'_>, size: u32) {
+fn read_error_stats(u: &DataUpdate, read: &ReadDone, moving: &Moving<'_>, size: u32) {
     let stats = moving.stats();
     let fs = u.op.fs();
     let k = read.poisoned.as_deref().map_or(BkeySC::from(u.index.k.as_ref()), BkeySC::from);
@@ -117,8 +117,8 @@ async fn run(mut u: Body<'_>, seq: u64, read_io: MovingIo, bucket: Option<Bucket
 /// Starts moving extent @k: its task, which issues the read - or nothing, if
 /// there's nothing to read.
 pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket: Option<&BucketMoves>,
-                          iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &bch_inode_opts,
-                          data_opts: &data_update_opts, found: Option<BadRef>) -> Result<(), BchError> {
+                          iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &InodeOpts,
+                          data_opts: &DataUpdateOpts, found: Option<BadRef>) -> Result<(), BchError> {
     let btree = iter.btree();
 
     t.allocate_dropping_locks(|| moving.updates_reserve().map_err(|_| t.fs().err(Errcode::ENOMEM_move_updates_reserve)))

@@ -10,7 +10,7 @@ use core::ptr::{self, NonNull};
 
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::cache::bch2_btree_id_level_to_text;
+use crate::btree::cache::btree_id_level_to_text;
 use crate::btree::interior::{check_topology_msg, BTREE_ROOT_LEVEL_BITS};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::btree::journal_overlay::BtreeAndJournalIter;
@@ -22,7 +22,7 @@ use crate::c;
 use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Bpos, bkey, BTREE_MAX_DEPTH};
+use crate::format::{BkeyType, Bpos, Bkey, BTREE_MAX_DEPTH};
 use crate::fs::{Fs, FsFlag};
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
@@ -51,7 +51,7 @@ pub(crate) fn advance_to_pos(iter: &mut KeyIter, keys: &Keys<'_>, pos: &Bpos, ma
     true
 }
 
-fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut bkey) -> Option<KeyVal> {
+fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut Bkey) -> Option<KeyVal> {
     match k {
         Some(k) => Some(KeyVal(keys.disassemble(k, u).v)),
         None => {
@@ -80,7 +80,7 @@ pub(crate) fn level_init_iter(iter: &mut KeyIter, fs: &Fs, keys: &Keys<'_>, pos:
 }
 
 impl BtreePath {
-    pub(crate) fn level_peek_all(&self, u: &mut bkey) -> Option<KeyVal> {
+    pub(crate) fn level_peek_all(&self, u: &mut Bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
         let b = self.locked_btree_node(level).expect("a path peeked is locked");
         let keys = b.keys(b.contents());
@@ -117,7 +117,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut bkey) -> Option<KeyVal> {
+    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut Bkey) -> Option<KeyVal> {
         let path = &mut paths[idx];
         let level = path.level() as usize;
 
@@ -196,13 +196,13 @@ fn set_down_key(dst: &mut DownKey, k: BkeySC<'_>) {
     let val = k.val_bytes();
     let room = plain_bytes_mut(dst.elems_mut());
 
-    room[..size_of::<bkey>()].copy_from_slice(plain_bytes(k.k));
-    room[size_of::<bkey>()..][..val.len()].copy_from_slice(val);
+    room[..size_of::<Bkey>()].copy_from_slice(plain_bytes(k.k));
+    room[size_of::<Bkey>()..][..val.len()].copy_from_slice(val);
     down_key_mem_ptr_reload(dst, k);
 }
 
 fn set_down_key_packed(dst: &mut DownKey, keys: &Keys<'_>, k: u16) {
-    let mut u = bkey::new();
+    let mut u = Bkey::new();
     let key = keys.disassemble(k, &mut u);
 
     keys.key_at(k).unpacked_into(&keys.contents().format, *key.k, dst.elems_mut());
@@ -325,7 +325,7 @@ impl BtreeTrans<'_> {
                 node_iter.advance(&keys);
                 let Some(k) = node_iter.peek(&keys) else { break };
 
-                let mut u = bkey::new();
+                let mut u = Bkey::new();
                 tmp.set_key(keys.disassemble(k, &mut u));
             }
             self.node_prefetch(paths, idx, &tmp, level)?;
@@ -413,13 +413,13 @@ impl BtreeTrans<'_> {
         });
 
         prt!(&mut *msg, "lookup found topology error:\n");
-        bch2_btree_id_level_to_text(&mut msg, path.btree_id(), level as c_uint);
+        btree_id_level_to_text(&mut msg, path.btree_id(), level as c_uint);
         prt!(&mut *msg, " lookup at {}\n", path.pos);
 
         {
             let mut msg = msg.indent(2);
             prt!(&mut *msg, "parent:     ");
-            bch2_btree_id_level_to_text(&mut msg, crate::format::Btree(b.c.btree_id.get().into()), b.c.level.get().into());
+            btree_id_level_to_text(&mut msg, crate::format::Btree(b.c.btree_id.get().into()), b.c.level.get().into());
             prt!(&mut *msg, " {} - {}\n", contents.data().min_key, contents.data().max_key);
 
             prt!(&mut *msg, "parent key:  ");
@@ -435,7 +435,7 @@ impl BtreeTrans<'_> {
                     prt!(&mut *msg, "{}", label);
                     match k {
                         Some(k) => {
-                            let mut u = bkey::new();
+                            let mut u = Bkey::new();
                             let tmp = BkeyBuf::from_key(keys.disassemble(k, &mut u));
                             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(tmp.as_ref()));
                         }

@@ -6,25 +6,25 @@
 
 use super::iter::{CommitOpts, TransAttempt};
 use super::trans_attempt::AttemptKey;
-use crate::alloc::{capacity::DiskReservation, buckets::bch_fs_usage_base};
+use crate::alloc::{capacity::DiskReservation, buckets::FsUsageBase};
 use crate::btree::bkey::{bkey_val_to_text, BkeySC, BkeyI, BKEY_U64S};
-use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, table_arrays, PathIdx, Paths,
-    BTREE_ITER_INITIAL, btree_trans_paths, BtreePath};
+use crate::btree::path::{trans_paths_exit, trans_paths_init, table_arrays, PathIdx, Paths,
+    BTREE_ITER_INITIAL, BtreeTransPaths, BtreePath};
 use crate::c;
-use crate::btree::bch_fs_btree;
-use crate::btree::locking::btree_bkey_cached_common;
-use crate::btree::update::{btree_insert_entry, btree_trans_commit_hook, btree_trans_subbuf};
+use crate::btree::FsBtree;
+use crate::btree::locking::BtreeBkeyCachedCommon;
+use crate::btree::update::{BtreeInsertEntry, BtreeTransCommitHook, BtreeTransSubbuf};
 use crate::c::rcu_head;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::journal::journal::JournalFlag;
-use crate::journal::pins::journal_entry_pin;
-use crate::locking::seqmutex::seqmutex;
-use crate::locking::six::six_lock_waiter;
+use crate::journal::pins::JournalEntryPin;
+use crate::locking::seqmutex::Seqmutex;
+use crate::locking::six::SixLockWaiter;
 use crate::journal::flush_wait::Flush;
 use crate::data_structures::{bitmap::Bitmap, dst_room::DstRoom};
 use crate::debug::trace::events;
 use crate::errcode::{BchError, Errcode};
-use crate::format::{Bpos, Btree, jset_entry};
+use crate::format::{Bpos, Btree, JsetEntry};
 use crate::fs::{Fs, FsFlag};
 use crate::journal::validate::journal_entry_to_text;
 use crate::locking::{MemallocFlags, Locked, LockedBy, Mutex};
@@ -39,7 +39,7 @@ use crate::os::percpu::PerCpu;
 use crate::util::ffi::Opaque;
 use crate::util::projections::Volatile;
 use crate::util::rcu::Srcu;
-use crate::util::time_stats::{TimeStatsArray, bch2_time_stats};
+use crate::util::time_stats::{TimeStatsArray, TimeStats};
 use crate::util::vstructs::Validated;
 use cstruct_macros::{bitfield, BitfieldMembers, Init, MaybeZeroable, placed, TypeInfo};
 use pin_init::pin_data;
@@ -50,7 +50,7 @@ pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = c::NSEC_PER_MSEC as c_long
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
-pub struct trans_kmalloc_trace {
+pub struct TransKmallocTrace {
     pub ip: c_ulong,
     pub bytes: usize,
 }
@@ -82,7 +82,7 @@ pub struct TransMem {
  *    released periodically to avoid stalling reclaim
  */
 #[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
-pub struct btree_trans_bits {
+pub struct BtreeTransBits {
     lock_may_not_fail:              bool,
     locked:                         bool,
     migrate_disabled:               bool,
@@ -148,7 +148,7 @@ pub struct BtreeTrans<'f> {
     /* bump allocator, invalidated on transaction restart */
     pub mem: Cell<TransMem>,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: Cell<Vec<trans_kmalloc_trace>>,
+    pub trans_kmalloc_trace: Cell<Vec<TransKmallocTrace>>,
 
     pub nr_sorted: Cell<PathIdx>,
     pub nr_paths: Cell<PathIdx>,
@@ -158,7 +158,7 @@ pub struct BtreeTrans<'f> {
     pub fn_idx: Cell<u8>,
     pub lock_must_abort: AtomicU8,
     #[members]
-    pub bits: Cell<btree_trans_bits>,
+    pub bits: Cell<BtreeTransBits>,
     pub restart_count: Cell<u32>,
     #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
     pub restart_count_this_trans: Cell<u32>,
@@ -179,20 +179,20 @@ pub struct BtreeTrans<'f> {
     pub locking_root_id: Cell<Btree>,
 
     pub locking_hash_val: Cell<u64>,
-    pub locking: Cell<*mut btree_bkey_cached_common>,
+    pub locking: Cell<*mut BtreeBkeyCachedCommon>,
     /*
      * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
-     * bch2_six_check_for_deadlock() to detect that the node identity
+     * six_check_for_deadlock() to detect that the node identity
      * rotated while we were about to sleep on it. 0 for cached entries.
      */
-    pub locking_wait: six_lock_waiter,
+    pub locking_wait: SixLockWaiter,
 
     /* update path: */
-    pub journal_entries: Cell<btree_trans_subbuf<jset_entry<Validated>>>,
-    pub accounting: Cell<btree_trans_subbuf<BkeyI>>,
+    pub journal_entries: Cell<BtreeTransSubbuf<JsetEntry<Validated>>>,
+    pub accounting: Cell<BtreeTransSubbuf<BkeyI>>,
 
-    pub hooks: Cell<*mut btree_trans_commit_hook>,
-    pub journal_pin: Cell<*mut journal_entry_pin>,
+    pub hooks: Cell<*mut BtreeTransCommitHook>,
+    pub journal_pin: Cell<*mut JournalEntryPin>,
 
     pub journal_res_seq: Cell<u64>,
     /*
@@ -205,7 +205,7 @@ pub struct BtreeTrans<'f> {
     pub disk_res: Cell<*mut DiskReservation<'static>>,
     pub flush: Cell<*mut Option<crate::journal::flush_wait::Flush<'static>>>,
 
-    pub fs_usage_delta: Cell<bch_fs_usage_base>,
+    pub fs_usage_delta: Cell<FsUsageBase>,
 
     pub journal_u64s: Cell<c_uint>,
     pub extra_journal_u64s: Cell<u32>,
@@ -230,10 +230,10 @@ pub struct BtreeTrans<'f> {
 
     /* the first path table: Paths borrows into it */
     pub _paths_allocated: Opaque<[c_ulong; bits_to_longs(BTREE_ITER_INITIAL as usize)]>,
-    pub trans_paths: Opaque<btree_trans_paths>,
+    pub trans_paths: Opaque<BtreeTransPaths>,
     pub _paths: Opaque<[BtreePath; BTREE_ITER_INITIAL as usize]>,
     pub _sorted: Opaque<[PathIdx; BTREE_ITER_INITIAL as usize + 4]>,
-    pub _updates: Opaque<[btree_insert_entry; BTREE_ITER_INITIAL as usize]>,
+    pub _updates: Opaque<[BtreeInsertEntry; BTREE_ITER_INITIAL as usize]>,
 }
 
 impl BtreeTrans<'_> {
@@ -254,7 +254,7 @@ impl BtreeTrans<'_> {
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
-pub struct btree_trans_buf {
+pub struct BtreeTransBuf {
     pub trans: *mut BtreeTrans<'static>,
 }
 
@@ -264,7 +264,7 @@ pub struct btree_trans_buf {
 #[derive(MaybeZeroable)]
 pub struct TransStatsLocked {
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: Vec<trans_kmalloc_trace>,
+    pub trans_kmalloc_trace: Vec<TransKmallocTrace>,
     pub max_paths_text: Printbuf,
 }
 
@@ -281,7 +281,7 @@ crate::published! {
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
-pub struct btree_transaction_stats {
+pub struct BtreeTransactionStats {
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&s->lock"))]
     pub lock: Locked<Mutex, TransStatsLocked, TransStatsMax>,
@@ -289,15 +289,15 @@ pub struct btree_transaction_stats {
 
 pub const BCH_TRANSACTIONS_NR: u32 = 128;
 
-#[placed(bch_fs_btree.trans)]
+#[placed(FsBtree.trans)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
-pub struct bch_fs_btree_trans {
+pub struct FsBtreeTrans {
     #[pin]
     /* the filesystem's transactions: zeroed, it's empty - List's first push sets it up */
     #[init(new_lock!(::pin_init::zeroed(), "&c->btree.trans.lock"))]
-    pub list: Locked<seqmutex, crate::btree::trans::TransList>,
+    pub list: Locked<Seqmutex, crate::btree::trans::TransList>,
     #[pin]
     #[init(Mempool::new(1, core::mem::size_of::<BtreeTrans<'_>>()))]
     pub pool: Mempool,
@@ -306,25 +306,25 @@ pub struct bch_fs_btree_trans {
     pub malloc_pool: Mempool,
     #[pin]
     #[init(PerCpu::alloc(), ENOMEM_fs_other_alloc)]
-    pub bufs: PerCpu<btree_trans_buf>,
+    pub bufs: PerCpu<BtreeTransBuf>,
 
     #[pin]
     #[init(crate::new_srcu!("btree_trans_barrier"))]
     pub barrier: Srcu,
 
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| btree_transaction_stats::init()))]
-    pub stats: [btree_transaction_stats; BCH_TRANSACTIONS_NR as usize],
+    #[init(::pin_init::pin_init_array_from_fn(|_| BtreeTransactionStats::init()))]
+    pub stats: [BtreeTransactionStats; BCH_TRANSACTIONS_NR as usize],
     /* each transaction function's, as stats[] */
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub duration: TimeStatsArray<bch2_time_stats, { BCH_TRANSACTIONS_NR as usize }>,
+    pub duration: TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>,
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub lock_hold_times: TimeStatsArray<bch2_time_stats, { BCH_TRANSACTIONS_NR as usize }>,
+    pub lock_hold_times: TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>,
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub lock_wait_times: TimeStatsArray<bch2_time_stats, { BCH_TRANSACTIONS_NR as usize }>,
+    pub lock_wait_times: TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>,
 
     #[pin]
     #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]
@@ -438,7 +438,7 @@ impl TransFnName {
         buf[..n].copy_from_slice(&name.as_bytes()[..n]);
         buf[n] = 0;
 
-        let idx = bch2_trans_get_fn_idx(buf.as_ptr().cast());
+        let idx = trans_get_fn_idx(buf.as_ptr().cast());
         self.idx.store(idx, Ordering::Release);
         idx
     }
@@ -490,7 +490,7 @@ impl<'f> BtreeTrans<'f> {
     /// # Safety
     /// Not held across anything that grows the path table or begins the
     /// transaction.
-    pub(crate) unsafe fn updates_unguarded(&self) -> &[btree_insert_entry] {
+    pub(crate) unsafe fn updates_unguarded(&self) -> &[BtreeInsertEntry] {
         let (_, _, updates) = table_arrays(self.paths.get(), self.nr_paths.get().into());
         unsafe { core::slice::from_raw_parts(updates, self.nr_updates.get() as usize) }
     }
@@ -586,7 +586,7 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    pub fn fs_usage_delta_add(&self, d: bch_fs_usage_base) {
+    pub fn fs_usage_delta_add(&self, d: FsUsageBase) {
         self.fs_usage_delta.set(self.fs_usage_delta.get().wrapping_add(d));
     }
 
@@ -629,8 +629,8 @@ pub(crate) type TransList = crate::list!(BtreeTrans<'static>, list);
 
 /// Another thread's transaction's flags: its own thread changes them -
 /// READ_ONCE().
-pub(crate) fn foreign_bits(trans: &BtreeTrans<'_>) -> btree_trans_bits {
-    unsafe { (&raw const trans.bits).cast::<btree_trans_bits>().read_volatile() }
+pub(crate) fn foreign_bits(trans: &BtreeTrans<'_>) -> BtreeTransBits {
+    unsafe { (&raw const trans.bits).cast::<BtreeTransBits>().read_volatile() }
 }
 
 /// A transaction off the list, kept live - its paths, its task - by the ref.
@@ -658,7 +658,7 @@ impl ListedTrans {
 
 impl ToText for ListedTrans {
     fn to_text(&self, out: &mut Printbuf) {
-        unsafe { crate::btree::lock_graph::bch2_btree_trans_to_text(out, self.trans) }
+        unsafe { crate::btree::lock_graph::btree_trans_to_text(out, self.trans) }
     }
 }
 
@@ -708,7 +708,7 @@ impl Fs {
 
 // ── Getting and putting ─────────────────────────────────────────────────────
 
-fn bch2_trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
+fn trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
     let cached = {
         let cpu = CpuGuard::new();
         let slot = crate::percpu_field!(c.btree.trans.bufs.this_cpu(&cpu), trans);
@@ -801,7 +801,7 @@ impl<'f> TransGuard<'f> {
                      c.flags.get(FsFlag::scrub_journal) ||
                      sched::current() == c.recovery_task.load(Ordering::Relaxed));
 
-        let trans = TransGuard { trans: bch2_trans_alloc(c) };
+        let trans = TransGuard { trans: trans_alloc(c) };
         #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
         let _ = unsafe {
             crate::util::alloc::init_at(crate::new_lockdep_map!("bcachefs_btree"),
@@ -838,7 +838,7 @@ impl<'f> TransGuard<'f> {
         t.set_journal_replay_not_finished(
             !c.journal.flags.get(JournalFlag::replay_done) &&
             c.journal_keys_get().map(RefGuard::leak).is_some());
-        bch2_trans_paths_init(t);
+        trans_paths_init(t);
 
         if let Some(s) = stats {
             let max_mem = s.lock.max_mem.get();
@@ -948,7 +948,7 @@ impl Drop for TransGuard<'_> {
         #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
         drop(t.trans_kmalloc_trace.take());
 
-        bch2_trans_paths_exit(t);
+        trans_paths_exit(t);
 
         t.mem.take().free(&c.btree.trans.malloc_pool);
 
@@ -1045,7 +1045,7 @@ impl BtreeTrans<'_> {
 
 #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
 #[cold]
-pub(crate) fn kmalloc_trace_to_text(out: &mut Printbuf, trace: &[trans_kmalloc_trace]) {
+pub(crate) fn kmalloc_trace_to_text(out: &mut Printbuf, trace: &[TransKmallocTrace]) {
     out.tabstops_reset();
     out.tabstop_push(60);
 
@@ -1433,7 +1433,7 @@ pub fn transaction_fns() -> impl Iterator<Item = &'static CStr> {
     (0..TRANSACTION_FNS.len()).map_while(transaction_fn)
 }
 
-pub fn bch2_trans_get_fn_idx(fn_: *const c_char) -> c_uint {
+pub fn trans_get_fn_idx(fn_: *const c_char) -> c_uint {
     for (i, slot) in TRANSACTION_FNS.iter().enumerate() {
         let cur = slot.load(Ordering::Acquire);
         if cur.is_null() || ptr::eq(cur, fn_) {

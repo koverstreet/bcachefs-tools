@@ -6,7 +6,7 @@ use crate::alloc::{background::alloc_to_v4, capacity::DiskReservation};
 use crate::btree::bkey::POS_MIN;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::util::time_stats::TimeStat;
 use crate::data::ptrs::drop_stale_ptrs;
 use crate::debug::trace::events;
@@ -25,9 +25,9 @@ use cstruct_macros::{MaybeZeroable, TypeInfo};
 
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_fs_gc_gens {
+pub struct FsGcGens {
     /* gc_gens's: where its walk is, for sysfs */
-    pub pos: Volatile<bbpos>,
+    pub pos: Volatile<Bbpos>,
 }
 
 fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
@@ -59,7 +59,7 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
     let res = DiskReservation::new(fs);
 
     for btree in (0..Btree::NR).map(Btree).filter(|b| b.has_data_ptrs()) {
-        fs.gc_gens.pos.set(bbpos { btree, pos: POS_MIN });
+        fs.gc_gens.pos.set(Bbpos { btree, pos: POS_MIN });
 
         BtreeIter::new(&trans, btree, POS_MIN, BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS)
             .for_each_commit(&trans, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
@@ -89,7 +89,7 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
             t.update(iter, a, UpdateTriggerFlags::empty())
         })?;
 
-    fs.gc_gens.pos.set(bbpos::default());
+    fs.gc_gens.pos.set(Bbpos::default());
 
     fs.times.get(TimeStat::btree_gc as usize).update(start_time);
     fs.event_inc_trace(events::gc_gens_end, |_| {});

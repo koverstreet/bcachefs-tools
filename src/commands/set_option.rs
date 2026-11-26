@@ -1,11 +1,11 @@
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::opts::{bch_opts, OptFlags};
+use bcachefs_kernel::opts::{Opts, OptFlags};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::{printbuf::Printbuf, rcu};
 use clap::{Arg, ArgAction, Command};
 
-use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
+use crate::commands::opts::{find_opt, option_args, options_from_matches};
 use crate::device_scan::OpenedFs;
 use crate::wrappers::{handle::BcachefsHandle, sysfs};
 
@@ -21,7 +21,7 @@ Set a filesystem or device option on a running filesystem. Changes \
 are persisted to the superblock. Use -d to target a specific device \
 for device-scoped options. See <<sec:options>> for the full list of \
 available options.")
-        .args(bch_option_args(opt_flags(), false))
+        .args(option_args(opt_flags(), false))
         .arg(Arg::new("dev-idx")
             .short('d')
             .long("dev-idx")
@@ -42,14 +42,14 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
         .map(|v| v.copied().collect())
         .unwrap_or_default();
 
-    let opts = bch_options_from_matches(&matches, opt_flags());
+    let opts = options_from_matches(&matches, opt_flags());
     if opts.is_empty() {
         bail!("No options specified");
     }
 
     let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
 
-    let mut fs_opts = bch_opts::default();
+    let mut fs_opts = Opts::default();
     fs_opts.set_nostart(true);
     fs_opts.set_will_not_start(true);
 
@@ -76,7 +76,7 @@ fn set_option_online(
 
     for (name, value) in opts {
 
-        let Some((_id, opt)) = bch_opt_lookup(name) else {
+        let Some((_id, opt)) = find_opt(name) else {
             eprintln!("Unknown option: {name}");
             failed.insert(name.as_str());
             continue;
@@ -163,7 +163,7 @@ fn set_option_offline(
 
     for (name, value) in opts {
 
-        let Some((opt_id, opt)) = bch_opt_lookup(name) else {
+        let Some((opt_id, opt)) = find_opt(name) else {
             eprintln!("Unknown option: {name}");
             failed.insert(name.as_str());
             continue;

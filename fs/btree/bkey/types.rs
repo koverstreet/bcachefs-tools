@@ -53,7 +53,7 @@
 
 use super::BkeyP;
 use crate::btree::{bkey::{ops, BkeyOps, Ops}, iter::{BtreeIter, TransBkey}};
-use crate::format::{BkeyType, BkeyTypeFlags, Bpos, bch_val, bkey, bkey_i, BkeyType_arms};
+use crate::format::{BkeyType, BkeyTypeFlags, Bpos, Val, Bkey, BkeyType_arms};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
 use crate::util::vstructs::{len_at, ArmRef, DstHead, InState, SelfSized, SizedArm, State, Unsized,
@@ -62,8 +62,8 @@ use core::marker::PhantomData;
 
 #[repr(C)]
 pub struct BkeySC<'a, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
-    pub k:           &'a bkey,
-    pub(crate) v:    *const bch_val,
+    pub k:           &'a Bkey,
+    pub(crate) v:    *const Val,
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
     pub(crate) val:  PhantomData<*const V>,
 }
@@ -80,8 +80,8 @@ impl<V: ?Sized + BkeyVal> Copy for BkeySC<'_, V> {}
 /// rewrite - without aliasing.
 #[repr(C)]
 pub struct BkeyS<'a, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
-    pub k:          &'a mut bkey,
-    pub(crate) v:   *mut bch_val,
+    pub k:          &'a mut Bkey,
+    pub(crate) v:   *mut Val,
     pub(crate) val: PhantomData<*mut V>,
 }
 
@@ -94,7 +94,7 @@ pub struct BkeyS<'a, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
 #[derive(Default)]
 #[repr(C)]
 pub struct BkeyI<V: ?Sized = FamilyVal<AllTypes>> {
-    pub k: bkey,
+    pub k: Bkey,
     pub v: V,
 }
 
@@ -105,40 +105,40 @@ pub type AnyKey<S> = BkeyI<FamilyVal<AllTypes, S>>;
 pub type AnyKeySC<'a, S> = BkeySC<'a, FamilyVal<AllTypes, S>>;
 
 impl<V: ?Sized> DstHead for BkeyI<V> {
-    type Head = bkey;
+    type Head = Bkey;
 }
 
 /* u64s 0 is no key - a room starts as bkey_init()'s, and len_in() refuses one -
  * but from_raw() of it is total: the header, no value */
 unsafe impl<V: Unsized + ?Sized> Unsized for BkeyI<V> {
     type Elem = V::Elem;
-    const TAIL: usize = size_of::<bkey>() + V::TAIL;
-    const MIN_BYTES: usize = (size_of::<bkey>() + V::MIN_BYTES).next_multiple_of(align_of::<bkey>());
-    const ALIGN: usize = align_of::<bkey>();
+    const TAIL: usize = size_of::<Bkey>() + V::TAIL;
+    const MIN_BYTES: usize = (size_of::<Bkey>() + V::MIN_BYTES).next_multiple_of(align_of::<Bkey>());
+    const ALIGN: usize = align_of::<Bkey>();
 
     fn from_raw(p: *const u8, bytes: usize) -> *const Self {
-        let v = V::from_raw(p.wrapping_add(size_of::<bkey>()), bytes.saturating_sub(size_of::<bkey>()));
-        v.wrapping_byte_sub(size_of::<bkey>()) as *const Self
+        let v = V::from_raw(p.wrapping_add(size_of::<Bkey>()), bytes.saturating_sub(size_of::<Bkey>()));
+        v.wrapping_byte_sub(size_of::<Bkey>()) as *const Self
     }
 
     fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {
-        let v = V::from_raw_mut(p.wrapping_add(size_of::<bkey>()), bytes.saturating_sub(size_of::<bkey>()));
-        v.wrapping_byte_sub(size_of::<bkey>()) as *mut Self
+        let v = V::from_raw_mut(p.wrapping_add(size_of::<Bkey>()), bytes.saturating_sub(size_of::<Bkey>()));
+        v.wrapping_byte_sub(size_of::<Bkey>()) as *mut Self
     }
 }
 
 // XXX: what it reads its length from, k.u64s, can change through a &mut
 // Self - the XXX on BkeyI
 unsafe impl<F: 'static, S: State> SelfSized for BkeyI<FamilyVal<F, S>> {
-    const ALIGN: usize = align_of::<bkey>();
+    const ALIGN: usize = align_of::<Bkey>();
     const MIN_BYTES: usize = <Self as Unsized>::MIN_BYTES;
 
     unsafe fn from_thin(p: *const ()) -> *const Self {
-        <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<bkey>()).bytes() })
+        <Self as Unsized>::from_raw(p.cast(), unsafe { (*p.cast::<Bkey>()).bytes() })
     }
 
     fn len_in(b: &[u8]) -> Result<usize, VStructError> {
-        len_at::<Self>(b, bkey::bytes)
+        len_at::<Self>(b, Bkey::bytes)
     }
 }
 
@@ -201,7 +201,7 @@ impl<'a, S: KeyState> BkeyS<'a, FamilyVal<AllTypes, S>> {
     /// # Safety
     /// @v is @k's value, as long as k.u64s says, nothing else touching it for
     /// 'a, and what S says of it is true.
-    pub unsafe fn from_parts(k: &'a mut bkey, v: *mut bch_val) -> Self {
+    pub unsafe fn from_parts(k: &'a mut Bkey, v: *mut Val) -> Self {
         BkeyS { k, v, val: PhantomData }
     }
 }
@@ -210,11 +210,11 @@ impl BkeyI {
     /// # Safety
     /// @p is a key, its u64s right and all of them there, and it may reach
     /// them - not a pointer widened from a reference to the header.
-    pub unsafe fn from_raw(p: *const bkey_i) -> *const Self {
+    pub unsafe fn from_raw(p: *const BkeyI<Val>) -> *const Self {
         unsafe { cast_unsized(p) }
     }
 
-    pub unsafe fn from_raw_mut(p: *mut bkey_i) -> *mut Self {
+    pub unsafe fn from_raw_mut(p: *mut BkeyI<Val>) -> *mut Self {
         unsafe { cast_unsized_mut(p) }
     }
 }
@@ -255,7 +255,7 @@ unsafe impl<V: ::pin_init::Zeroable> ::pin_init::Zeroable for BkeyI<V> {}
 
 impl<V: BkeyWhole> BkeyI<V> {
     pub fn new() -> Self {
-        let mut k = bkey::new();
+        let mut k = Bkey::new();
         k.type_ = V::TYPE.0 as u8;
         k.set_val_bytes(size_of::<V>());
         BkeyI { k, v: V::zeroed() }
@@ -319,7 +319,7 @@ pub trait BkeyV: Sized {
 
     fn as_sc(&self) -> BkeySC<'_, Self::V>;
 
-    fn k(&self) -> &bkey {
+    fn k(&self) -> &Bkey {
         self.as_sc().k
     }
 
@@ -460,7 +460,7 @@ pub trait BkeyFamily {
     type Unvalidated: ?Sized + Unsized + BkeyVal<State = Unvalidated> + 'static;
 
     /// Its type, and anything else the set requires - an extent's size.
-    fn contains(k: &bkey) -> bool;
+    fn contains(k: &Bkey) -> bool;
 }
 
 /// The state a key is in, as its value's is: what narrowing it keeps.
@@ -605,14 +605,14 @@ impl<T: BkeyTag + InState> BkeyFamily for T
     type Validated = T::In<Validated>;
     type Unvalidated = T::In<Unvalidated>;
 
-    fn contains(k: &bkey) -> bool {
+    fn contains(k: &Bkey) -> bool {
         k.key_type().is::<T>()
     }
 }
 
 /// The types of a key family, F in FamilyVal<F>: which keys are one.
 pub trait FamilyTypes: 'static {
-    fn contains(k: &bkey) -> bool;
+    fn contains(k: &Bkey) -> bool;
 }
 
 /// A value of any of family F's types, as long as the key is, in state S -
@@ -625,7 +625,7 @@ pub struct FamilyVal<F, S: State = Validated>(PhantomData<(F, S)>, [u64]);
 pub enum AllTypes {}
 
 impl FamilyTypes for AllTypes {
-    fn contains(_k: &bkey) -> bool {
+    fn contains(_k: &Bkey) -> bool {
         true
     }
 }
@@ -713,7 +713,7 @@ impl FieldOffsets {
     }
 
     /// Where it is in @k's value: None if its type hasn't it.
-    pub fn of(&self, k: &bkey) -> Option<usize> {
+    pub fn of(&self, k: &Bkey) -> Option<usize> {
         *self.0.get(k.type_ as usize)?
     }
 }
@@ -723,7 +723,7 @@ impl FieldOffsets {
 pub enum ByFlag<const F: u32> {}
 
 impl<const F: u32> FamilyTypes for ByFlag<F> {
-    fn contains(k: &bkey) -> bool {
+    fn contains(k: &Bkey) -> bool {
         k.key_type().flags().bits() & F != 0
     }
 }
@@ -761,18 +761,18 @@ impl<F: FamilyTypes, S: KeyState> BkeyFamily for FamilyVal<F, S> {
     type Validated = FamilyVal<F, Validated>;
     type Unvalidated = FamilyVal<F, Unvalidated>;
 
-    fn contains(k: &bkey) -> bool {
+    fn contains(k: &Bkey) -> bool {
         F::contains(k)
     }
 }
 
 /// # Safety
 /// @k is a key whose value is a @V, its length validate's.
-pub(crate) unsafe fn cast_unsized<V: Unsized + ?Sized>(k: *const bkey_i) -> *const BkeyI<V> {
+pub(crate) unsafe fn cast_unsized<V: Unsized + ?Sized>(k: *const BkeyI<Val>) -> *const BkeyI<V> {
     <BkeyI<V> as Unsized>::from_raw(k.cast(), unsafe { (*k).k.bytes() })
 }
 
-pub(crate) unsafe fn cast_unsized_mut<V: Unsized + ?Sized>(k: *mut bkey_i) -> *mut BkeyI<V> {
+pub(crate) unsafe fn cast_unsized_mut<V: Unsized + ?Sized>(k: *mut BkeyI<Val>) -> *mut BkeyI<V> {
     <BkeyI<V> as Unsized>::from_raw_mut(k.cast(), unsafe { (*k).k.bytes() })
 }
 

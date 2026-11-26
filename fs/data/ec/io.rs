@@ -10,8 +10,8 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::data::ec::head::StripeBlockMask;
-use crate::data::extents::{extent_ptr_decoded, ReadFlags};
-use crate::data::extents_format::bch_extent_ptr;
+use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
+use crate::data::extents_format::ExtentPtr;
 use crate::sb::members_format::MemberErrorType;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::util::alloc::KBox;
@@ -39,7 +39,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::args_stored_once;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::format::{Bpos, Btree, DataType, bch_csum, CsumType};
+use crate::format::{Bpos, Btree, DataType, Csum, CsumType};
 
 // ── Block IO ─────────────────────────────────────────────────────────────
 //
@@ -132,7 +132,7 @@ impl RoundBuf for &[u8] {
 #[repr(C)]
 pub struct EcBio<M: MapBuf> {
     /// The block's pointer, for the endio's staleness check
-    ptr: bch_extent_ptr,
+    ptr: ExtentPtr,
     idx: u8,
     #[pin]
     dev: DevBio<Buffer<M>>,
@@ -301,8 +301,8 @@ pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut Str
 /// checksums, and the first one's checksum, as it should be and as it is.
 pub struct Scrubbed {
     pub bad_sectors: u64,
-    pub want:        bch_csum,
-    pub got:         bch_csum,
+    pub want:        Csum,
+    pub got:         Csum,
 }
 
 /// Scrub: block @block of stripe @s checked against the stripe's checksums
@@ -362,7 +362,7 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, block: usize) -> R
 /// been deleted while the IO was in flight.
 #[args_stored_once]
 pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut Bio,
-                                pick: &extent_ptr_decoded, flags: ReadFlags, msg: &mut Printbuf)
+                                pick: &ExtentPtrDecoded, flags: ReadFlags, msg: &mut Printbuf)
     -> Result<(), BchError>
 {
     let iter = c::bvec_iter { bi_sector: pick.ptr.offset(), ..bio.raw().bi_iter };
@@ -384,7 +384,7 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
 
 /// The stripe looked up and checked, and its buffer: everything before the IO.
 fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
-                     pick: &extent_ptr_decoded, flags: ReadFlags, msg: &mut Printbuf)
+                     pick: &ExtentPtrDecoded, flags: ReadFlags, msg: &mut Printbuf)
     -> Result<(BkeyBuf, KBox<StripeBuf>, usize), BchError>
 {
     assert!(pick.has_ec, "reconstructing a read of an extent with no stripe");

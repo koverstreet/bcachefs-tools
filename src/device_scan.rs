@@ -25,12 +25,12 @@ use std::{
 use anyhow::{bail, Result};
 use crate::wrappers::{sysfs::DevInfo, fs::FsExt};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
-use bcachefs_kernel::format::bch_sb;
+use bcachefs_kernel::format::Sb;
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::{filter_dead, Fs, OpenFs};
 use bcachefs_kernel::util::alloc;
-use bcachefs_kernel::init::dev::bch_sb_handle;
-use bcachefs_kernel::opts::{bch_opts, OptId};
+use bcachefs_kernel::init::dev::SbHandle;
+use bcachefs_kernel::opts::{Opts, OptId};
 use uuid::Uuid;
 use log::{debug, info, warn};
 
@@ -39,7 +39,7 @@ use crate::device_multipath::{
     find_multipath_holder, preferred_multipath_devnode, warn_multipath_component,
 };
 
-pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
+pub fn read_super_silent(path: impl AsRef<Path>, mut opts: Opts) -> Result<SbHandle, BchError> {
     opts.set_noexcl(true);
     opts.set_nochanges(true);
     opts.set_no_version_check(true);
@@ -132,9 +132,9 @@ fn get_all_block_devnodes() -> anyhow::Result<Vec<PathBuf>> {
 fn read_sbs_matching_uuid(
     uuid: Uuid,
     devices: &[PathBuf],
-    opts: &bch_opts,
+    opts: &Opts,
     filter_multipath: bool,
-) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+) -> Result<Vec<(PathBuf, SbHandle)>, BchError> {
 	let sbs = devices
 		.iter()
 		.filter(|dev| {
@@ -162,7 +162,7 @@ fn read_sbs_matching_uuid(
 	filter_current_sbs(sbs, opts)
 }
 
-fn sb_label_matches(sb: &bch_sb, label: &str) -> bool {
+fn sb_label_matches(sb: &Sb, label: &str) -> bool {
     let label_len = sb.label.iter()
         .position(|&b| b == 0)
         .unwrap_or(sb.label.len());
@@ -173,9 +173,9 @@ fn sb_label_matches(sb: &bch_sb, label: &str) -> bool {
 fn read_sbs_matching_label(
     label: &str,
     devices: &[PathBuf],
-    opts: &bch_opts,
+    opts: &Opts,
     filter_multipath: bool,
-) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+) -> Result<Vec<(PathBuf, SbHandle)>, BchError> {
     let sbs = devices
         .iter()
         .filter(|dev| {
@@ -199,14 +199,14 @@ fn read_sbs_matching_label(
     filter_current_sbs(sbs, opts)
 }
 
-fn sb_handle_path(sb: &bch_sb_handle) -> PathBuf {
+fn sb_handle_path(sb: &SbHandle) -> PathBuf {
 	PathBuf::from(OsString::from_vec(sb.io().name().to_bytes().to_vec()))
 }
 
 pub fn filter_current_sbs(
-	sbs: Vec<(PathBuf, bch_sb_handle)>,
-	opts: &bch_opts,
-) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+	sbs: Vec<(PathBuf, SbHandle)>,
+	opts: &Opts,
+) -> Result<Vec<(PathBuf, SbHandle)>, BchError> {
 	// Ahead of filter_dead(), which frees the superblock of every
 	// device it drops - and drops one that diverged the same way it drops one
 	// that was properly removed, leaving nothing to tell them apart afterwards.
@@ -242,9 +242,9 @@ pub fn filter_current_sbs(
 
 pub fn get_devices_by_uuid(
     uuid: Uuid,
-    opts: &bch_opts,
+    opts: &Opts,
     use_udev: bool
-) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
+) -> anyhow::Result<Vec<(PathBuf, SbHandle)>> {
     if use_udev {
         let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
 
@@ -291,7 +291,7 @@ const QUIET_WAIT: Duration = Duration::from_secs(2);
 
 /// Members the filesystem should have, according to what we found. Zero when
 /// we found nothing at all - not "no devices", but "don't know yet".
-pub fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
+pub fn expected_devices(sbs: &[(PathBuf, SbHandle)]) -> usize {
     sbs.first()
         .map(|(_, sb)| sb.sb().number_of_devices() as usize)
         .unwrap_or(0)
@@ -300,7 +300,7 @@ pub fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
 /// By dev_idx, because a scan produces paths and the same device turns up
 /// under more than one - multipath, or udev and the block scan both
 /// contributing. Counting paths calls the set complete with a member missing.
-pub fn present_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> HashSet<u8> {
+pub fn present_devices(sbs: &[(PathBuf, SbHandle)]) -> HashSet<u8> {
     sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect()
 }
 
@@ -316,7 +316,7 @@ pub fn present_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> HashSet<u8> {
 /// way it went missing.
 ///
 /// Durability as to_cpu() decodes it: one-biased on disk, zero meaning one.
-pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo> {
+pub fn devices_from_superblocks(sbs: &[(PathBuf, SbHandle)]) -> Vec<DevInfo> {
     let Some((_, first)) = sbs.first() else { return Vec::new() };
     let Some(members) = bcachefs_kernel::sb::members::members_v2(first.sb()) else {
         return Vec::new();
@@ -349,7 +349,7 @@ pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo
 }
 
 /// Are all the members here?
-fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
+fn have_every_device(sbs: &[(PathBuf, SbHandle)]) -> bool {
     let expected = expected_devices(sbs);
 
     expected != 0 && present_devices(sbs).len() >= expected
@@ -362,7 +362,7 @@ fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
 /// value, if we've found enough of one to read it. Zero on disk means "unset",
 /// since every filesystem written before the option existed reads back zero, so
 /// it falls through to the same built-in as having found nothing at all.
-fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> Duration {
+fn missing_dev_timeout(sbs: &[(PathBuf, SbHandle)], cli_opts: &Opts) -> Duration {
     if cli_opts.defined(OptId::missing_dev_timeout) {
         return Duration::from_secs(cli_opts.missing_dev_timeout() as u64);
     }
@@ -371,7 +371,7 @@ fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) ->
         return DEFAULT_MISSING_DEV_TIMEOUT;
     };
 
-    let mut sb_opts: bch_opts = Default::default();
+    let mut sb_opts: Opts = Default::default();
     bcachefs_kernel::opts::opts_from_sb(&mut sb_opts, sb.sb().as_unvalidated());
 
     match sb_opts.missing_dev_timeout_or_default() {
@@ -391,10 +391,10 @@ fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) ->
 ///
 /// Returns a short set rather than failing: what to do about missing members
 /// is the degraded action's question, not this one's.
-fn scan_waiting_for_devices<F>(cli_opts: &bch_opts, scan: F)
-    -> Result<Vec<(PathBuf, bch_sb_handle)>>
+fn scan_waiting_for_devices<F>(cli_opts: &Opts, scan: F)
+    -> Result<Vec<(PathBuf, SbHandle)>>
 where
-    F: Fn() -> Result<Vec<(PathBuf, bch_sb_handle)>>,
+    F: Fn() -> Result<Vec<(PathBuf, SbHandle)>>,
 {
     let socket = BlockMonitor::new().ok();
 
@@ -478,9 +478,9 @@ where
 
 fn get_devices_by_label(
     label: &str,
-    opts: &bch_opts,
+    opts: &Opts,
     use_udev: bool,
-) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
+) -> anyhow::Result<Vec<(PathBuf, SbHandle)>> {
     let sbs = if use_udev {
         let devs_from_udev = get_bcachefs_devnodes_udev()?;
         if devs_from_udev.is_empty() {
@@ -514,10 +514,10 @@ fn get_devices_by_label(
 
 fn devs_str_sbs_from_device(
     device: &Path,
-    opts: &bch_opts,
+    opts: &Opts,
     use_udev: bool,
     wait: bool,
-) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
+) -> anyhow::Result<Vec<(PathBuf, SbHandle)>> {
     if let Ok(metadata) = fs::metadata(device) {
         if metadata.is_dir() {
             return Err(anyhow::anyhow!("'{}' is a directory, not a block device", device.display()));
@@ -562,7 +562,7 @@ fn parse_label_equals(s: &str) -> Option<&str> {
 }
 
 /// Find a filesystem's members, without waiting for any that are absent.
-pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
+pub fn scan_sbs(device: &String, opts: &Opts) -> Result<Vec<(PathBuf, SbHandle)>> {
     scan_sbs_maybe_waiting(device, opts, false)
 }
 
@@ -572,23 +572,23 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
 /// being run by someone at a prompt who already knows what is plugged in -
 /// `bcachefs device remove` on a dead disk should not sit for
 /// missing_dev_timeout before doing the thing it was asked to do.
-pub fn scan_sbs_for_mount(device: &String, opts: &bch_opts)
-    -> Result<Vec<(PathBuf, bch_sb_handle)>>
+pub fn scan_sbs_for_mount(device: &String, opts: &Opts)
+    -> Result<Vec<(PathBuf, SbHandle)>>
 {
     scan_sbs_maybe_waiting(device, opts, true)
 }
 
 /// Waiting is for the search paths only: naming paths, with or without colons,
 /// is a statement about what exists.
-fn search<F>(opts: &bch_opts, wait: bool, f: F) -> Result<Vec<(PathBuf, bch_sb_handle)>>
+fn search<F>(opts: &Opts, wait: bool, f: F) -> Result<Vec<(PathBuf, SbHandle)>>
 where
-    F: Fn() -> Result<Vec<(PathBuf, bch_sb_handle)>>,
+    F: Fn() -> Result<Vec<(PathBuf, SbHandle)>>,
 {
     if wait { scan_waiting_for_devices(opts, f) } else { f() }
 }
 
-fn scan_sbs_maybe_waiting(device: &String, opts: &bch_opts, wait: bool)
-    -> Result<Vec<(PathBuf, bch_sb_handle)>>
+fn scan_sbs_maybe_waiting(device: &String, opts: &Opts, wait: bool)
+    -> Result<Vec<(PathBuf, SbHandle)>>
 {
     let udev = opts.mount_trusts_udev_or_default();
 
@@ -630,7 +630,7 @@ fn scan_sbs_maybe_waiting(device: &String, opts: &bch_opts, wait: bool)
     devs_str_sbs_from_device(Path::new(device), opts, udev, wait)
 }
 
-pub fn joined_device_str(sbs: &[(PathBuf, bch_sb_handle)]) -> OsString {
+pub fn joined_device_str(sbs: &[(PathBuf, SbHandle)]) -> OsString {
     sbs.iter()
         .map(|sb| sb.0.clone().into_os_string())
         .collect::<Vec<_>>()
@@ -653,7 +653,7 @@ pub enum OpenedFs {
 /// "Couldn't tell" (e.g. a sysfs error on a mounted filesystem) is an
 /// error, never silently treated as offline - the offline fallback on a
 /// live filesystem is how you corrupt it.
-pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
+pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: Opts)
     -> Result<OpenedFs, BchError>
 {
     use crate::wrappers::handle::BcachefsHandle;
@@ -666,7 +666,7 @@ pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
 
 /// One device names a filesystem, so find its members the way mount does.
 /// Several were named deliberately, and pass through as-is.
-pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<OpenFs, BchError> {
+pub fn open_scan(devs: &[PathBuf], fs_opts: Opts) -> Result<OpenFs, BchError> {
     let devs = if devs.len() == 1 {
         let mut dev_str = devs[0].to_string_lossy().into_owned();
 
@@ -697,7 +697,7 @@ pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<OpenFs, BchError
 pub struct DeviceWatch {
 	socket:	BlockMonitor,
 	uuid:	Uuid,
-	opts:	bch_opts,
+	opts:	Opts,
 	use_udev: bool,
 }
 
@@ -705,7 +705,7 @@ impl DeviceWatch {
 	/// `None` when there is no way to watch: no udev to tell us about
 	/// arrivals. Polling for a disk on a timer while a question is on screen
 	/// is not worth the code.
-	pub fn new(uuid: Uuid, opts: &bch_opts, use_udev: bool) -> Option<Self> {
+	pub fn new(uuid: Uuid, opts: &Opts, use_udev: bool) -> Option<Self> {
 		let socket = BlockMonitor::new().ok()?;
 
 		Some(DeviceWatch { socket, uuid, opts: *opts, use_udev })

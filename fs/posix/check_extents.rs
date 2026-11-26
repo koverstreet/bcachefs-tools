@@ -46,7 +46,7 @@ use crate::snapshots::snapshot;
 use crate::util::{alloc::Vec, Printbuf};
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::posix::namei;
-use crate::format::{Bpos, Btree, BkeyType, bkey};
+use crate::format::{Bpos, Btree, BkeyType, Bkey};
 
 /// Where the last extent seen in a snapshot ended.
 struct ExtentEnd {
@@ -189,7 +189,7 @@ fn overlapping_extents_found(
     res:  &DiskReservation<'_>,
     e1:   &mut ExtentEnd,
     inum: u64,
-    pos2: bkey,
+    pos2: Bkey,
 ) -> Result<bool, BchError> {
     let fs = t.fs();
     let pos1 = spos(inum, e1.offset, e1.snapshot);

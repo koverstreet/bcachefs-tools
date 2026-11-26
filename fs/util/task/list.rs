@@ -5,7 +5,7 @@
 //! after it's done, so the walk, under RCU, can read what it finds.
 
 use super::{Header, TaskRef};
-use crate::data_structures::fast_list::fast_list;
+use crate::data_structures::fast_list::FastList;
 use crate::locking::MemallocFlags;
 use crate::os::{kernel::msleep, module::{Quiesced, ThisModule}};
 use crate::prt;
@@ -19,7 +19,7 @@ use core::ffi::c_void;
 use core::ptr::NonNull;
 
 #[repr(transparent)]
-pub struct TaskList(fast_list);
+pub struct TaskList(FastList);
 
 /// Tasks of no filesystem's.
 pub static TASKS: TaskList = TaskList(::pin_init::zeroed());
@@ -27,7 +27,7 @@ pub static TASKS: TaskList = TaskList(::pin_init::zeroed());
 impl TaskList {
     /// A list made and torn down by its owner, as a filesystem's async object
     /// lists are.
-    pub fn of(list: &fast_list) -> &TaskList {
+    pub fn of(list: &FastList) -> &TaskList {
         unsafe { &*core::ptr::from_ref(list).cast::<TaskList>() }
     }
 
@@ -35,7 +35,7 @@ impl TaskList {
     pub fn init(&'static self, _: &ThisModule) -> Result<(), BchError> {
         assert!(!self.0.is_made(), "the module's task list made twice");
         // SAFETY: zeroed, at module init, before any task is made
-        unsafe { init_at(fast_list::new(), core::ptr::from_ref(&self.0).cast_mut()) }
+        unsafe { init_at(FastList::new(), core::ptr::from_ref(&self.0).cast_mut()) }
     }
 
     /// A static's, dropped in place and zeroed again: a no-op on one never made.

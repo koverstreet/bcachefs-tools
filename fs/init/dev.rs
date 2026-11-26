@@ -212,13 +212,13 @@
 use crate::c;
 #[cfg(kernel)]
 use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
-use crate::alloc::buckets::{bch_dev_usage_full, bucket, BucketGensArray};
-use crate::alloc::check_backpointers::{bucket_bitmap, BucketBitmapWords};
+use crate::alloc::buckets::{DevUsageFull, Bucket, BucketGensArray};
+use crate::alloc::check_backpointers::{BucketBitmap, BucketBitmapWords};
 use crate::btree::interior::BTREE_NODE_RESERVE;
 use crate::data::reconcile::work::ReconcileScan;
-use crate::journal::buckets::journal_device;
-use crate::opts::bch_opts;
-use crate::sb::members_format::{bch_member, BCH_MEMBER_NBUCKETS_MAX, bch_sb_field_members_v2,
+use crate::journal::buckets::JournalDevice;
+use crate::opts::Opts;
+use crate::sb::members_format::{Member, BCH_MEMBER_NBUCKETS_MAX, SbFieldMembersV2,
     BCH_SB_MEMBERS_MAX, MemberErrorType};
 use crate::alloc::accounting::{self, dev_usage_init};
 use crate::btree::iter::{trans_commit_do, CommitFlags, UpdateTriggerFlags};
@@ -233,13 +233,13 @@ use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, StateLockWrite, FsFlag};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures, __uuid_t,
-    BCH_BKEY_PTRS_MAX, bch_sb, bch_sb_layout, SbCompat};
+    BCH_BKEY_PTRS_MAX, Sb, SbLayout, SbCompat};
 use crate::locking::{Guard as _, Locked, LockedBy, MemallocFlags, Mutex};
 use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevIoRef, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID,
-                         bch_dev_identity, bch_member_cpu, DevReadRefKind};
+                         DevIdentity, MemberCpu, DevReadRefKind};
 use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
@@ -273,12 +273,12 @@ use crate::init::error::io_error_work;
 use crate::new_lock;
 use crate::util::late::Late;
 use crate::util::place::Placed;
-use crate::util::time_stats::{TimeStatsArray, bch2_time_stats_quantiles};
+use crate::util::time_stats::{TimeStatsArray, TimeStatsQuantiles};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct io_count {
+pub struct IoCount {
     pub sectors: [[u64; DataType::NR as usize]; 2],
 }
 
@@ -344,7 +344,7 @@ pub struct Dev {
      * Committed by bch2_write_super() -> bch_fs_mi_update(): written under
      * sb_lock, read without it
      */
-    pub mi: crate::util::projections::Volatile<bch_member_cpu>,
+    pub mi: crate::util::projections::Volatile<MemberCpu>,
     pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
     pub errors: [AtomicI64; MemberErrorType::NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
@@ -361,37 +361,37 @@ pub struct Dev {
     /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
     /// device it's on, fixed while it's attached.
     #[init(LockedBy::new(Default::default(), ::pin_init::zeroed()))]
-    pub disk_sb: LockedBy<bch_sb_io, bch_sb_bdev, crate::at!(Fs.sb)>,
+    pub disk_sb: LockedBy<SbIo, SbBdev, crate::at!(Fs.sb)>,
     /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
     /// whose buffer write_super can reallocate: the allocator, steering clear
     /// of superblock buckets. Copied as it's attached, and as it's edited -
     /// DevSbMut::edit_layout(), under sb_lock.
-    pub sb_layout: crate::util::projections::Volatile<bch_sb_layout>,
+    pub sb_layout: crate::util::projections::Volatile<SbLayout>,
     #[pin]
     #[init(None)]
     pub(crate) sb_read_scratch: Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>,
     pub dev: crate::util::projections::Volatile<c::dev_t>,
 
-    pub self_mask: bch_devs_mask,
+    pub self_mask: DevsMask,
 
     /*
      * Buckets:
      * Per-bucket arrays are protected by either rcu_read_lock or
      * state_lock, for device resize.
      */
-    pub buckets_gc: SharedGenRadix<bucket>,
+    pub buckets_gc: SharedGenRadix<Bucket>,
     pub bucket_gens: LockedBy<(), BucketGensArray, crate::at!(Fs.state_lock)>,
     /* allocated once, by migrate, and read without a lock */
     pub buckets_nouse: LockedBy<(), BucketBitmapWords, crate::at!(Fs.state_lock)>,
 
     #[pin]
-    #[init(bucket_bitmap::init())]
-    pub bucket_backpointer_mismatch: bucket_bitmap,
+    #[init(BucketBitmap::init())]
+    pub bucket_backpointer_mismatch: BucketBitmap,
     #[pin]
-    #[init(bucket_bitmap::init())]
-    pub bucket_backpointer_empty: bucket_bitmap,
+    #[init(BucketBitmap::init())]
+    pub bucket_backpointer_empty: BucketBitmap,
 
-    pub usage: PerCpu<bch_dev_usage_full>,
+    pub usage: PerCpu<DevUsageFull>,
 
     /* Allocator: */
     /* where each btree_bitmap kind of allocation scans from: racy, as in C */
@@ -447,7 +447,7 @@ pub struct Dev {
     pub rebalance_work: AtomicI64,
 
     #[pin]
-    pub journal: journal_device,
+    pub journal: JournalDevice,
     pub prev_journal_sector: Volatile<u64>,
 
     /// The bios of writes' replicas on it: write_replicas.rs's
@@ -460,20 +460,20 @@ pub struct Dev {
     pub cur_latency: [AtomicI64; 2],
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub io_latency: TimeStatsArray<bch2_time_stats_quantiles, 2>,
+    pub io_latency: TimeStatsArray<TimeStatsQuantiles, 2>,
 
     pub congested: AtomicI32,
     /* written racily, by bch2_latency_acct() */
     pub congested_last: AtomicU64,
 
-    pub io_done: PerCpu<io_count>,
+    pub io_done: PerCpu<IoCount>,
 }
 
 
 /// What a superblock's read into, and kept in: IO-aligned, as it's read and
 /// written in place.
 pub(crate) type SbStorage = AlignedBox<[u64], IO_ALIGN>;
-pub(crate) type SbRoom = DstRoom<bch_sb, SbStorage>;
+pub(crate) type SbRoom = DstRoom<Sb, SbStorage>;
 
 /// A superblock in memory, in a buffer that grows: a power of two, zeroes past
 /// the superblock, page aligned - it's read and written in place, O_DIRECT in
@@ -493,11 +493,11 @@ pub struct bch_sb_buf {
 /// Fs::sb_resize(), which grows its devices' with it.
 #[repr(C)]
 #[derive(Default, MaybeZeroable, TypeInfo)]
-pub struct bch_fs_sb {
+pub struct FsSb {
     buf: bch_sb_buf,
 }
 
-impl core::ops::Deref for bch_fs_sb {
+impl core::ops::Deref for FsSb {
     type Target = bch_sb_buf;
 
     fn deref(&self) -> &bch_sb_buf {
@@ -505,7 +505,7 @@ impl core::ops::Deref for bch_fs_sb {
     }
 }
 
-impl core::ops::DerefMut for bch_fs_sb {
+impl core::ops::DerefMut for FsSb {
     fn deref_mut(&mut self) -> &mut bch_sb_buf {
         &mut self.buf
     }
@@ -519,7 +519,7 @@ pub type SbBio = Option<BioBox<'static, Bio>>;
 /// a test's - it's a superblock in memory alone.
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
-pub struct bch_sb_io {
+pub struct SbIo {
     /// Read and validated, or made: never what a read hasn't checked
     pub buf: bch_sb_buf,
     /// Its bio, as big as the buffer, while its device is open: Rust's alone
@@ -534,9 +534,9 @@ pub struct bch_sb_io {
     pub mode: c::blk_mode_t,
 }
 
-impl Default for bch_sb_io {
+impl Default for SbIo {
     fn default() -> Self {
-        bch_sb_io {
+        SbIo {
             buf:         Default::default(),
             bio:         None,
             seq:         0,
@@ -552,31 +552,31 @@ crate::published! {
     /// The block device a superblock was read from, open: fixed while the
     /// device is a filesystem's, and read without sb_lock.
     #[derive(MaybeZeroable)]
-    pub struct bch_sb_bdev {
+    pub struct SbBdev {
         pub bdev: Volatile<*mut crate::os::blkdev::BlockDevice>,
     }
 }
 
 /// A superblock read from a device and held alone: bch2_read_super()'s. A
 /// device's is Dev.disk_sb, the same LockedBy, Shared.
-pub struct bch_sb_handle(LockedBy<bch_sb_io, bch_sb_bdev, (), Unshared>);
+pub struct SbHandle(LockedBy<SbIo, SbBdev, (), Unshared>);
 
-impl Default for bch_sb_handle {
+impl Default for SbHandle {
     fn default() -> Self {
-        bch_sb_handle(LockedBy::new(Default::default(), ::pin_init::zeroed()))
+        SbHandle(LockedBy::new(Default::default(), ::pin_init::zeroed()))
     }
 }
 
-impl bch_sb_handle {
-    pub fn io(&self) -> &bch_sb_io {
+impl SbHandle {
+    pub fn io(&self) -> &SbIo {
         self.0.get()
     }
 
-    pub fn io_mut(&mut self) -> &mut bch_sb_io {
+    pub fn io_mut(&mut self) -> &mut SbIo {
         self.0.get_mut()
     }
 
-    pub fn dev(&self) -> &bch_sb_bdev {
+    pub fn dev(&self) -> &SbBdev {
         &self.0
     }
 
@@ -591,23 +591,17 @@ impl bch_sb_handle {
 pub type DevsMask = BitArray<{ bits_to_longs(BCH_SB_MEMBERS_MAX as usize) }>;
 
 /// One changed under readers - c->devs_online, the allocator's rw_devs[] -
-/// declared as such where it's a field: still a struct bch_devs_mask to C.
+/// declared as such where it's a field.
 pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(BCH_SB_MEMBERS_MAX as usize) }>;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, zerocopy_derive::FromZeros)]
-pub struct bch_devs_mask {
-    pub d: DevsMask,
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
-pub struct bch_devs_list {
+pub struct DevsList {
     pub nr: u8,
     pub data: [u8; BCH_BKEY_PTRS_MAX as usize],
 }
 
-fn may_add(fs: &Fs, sb: &bch_sb) -> Result<(), BchError> {
+fn may_add(fs: &Fs, sb: &Sb) -> Result<(), BchError> {
     let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
 
     if u64::from(sb.block_size.get()) != fs.block_bytes() >> 9 {
@@ -801,7 +795,7 @@ impl Drop for NewDev {
     }
 }
 
-fn dev_alloc(fs: &Fs, member: &bch_member) -> Option<NewDev> {
+fn dev_alloc(fs: &Fs, member: &Member) -> Option<NewDev> {
     let mut ca = NewDev(Some(MaybeRcuAlloc::new(Dev::init(fs)).ok()?));
 
     ca.mi.set(member.to_cpu());
@@ -835,7 +829,7 @@ impl NewDev {
             let this = self.as_pin_mut().project();
 
             *this.dev_idx = dev_idx as u8;
-            this.self_mask.d.set(dev_idx as usize);
+            this.self_mask.set(dev_idx as usize);
 
             if this.name.get_mut().is_empty() {
                 let mut name = Printbuf::new();
@@ -895,7 +889,7 @@ fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [c_char]) -> bool {
     false
 }
 
-pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut bch_dev_identity) {
+pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut DevIdentity) {
     let mut bdevname = Printbuf::new();
     bdev.to_text(&mut bdevname);
     strscpy(&mut id.name, bdevname.as_bytes());
@@ -909,8 +903,8 @@ pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut bch_dev_ide
 
 /// Whether @sb can be opened as a member of the filesystem whose superblock is
 /// @fs. A device that diverged from @fs - split brain - is reported.
-pub fn dev_in_fs(fs: &bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: &bch_sb_handle,
-                 opts: &bch_opts) -> Result<(), BchError> {
+pub fn dev_in_fs(fs: &Sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: &SbHandle,
+                 opts: &Opts) -> Result<(), BchError> {
     let dev = sb.sb();
     if core::ptr::eq(fs, dev) {
         return Ok(());
@@ -958,7 +952,7 @@ pub fn dev_in_fs(fs: &bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, 
     Ok(())
 }
 
-fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut bch_sb_handle, err: &mut Printbuf)
+fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut SbHandle, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let fs = ca.fs();
@@ -1007,7 +1001,7 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut bch_sb_handle, err
 }
 
 impl StateLockWrite<'_> {
-    pub fn dev_attach_bdev(&self, sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<(), BchError> {
+    pub fn dev_attach_bdev(&self, sb: &mut SbHandle, err: &mut Printbuf) -> Result<(), BchError> {
         let fs = self.fs();
 
         {
@@ -1113,8 +1107,8 @@ impl StateLockWrite<'_> {
         let rw = MemberState::rw;
 
         if ca.mi.get().state == rw && new_state != rw {
-            let mut new_rw_devs = bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
-            new_rw_devs.d.clear(ca.dev_idx.into());
+            let mut new_rw_devs = fs.allocator.rw_devs[0].load();
+            new_rw_devs.clear(ca.dev_idx.into());
 
             return can_write_with_devs(fs, &new_rw_devs, WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
                                        flags, err);
@@ -1199,11 +1193,11 @@ impl StateLockWrite<'_> {
     pub fn dev_may_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let fs = self.fs();
 
-        let mut new_devs = bch_devs_mask { d: fs.devs_online.load() };
-        new_devs.d.clear(ca.dev_idx.into());
+        let mut new_devs = fs.devs_online.load();
+        new_devs.clear(ca.dev_idx.into());
 
-        let mut new_rw_devs = bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
-        new_rw_devs.d.clear(ca.dev_idx.into());
+        let mut new_rw_devs = fs.allocator.rw_devs[0].load();
+        new_rw_devs.clear(ca.dev_idx.into());
 
         if !fs.can_read_fs_with_devs(&new_devs, flags, Some(err)) ||
            (fs.opts().read_only.get() == 0 &&
@@ -1401,7 +1395,7 @@ impl Fs {
         dev_free(slot);
 
         /*
-         * Free this device's slot in the bch_member array - all pointers to
+         * Free this device's slot in the Member array - all pointers to
          * this device must be gone:
          */
         let mut sb = self.sb_lock();
@@ -1452,7 +1446,7 @@ impl Fs {
 
     /* Add new device to running filesystem: */
     pub fn dev_add(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut opts = bch_opts::default();
+        let mut opts = Opts::default();
         let mut sb = read_super(path, &mut opts, Some(self.holder()))
             .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?;
 
@@ -1523,7 +1517,7 @@ impl Fs {
                  * member copy above; re-intern so the new device gets
                  * its failure_domain id.
                  */
-                let _ = bch_sb_field_members_v2::<crate::util::vstructs::Validated>::to_cpu(self, &mut w);
+                let _ = SbFieldMembersV2::<crate::util::vstructs::Validated>::to_cpu(self, &mut w);
 
                 if mi_field_upgrades(&mut w, dev_idx, &identity) {
                     w.dirty();
@@ -1578,7 +1572,7 @@ impl Fs {
 
     /* Hot add existing device to running filesystem: */
     pub fn dev_bring_online(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut opts = bch_opts::default();
+        let mut opts = Opts::default();
 
         let state = self.state_lock_write();
 
@@ -1783,7 +1777,7 @@ impl Fs {
 
     /// @devs by name, space separated; one there isn't, by its number.
     #[cold]
-    pub fn devs_list_to_text(&self, out: &mut Printbuf, devs: &bch_devs_list) {
+    pub fn devs_list_to_text(&self, out: &mut Printbuf, devs: &DevsList) {
         // room first: under RCU it can only allocate atomically
         out.make_room(1024);
         let rcu = read_lock();

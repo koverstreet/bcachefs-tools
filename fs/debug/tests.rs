@@ -29,7 +29,7 @@ use pin_init::{pin_data, pinned_drop};
 
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;
-use crate::format::{Btree, BkeyType, bkey, Cookie};
+use crate::format::{Btree, BkeyType, Bkey, Cookie};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 mod cuckoo;
@@ -746,7 +746,7 @@ fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
         *v = seed + i as u64;
     }
 
-    let mut h = bkey::new();
+    let mut h = Bkey::new();
     h.u64s = u64s as u8;
     h.p.offset = seed;
 

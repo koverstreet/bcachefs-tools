@@ -39,7 +39,7 @@ use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 #[repr(C)]
 #[pin_data(PinnedDrop)]
 #[derive(MaybeZeroable)]
-pub struct fast_list {
+pub struct FastList {
     /* the items, by slot: allocated by any CPU at once */
     pub items: SharedGenRadix<Item>,
     #[pin]
@@ -65,7 +65,7 @@ struct Cache(ArrayVec<u32, 31>);
 // MaybeUninits
 unsafe impl ::pin_init::Zeroable for Cache {}
 
-impl fast_list {
+impl FastList {
     /// @f on this CPU's cache, interrupts off.
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
@@ -180,7 +180,7 @@ impl fast_list {
 
 /// Every item should be off it.
 #[pinned_drop]
-impl PinnedDrop for fast_list {
+impl PinnedDrop for FastList {
     fn drop(self: Pin<&mut Self>) {
         // SAFETY: no CPU's using it
         for lp in self.buffer.get().cpus() {
@@ -197,7 +197,7 @@ impl PinnedDrop for fast_list {
 /// A slot had before its item, empty: given back if it's dropped so.
 #[must_use = "a slot dropped is given back"]
 pub struct Slot<'l> {
-    list: &'l fast_list,
+    list: &'l FastList,
     idx:  u32,
 }
 

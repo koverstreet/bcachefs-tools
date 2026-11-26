@@ -711,19 +711,20 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::alloc::foreground::{AllocWait, Blocked, open_buckets, Watermark};
+use crate::alloc::foreground::{AllocWait, Blocked, OpenBuckets, Watermark};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, BkeyS, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::alloc::buckets::DiskReservation;
-use crate::alloc::write_point::{write_point, write_point_specifier};
-use crate::data::extents::{bch_extent_crc_unpacked, bch_io_failures};
+use crate::alloc::write_point::{WritePoint, WritePointSpecifier};
+use crate::data::extents::ExtentCrcUnpacked;
+use crate::data::ptrs::IoFailures;
 use crate::data::extents_format::{BKEY_EXTENT_U64s_MAX, InlineDataCsum};
-use crate::data::update::data_update_index;
-use crate::init::dev::{AtomicDevsMask, bch_devs_list};
-use crate::opts::bch_inode_opts;
-use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::data::update::DataUpdateIndex;
+use crate::init::dev::{AtomicDevsMask, DevsList};
+use crate::opts::InodeOpts;
+use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::util::time_stats::TimeStat;
 use crate::data::inline_data::{InlineDataMut, DATA};
 use crate::data::keylist::Keylist;
@@ -733,7 +734,7 @@ use crate::data::write_nocow::nocow_write;
 use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Bversion, DataType, BkeyType, MetadataVersion, SbFeature,
-    BCH_BKEY_PTRS_MAX, BCH_REPLICAS_MAX, bkey, CsumType};
+    BCH_BKEY_PTRS_MAX, BCH_REPLICAS_MAX, Bkey, CsumType};
 use crate::fs::Fs;
 use crate::types::NeBytes;
 use crate::locking::MemallocFlags;
@@ -782,8 +783,8 @@ nest! {
     #[pin_data]
     #[repr(C)]
     #[derive(MaybeZeroable, BitfieldMembers, TypeInfo, Init)]
-    #[init_args(fs: &Fs, opts: bch_inode_opts)]
-    pub struct bch_write_op {
+    #[init_args(fs: &Fs, opts: InodeOpts)]
+    pub struct WriteOp {
         #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
         pub c: crate::util::backref::BackRef<Fs>,
         pub start_time: u64,
@@ -794,12 +795,12 @@ nest! {
         pub io_error: u8,
 
         #[members]
-        #[init(bch_write_op_bits::new()
+        #[init(WriteOpBits::new()
                .with_csum_type(fs.data_checksum_type(&opts))
                .with_compression_opt(opts.compression)
                .with_watermark(Watermark::normal as u8))]
         #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
-        pub bits: pub struct bch_write_op_bits {
+        pub bits: pub struct WriteOpBits {
             /*
              * What we want the data to be. Seeded from @opts at init
              * (bch2_write_op_init()), but allowed to diverge from it: the data
@@ -827,7 +828,7 @@ nest! {
             __pad:           u11,
         },
 
-        pub devs_have: bch_devs_list,
+        pub devs_have: DevsList,
         pub target: u16,
         pub nonce: u16,
 
@@ -837,13 +838,13 @@ nest! {
          * disagree, they do so deliberately.
          *
          * TODO: this should be the compact reconcile opts, not a full
-         * bch_inode_opts - the write path doesn't need foreground vs background
+         * InodeOpts - the write path doesn't need foreground vs background
          * compression, its caller should be choosing that. Then the read bio
          * can carry the effective opts per extent too, and
          * read_extent_rbio_alloc() stops looking up a reflink_v's own.
          */
         #[init(opts)]
-        pub opts: bch_inode_opts,
+        pub opts: InodeOpts,
 
         pub subvol: u32,
         #[init(crate::POS_MAX)]
@@ -861,15 +862,15 @@ nest! {
          * So the three layers are: @opts is policy, @csum_type is intent, @crc
          * is fact. Anything that changes the buffer must update @crc with it.
          */
-        pub crc: bch_extent_crc_unpacked,
+        pub crc: ExtentCrcUnpacked,
 
-        pub write_point: write_point_specifier,
+        pub write_point: WritePointSpecifier,
 
         /* Reserved at @res.nr_replicas, which is not @nr_replicas - see above */
         #[init(DiskReservation::new(unsafe { crate::util::backref::BackRef::new(fs).get() }))]
         pub res: DiskReservation<'static>,
 
-        pub open_buckets: open_buckets,
+        pub open_buckets: OpenBuckets,
 
         #[init(u64::MAX)]
         pub new_i_size: u64,
@@ -879,8 +880,8 @@ nest! {
         pub insert_keys: crate::data::keylist::Keylist<{ BKEY_EXTENT_U64s_MAX * 2 }>,
 
         /* what failed writing this round's buckets: */
-        #[init(bch_io_failures::default())]
-        pub failed: bch_io_failures,
+        #[init(IoFailures::default())]
+        pub failed: IoFailures,
 
         /* c->writes, held till it's done - a data update's holds its own */
         #[init(None)]
@@ -897,12 +898,12 @@ crate::module_param! {
     perm = 0o644, desc = "";
 }
 
-type Op = bch_write_op;
+type Op = WriteOp;
 
 /// A write bio's io ref on its device.
 pub(crate) type DevWriteRef = DevIoRef<DevWriteRefKind>;
 
-impl bch_write_op {
+impl WriteOp {
     /// The op's filesystem, as 'static: an op is done before its filesystem
     /// goes, and what it hands out of it goes no further than the op.
     pub fn fs(&self) -> &'static Fs {
@@ -915,7 +916,7 @@ impl bch_write_op {
     /// # Safety
     /// @fs outlives the op, and @op holds nothing to drop: new memory, or an
     /// op whose write's done - its reservation put, its keys and refs gone.
-    pub unsafe fn init_at(op: *mut Self, fs: &Fs, opts: bch_inode_opts) {
+    pub unsafe fn init_at(op: *mut Self, fs: &Fs, opts: InodeOpts) {
         unsafe { crate::util::alloc::init_at(Self::init(fs, opts), op) }
             .unwrap_or_else(|e| panic!("a write op's init, which can't fail: {e}"));
     }
@@ -952,7 +953,7 @@ impl bch_write_op {
 fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -> Result<(), BchError> {
     let fs = op.fs();
     let subvol = op.subvol;
-    let inum = subvol_inum {
+    let inum = SubvolInum {
         subvol: subvol.into(),
         inum:   op.insert_keys.front().expect("an index update with no keys").k().p.inode,
     };
@@ -994,7 +995,7 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
             // in place: a direct data key's cut leaves its u64s, so the keys
             // after it stay where they are
             let k = op.insert_keys.front_mut().expect("an index update with no keys");
-            crate::data::extents::bch2_cut_front_s(fs, next, BkeyS::from(k));
+            crate::data::extents::cut_front_s(fs, next, BkeyS::from(k));
         }
 
         if op.insert_keys.is_empty() {
@@ -1012,7 +1013,7 @@ pub(crate) fn index_update_wq(op: &Op) -> &'static Queue {
     }
 }
 
-impl write_point {
+impl WritePoint {
     pub(crate) fn index_updates(&self) -> Pin<&RunQueue> {
         self.index_updates.as_pin()
     }
@@ -1068,7 +1069,7 @@ impl ReplicaErrs {
             op.io_error = 1;
         }
         if let WriteFor::Inode(devs_need_flush) = of {
-            for dev in self.unflushed.d.iter() {
+            for dev in self.unflushed.iter() {
                 devs_need_flush.set(dev);
             }
         }
@@ -1081,7 +1082,7 @@ fn keylist_sectors<const N: usize>(keys: &Keylist<N>) -> u64 {
 
 /* Writes */
 
-fn log_write_error_start(out: &mut Printbuf, op: &Op, update: Option<&data_update_index>, offset: u64) {
+fn log_write_error_start(out: &mut Printbuf, op: &Op, update: Option<&DataUpdateIndex>, offset: u64) {
     prt!(out, "error writing data at ");
 
     let pos = Bpos { offset, ..op.pos };
@@ -1093,7 +1094,7 @@ fn log_write_error_start(out: &mut Printbuf, op: &Op, update: Option<&data_updat
     write_op_to_text(out, op, update);
 }
 
-pub(crate) fn write_op_error(op: &Op, update: Option<&data_update_index>, offset: u64, msg: fmt::Arguments<'_>) {
+pub(crate) fn write_op_error(op: &Op, update: Option<&DataUpdateIndex>, offset: u64, msg: fmt::Arguments<'_>) {
     let mut m = log_msg_ratelimited!(op.fs());
 
     log_write_error_start(&mut m, op, update, offset);
@@ -1151,7 +1152,7 @@ fn write_drop_io_error_ptrs(op: &mut Op) -> Result<(), BchError> {
 /// message isn't needed in the frame the index update runs under.
 #[cold]
 #[inline(never)]
-fn write_io_error_keys(op: &mut Op, update: Option<&data_update_index>) -> Result<(), BchError> {
+fn write_io_error_keys(op: &mut Op, update: Option<&DataUpdateIndex>) -> Result<(), BchError> {
     let fs = op.fs();
     let ret = write_drop_io_error_ptrs(op);
 
@@ -1191,7 +1192,7 @@ fn write_io_error_keys(op: &mut Op, update: Option<&data_update_index>) -> Resul
 
 /// After a write, update index to point to new data - with w::flush, the
 /// write's last update asking for its journal flush.
-fn __write_index(op: &mut Op, update: Option<&data_update_index>, flush: Option<&mut Option<Flush<'_>>>) {
+fn __write_index(op: &mut Op, update: Option<&DataUpdateIndex>, flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
     let flush = flush.filter(|_| op.has(w::submitted));
 
@@ -1252,7 +1253,7 @@ fn __write_index(op: &mut Op, update: Option<&data_update_index>, flush: Option<
 /// How a pass ended: the write point it last allocated from, if it found one,
 /// and what the allocator blocked on, if it did.
 struct Pass {
-    wp:      Option<&'static write_point>,
+    wp:      Option<&'static WritePoint>,
     blocked: Option<(Blocked, u32)>,
 }
 
@@ -1269,7 +1270,7 @@ enum Next<'a> {
 /// @data. Out of line and not async: its transaction and memalloc scope go
 /// before its replicas are waited on.
 #[allow(clippy::too_many_arguments)]
-fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&data_update_index>,
+fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&DataUpdateIndex>,
                    in_caller: bool, stuck: bool, retried_for_encoded: &mut bool, pass: &mut Pass) -> Next<'s> {
     let fs = op.fs();
     let _noio = MemallocFlags::noio();
@@ -1371,7 +1372,7 @@ fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Optio
 /// on the allocator ran out allocator_stuck_timeout - blocked again, it's
 /// reported.
 #[allow(clippy::too_many_arguments)]
-async fn write_pass<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&data_update_index>,
+async fn write_pass<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Option<&DataUpdateIndex>,
                         in_caller: bool, stuck: bool, retried_for_encoded: &mut bool,
                         owned: &mut impl Iterator<Item = &'s mut Option<ExtentBio>>,
                         io: &mut InFlight<'s>, at: Resume<'_>) -> Pass {
@@ -1506,7 +1507,7 @@ async fn __write(op: &mut Op, wbio: &mut WriteBio<'_>, of: WriteFor<'_>, at: Res
     }
 }
 
-fn write_data_inline(op: &mut Op, wbio: &mut Bio, update: Option<&data_update_index>, data_len: u32,
+fn write_data_inline(op: &mut Op, wbio: &mut Bio, update: Option<&DataUpdateIndex>, data_len: u32,
                      flush: Option<&mut Option<Flush<'_>>>) {
     let fs = op.fs();
 
@@ -1527,7 +1528,7 @@ fn write_data_inline(op: &mut Op, wbio: &mut Bio, update: Option<&data_update_in
 
     let sectors = wbio.range().len() >> 9;
     let p = Bpos { offset: op.pos.offset + u64::from(sectors), ..op.pos };
-    let k = bkey { type_: ty.0 as u8, p, size: sectors, bversion: op.version, ..bkey::new() };
+    let k = Bkey { type_: ty.0 as u8, p, size: sectors, bversion: op.version, ..Bkey::new() };
 
     let len = data_len as usize;
     let val_u64s = (DATA.of(&k).expect("an inline data type") + len).div_ceil(8);
@@ -1555,7 +1556,7 @@ fn write_data_inline(op: &mut Op, wbio: &mut Bio, update: Option<&data_update_in
 
 #[cold]
 #[inline(never)]
-fn data_write_trace(out: &mut Printbuf, op: &Op, update: Option<&data_update_index>) {
+fn data_write_trace(out: &mut Printbuf, op: &Op, update: Option<&DataUpdateIndex>) {
     write_op_to_text(out, op, update)
 }
 
@@ -1566,13 +1567,13 @@ pub enum WriteFor<'a> {
     /// issued to them since last flush
     Inode(&'a AtomicDevsMask),
     /// A data update's, which its index update rewrites the extent of
-    Update(&'a data_update_index),
+    Update(&'a DataUpdateIndex),
     /// The tools': no fsync to tell
     Tools,
 }
 
 impl<'a> WriteFor<'a> {
-    pub(crate) fn update(self) -> Option<&'a data_update_index> {
+    pub(crate) fn update(self) -> Option<&'a DataUpdateIndex> {
         match self {
             Self::Update(u) => Some(u),
             _ => None,
@@ -1723,7 +1724,7 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
 }
 
 #[cold]
-pub fn write_op_to_text(out: &mut Printbuf, op: &Op, update: Option<&data_update_index>) {
+pub fn write_op_to_text(out: &mut Printbuf, op: &Op, update: Option<&DataUpdateIndex>) {
     __write_op_to_text(out, op);
 
     if let Some(u) = update {

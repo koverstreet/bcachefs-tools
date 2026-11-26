@@ -3,7 +3,7 @@ use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
 use chrono::{Local, TimeZone};
 
 use anyhow::{anyhow, ensure, Context, Result};
-use bcachefs_kernel::bcachefs_ioctl::{BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2, bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2, bch_ioctl_subvol_dirent, bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path};
+use bcachefs_kernel::bcachefs_ioctl::{BCH_SUBVOL_SNAPSHOT_RO, IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2, IoctlSubvolDirent, IoctlSubvolReaddir, IoctlSubvolToPath};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
@@ -158,7 +158,7 @@ struct SubvolEntry {
     path: String,
 }
 
-type SnapshotNode = bch_ioctl_snapshot_node_v2;
+type SnapshotNode = IoctlSnapshotNodeV2;
 
 struct SnapshotTreeResult {
     master_subvol:  u32,
@@ -206,7 +206,7 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
     // aligned for one if the buffer is
     let mut buf = vec![0u64; (64 << 10) / 8];
     let arg = loop {
-        let mut arg = bch_ioctl_subvol_readdir {
+        let mut arg = IoctlSubvolReaddir {
             pos: *pos,
             buf_size: u32::try_from(mem::size_of_val(&*buf))
                 .context("BCH_IOCTL_SUBVOLUME_LIST: an entry bigger than any buffer the ioctl can be given")?,
@@ -226,7 +226,7 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         anyhow!("BCH_IOCTL_SUBVOLUME_LIST: {} bytes used, of {}", arg.used, arg.buf_size)
     })?;
 
-    UnvalidatedEntries::<bch_ioctl_subvol_dirent<Unvalidated>>::new(reply)
+    UnvalidatedEntries::<IoctlSubvolDirent<Unvalidated>>::new(reply)
         .map(|d| {
             let d = d?;
             let path = CStr::from_bytes_until_nul(plain_bytes(&d.path))
@@ -258,7 +258,7 @@ fn list_children(fd: &OwnedFd) -> Result<Vec<SubvolEntry>> {
 
 fn subvol_to_path(fd: &OwnedFd, subvolid: u32) -> Result<String> {
     let mut buf = vec![0u8; 4096];
-    let mut arg = bch_ioctl_subvol_to_path {
+    let mut arg = IoctlSubvolToPath {
         subvolid,
         buf_size: buf.len() as u32,
         buf: buf.as_mut_ptr() as u64,
@@ -279,9 +279,9 @@ fn resolve_subvol_path(fd: &OwnedFd, subvolid: u32) -> Option<String> {
 }
 
 fn query_snapshot_tree(fd: &OwnedFd, tree_id: u32) -> Result<SnapshotTreeResult> {
-    match bcachefs_flex_ioctl(fd, bch_ioctl_snapshot_tree_query_v2 {
+    match bcachefs_flex_ioctl(fd, IoctlSnapshotTreeQueryV2 {
         tree_id,
-        node_size: mem::size_of::<bch_ioctl_snapshot_node_v2>() as u32,
+        node_size: mem::size_of::<IoctlSnapshotNodeV2>() as u32,
         ..Default::default()
     }) {
         Ok((hdr, nodes)) => Ok(SnapshotTreeResult {
@@ -292,7 +292,7 @@ fn query_snapshot_tree(fd: &OwnedFd, tree_id: u32) -> Result<SnapshotTreeResult>
         /* Kernel predates v2: fall back, without the key counters */
         Err(e) if e.downcast_ref::<std::io::Error>()
             .and_then(|e| e.raw_os_error()) == Some(rustix::io::Errno::NOTTY.raw_os_error()) => {
-            let (hdr, v1) = bcachefs_flex_ioctl(fd, bch_ioctl_snapshot_tree_query {
+            let (hdr, v1) = bcachefs_flex_ioctl(fd, IoctlSnapshotTreeQuery {
                 tree_id,
                 ..Default::default()
             })?;
@@ -300,7 +300,7 @@ fn query_snapshot_tree(fd: &OwnedFd, tree_id: u32) -> Result<SnapshotTreeResult>
             Ok(SnapshotTreeResult {
                 master_subvol: hdr.master_subvol,
                 root_snapshot: hdr.root_snapshot,
-                nodes: v1.iter().map(|n| bch_ioctl_snapshot_node_v2 {
+                nodes: v1.iter().map(|n| IoctlSnapshotNodeV2 {
                     id:       n.id,
                     parent:   n.parent,
                     children: n.children,

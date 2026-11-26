@@ -17,12 +17,12 @@ use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
 use crate::c;
-use crate::posix::inode::bch_inode_unpacked;
-use crate::posix::inode_opts::inode_opt_change;
+use crate::posix::inode::InodeUnpacked;
+use crate::posix::inode_opts::InodeOptChange;
 use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_TMPFILE, BCH_CREATE_SUBVOL};
 use crate::posix::quota_format::{QuotaCounter, QuotaType};
-use crate::posix::str_hash::bch_hash_info;
-use crate::snapshots::{format::Subvolume, subvolume::subvol_inum, subvolume};
+use crate::posix::str_hash::HashInfo;
+use crate::snapshots::{format::Subvolume, subvolume::SubvolInum, subvolume};
 use crate::vfs::inode::InodeInfoFlag;
 use crate::posix::dirent::{self, Dirent};
 use crate::errcode::{Errcode, BchError};
@@ -52,7 +52,7 @@ impl InodeInfo {
     /// root, a snapshot of @snapshot_src's subvolume, with BCH_CREATE_SUBVOL
     /// and BCH_CREATE_SNAPSHOT. The reference is ours, not yet the dentry's.
     pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mut mode: c::umode_t,
-                         rdev: c::dev_t, snapshot_src: subvol_inum, flags: u32)
+                         rdev: c::dev_t, snapshot_src: SubvolInum, flags: u32)
         -> Result<InodeRef, BchError>
     {
         let fs = self.fs();
@@ -75,7 +75,7 @@ impl InodeInfo {
         // so that inserting it, which can't fail, rarely has to allocate
         fs.vfs.inode_cache.make_room();
 
-        let mut inode_u = bch_inode_unpacked::default();
+        let mut inode_u = InodeUnpacked::default();
         inode::init_early(fs, &mut inode_u);
 
         let dir_lock = (!tmpfile).then(|| self.update_lock());
@@ -83,7 +83,7 @@ impl InodeInfo {
         // ours until after, ei->update_lock must also be taken first:
         let trans = crate::btree_trans!(fs);
         let mut held = None;
-        let mut dir_u = bch_inode_unpacked::default();
+        let mut dir_u = InodeUnpacked::default();
         let mut subvol = Subvolume::default();
 
         // Quotas count only master subvolume inodes; a new subvolume's root is
@@ -103,7 +103,7 @@ impl InodeInfo {
                 quota::acct(fs, qid, quota::Q_INO, 1, QuotaAcctMode::PREALLOC, &mut QuotaWarnings::new(fs))?;
             }
 
-            let inum = subvol_inum {
+            let inum = SubvolInum {
                 subvol: if inode_u.bi_subvol != 0 { inode_u.bi_subvol.into() } else { self.inum().subvol },
                 inum:   inode_u.bi_inum,
             };
@@ -154,7 +154,7 @@ impl InodeInfo {
     /// The inode @name in this directory names, through the inode cache - @hash
     /// is this directory's. ENOENT if there's no such name, or it's a subvolume
     /// this directory doesn't list.
-    pub fn lookup(&self, hash: &bch_hash_info, name: &OsStr) -> Result<InodeRef, BchError> {
+    pub fn lookup(&self, hash: &HashInfo, name: &OsStr) -> Result<InodeRef, BchError> {
         let dir = self.inum();
         // before the locks an insert of what we find would be under
         self.fs().vfs.inode_cache.make_room();
@@ -203,7 +203,7 @@ impl InodeInfo {
     pub fn link(&self, dir: &InodeInfo, name: &OsStr) -> Result<(), BchError> {
         let _lock = self.update_lock();
         let trans = crate::btree_trans!(self.fs());
-        let [mut dir_u, mut inode_u] = [bch_inode_unpacked::default(); 2];
+        let [mut dir_u, mut inode_u] = [InodeUnpacked::default(); 2];
 
         commit_do(&trans, None, CommitOpts::new(), |t| {
             dir.fold_times_trans(t)?;
@@ -222,7 +222,7 @@ impl InodeInfo {
         {
             let _locks = InodeInfo::update_lock_all([self, inode]);
             let trans = crate::btree_trans!(self.fs());
-            let [mut dir_u, mut inode_u] = [bch_inode_unpacked::default(); 2];
+            let [mut dir_u, mut inode_u] = [InodeUnpacked::default(); 2];
 
             commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
                 self.fold_times_trans(t)?;
@@ -249,7 +249,7 @@ impl InodeInfo {
 
 /// The LSMs' xattrs for a new @inode in @dir.
 fn init_security(t: &TransAttempt<'_, '_>, dir: &InodeInfo, inode: &mut NewInode, name: Option<&c::qstr>,
-                 inum: subvol_inum, inode_u: &bch_inode_unpacked, flags: u32) -> Result<(), BchError> {
+                 inum: SubvolInum, inode_u: &InodeUnpacked, flags: u32) -> Result<(), BchError> {
     // A snapshot create doesn't create an inode: create_trans() looks up the
     // source subvolume's root and reuses it at the new snapshot ID, so the
     // source's security xattr is already visible there through snapshot
@@ -410,11 +410,11 @@ impl InodeOps for DirOps {
             }
 
             let [mut src_dir_u, mut dst_dir_u, mut src_inode_u, mut dst_inode_u] =
-                [bch_inode_unpacked::default(); 4];
+                [InodeUnpacked::default(); 4];
             // Outside the attempts: the propagates they start are finished after
             // the commit
-            let mut src_opt_change = inode_opt_change::new();
-            let mut dst_opt_change = inode_opt_change::new();
+            let mut src_opt_change = InodeOptChange::new();
+            let mut dst_opt_change = InodeOptChange::new();
 
             lockrestart_do(&trans, |t| {
                 for inode in [src_dir, dst_dir, src_inode].into_iter().chain(dst_inode) {
@@ -427,7 +427,7 @@ impl InodeOps for DirOps {
 
                 if flags & c::RENAME_WHITEOUT != 0 {
                     // In the transaction's memory, as C had it: off the stack
-                    let w = t.alloc_zeroed::<bch_inode_unpacked>()?;
+                    let w = t.alloc_zeroed::<InodeUnpacked>()?;
                     inode::init_early(fs, w);
 
                     let mut new_subvol = Subvolume::default();
@@ -436,7 +436,7 @@ impl InodeOps for DirOps {
                     namei::create_trans(t, src_dir.inum(), &mut src_dir_u, w, &mut new_subvol,
                                         Some(src_dentry.name()), uid, gid,
                                         (c::S_IFCHR | c::WHITEOUT_MODE) as c::umode_t, 0,
-                                        None, None, subvol_inum::default(), 0)?;
+                                        None, None, SubvolInum::default(), 0)?;
                     if !src_dir.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
                         quota::acct(fs, quota::qid(w), QuotaCounter::Q_INO.0 as usize, 1,
                                     QuotaAcctMode::PREALLOC, &mut QuotaWarnings::new(fs))?;
@@ -485,8 +485,8 @@ impl InodeOps for DirOps {
 /// Dirent @d, in @dir, points at @inum, which isn't there: @err, looking for
 /// it in @snapshot. Not a reason to take the filesystem read-only - logged, and
 /// check_dirents scheduled.
-fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: subvol_inum,
-                           inum: subvol_inum, snapshot: u32, err: &BchError)
+fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: SubvolInum,
+                           inum: SubvolInum, snapshot: u32, err: &BchError)
     -> Result<(), BchError>
 {
     let fs = t.fs();

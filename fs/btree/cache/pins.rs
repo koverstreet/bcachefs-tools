@@ -3,7 +3,7 @@
 use crate::btree::bkey::{POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
 use crate::btree::node::BtreeNode;
-use crate::btree::bbpos::bbpos;
+use crate::btree::bbpos::Bbpos;
 use crate::btree::cache::BtreeNodeCacheState;
 use crate::errcode::BchError;
 use crate::format::Btree;
@@ -46,7 +46,7 @@ impl BtreeCachePins<'_> {
      * they're just slow paths.
      */
     pub fn pin(&self, trans: &BtreeTrans<'_>, leaf_mask: u64, interior_mask: u64,
-               range: RangeInclusive<bbpos>) -> Result<bbpos, BchError> {
+               range: RangeInclusive<Bbpos>) -> Result<Bbpos, BchError> {
         let fs = self.0;
         let (start, end) = range.into_inner();
         let mut mem_may_pin = self.budget() as i64;
@@ -78,7 +78,7 @@ impl BtreeCachePins<'_> {
                 }
                 mem_may_pin -= b.buf_bytes() as i64;
                 if mem_may_pin <= 0 {
-                    pinned_end = bbpos { btree: Btree(btree), pos: b.key().k.p };
+                    pinned_end = Bbpos { btree: Btree(btree), pos: b.key().k.p };
                     fs.btree.cache.lock.lock().pinned_nodes_end = pinned_end;
                     return Ok(ControlFlow::Break(()));
                 }

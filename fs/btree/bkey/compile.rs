@@ -6,7 +6,7 @@ use core::mem::offset_of;
 
 use super::format::{bkey_fields, FIELDS};
 use super::BKEY_U64S;
-use crate::format::{BkeyField::{self, *}, bkey_format, KEY_FORMAT_CURRENT};
+use crate::format::{BkeyField::{self, *}, BkeyFormat, KEY_FORMAT_CURRENT};
 use crate::types::field_size;
 
 struct Emit<'a> {
@@ -21,7 +21,7 @@ impl Emit<'_> {
     }
 }
 
-fn compile_bkey_field(format: &bkey_format, out: &mut Emit<'_>, field: BkeyField,
+fn compile_bkey_field(format: &BkeyFormat, out: &mut Emit<'_>, field: BkeyField,
                       dst_offset: u8, dst_size: usize, eax_zeroed: &mut bool) {
     let bits = format.bits(field);
     let offset = format.offset(field);
@@ -185,7 +185,7 @@ fn compile_bkey_field(format: &bkey_format, out: &mut Emit<'_>, field: BkeyField
     }
 }
 
-impl bkey_format {
+impl BkeyFormat {
     /// Into @out: returns its length.
     pub fn compile(&self, out: &mut [u8]) -> usize {
         let mut out = Emit { out, len: 0 };
@@ -213,8 +213,8 @@ impl bkey_format {
         macro_rules! compile_fields {
             ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {
                 $(compile_bkey_field(self, &mut out, $id,
-                                     offset_of!(crate::format::bkey, $($field).+) as u8,
-                                     field_size(|k: crate::format::bkey| k.$($field).+) as usize,
+                                     offset_of!(crate::format::Bkey, $($field).+) as u8,
+                                     field_size(|k: crate::format::Bkey| k.$($field).+) as usize,
                                      &mut eax_zeroed);)*
             };
         }

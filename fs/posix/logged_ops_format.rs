@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::format::bch_val;
+use crate::format::Val;
 use crate::types::{Le32, Le64};
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
@@ -16,7 +16,7 @@ pub enum LoggedOpsInum {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpTruncate {
-    pub v: bch_val,
+    pub v: Val,
     pub subvol: Le32,
     pub pad: Le32,
     pub inum: Le64,
@@ -34,7 +34,7 @@ pub enum LoggedOpFinsertState {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpFinsert {
-    pub v: bch_val,
+    pub v: Val,
     pub state: u8,
     pub pad: [u8; 3],
     pub subvol: Le32,
@@ -60,7 +60,7 @@ pub struct LoggedOpFinsert {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpInodeOptPropagate {
-    pub v: bch_val,
+    pub v: Val,
     pub inum: Le64,
     pub origin_snapshot: Le32,
     pub cursor_snapshot: Le32,
@@ -69,7 +69,7 @@ pub struct LoggedOpInodeOptPropagate {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct LoggedOpStripeUpdate {
-    pub v: bch_val,
+    pub v: Val,
     pub old_idx: Le64,
     pub new_idx: Le64,
     pub old_blocks_nr: u8,

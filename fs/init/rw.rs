@@ -21,7 +21,7 @@ use crate::init::passes::RecoveryPass;
 use crate::alloc::{accounting::verify_accounting_clean, capacity::recalc_capacity};
 use crate::btree::init::btree_init_rw;
 use crate::fs::{FsFlag as Flag, Fs, StateLockWrite};
-use crate::journal::journal::{JournalFlag as Journal, JournalGuard};
+use crate::journal::journal::{JournalFlag, JournalGuard};
 use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{MemberState, SbFeature};
@@ -87,7 +87,7 @@ impl Fs {
         bch_verbose!(self, "flushing journal and stopping allocators complete, journal seq {}",
                      self.journal_cur_seq());
 
-        if self.journal.flags.get(Journal::replay_done) && !self.flags.get(Flag::emergency_ro) {
+        if self.journal.flags.get(JournalFlag::replay_done) && !self.flags.get(Flag::emergency_ro) {
             self.flags.set(Flag::clean_shutdown, true);
         }
 
@@ -166,7 +166,7 @@ impl StateLockWrite<'_> {
         /*
          * Stop background kthreads that issue writes (reconcile, etc.)
          * before disabling c->writes; otherwise they can dispatch
-         * data_update operations that fail with erofs_no_writes once
+         * DataUpdate operations that fail with erofs_no_writes once
          * c->writes is stopped, and the failure-rate threshold trips.
          */
         fs.reconcile_stop();
@@ -309,8 +309,8 @@ impl StateLockWrite<'_> {
          */
         {
             let mut g = fs.journal.lock.lock();
-            fs.journal.flags.set(Journal::need_flush_write, true);
-            fs.journal.flags.set(Journal::running, true);
+            fs.journal.flags.set(JournalFlag::need_flush_write, true);
+            fs.journal.flags.set(JournalFlag::running, true);
             #[cfg(CONFIG_BCACHEFS_DEBUG)]
             fs.journal.stop_thread.store(core::ptr::null_mut(), Relaxed);
             fs.journal.space_available(&mut g);

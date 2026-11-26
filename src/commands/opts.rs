@@ -95,7 +95,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
 /// options — the sentinel set-file-option uses to delete a per-file option.
 /// Without it, clap's choice validation rejects "-" before the command sees it.
 /// Commands with no removal semantics (set-option, device add) pass false.
-pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
+pub fn option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
     let mut args = Vec::new();
 
     for_each_opt(flag_filter, |name, opt| {
@@ -162,29 +162,29 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
 
 /// Look up a bcachefs option by name, handling --nooption negation for booleans.
 /// Returns (opt_id, opt_ref, negated).
-pub fn bch_opt_lookup_negated(name: &str) -> Option<(OptId, &'static Opt, bool)> {
-    if let Some(r) = bch_opt_lookup(name) {
+pub fn find_opt_negated(name: &str) -> Option<(OptId, &'static Opt, bool)> {
+    if let Some(r) = find_opt(name) {
         return Some((r.0, r.1, false));
     }
     let rest = name.strip_prefix("no_").or_else(|| name.strip_prefix("no"))?;
-    let (id, opt) = bch_opt_lookup(rest)?;
+    let (id, opt) = find_opt(rest)?;
     matches!(opt.ty, OptType::Bool).then_some((id, opt, true))
 }
 
 /// Look up a bcachefs option by name. Returns the typed option id and reference.
-pub fn bch_opt_lookup(name: &str) -> Option<(OptId, &'static Opt)> {
+pub fn find_opt(name: &str) -> Option<(OptId, &'static Opt)> {
     bcachefs_kernel::opts::opt_lookup(name).map(|opt| (opt.id, opt))
 }
 
 /// Option names matching the filter.
-pub fn bch_option_names(flag_filter: u32) -> Vec<&'static str> {
+pub fn option_names(flag_filter: u32) -> Vec<&'static str> {
     let mut names = Vec::new();
     for_each_opt(flag_filter, |name, _| names.push(name));
     names
 }
 
 /// Extract bcachefs option (name, value) pairs from ArgMatches.
-pub fn bch_options_from_matches(matches: &ArgMatches, flag_filter: u32) -> Vec<(String, String)> {
+pub fn options_from_matches(matches: &ArgMatches, flag_filter: u32) -> Vec<(String, String)> {
     let mut opts = Vec::new();
     for_each_opt(flag_filter, |name, opt| {
         if let Some(val) = matches.get_one::<String>(name) {
@@ -203,7 +203,7 @@ pub fn bch_options_from_matches(matches: &ArgMatches, flag_filter: u32) -> Vec<(
 ///
 /// Returns:
 ///   `Ok(None)` — option needs an open filesystem, should be deferred
-///   `Ok(Some(v))` — parsed value, ready to set with `bch_opts::set()`
+///   `Ok(Some(v))` — parsed value, ready to set with `Opts::set()`
 ///   `Err(...)` — parse error
 pub(crate) fn parse_opt_val(
     opt: &Opt,

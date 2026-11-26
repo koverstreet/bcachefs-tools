@@ -52,7 +52,7 @@ pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 /// wait_for_pagecache_and_delete_work: ReffedWork<delete_unlinked, field!(super.writes)>,
 /// ```
 ///
-/// runs delete_unlinked(&bch_fs_snapshots) holding a write ref of their Fs.
+/// runs delete_unlinked(&FsSnapshots) holding a write ref of their Fs.
 ///
 /// The parent's #[derive(Init)] makes it in place, holding the field's At:
 /// so C's pointer to it is had back as the ReffedWork, and its container()

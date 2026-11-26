@@ -561,7 +561,7 @@ fn fields_to_text(
     indent: usize,
 ) -> core::fmt::Result {
     for f in info.fields {
-        // bch_val and friends: zero-size markers, nothing to show (their
+        // Val and friends: zero-size markers, nothing to show (their
         // flexible-array member would misreport the rest of the value).
         if matches!(&f.kind, FieldKind::Struct(inner) if inner.size == 0) {
             continue;
@@ -646,8 +646,8 @@ pub fn struct_to_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bcachefs_ioctl::bch_ioctl_fsck_offline;
-    use crate::format::bch_sb_head;
+    use crate::bcachefs_ioctl::IoctlFsckOffline;
+    use crate::format::SbHead;
     use crate::snapshots::format::Snapshot;
 
     fn snapshot_info() -> &'static StructInfo {
@@ -697,7 +697,7 @@ mod tests {
     /// zero; anywhere else it's a zero-length array.
     #[test]
     fn flex_array_tail() {
-        let info = <crate::util::vstructs::Head<bch_ioctl_fsck_offline> as TypeInfo>::INFO;
+        let info = <crate::util::vstructs::Head<IoctlFsckOffline> as TypeInfo>::INFO;
         let devs = info.fields.iter().find(|f| f.name == "devs").unwrap();
         assert!(matches!(devs.kind, FieldKind::VarTail { stride: 8, .. }));
 
@@ -796,8 +796,8 @@ mod tests {
     /// members bits of it - as tests set an inode's bi_flags, a number.
     #[test]
     fn bitfield_word() {
-        let info = <bch_sb_head as TypeInfo>::INFO;
-        let mut buf = [0u8; core::mem::size_of::<bch_sb_head>()];
+        let info = <SbHead as TypeInfo>::INFO;
+        let mut buf = [0u8; core::mem::size_of::<SbHead>()];
         let field = |path| resolve_with_bits(info, path).unwrap();
         let (word, clean, csum_type) = (field("flags0"), field("clean"), field("csum_type"));
 

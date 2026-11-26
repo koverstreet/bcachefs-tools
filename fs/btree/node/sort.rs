@@ -7,7 +7,7 @@ use super::{BtreeNode, BtreeNrKeys, NodeContents};
 use crate::btree::path::{LockedNode, Write};
 use crate::btree::bkey::{self, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::cache::Bounce;
-use crate::format::{btree_node, btree_node_entry, KEY_FORMAT_LOCAL_BTREE};
+use crate::format::{btree_node, BtreeNodeEntry, KEY_FORMAT_LOCAL_BTREE};
 use crate::util::time_stats::TimeStat;
 use crate::fs::Fs;
 use crate::types::Le64;
@@ -111,8 +111,8 @@ pub enum CompactMode {
 }
 
 const NODE_U64S: usize = size_of::<Head<btree_node>>() / size_of::<u64>();
-const ENTRY_U64S: usize = size_of::<Head<btree_node_entry>>() / size_of::<u64>();
-const ENTRY_KEYS: usize = offset_of!(Head<btree_node_entry>, keys) / size_of::<u64>();
+const ENTRY_U64S: usize = size_of::<Head<BtreeNodeEntry>>() / size_of::<u64>();
+const ENTRY_KEYS: usize = offset_of!(Head<BtreeNodeEntry>, keys) / size_of::<u64>();
 
 /// Runs of keys, merged: by position, then by @tie_break - of each key's
 /// offset and key.
