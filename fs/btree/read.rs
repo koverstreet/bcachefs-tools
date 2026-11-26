@@ -739,6 +739,7 @@ fn sort_bsets(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, runs: &mut So
     }
 
     contents.nsets = 1;
+    b.flags.set_nr_written_bsets(1);
     b.keys_mut(contents).set_bset(0, (offset_of!(Head<c::btree_node>, keys) / 8) as u16);
 
     let n = c::btree_node::<Unvalidated>::from_bytes_mut(unsafe { node_buf(b, contents) }).expect(FITS);

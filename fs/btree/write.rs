@@ -343,7 +343,7 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     let contents = b.contents();
     assert!(b.written.get() < fs.btree_sectors() as u16);
     assert!(b.written.get() & (fs.block_sectors() as u16 - 1) == 0);
-    assert!(!b.bset_written(contents.last_set()));
+    assert!(!b.last_bset_written(contents));
     assert!(contents.data().magic.get() == fs.bset_magic());
     assert!(plain_bytes(&contents.data().format) == plain_bytes(&contents.format));
 
@@ -352,7 +352,11 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     let contents = b.contents();
     let fs_ref = unsafe { BackRef::new(fs) };
     /* the bounce is the task's */
-    let Some(mut w) = BsetWrite::build(unsafe { fs_ref.get() }, &b, contents) else {
+    let w = BsetWrite::build(unsafe { fs_ref.get() }, &b, contents);
+    /* written - or with nothing to put on disk, all their keys overwritten */
+    b.flags.set_nr_written_bsets(contents.nsets);
+
+    let Some(mut w) = w else {
         write_done(fs, b);
         return;
     };
@@ -476,8 +480,8 @@ impl BsetWrite {
         bytes += b.whiteout_u64s.get() as usize * size_of::<u64>();
 
         let mut seq = 0;
-        for t in contents.sets() {
-            if b.bset_written(t) {
+        for (set, t) in contents.sets().iter().enumerate() {
+            if b.bset_written(set) {
                 continue;
             }
 
@@ -604,15 +608,6 @@ pub fn post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> 
     b.flags.set_just_written(false);
 
     /*
-     * Note: immediately after write, bset_written() doesn't work - the
-     * amount of data we had to write after compaction might have been
-     * smaller than the offset of the last bset.
-     *
-     * However, we know that all bsets have been written here, as long as
-     * we're still holding the write lock:
-     */
-
-    /*
      * XXX: decide if we really want to unconditionally sort down to a
      * single bset:
      */
@@ -703,7 +698,7 @@ pub(in crate::btree) fn init_next(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_,
 
     ebug_assert!(six_lock_counts(b.c.lock.six()).n[c::SixLockType::SIX_LOCK_write as usize] != 0);
     let contents = b.contents();
-    assert!(!b.bset_written(&contents.set[1]));
+    assert!(!b.bset_written(1));
     assert!(!b.flags.just_written());
 
     if contents.nsets as u32 == MAX_BSETS &&

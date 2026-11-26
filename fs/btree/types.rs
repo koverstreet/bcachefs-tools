@@ -927,7 +927,8 @@ pub struct BtreeNodeFlags {
     never_write: bool,
     pinned: bool,
     permanent: bool,
-    __: u8,
+    #[bits(2)] nr_written_bsets: u8,
+    #[bits(6)] __: u8,
 }
 
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&

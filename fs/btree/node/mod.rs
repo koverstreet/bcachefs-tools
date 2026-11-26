@@ -494,8 +494,12 @@ impl BtreeNode {
         self.written.get() as usize * (512 / size_of::<u64>())
     }
 
-    pub fn bset_written(&self, t: &BsetTree) -> bool {
-        (t.data_offset as usize) < self.written_end()
+    pub fn bset_written(&self, set: usize) -> bool {
+        set < self.flags.nr_written_bsets().into()
+    }
+
+    pub fn last_bset_written(&self, contents: &NodeContents) -> bool {
+        self.bset_written(contents.nsets as usize - 1)
     }
 
     pub fn unwritten_whiteouts(&self) -> Range<usize> {
@@ -516,7 +520,7 @@ impl BtreeNode {
         let remaining = self.u64s_remaining(t.end_offset as usize);
         assert!(remaining >= 0, "a node's keys past its buffer, by {} u64s", -remaining);
 
-        if self.bset_written(t) { 0 } else { remaining as usize }
+        if self.last_bset_written(contents) { 0 } else { remaining as usize }
     }
 
     /// Whether a key of @u64s goes in without a split, or a rewrite first:
@@ -558,7 +562,7 @@ impl BtreeNode {
         let bne = self.written_end().max(t.end_offset as usize);
         let keys = (offset_of!(Head<c::btree_node_entry>, keys) + offset_of!(Head<c::bset>, _data)) / size_of::<u64>();
 
-        let want = if self.bset_written(t) {
+        let want = if self.last_bset_written(contents) {
             self.written.get() as u32 + fs.block_sectors() <= fs.btree_sectors()
         } else {
             t.u64s() * size_of::<u64>() > WRITE_SET_BUFFER &&

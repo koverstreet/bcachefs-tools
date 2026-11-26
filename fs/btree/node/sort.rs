@@ -365,7 +365,7 @@ fn should_compact_bset(b: &BtreeNode, contents: &NodeContents, set: usize, compa
 
     match mode {
         CompactMode::COMPACT_LAZY => should_compact_bset_lazy(&contents.nr, set, t) ||
-            (compacting && !b.bset_written(t)),
+            (compacting && !b.bset_written(set)),
         CompactMode::COMPACT_ALL  => true,
     }
 }
@@ -376,7 +376,7 @@ pub fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactM
 
     for set in 0..contents.nsets as usize {
         let t = contents.set[set];
-        let moved = (set != 0 && !b.bset_written(&t))
+        let moved = (set != 0 && !b.bset_written(set))
             .then(|| (t.data_offset as usize - ENTRY_KEYS, write_block.max(contents.set[set - 1].end_offset as usize)))
             .filter(|(src, dst)| src != dst);
 
@@ -430,6 +430,11 @@ pub fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactM
 pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, start_idx: usize, end_idx: usize) {
     let shift = end_idx - start_idx - 1;
     let sorting_entire_node = start_idx == 0 && end_idx == contents.nsets as usize;
+    let written = usize::from(b.flags.nr_written_bsets());
+
+    assert!(end_idx <= written || start_idx >= written,
+            "sorting bsets {start_idx}..{end_idx} of a node's {}, {written} of them written: written with unwritten",
+            contents.nsets);
 
     let keys = b.keys(contents);
     let sets = &keys.sets[start_idx..end_idx];
@@ -486,6 +491,9 @@ pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, star
     contents.set.copy_within(end_idx..nsets, start_idx + 1);
     contents.nsets -= shift as u8;
     contents.nr.bset_u64s[contents.nsets as usize..].fill(0);
+    if end_idx <= written {
+        b.flags.set_nr_written_bsets((written - shift) as u8);
+    }
 
     let mut keys = b.keys_mut(contents);
     keys.bset_head_mut(start_offset).set_u64s(u64s);
@@ -560,7 +568,7 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
 pub fn btree_node_compact(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> bool {
     let (b, contents) = (b.node(), b.contents_mut());
     let nsets = contents.nsets as usize;
-    let unwritten_idx = contents.sets().iter().position(|t| !b.bset_written(t)).unwrap_or(nsets);
+    let unwritten_idx = usize::from(b.flags.nr_written_bsets()).min(nsets);
     let mut ret = false;
 
     for (start, end) in [(unwritten_idx, nsets), (0, unwritten_idx)] {
@@ -574,11 +582,10 @@ pub fn btree_node_compact(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> 
 
 pub fn build_aux_trees(b: &BtreeNode, contents: &mut NodeContents) {
     let nsets = contents.nsets as usize;
-    let written: [bool; MAX_BSETS as usize] = core::array::from_fn(|i| i < nsets && b.bset_written(&contents.set[i]));
     let mut keys = b.keys_mut(contents);
 
     for set in 0..nsets {
-        keys.bset_build_aux_tree(set, !written[set] && set + 1 == nsets);
+        keys.bset_build_aux_tree(set, !b.bset_written(set) && set + 1 == nsets);
     }
 }
 

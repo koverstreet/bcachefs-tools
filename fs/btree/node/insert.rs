@@ -104,7 +104,7 @@ fn bset_overwrite(b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &KeyIter,
         let keys = b.keys(contents);
 
         ebug_assert!(!b.flags.just_written());
-        ebug_assert!(!b.bset_written(contents.last_set()));
+        ebug_assert!(!b.last_bset_written(contents));
         ebug_assert!(!(deleting && insert.k.val_u64s() != 0));
         ebug_assert!(insert.k.p >= contents.data().min_key);
         ebug_assert!(insert.k.p <= contents.data().max_key);
