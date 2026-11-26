@@ -8,7 +8,7 @@ use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::Status;
 use crate::locking::{Locked, SeqLock, SpinLockIrq};
 use crate::new_lock;
-use crate::data::reconcile::work::StripesPending;
+use crate::data::reconcile::work::{PhysWorkers, StripesPending};
 use crate::os::kthread::Daemon;
 use crate::os::power_supply::PowerNotifier;
 use core::sync::atomic::{AtomicBool, AtomicI32};
@@ -37,6 +37,10 @@ pub struct bch_fs_reconcile {
     pub(crate) status: SeqLock<Status>,
     pub work_stats: c::MoveStats,
     pub progress: c::progress_indicator,
+    /// The last phys phase's workers, for sysfs
+    #[pin]
+    #[init(SeqLock::new(PhysWorkers::new()))]
+    pub(crate) phys_workers: SeqLock<PhysWorkers>,
     pub scan_stats: c::MoveStats,
 
     /*
