@@ -496,15 +496,19 @@ bch-rust-gc-in += g2p_kernels_hf.o
 targets += $(patsubst $(obj)/%,%,$(bch-hf-metas) $(filter $(bch-hf)/%,$(bch-hf-target)))
 endif
 
-# Line tables, not the kernel's full (or reduced) debuginfo: our crate is one
-# codegen unit, so what rustc holds for it grows with the crate - enough to be
-# OOM-killed in a 4G test VM - and full debuginfo adds ~15% to that, for
-# nothing BTF uses: pahole skips Rust units. Line tables keep addresses
-# decodable to file:line. After Makefile.rust.vendor, which may have turned
-# debuginfo off for BTF: this reads KBUILD_RUSTFLAGS now (rustflags-y is
-# simply expanded), and mustn't turn it back on.
+# No debuginfo, whatever the kernel's: backtraces need only the symbol table,
+# which kallsyms and perf read, and the ORC unwinder. DWARF was most of the
+# module - 47M of 59M, even as line tables - and BTF uses none of it: pahole
+# skips Rust units. Our crate is one codegen unit, so what rustc holds for it
+# grows with the crate - enough to be OOM-killed in a 4G test VM - and
+# debuginfo adds to that. BCACHEFS_DEBUG_INFO=1 keeps line tables, for
+# addresses decoded to file:line. After Makefile.rust.vendor, which may have
+# turned debuginfo off for BTF: this reads KBUILD_RUSTFLAGS now (rustflags-y
+# is simply expanded), and mustn't turn it back on.
 rustflags-remove-y += -Cdebuginfo=1 -Cdebuginfo=2
+ifeq ($(BCACHEFS_DEBUG_INFO),1)
 rustflags-y += $(if $(filter -Cdebuginfo=1 -Cdebuginfo=2,$(KBUILD_RUSTFLAGS)),-Cdebuginfo=line-tables-only)
+endif
 
 # ---- rust.o: the Rust, less what nothing reaches ----------------------------
 # kbuild links a module without section GC, and rustc compiles everything a
