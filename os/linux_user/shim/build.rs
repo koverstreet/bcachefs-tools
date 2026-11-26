@@ -39,14 +39,12 @@ fn main() {
     println!("cargo:rerun-if-changed={}", wrapper.display());
     println!("cargo:rerun-if-changed=../../../clang_target.rs");
 
-    // What os/linux_user/compress.rs calls: linked after this
+    // liburcu, and what os/linux_user/compress.rs calls: linked after this
     // crate, as a link --as-needed only keeps a library that's needed by what
     // comes before it
-    println!("cargo:rustc-link-lib=z");
-    println!("cargo:rustc-link-lib=lz4");
-    println!("cargo:rustc-link-lib=zstd");
-
-    let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
+    let include_paths: Vec<PathBuf> = ["liburcu", "zlib", "liblz4", "libzstd"].iter()
+        .flat_map(|lib| pkg_config::probe_library(lib).unwrap_or_else(|e| panic!("{e}")).include_paths)
+        .collect();
     let target = std::env::var("TARGET").unwrap();
     let clang_target = clang_target_for_rust_target(&target);
 
@@ -54,11 +52,7 @@ fn main() {
         .formatter(bindgen::Formatter::Prettyplease)
         .header(wrapper.display().to_string())
         .clang_arg(format!("--target={}", clang_target))
-        .clang_args(
-            urcu.include_paths
-                .iter()
-                .map(|p| format!("-I{}", p.display())),
-        )
+        .clang_args(include_paths.iter().map(|p| format!("-I{}", p.display())))
         .clang_arg(format!("-I{}", root.display()))
         .clang_arg("-fkeep-inline-functions")
         .derive_debug(true)
@@ -108,9 +102,7 @@ fn main() {
         .include(&root)
         .flag("-fkeep-inline-functions")
         .warnings(false);
-    for p in &urcu.include_paths {
-        wrappers.include(p);
-    }
+    wrappers.includes(&include_paths);
     wrappers.compile("bcachefs_shim_static_wrappers");
 
     // dh-cargo Built-Using (Debian): point at the workspace root (== the dpkg

@@ -92,17 +92,11 @@ CARGO=cargo $(CARGO_ARGS)
 # Cold paths out of line, as the module's are: fs/Makefile.rust
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries -C llvm-args=-hot-cold-split=true
 
-PKGCONFIG_LIBS="blkid liburcu zlib liblz4 libzstd"
-
 # Only query pkg-config for targets that compile or do a full install.
 # Targets like install_dkms and clean don't need build dependencies.
 NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf
 ifneq ($(filter-out $(NO_PKGCONFIG_TARGETS),$(or $(MAKECMDGOALS),all)),)
 
-# The libraries cargo links: missing, said here rather than mid-build
-ifeq (,$(shell $(PKG_CONFIG) --exists $(PKGCONFIG_LIBS) && echo y))
-    $(error pkg-config error, command: $(PKG_CONFIG) --exists $(PKGCONFIG_LIBS))
-endif
 PKGCONFIG_UDEVDIR:=$(shell $(PKG_CONFIG) --variable=udevdir udev)
 ifeq (,$(PKGCONFIG_UDEVDIR))
     $(error pkg-config error, command: $(PKG_CONFIG) --variable=udevdir udev)
