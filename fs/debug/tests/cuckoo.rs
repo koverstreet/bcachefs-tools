@@ -927,6 +927,7 @@ fn bench<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
 
 /// The load a table reaches before an insert finds no chain: dense, so only
 /// that grows it - the load just before each grow, by the size it grew from.
+#[cfg(test)]
 fn fill<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
     const TRIALS: usize = 8;
     const MAX_BITS: usize = 20;
@@ -962,6 +963,7 @@ fn fill<S: CuckooHasher, const W: usize>(table: &str) -> TestRet {
     Ok(())
 }
 
+#[cfg(test)]
 fn fills() -> TestRet {
     fill::<SipHash13Key, 2>("siphash, 2-way")?;
     fill::<SipHash13Key, 3>("siphash, 3-way")?;
