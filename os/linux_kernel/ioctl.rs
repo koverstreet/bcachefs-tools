@@ -17,9 +17,7 @@
 
 use crate::c;
 use crate::errcode::{BchError, Errcode};
-use crate::util::alloc::Vec;
-use crate::util::ioctl::{dir, Ioctl};
-use crate::util::vstructs::{CountedHead, DstHead, Head, Unsized};
+use crate::util::{alloc::Vec, ioctl::{dir, Ioctl}, vstructs::{CountedHead, DstHead, Head, Unsized}};
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::mem::size_of;

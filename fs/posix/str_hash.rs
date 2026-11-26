@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::posix::dirent_format;
+use crate::posix::{dirent_format, inode};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, MutBkey, SPOS_MAX};
 use crate::btree::iter::{
@@ -11,16 +11,13 @@ use crate::btree::iter::{
 };
 use crate::posix::inode_format::InodeFlags;
 use crate::posix::inode::bch_inode_unpacked;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{subvolume::subvol_inum, snapshot, subvolume};
 use crate::posix::check::{self, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::posix::inode;
-use crate::snapshots::{snapshot, subvolume};
-use crate::os::checksum::{Checksum, Crc32c, Crc64};
-use crate::os::unicode::UnicodeMap;
+use crate::os::{checksum::{Checksum, Crc32c, Crc64}, unicode::UnicodeMap};
 // a glob: userspace's are RustCrypto's, called through their traits
 use crate::os::crypto::*;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};

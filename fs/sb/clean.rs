@@ -16,22 +16,19 @@ use crate::btree::bkey::{AnyKey, BkeySCToText, ValidateFlags, bkey_validate_cont
     BkeyValidateFrom};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard};
+use crate::fs::{Fs, SbLockGuard, btree_id_is_alloc};
 use crate::journal::entries::{entry_u64s, EntryWriter, NoRoom};
 use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
-use crate::sb::errors::SbErrorId;
-use crate::sb::io::{entries_end, SbFieldOps};
+use crate::sb::{errors::SbErrorId, io::{entries_end, SbFieldOps, SbResize}};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::Vec;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, Validated,
                             ValidatedEntriesMut};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
-use crate::sb::io::SbResize;
 use crate::format::{Btree, MetadataVersion, SbFeatures, bch_sb, bch_sb_field_clean, FsUsageType,
     jset, jset_entry, jset_entry_clock, jset_entry_usage, JsetEntryRef, JsetEntryType, SbCompats,
     SbFieldType};
-use crate::fs::btree_id_is_alloc;
 
 type Section = bch_sb_field_clean<Validated>;
 

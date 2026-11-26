@@ -28,18 +28,16 @@
 //! it's held.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, BkeyVal};
+use crate::btree::bkey::{AnyKeySC, BkeyVal, bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS,
+    BkeySC, BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN, BkeyOps};
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
-                         BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN};
-use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkP,
     ReflinkPIdxFlags, ReflinkV};
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_one;
 use crate::errcode::{Errcode, BchError};
@@ -47,7 +45,6 @@ use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::sb::errors::FsckFlags;
-use crate::snapshots::subvolume;
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::types::{Le32, Le64};
 use crate::os::kernel::{fatal_signal_pending, unlikely};

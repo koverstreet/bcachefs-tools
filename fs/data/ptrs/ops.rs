@@ -3,17 +3,13 @@
 //! seen, or rejected - and btree_ptr(_v2)'s own on top of them.
 
 use super::*;
-use crate::init::passes::RecoveryPass;
+use crate::init::{passes::RecoveryPass, error::{id, BkeyValidate}};
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
 use crate::data::durability::BkeyVDurability;
-use crate::btree::bkey::{AnyKeySC, BkeyOps, ValidateFlags, BkeyValidateFrom};
-use crate::util::vstructs::Unvalidated;
-use crate::btree::trigger::Trigger;
-use crate::init::error::{id, BkeyValidate};
-use crate::util::rcu::ReadGuard;
-use crate::util::{Printbuf, ToText};
+use crate::btree::{bkey::{AnyKeySC, BkeyOps, ValidateFlags, BkeyValidateFrom}, trigger::Trigger};
+use crate::util::{vstructs::Unvalidated, rcu::ReadGuard, Printbuf, ToText};
 use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion, BCH_BKEY_PTRS_MAX,
     BCH_REPLICAS_MAX};
 

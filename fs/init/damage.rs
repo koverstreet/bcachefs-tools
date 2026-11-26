@@ -30,22 +30,17 @@
 //! later, when the inodes btree can be walked: lost extents below.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
-use crate::btree::bkey::{spos, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{AnyKeySC, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::data::extents_format::BtreePtrV2;
-use crate::init::damage_format::Damage;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::init::{damage_format::Damage, error::{id, BkeyValidate}};
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
 use crate::posix::inode;
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId, bch_sb_error_entry_cpu};
-use crate::snapshots::subvolume;
-use crate::util::{DateTime, Printbuf};
-use crate::util::alloc::Vec;
+use crate::util::{DateTime, Printbuf, alloc::Vec, vstructs::{Unvalidated, Validated}};
 use crate::os::kernel::ktime_get_real_seconds;
-use crate::util::vstructs::{Unvalidated, Validated};
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
 use crate::sb::errors_format::bch_sb_field_error_entry_v2 as Entry;
 use core::cmp::Ordering;

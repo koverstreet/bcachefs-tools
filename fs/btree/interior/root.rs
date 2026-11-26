@@ -4,27 +4,24 @@
 //! when one's missing - and each written as a journal entry propagated back
 //! to the in-memory roots; and the reserve cache, as text.
 
-use core::ffi::c_ulong;
+use core::ffi::{c_ulong, c_int};
 use core::ptr;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::build_aux_trees;
 use crate::btree::path::{PathIdx, Paths};
-use crate::btree::bkey::BkeyV;
+use crate::btree::bkey::{BkeyV, BkeyI, BKEY_U64S};
 use crate::btree::interior::btree_alloc;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
 use crate::format::{BkeyType, Btree, BTREE_ID_NR_MAX, jset_entry, jset_entry_btree_root};
 use crate::fs::Fs;
-use crate::prt;
+use crate::{prt, POS_MIN, SPOS_MAX};
 use crate::util::Printbuf;
 use crate::util::printbuf::ToText;
 use crate::util::vstructs::Validated;
-use crate::{POS_MIN, SPOS_MAX};
 use super::{reserve, InteriorUpdate, NewNode};
-use core::ffi::c_int;
-use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::data_structures::dst_room::DstRoom;
 use crate::locking::{ExclusiveGuard, Mutex};
 use crate::util::alloc::Vec;

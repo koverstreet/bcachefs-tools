@@ -50,10 +50,9 @@ use bcachefs_kernel::btree::iter::{
 };
 use bcachefs_kernel::data::write::WriteFlags;
 use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::posix::inode::bch_inode_unpacked;
+use bcachefs_kernel::posix::{inode::bch_inode_unpacked, inode};
 use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::posix::inode;
 use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::{Head, Unvalidated};
 use bcachefs_kernel::format::DegradedAction;
@@ -61,8 +60,7 @@ use clap::Parser;
 
 use crate::device_scan::OpenedFs;
 use crate::logging;
-use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
+use crate::wrappers::{handle::BcachefsHandle, online_iter::{OnlineBtreeIter, OnlineIterFlags}};
 use bcachefs_kernel::format::{Bpos, Btree, BkeyType, bch_sb, bkey, Deleted, ErrorAction};
 
 const BKEY_U64S: usize = size_of::<bkey>() / size_of::<u64>();

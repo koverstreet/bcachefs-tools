@@ -4,12 +4,9 @@
 //! recovery passes it asks for, and the version upgrade or downgrade the
 //! options and the version say - with the passes each needs run.
 
-use crate::init::passes::RecoveryPass;
-use crate::fs::FsFlag as Flag;
-use crate::format::VersionUpgradeOpt as Upgrade;
-use crate::format::{Btree, MetadataVersion, ErrorAction};
-use crate::fs::{Fs, SbLockGuard};
-use crate::init::passes::{passes_from_stable, passes_to_stable, prt_stable};
+use crate::init::passes::{RecoveryPass, passes_from_stable, passes_to_stable, prt_stable};
+use crate::fs::{FsFlag as Flag, Fs, SbLockGuard};
+use crate::format::{VersionUpgradeOpt as Upgrade, Btree, MetadataVersion, ErrorAction};
 use crate::prt;
 use crate::sb::downgrade::{ext, sb_set_downgrade, sb_set_upgrade};
 use crate::sb::errors::SbErrorId;
@@ -17,9 +14,7 @@ use crate::sb::io::{check_version_downgrade, sb_upgrade};
 use crate::types::Le64;
 use crate::data_structures::bitmap::LeBitmap;
 use crate::os::kernel::ktime_get_real_seconds;
-use crate::util::names;
-use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
+use crate::util::{names, Printbuf, rcu::read_lock};
 
 /// Older than this, an upgrade isn't optional
 const REQUIRED_UPGRADE_BELOW: MetadataVersion = MetadataVersion::btree_node_accounting;

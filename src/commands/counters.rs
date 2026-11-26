@@ -4,9 +4,8 @@ use anyhow::{anyhow, Context, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::opts::bch_opts;
 use bcachefs_kernel::format::DegradedAction;
-use bcachefs_kernel::sb::counters_format::PersistentCounter;
+use bcachefs_kernel::sb::{counters_format::PersistentCounter, counters::COUNTERS};
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::sb::counters::COUNTERS;
 use clap::Parser;
 
 fn match_counter(name: &str) -> Result<usize> {

@@ -8,18 +8,14 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::{inode::bch_inode_unpacked, inode, dirent::{Dirent, DirentTarget}};
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::posix::inode;
-use crate::posix::dirent::{Dirent, DirentTarget};
-use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::capacity::DiskReservation;
-use crate::util::alloc::Vec;
-use crate::util::Printbuf;
+use crate::util::{alloc::Vec, Printbuf};
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, Whiteout};

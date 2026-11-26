@@ -5,19 +5,14 @@
 //! number, whether it's a directory - and keeps the VFS's checks of
 //! ownership and permission, which come in as arguments or a callback.
 
-use core::mem::offset_of;
-use core::mem::size_of;
-use core::ops::ControlFlow;
-use core::ops::Range;
-use crate::alloc::accounting;
-use crate::alloc::capacity::DiskReservation;
-use crate::bch_warn;
+use core::mem::{offset_of, size_of};
+use core::ops::{ControlFlow, Range};
+use crate::alloc::{accounting, capacity::DiskReservation, disk_groups_format::BCH_SB_LABEL_SIZE};
+use crate::{bch_warn, btree_trans};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
-use crate::btree_trans;
 use crate::c;
-use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
 use crate::bcachefs_ioctl::{bch_ioctl_get_damage, bch_ioctl_readdir_flags, bch_ioctl_snapshot_node,
     bch_ioctl_snapshot_node_v2, bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
     bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path, bch_ioctl_unpoison, BCH_READDIR_damaged,
@@ -39,12 +34,8 @@ use crate::init::damage;
 use crate::posix::inode_opts::get_io_opts;
 use crate::posix::namei;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::Printbuf;
-use crate::util::alloc::Vec;
-use crate::os::ioctl::{UserArg, UserVstruct};
-use crate::os::kernel::{capable, Capability};
-use crate::util::os_str::OsStrExt;
-use crate::util::vstructs::{plain_bytes, Plain};
+use crate::util::{Printbuf, alloc::Vec, os_str::OsStrExt, vstructs::{plain_bytes, Plain}};
+use crate::os::{ioctl::{UserArg, UserVstruct}, kernel::{capable, Capability}};
 use kernel::uaccess::{UserPtr, UserSlice};
 use crate::format::{Btree, BkeyType, MetadataVersion};
 

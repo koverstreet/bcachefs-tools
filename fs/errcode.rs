@@ -22,8 +22,7 @@
 
 use crate::c;
 use core::ffi::c_int;
-use core::fmt;
-use core::iter;
+use core::{fmt, iter};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::{bch_enum, xmacro};

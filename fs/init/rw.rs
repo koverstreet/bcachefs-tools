@@ -18,23 +18,19 @@
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::init::passes::RecoveryPass;
-use crate::alloc::accounting::verify_accounting_clean;
-use crate::alloc::capacity::recalc_capacity;
+use crate::alloc::{accounting::verify_accounting_clean, capacity::recalc_capacity};
 use crate::btree::init::btree_init_rw;
-use crate::fs::FsFlag as Flag;
-use crate::journal::journal::JournalFlag as Journal;
-use crate::journal::journal::JournalGuard;
+use crate::fs::{FsFlag as Flag, Fs, StateLockWrite};
+use crate::journal::journal::{JournalFlag as Journal, JournalGuard};
 use crate::data::ec::head::stripe_heads_stop;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{MemberState, SbFeature};
-use crate::fs::{Fs, StateLockWrite};
 use crate::sb::members::{btree_bitmap_gc_schedule, SbMembersMut};
 use crate::util::futex::EventCount;
-use crate::os::kernel::WRITE;
+use crate::os::{kernel::WRITE, workqueue::Queue};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{OnRelease, WaitableRef};
 use crate::util::sleep::Sleep;
-use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, bch_verbose, prt, warn_on};
 

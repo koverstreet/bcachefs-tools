@@ -27,16 +27,12 @@
 use crate::alloc::disk_groups::Target;
 use crate::alloc::write_point::{WritePointGuard, WritePointSpec, write_point, write_point_specifier,
     WritePointLocked};
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeyI, BkeyS};
-use crate::btree::iter::TransAttempt;
+use crate::btree::{bkey::prelude::*, bkey::{BkeyI, BkeyS}, iter::TransAttempt};
 use crate::alloc::foreground::{alloc_request, open_buckets};
 use crate::init::dev::DevsMask;
-use crate::errcode::Errcode;
-use crate::data::extents::bkey_append_ptr;
+use crate::errcode::{Errcode, BchError};
+use crate::data::{extents::bkey_append_ptr, ptrs::PtrsMut};
 use crate::data_structures::dst_room::DstRoom;
-use crate::data::ptrs::PtrsMut;
-use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::debug::trace::events;

@@ -37,16 +37,12 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::alloc::format::BucketGens;
 use crate::btree::bbpos::bbpos;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::fs::{Fs, WriteRef};
-use crate::init::error::id;
-use crate::init::passes;
-use crate::init::progress::Progress;
-use crate::sb::errors::FsckFlags;
-use crate::sb::members::DevRef;
+use crate::init::{error::id, passes, progress::Progress};
+use crate::sb::{errors::FsckFlags, members::DevRef};
 use crate::os::kernel::{local_clock, READ};
 use crate::{bch_err, bch_info, bch_verbose, fsck_err, fsck_err_flags, fsck_err_on};
-use crate::errcode::Errcode;
 use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature, Set};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────

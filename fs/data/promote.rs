@@ -15,28 +15,20 @@
 //! The in-flight limit is one count for the filesystem, PROMOTES_PER_CPU per
 //! online CPU.
 
-use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::{is_restart, TransAttempt};
-use crate::alloc::write_point::write_point_specifier;
+use crate::alloc::{disk_groups::Target, write_point::write_point_specifier};
+use crate::btree::{bkey::{BkeySC, BkeyV}, iter::{is_restart, TransAttempt}};
 use crate::data::update::{data_update_opts, DataUpdateType};
 use crate::opts::bch_inode_opts;
-use crate::util::time_stats::TimeStat;
-use crate::errcode::Errcode;
+use crate::util::{time_stats::TimeStat, atomic::try_update, refcount::TryRefcount, task::Resume};
+use crate::errcode::{Errcode, BchError};
 use crate::data::extents::{BkeyVExtents, bch_io_failures};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::read::Rbio;
 use crate::data::update_task::{self, AwaitingRead, Body, ReadBody};
-use crate::debug::async_objs::AsyncObjSlot;
-use crate::errcode::BchError;
+use crate::debug::{async_objs::AsyncObjSlot, trace::events};
 use crate::fs::{Fs, WriteRef};
 use crate::prt;
-use crate::debug::trace::events;
-use crate::util::atomic::try_update;
-use crate::os::kernel::{current_id, local_clock, num_online_cpus};
-use crate::util::refcount::TryRefcount;
-use crate::util::task::Resume;
-use crate::os::workqueue::Queue;
+use crate::os::{kernel::{current_id, local_clock, num_online_cpus}, workqueue::Queue};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::in_place;
 use crate::format::{Btree, BkeyType};

@@ -2,12 +2,10 @@
 
 use super::OwnedNode;
 use super::state::state_hashed;
-use crate::btree::node::bset::BSET_CACHELINE;
-use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::{node::bset::BSET_CACHELINE, node::{BtreeNode, NodeContents}};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_exit, SixLockInitFlags};
-use crate::locking::MemallocFlags;
+use crate::locking::{six::{six_lock_exit, SixLockInitFlags}, MemallocFlags};
 use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, Global, KVmalloc, Vmalloc, WithFlags};
 use crate::os::kernel::is_vmalloc_addr;
 use crate::util::maybe_rcu_alloc::alloc_at;

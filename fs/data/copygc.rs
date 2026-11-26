@@ -54,7 +54,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::accounting;
 use crate::alloc::accounting_mem::MarkHeld;
 use crate::alloc::background::alloc_to_v4;
@@ -70,16 +70,14 @@ use crate::alloc::write_point::{write_point, write_point_specifier};
 use crate::btree::update::TransCommitFlags;
 use crate::data::update::{data_update_opts, DataUpdateType};
 use crate::init::dev::{AtomicDevsMask, DevsMask};
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, BchError};
 use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
 use crate::data::moving::{BucketMoves, MoveStats, MovingCtxt, move_bucket_key};
 use crate::util::gather::Gather;
-use crate::errcode::BchError;
-use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
-use crate::prt;
+use crate::{prt, bch_err_msg, fs_fatal_error};
 use crate::util::alloc::{kbox_pin_init, KBox, Vec};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
@@ -93,7 +91,6 @@ use crate::util::sleep::{sleep_until, Sleep};
 use crate::data_structures::sort::heapsort_by;
 use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::util::{HumanReadable, Printbuf};
-use crate::{bch_err_msg, fs_fatal_error};
 use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};

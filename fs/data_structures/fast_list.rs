@@ -23,10 +23,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::errcode::BchError;
-use crate::util::alloc::AllocError;
+use crate::util::{alloc::AllocError, rcu::ReadGuard};
 use crate::os::percpu::{IrqGuard, PerCpu};
-use crate::util::rcu::ReadGuard;
-use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::{array_vec::ArrayVec, genradix::SharedGenRadix, ida::Ida};
 use core::ffi::c_void;
 use core::iter;
 use core::mem::ManuallyDrop;
@@ -36,8 +35,6 @@ use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use cstruct_macros::MaybeZeroable;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use crate::data_structures::genradix::SharedGenRadix;
-use crate::data_structures::ida::Ida;
 
 #[repr(C)]
 #[pin_data(PinnedDrop)]

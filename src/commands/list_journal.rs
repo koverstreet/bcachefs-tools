@@ -1,8 +1,6 @@
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::btree::bkey::BkeyI;
-use bcachefs_kernel::btree::bbpos::bbpos;
-use bcachefs_kernel::btree::journal_overlay::journal_replay;
+use bcachefs_kernel::btree::{bkey::BkeyI, bbpos::bbpos, journal_overlay::journal_replay};
 use bcachefs_kernel::opts::FsckErrOpt;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::read::{
@@ -11,8 +9,7 @@ use bcachefs_kernel::journal::read::{
 };
 use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::util::ToText;
-use bcachefs_kernel::util::vstructs::SelfSized;
+use bcachefs_kernel::util::{ToText, vstructs::SelfSized};
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;

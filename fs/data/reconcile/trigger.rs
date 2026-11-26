@@ -7,10 +7,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::alloc::accounting::ReconcileType;
-use crate::{bkey_fsck_err_on, fsck_err};
-use crate::alloc::accounting;
-use crate::alloc::disk_groups::Target;
+use crate::alloc::{accounting::ReconcileType, accounting, disk_groups::Target};
+use crate::{bkey_fsck_err_on, fsck_err, prt};
 use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVal};
 use crate::btree::trigger::TriggerOp;
 use crate::btree::bkey_buf::BkeyBuf;
@@ -19,20 +17,15 @@ use crate::data::ec::format::Stripe;
 use crate::btree::bbpos::bbpos;
 use crate::data::reconcile::format::{bch_extent_rebalance_v1, bch_extent_reconcile,
     bch_extent_reconcile_bp, ReconcileOpt, ReconcileWorkId};
-use crate::init::dev::bch_devs_mask;
+use crate::init::{dev::bch_devs_mask, error::{id, BkeyValidate}};
 use crate::opts::bch_inode_opts;
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
-use crate::util::vstructs::{plain_bytes, Validated};
-use crate::prt;
-use crate::util::printbuf::Msg;
-use crate::util::{Printbuf, ToText};
+use crate::util::{vstructs::{plain_bytes, Validated}, printbuf::Msg, Printbuf, ToText, alloc::Vec};
 use core::mem::size_of;
 use cstruct_macros::{bch_enum, MaybeZeroable};
-use crate::util::alloc::Vec;
 use crate::format::{Bpos, Btree, Backpointer};
 
 #[bch_enum(closed)]

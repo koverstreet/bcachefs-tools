@@ -13,8 +13,7 @@
 //! stripe's ref should have kept it - is reported, not repaired (GH #960):
 //! what to do with such a stripe is still open.
 
-use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
-use crate::alloc::lru::{lru_check_set, LruId, LruPos};
+use crate::alloc::{buckets::{bucket_to_u64, u64_to_bucket}, lru::{lru_check_set, LruId, LruPos}};
 use crate::btree::bkey::{pos, BkeySC, BkeyV, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
@@ -24,8 +23,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
-use crate::util::rcu::read_lock;
-use crate::util::vstructs::Validated;
+use crate::util::{rcu::read_lock, vstructs::Validated};
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
 use crate::format::{Bpos, Btree, BkeyType};
 

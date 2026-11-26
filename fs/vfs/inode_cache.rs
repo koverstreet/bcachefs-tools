@@ -14,25 +14,20 @@
 //! I_FREEING set - waits for it to go.
 
 use crate::btree::iter::TransAttempt;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{subvolume::subvol_inum, snapshot, subvolume};
 use crate::data_structures::cuckoo::{Cuckoo, CuckooMultimap, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Bpos;
 use crate::fs::{Fs, FsFlag};
 use crate::locking::MemallocFlags;
-use crate::snapshots::{snapshot, subvolume};
-use crate::util::alloc::Vec;
-use crate::util::printbuf::{Printbuf, ToText};
+use crate::util::{alloc::Vec, printbuf::{Printbuf, ToText}, rcu::read_lock, siphash::SipHash13Key};
 use crate::prt;
 use crate::os::kernel::HZ;
-use crate::util::rcu::read_lock;
-use crate::util::siphash::SipHash13Key;
 use core::ptr::NonNull;
 
 use super::inode::{InodeInfo, InodeRef};
 use super::new_inode::NewInode;
-use crate::os::super_block::IsInode;
-use crate::os::vfs_inode::VfsInode;
+use crate::os::{super_block::IsInode, vfs_inode::VfsInode};
 
 /// An inode as the cache keys it: by its subvol_inum, set before it's in and
 /// unchanged while it is.

@@ -9,15 +9,13 @@
 use core::cmp::min;
 use core::ops::Range;
 
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{capacity::DiskReservation, buckets::ReservationFlags as ReservationFlags};
 use crate::vfs::pagecache::FolioSectorState as SectorState;
-use crate::alloc::buckets::ReservationFlags as ReservationFlags;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 
-use super::folio::FolioStateGuard;
+use super::folio::{FolioStateGuard, Folio, FolioSpan};
 use crate::os::folio::FsMapping;
-use super::folio::{Folio, FolioSpan};
 use super::inode::{InodeInfo, QuotaReservation};
 use super::pagecache::{blocks_in, blocks_out};
 

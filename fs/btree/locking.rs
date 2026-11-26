@@ -20,7 +20,7 @@ use crate::btree::trans::BCH_TRANSACTIONS_NR;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::time_stats::bch2_time_stats;
 use crate::btree::node::BtreeNodeFlags;
-use crate::debug::params::debug_check_btree_locking;
+use crate::debug::{params::debug_check_btree_locking, trace::{events, TraceEvent}};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
@@ -29,7 +29,6 @@ use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold, six_lock, s
 use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, Mutex, RawTimedLock, PF_MEMALLOC_NOIO};
 use crate::util::place::Placed;
 use crate::prt;
-use crate::debug::trace::{events, TraceEvent};
 use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
 use crate::util::futex::EventCount;
 use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};

@@ -27,8 +27,7 @@ use super::inode::InodeInfo;
 use super::pagecache;
 use crate::btree::bkey::{pos, prelude::*, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
-use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::data::read::{self, Rbio};
+use crate::data::{ptrs::{BkeyVPtrs, Ptrs}, read::{self, Rbio}, extents::ReadFlags};
 use crate::errcode::{Errcode as err, BchError};
 use crate::format::{Bpos, Btree, CompressionType, CsumType};
 use crate::fs::Fs;
@@ -48,7 +47,6 @@ use crate::util::task::{exclusive_size, waiter, TaskSlot, WaitSync};
 use crate::{btree_trans, c, log_msg_ratelimited};
 use core::pin::Pin;
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
-use crate::data::extents::ReadFlags;
 use crate::opts::bch_inode_opts;
 use crate::vfs::inode::PagecacheAdd;
 

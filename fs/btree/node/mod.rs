@@ -21,15 +21,11 @@ use crate::btree::path::{LockedNode, NodeLock};
 use crate::btree::locking::btree_bkey_cached_common;
 use crate::btree::node::bset::MAX_BSETS;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
-use crate::locking::six::SixLockInitFlags;
-use crate::data_structures::dst_room::DstRoom;
+use crate::locking::{six::SixLockInitFlags, LockedBy};
+use crate::data_structures::{dst_room::DstRoom, list::ListLinks};
 use crate::fs::Fs;
 use crate::journal::pins::Pin;
-use crate::locking::LockedBy;
-use crate::util::projections::{Publish, Volatile};
-use crate::util::vstructs::Head;
-use crate::util::{Printbuf, ToText};
-use crate::data_structures::list::ListLinks;
+use crate::util::{projections::{Publish, Volatile}, vstructs::Head, Printbuf, ToText, alloc::Flags};
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
@@ -37,10 +33,8 @@ use core::ptr;
 use bset::{BsetTree, BSET_CACHELINE};
 use iter::KeyIter;
 use crate::format::{BkeyType, bkey, bkey_format, btree_node, btree_node_entry, BkeyField};
-use crate::util::alloc::Flags;
-use cstruct_macros::{Init, MaybeZeroable};
+use cstruct_macros::{Init, MaybeZeroable, bch_enum, bitfield};
 use pin_init::pin_data;
-use cstruct_macros::{bch_enum, bitfield};
 
 #[bch_enum(closed)]
 #[nr]

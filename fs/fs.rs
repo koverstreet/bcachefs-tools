@@ -6,28 +6,22 @@
 #![allow(non_camel_case_types)]
 
 use crate::init::passes::{RecoveryPass, bch_fs_recovery};
-use crate::btree::node::BtreeNode;
+use crate::btree::{node::BtreeNode, bch_fs_btree, check_allocations::bch_fs_gc};
 use crate::c;
 use crate::alloc::capacity::{bch_fs_capacity, MarkLockAt};
 use crate::alloc::discard::bch_fs_discards;
 use crate::alloc::gc_gens::bch_fs_gc_gens;
 use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
-use crate::btree::bch_fs_btree;
-use crate::btree::check_allocations::bch_fs_gc;
-use crate::data::copygc::bch_fs_copygc;
-use crate::data::ec::bch_fs_ec;
-use crate::data::reconcile::bch_fs_reconcile;
+use crate::data::{copygc::bch_fs_copygc, ec::bch_fs_ec, reconcile::bch_fs_reconcile};
 use crate::debug::async_objs::{async_obj_list, AsyncObjKind};
 #[cfg(CONFIG_DEBUG_FS)]
 use crate::debug::debug::btree_debug;
 use crate::journal::journal::{journal, journal_entry_res};
 use crate::opts::{AtomicOptsMask, bch_opts, OPT_SHOW_MOUNT_STYLE, OptFlags, PublishedOpts,
     PublishedOptsWriter};
-use crate::posix::logged_ops::bch_fs_logged_ops;
-use crate::posix::quota::Quotas;
+use crate::posix::{logged_ops::bch_fs_logged_ops, quota::Quotas};
 use crate::sb::members_format::{bch_member, BCH_SB_MEMBERS_MAX};
-use crate::snapshots::bch_fs_snapshots;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{bch_fs_snapshots, subvolume::subvol_inum};
 use crate::util::clock::io_clock;
 #[cfg(kernel)]
 use crate::vfs::bch_fs_vfs;
@@ -36,14 +30,12 @@ use crate::vfs::fdm::fdm_hash;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::alloc::foreground::{allocator_foreground_init, bch_fs_allocator};
 use crate::alloc::replicas::{can_write_with_devs, WriteCheck};
-use crate::btree::init::btree_init;
-use crate::btree::journal_overlay::{journal_keys_put_initial, journal_keys};
+use crate::btree::{init::btree_init, journal_overlay::{journal_keys_put_initial, journal_keys}};
 use crate::data::checksum::encryption_init;
 use crate::data::compress::compress_init;
 use crate::data::ec::head::ec_exit;
 use crate::data::reconcile::work::reconcile_exit;
-use crate::debug::sysfs::{FsDir, FS_GROUPS};
-use crate::debug::trace::events;
+use crate::debug::{sysfs::{FsDir, FS_GROUPS}, trace::events};
 use crate::init::dev::{dev_exit, dev_in_fs, AtomicDevsMask, bch_devs_mask, bch_fs_sb,
     bch_sb_handle};
 use crate::init::error::{free_fsck_errs, bch_fs_errors};
@@ -58,7 +50,7 @@ use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists,
 use crate::sb::version::prep_for_start;
 use crate::util::{Printbuf, ToText};
 use crate::util::alloc::{Arc, Vec};
-use crate::util::refcount::PercpuRef;
+use crate::util::refcount::{PercpuRef, RefGuard, WaitableRef, AtomicRef};
 use crate::util::ffi::c_char;
 use crate::os::kernel::READ;
 use crate::os::sched;
@@ -66,11 +58,8 @@ use crate::os::kobject::{into_ref, GroupList, KobjOwner, Kobject};
 use crate::os::module::ModuleRef;
 use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::place::PlacedDrop;
+use crate::util::place::{PlacedDrop, Placed};
 use crate::util::rcu::{read_lock, RcuPtrWriter};
-use crate::util::refcount::{RefGuard, WaitableRef};
-use crate::util::place::Placed;
-use crate::util::refcount::AtomicRef;
 use crate::util::late::Late;
 use core::ffi::CStr;
 use core::ops::AsyncFnOnce;
@@ -88,11 +77,9 @@ use crate::new_lock;
 use crate::os::bio::{Bio, BioSet};
 use crate::os::unicode::UnicodeMap;
 use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use crate::sb::counters::recent_counters;
-use crate::sb::members::btree_bitmap_gc_schedule;
+use crate::sb::{counters::recent_counters, members::btree_bitmap_gc_schedule};
 use crate::types::bits_to_longs;
-use crate::util::projections::Volatile;
-use crate::util::time_stats::{TimeStatsArray, bch2_time_stats, TimeStat};
+use crate::util::{projections::Volatile, time_stats::{TimeStatsArray, bch2_time_stats, TimeStat}};
 #[cfg(kernel)]
 use kernel::sync::SetOnce;
 #[cfg(not(kernel))]

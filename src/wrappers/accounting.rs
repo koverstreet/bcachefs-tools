@@ -1,5 +1,4 @@
-use bcachefs_kernel::btree::bkey::prelude::*;
-use bcachefs_kernel::btree::bkey::AnyKey;
+use bcachefs_kernel::btree::{bkey::prelude::*, bkey::AnyKey};
 use anyhow::anyhow;
 use bcachefs_kernel::alloc::accounting_format::Accounting;
 use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_query_accounting, bch_ioctl_query_accounting_v2};

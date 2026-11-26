@@ -35,10 +35,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
+use crate::btree::bkey::{AnyKeySC, pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeNodeRef, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
@@ -53,7 +52,6 @@ use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;

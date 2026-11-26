@@ -28,10 +28,9 @@ use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{AccountingEntry, DiskAccountingType};
 use bcachefs_kernel::alloc::accounting_format::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::DataType;
-use bcachefs_kernel::util::vstructs::ArmError;
+use bcachefs_kernel::util::{vstructs::ArmError, Printbuf, Sectors};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo};
-use bcachefs_kernel::util::{Printbuf, Sectors};
 
 #[derive(Parser, Debug)]
 #[command(name = "failure-domains",

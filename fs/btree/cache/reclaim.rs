@@ -1,24 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{bch2_btree_pos_to_text, cached_node, OwnedNode};
-use crate::btree::node::BtreeNode;
+use super::{bch2_btree_pos_to_text, cached_node, OwnedNode, BtreeCacheNotFreedReason as NotFreed,
+    BtreeCacheGuard};
+use crate::btree::node::{BtreeNode, BtreeWriteType};
 use crate::btree::path::LockedNode;
-use super::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard};
-use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::btree::cache::bch_fs_btree_cache;
 use crate::journal::journal::JournalFlag;
 use crate::util::time_stats::TimeStat;
 use crate::data_structures::list::Walk;
-use crate::debug::params::btree_shrinker_disabled;
-use crate::debug::trace::events;
+use crate::debug::{params::btree_shrinker_disabled, trace::events};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
-use crate::locking::six::SixHold;
+use crate::locking::{six::SixHold, six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read}};
 use crate::prt;
 use crate::os::kernel::local_clock;
 use bitflags::bitflags;
-use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 
 /*
  * Dirty nodes are journal reclaim's to write - but during journal replay it

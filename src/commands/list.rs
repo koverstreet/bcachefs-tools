@@ -2,10 +2,7 @@ use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
 use bcachefs_kernel::opts::{bch_opts, FsckErrOpt};
-use bcachefs_kernel::btree::bkey::prelude::*;
-use bcachefs_kernel::btree::iter::BtreeIter;
-use bcachefs_kernel::btree::iter::BtreeIterFlags;
-use bcachefs_kernel::btree::iter::BtreeNodeIter;
+use bcachefs_kernel::btree::{bkey::prelude::*, iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter}};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::format::DegradedAction;
 use clap::Parser;
@@ -13,8 +10,7 @@ use std::io::{stdout, IsTerminal};
 
 use crate::logging;
 use crate::device_scan::OpenedFs;
-use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
+use crate::wrappers::{handle::BcachefsHandle, online_iter::{OnlineBtreeIter, OnlineIterFlags}};
 use bcachefs_kernel::format::{Bpos, Btree, BkeyType, BTREE_MAX_DEPTH, ErrorAction};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {

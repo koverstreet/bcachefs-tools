@@ -4,10 +4,9 @@
 //! stripe's, for the blocks the new one carries - as a logged op, resumed
 //! after a crash.
 
-use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{backpointers::{backpointer_get_key, BackpointerPos}, capacity::DiskReservation};
 use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
-use crate::util::vstructs::Unvalidated;
+use crate::util::{vstructs::{Unvalidated, Validated}, log::LogMsg, Join, Printbuf};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
@@ -15,21 +14,16 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::data::ec::format::Stripe;
 use crate::data::extents_format::{bch_extent_stripe_ptr, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::posix::logged_ops_format::LoggedOpStripeUpdate;
+use crate::posix::{logged_ops_format::LoggedOpStripeUpdate, inode_opts::get_io_opts, logged_ops};
 use crate::data::durability::drop_extra_durability;
 use crate::data::ec::stripe::{carried_blocks, ptr_in_block, Block};
 use crate::data::ptrs::{brand, BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, Ptrs, PtrsMut};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::{events, TraceEvent};
 use crate::sb::errors::FsckFlags;
-use crate::util::log::LogMsg;
-use crate::util::vstructs::Validated;
-use crate::util::{Join, Printbuf};
 use crate::{bch_err, fs_inconsistent, fsck_err_flags, prt};
-use crate::posix::logged_ops;
 use core::mem::size_of;
 use core::ops::RangeInclusive;
 use crate::format::{Bpos, Btree, BkeyType, Backpointer};

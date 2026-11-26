@@ -11,11 +11,10 @@ use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, BtreeNod
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::data::write::WriteFlags;
-use crate::fs::FsFlag as Flag;
+use crate::fs::{FsFlag as Flag, Fs, WriteRef};
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Registration};
 use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
-use crate::fs::{Fs, WriteRef};
 use crate::init::passes::RecoveryPass;
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;

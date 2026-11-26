@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{capacity::DiskReservation, buckets::ReservationFlags};
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::data_structures::dst_room::DstRoom;
@@ -10,8 +10,7 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
-use crate::data::ec::open::OpenStripe;
-use crate::data::ptrs::{ExtentEntry, ExtentEntryMut, Ptrs};
+use crate::data::{ec::open::OpenStripe, ptrs::{ExtentEntry, ExtentEntryMut, Ptrs}};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::{local_clock, random_u64_below};
@@ -19,11 +18,9 @@ use crate::util::par::{self, Backend};
 use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
-use crate::alloc::buckets::ReservationFlags;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 
-use crate::util::alloc::{kbox_pin_init, KBox, Vec};
-use crate::util::place::{Container, PlacedInit};
+use crate::util::{alloc::{kbox_pin_init, KBox, Vec}, place::{Container, PlacedInit}};
 use core::ops::ControlFlow;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};

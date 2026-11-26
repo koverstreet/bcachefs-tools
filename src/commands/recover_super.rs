@@ -11,12 +11,10 @@ use bcachefs_kernel::sb::SbFieldType;
 use clap::Parser;
 
 use crate::util::parse_human_size;
-use bcachefs_kernel::sb::io::{read_super, SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
-use bcachefs_kernel::util::vstructs::Unvalidated;
+use bcachefs_kernel::sb::io::{read_super, SbBuf, BCACHE_MAGIC, BCHFS_MAGIC, SbResize};
+use bcachefs_kernel::util::{vstructs::Unvalidated, HumanReadable, Printbuf};
 use bcachefs_kernel::sb::members::sb_member;
-use bcachefs_kernel::util::{HumanReadable, Printbuf};
 use crate::commands::format_util::{self, SUPERBLOCK_SIZE_DEFAULT};
-use bcachefs_kernel::sb::io::SbResize;
 
 /// Attempt to recover an overwritten superblock from backups
 #[derive(Parser, Debug)]

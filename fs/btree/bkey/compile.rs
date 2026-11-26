@@ -6,8 +6,7 @@ use core::mem::offset_of;
 
 use super::format::{bkey_fields, FIELDS};
 use super::BKEY_U64S;
-use crate::format::BkeyField::{self, *};
-use crate::format::{bkey_format, KEY_FORMAT_CURRENT};
+use crate::format::{BkeyField::{self, *}, bkey_format, KEY_FORMAT_CURRENT};
 use crate::types::field_size;
 
 struct Emit<'a> {

@@ -7,11 +7,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::opts::{bch_opts, OptFlags};
-use bcachefs_kernel::format::DegradedAction;
+use bcachefs_kernel::format::{DegradedAction, MetadataVersion};
 use bcachefs_kernel::bcachefs_ioctl::{BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::sb::members_format;
 use bcachefs_kernel::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
@@ -21,8 +20,7 @@ use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::device_scan::OpenedFs;
 use crate::util::{fmt_bytes_human, fmt_duration_human, fmt_sectors_human, parse_human_size};
 
-use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
+use crate::wrappers::{handle::BcachefsHandle, sysfs::{self, bcachefs_kernel_version}};
 
 fn device_add_opt_flags() -> u32 {
     OptFlags::format.bits() | OptFlags::device.bits()

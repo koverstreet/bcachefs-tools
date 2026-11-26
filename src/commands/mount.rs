@@ -17,12 +17,10 @@ use clap::Parser;
 use log::{debug, error, info, warn};
 use rustix::mount::MountFlags;
 use uuid::Uuid;
-use crate::degraded;
-use crate::device_scan;
+use crate::{degraded, device_scan};
 use crate::recovery_display::RecoveryDisplay;
 use crate::thread_with_file::{self, StatusDisplay};
-use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::sysfs::DevInfo;
+use crate::wrappers::{handle::BcachefsHandle, sysfs::DevInfo};
 
 use crate::{
     fs_context::{self, FsContext, Level, Message},

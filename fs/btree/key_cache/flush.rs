@@ -2,11 +2,10 @@
 
 use super::LockedEntry;
 use crate::btree::bkey::BkeySC;
-use crate::btree::trans_attempt::lockrestart_do;
+use crate::btree::trans_attempt::{lockrestart_do, TransAttempt};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, PathNode, Paths};
 use crate::btree::trans::BtreeTrans;
-use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
 use crate::btree::key_cache::{bkey_cached, BKEY_CACHED_DIRTY, bkey_cached_key};
 use crate::btree::update::btree_insert_entry;
@@ -16,9 +15,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::{Fs, FsFlag};
 use crate::journal::pins::PinHolder;
-use crate::util::alloc::{flags, Vec};
-use crate::util::log::LogMsg;
-use crate::util::rcu::read_lock;
+use crate::util::{alloc::{flags, Vec}, log::LogMsg, rcu::read_lock};
 use crate::{fs_fatal_error, prt};
 use crate::journal::pins::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
 use crate::locking::six::SixLockType::SIX_LOCK_intent;

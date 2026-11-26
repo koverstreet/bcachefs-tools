@@ -9,13 +9,12 @@
 
 use crate::btree::bkey::pos;
 use crate::c;
-use crate::alloc::foreground::{OPEN_BUCKETS_COUNT, Watermark};
-use crate::alloc::write_point::write_point_specifier;
+use crate::alloc::{foreground::{OPEN_BUCKETS_COUNT, Watermark}, write_point::write_point_specifier};
 use crate::opts::bch_inode_opts;
 use crate::util::time_stats::TimeStat;
 use crate::vfs::inode::InodeInfoFlag;
-use crate::vfs::pagecache::bch_folio_sector;
-use crate::data::write::{write, WriteBio, WriteFor, bch_write_op};
+use crate::vfs::pagecache::{bch_folio_sector, FolioSectorState as SectorState};
+use crate::data::write::{write, WriteBio, WriteFor, bch_write_op, WriteFlags as w};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::posix::inode_opts;
@@ -33,8 +32,6 @@ use crate::os::ops::from_raw;
 use crate::os::folio::Wbc;
 use super::folio::{Folio, FolioGuard, FolioSpan, Mapping};
 use crate::vfs::folio::Writeback;
-use crate::vfs::pagecache::FolioSectorState as SectorState;
-use crate::data::write::WriteFlags as w;
 use core::ffi::c_int;
 use core::pin::Pin;
 use cstruct_macros::in_place;

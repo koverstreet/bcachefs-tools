@@ -32,8 +32,7 @@ use crate::data::ec::stripe::{stripe_reuse_lru, StripeKey, STRIPE_LRU_POS_EMPTY}
 use crate::data::ec::stripe_new::{Internal, Slot};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::util::alloc::{kbox_into_inner, kbox_pin_init, KBox};
-use crate::util::vstructs::Validated;
+use crate::util::{alloc::{kbox_into_inner, kbox_pin_init, KBox}, vstructs::Validated};
 use core::ops::ControlFlow;
 use core::pin::Pin;
 use pin_init::{init, Init};

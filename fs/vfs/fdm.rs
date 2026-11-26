@@ -24,10 +24,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use crate::util::futex::EventCount;
-use crate::util::hash::hash_64;
-use crate::util::projections::Volatile;
-use crate::util::sleep::Sleep;
+use crate::util::{futex::EventCount, hash::hash_64, projections::Volatile, sleep::Sleep};
 use crate::os::kernel::{current_id, random_u64};
 use core::ffi::c_ulong;
 use core::ptr::NonNull;

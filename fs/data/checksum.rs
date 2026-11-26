@@ -28,22 +28,18 @@
 
 use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
-use crate::data::extents::bch_extent_crc_unpacked;
-use crate::data::reconcile::format::bch_extent_reconcile;
+use crate::data::{extents::bch_extent_crc_unpacked, reconcile::format::bch_extent_reconcile};
 use crate::opts::bch_inode_opts;
-use crate::util::vstructs::{plain_bytes, Unvalidated, Validated, VStruct};
+use crate::util::{vstructs::{plain_bytes, Unvalidated, Validated, VStruct}, Printbuf};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
-use crate::os::bio::BioRange;
-use crate::util::Printbuf;
+use crate::os::{bio::BioRange, checksum::{Checksum, Crc32c, Crc64, Xxh64}};
 use crate::format::{Bversion, Nonce, bch_csum, bch_encrypted_key, bch_key, bch_sb,
     bch_sb_field_crypt, CsumOpt, CsumType, KdfType};
-use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
 // a glob: userspace's are RustCrypto's, called through their traits
-use crate::os::crypto::*;
-use crate::os::keyring;
+use crate::os::{crypto::*, keyring};
 
 // ── Nonces ───────────────────────────────────────────────────────────────
 

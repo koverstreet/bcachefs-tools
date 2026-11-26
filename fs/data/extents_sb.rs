@@ -13,10 +13,8 @@ use crate::format::bch_sb;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{set_all, SbFieldOps};
-use crate::util::vstructs::{Unvalidated, Validated};
-use crate::util::Printbuf;
-use crate::sb::io::SbResize;
+use crate::sb::io::{set_all, SbFieldOps, SbResize};
+use crate::util::{vstructs::{Unvalidated, Validated}, Printbuf};
 
 fn ours() -> impl Iterator<Item = u8> {
     (0..ExtentEntryType::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8)

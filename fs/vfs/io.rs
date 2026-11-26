@@ -10,10 +10,10 @@ use crate::btree::bkey::{bkey_ge, pos};
 use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::alloc::write_point::write_point_specifier;
-use crate::init::dev::bch_devs_mask;
-use crate::posix::inode::bch_inode_unpacked;
+use crate::init::{dev::bch_devs_mask, error::{count_fsck_err, id}};
+use crate::posix::{inode::bch_inode_unpacked, inode, inode_opts};
 use crate::sb::members::DevWriteRefKind;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
 use crate::vfs::inode::PagecacheBlock;
 use crate::data::dev_bio::DevBio;
 use crate::data::durability::BkeyVDurability;
@@ -22,10 +22,7 @@ use crate::data::{io_misc, reflink};
 use crate::errcode::{Errcode, ret_to_class, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::init::error::{count_fsck_err, id};
-use crate::posix::{inode, inode_opts};
 use crate::debug::trace::events;
-use crate::snapshots::subvolume;
 use crate::os::file::File;
 use crate::os::folio::FsMapping;
 use super::file::InodeFile;
@@ -40,10 +37,9 @@ use crate::util::task::{waiter, WaitSync};
 use crate::util::Nsecs;
 use crate::{fsck_err_on, prt};
 
-use crate::os::iattr::Iattr;
+use crate::os::iattr::{Iattr, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::idmap::MntIdmap;
 use super::inode::{InodeInfo, QuotaReservation};
-use crate::os::iattr::{ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::vfs_inode::VfsInode;
 
 impl InodeInfo {

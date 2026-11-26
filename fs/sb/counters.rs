@@ -21,16 +21,12 @@ use crate::sb::counters_format::{bch_sb_field_counters, PersistentCounter, Persi
     PersistentCounterStable};
 use crate::debug::trace::{events, TraceEvent};
 use crate::errcode::BchError;
-use crate::util::vstructs::{Unvalidated, Validated};
+use crate::util::{vstructs::{Unvalidated, Validated}, Printbuf};
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
-use crate::sb::io::{sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
 use crate::types::Le64;
-use crate::os::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
-use crate::os::workqueue::Queue;
-use crate::util::Printbuf;
-use crate::sb::io::SbResize;
-use crate::os::percpu::PerCpu;
+use crate::os::{kernel::{nsecs_to_jiffies, NSEC_PER_SEC}, workqueue::Queue, percpu::PerCpu};
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 pub const NR_RECENT_COUNTERS: u32 = 20;

@@ -13,11 +13,9 @@
 //! DstRoom - at the top, in room reserve() made, by push_with() - which checks
 //! what's appended to it against the room.
 
-use crate::btree::bkey::{AnyKey, BkeyI, BkeySC, BkeyV, BKEY_U64S};
-use crate::btree::iter::NoRoom;
+use crate::btree::{bkey::{AnyKey, BkeyI, BkeySC, BkeyV, BKEY_U64S}, iter::NoRoom};
 use crate::format::bkey;
-use crate::data_structures::dst_room::{DstRoom, Storage};
-use crate::data_structures::inline_vec::InlineVec;
+use crate::data_structures::{dst_room::{DstRoom, Storage}, inline_vec::InlineVec};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{Alloc, AllocError, Box};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, SelfSized, Unsized, Unvalidated, UnvalidatedEntries, UnvalidatedEntriesMut};

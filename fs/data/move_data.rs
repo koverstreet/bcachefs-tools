@@ -32,7 +32,7 @@
 //! A stripe isn't moved: the phys walk of a scrub checks its blocks against
 //! their checksums instead (ec/repair.rs's scrub_stripe_block()).
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
@@ -53,7 +53,7 @@ use crate::data::extents::{extent_ptr_decoded, ReadFlags};
 use crate::data::reconcile::trigger::{per_snapshot_io_opts, SetNeedsReconcileCtx};
 use crate::opts::bch_inode_opts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
-use crate::errcode::Errcode as err;
+use crate::errcode::{Errcode as err, ret_to_c, BchError};
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
 use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt, move_bucket_key};
 use crate::data::moving_update;
@@ -61,8 +61,6 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{fail_should_trace, is_scrub, data_update_opts, DataUpdateType};
-use crate::errcode::{ret_to_c, BchError};
-use crate::fs::Fs;
 use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::os::kernel::current_id;

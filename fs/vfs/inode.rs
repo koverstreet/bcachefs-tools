@@ -35,8 +35,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::data_structures::array_vec::ArrayVec;
-use crate::data_structures::bitmap::AtomicBitflags;
+use crate::data_structures::{array_vec::ArrayVec, bitmap::AtomicBitflags};
 use core::ffi::{c_long, c_uint, c_ulong, CStr};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
@@ -45,38 +44,29 @@ use core::sync::atomic::{fence, Ordering::SeqCst};
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
 use crate::c;
-use crate::init::dev::AtomicDevsMask;
+use crate::init::{dev::AtomicDevsMask, error::{count_fsck_err, id}};
 use crate::posix::inode::{bch_inode_unpacked, VolatileInodeUnpacked};
 use crate::posix::inode_format::InodeOptId;
 use crate::posix::quota_format::QuotaType;
-use crate::snapshots::format::Subvolume;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{format::Subvolume, subvolume::subvol_inum, subvolume};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::{count_fsck_err, id};
-use crate::posix::inode;
+use crate::posix::{inode, quota};
 use crate::posix::inode_opts::{InodeOpt, inode_opt_change};
 use crate::locking::{ExclusiveGuard, Locked, Mutex, SpinLock, SpinLockIrq, two_state_lock_t,
     TwoState, TwoStateGuard};
-use crate::published;
+use crate::{published, prt};
 use crate::posix::quota::{QuotaAcctMode, QuotaWarnings, bch_qid};
-use crate::posix::quota;
-use crate::snapshots::subvolume;
-use crate::prt;
-use crate::util::ffi::Opaque;
+use crate::util::{ffi::Opaque, log::LogMsg, projections::Volatile, rcu::{read_lock, ReadGuard}};
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
-use crate::util::log::LogMsg;
-use crate::util::projections::Volatile;
-use crate::util::rcu::{read_lock, ReadGuard};
 use crate::os::workqueue::RawDelayedWork;
 use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
 use kernel::sync::aref::ARef;
 use pin_init::pin_data;
 
 use super::new_inode::NewInode;
-use crate::os::super_block::IsInode;
-use crate::os::vfs_inode::{ILocked, Live, VfsInode};
+use crate::os::{super_block::IsInode, vfs_inode::{ILocked, Live, VfsInode}};
 
 use crate::format::Btree;
 

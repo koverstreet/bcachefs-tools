@@ -8,16 +8,15 @@
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
-use crate::data_structures::fifo::FifoRead;
+use crate::data_structures::{fifo::FifoRead, array_vec::ArrayVec};
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
                          TransBkey, UpdateTriggerFlags, Watermark};
-use crate::btree::node::{BtreeNode, NR_WRITES, BtreeNodeFlags};
+use crate::btree::node::{BtreeNode, NR_WRITES, BtreeNodeFlags, BtreeWriteType};
 use crate::btree::path::{LockedNode, Paths};
 use crate::btree::trigger::{deleted_room, key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
-use crate::btree::node::BtreeWriteType;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::format::{btree_node, Deleted, JsetEntryType};
@@ -26,7 +25,6 @@ use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
-use crate::data_structures::array_vec::ArrayVec;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::fs_fatal_error;

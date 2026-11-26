@@ -30,8 +30,7 @@
 //! a grace period after it's done, as every task's is, and the Update dropped
 //! then too, its key buffer with it - an RcuDropMember's.
 
-use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::btree::{bkey::BkeySC, iter::{BtreeIter, TransAttempt}};
 use crate::c;
 use crate::alloc::write_point::write_point_specifier;
 use crate::opts::bch_inode_opts;

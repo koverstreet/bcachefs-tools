@@ -27,10 +27,9 @@ use crate::types::GenRadix;
 use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, Flags, Vec};
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
-use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
+use crate::os::{percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef}, workqueue::{Queue, RawWork}};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::{Flavor, GpCookie, HasRcuHead, RcuHead, RcuOwned};
-use crate::os::workqueue::{Queue, RawWork};
 
 const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 

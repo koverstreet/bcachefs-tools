@@ -22,7 +22,7 @@ use crate::init::dev::bch_devs_list;
 use crate::journal::journal::{journal, JournalFlag};
 use self::JournalPinType as PinType;
 use crate::alloc::replicas::SbEntry;
-use crate::data_structures::list::List;
+use crate::data_structures::list::{List, ListLinks};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, BCH_REPLICAS_MAX};
 use crate::fs::Fs;
@@ -34,7 +34,6 @@ use crate::util::place::{up, FieldPath};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
-use crate::data_structures::list::ListLinks;
 use core::cell::Cell;
 use cstruct_macros::{bch_enum, MaybeZeroable};
 

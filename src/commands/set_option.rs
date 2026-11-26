@@ -2,14 +2,12 @@
 use anyhow::{bail, Result};
 use bcachefs_kernel::opts::{bch_opts, OptFlags};
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::util::rcu;
+use bcachefs_kernel::util::{printbuf::Printbuf, rcu};
 use clap::{Arg, ArgAction, Command};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
 use crate::device_scan::OpenedFs;
-use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::sysfs;
+use crate::wrappers::{handle::BcachefsHandle, sysfs};
 
 fn opt_flags() -> u32 {
     OptFlags::fs.bits() | OptFlags::device.bits()

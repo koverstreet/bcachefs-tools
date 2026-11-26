@@ -13,10 +13,8 @@ use crate::btree::key_cache::{bkey_cached, BKEY_CACHED_ACCESSED, BKEY_CACHED_IMM
 use crate::data_structures::cuckoo::Entry;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::locking::six::SixHold;
-use crate::locking::MemallocFlags;
+use crate::locking::{six::SixHold, MemallocFlags, six::SixLockType::SIX_LOCK_read};
 use crate::prt;
-use crate::locking::six::SixLockType::SIX_LOCK_read;
 use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;

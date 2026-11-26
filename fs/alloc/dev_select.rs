@@ -17,17 +17,14 @@
 //! lopsided enough that a device only fills if every write puts a copy on
 //! it), then the clock hands.
 
-use crate::fs::Dev;
-use crate::alloc::buckets::bch_dev_usage;
-use crate::alloc::foreground::{alloc_request, dev_alloc_list, Watermark};
+use crate::fs::{Dev, Fs};
+use crate::alloc::{buckets::bch_dev_usage, foreground::{alloc_request, dev_alloc_list, Watermark}};
 use crate::format::BCH_REPLICAS_MAX;
 use crate::init::dev::{bch_devs_mask, DevsMask};
 use crate::sb::members_format::BCH_SB_MEMBERS_MAX;
-use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::os::kernel::likely;
-use crate::util::projections::Volatile;
-use crate::util::rcu::read_lock;
+use crate::util::{projections::Volatile, rcu::read_lock};
 use crate::published;
 use core::ffi::c_ulong;
 use cstruct_macros::MaybeZeroable;

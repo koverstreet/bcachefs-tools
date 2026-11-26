@@ -22,23 +22,17 @@
 //! they strand - a bucket each - and shrink when an allocation finds it
 //! isn't: too_many_writepoints().
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::btree::iter::TransAttempt;
-use crate::alloc::dev_select::dev_stripe_state;
-use crate::alloc::foreground::{bch_fs_allocator, open_buckets};
+use crate::alloc::{dev_select::dev_stripe_state, foreground::{bch_fs_allocator, open_buckets}};
 use crate::data::ec::head::stripe_heads_stop;
-use crate::fs::Fs;
-use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
-use crate::prt;
+use crate::locking::{ByteLock, ExclusiveGuard, Lockdep, Locked};
+use crate::{prt, new_lock, published};
 use crate::util::hash::hash_64;
-use crate::os::kernel::local_clock;
-use crate::os::workqueue::Queue;
+use crate::os::{kernel::local_clock, workqueue::Queue};
 use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
 use crate::format::DataType;
-use crate::locking::Locked;
-use crate::new_lock;
-use crate::published;
 use crate::types::CacheAligned;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::projections::Volatile;

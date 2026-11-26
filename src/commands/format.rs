@@ -18,10 +18,9 @@
 
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::io;
+use std::{io, process};
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;

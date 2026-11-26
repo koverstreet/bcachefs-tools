@@ -1,8 +1,7 @@
 use std::ffi::CString;
-use std::io;
+use std::{io, process};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
-use std::process;
 
 use anyhow::{anyhow, Result};
 use crate::wrappers::fs::FsExt;
@@ -14,12 +13,10 @@ use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
-use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::{handle::BcachefsHandle, sysfs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
-use crate::wrappers::sysfs;
-use crate::device_scan;
-use crate::thread_with_file;
+use crate::{device_scan, thread_with_file};
 
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_w, IoctlBuf, BCH_IOCTL_FSCK_OFFLINE, BCH_IOCTL_FSCK_ONLINE};
 

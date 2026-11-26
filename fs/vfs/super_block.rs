@@ -10,29 +10,24 @@
 
 use core::ffi::c_int;
 
-use crate::alloc::accounting;
-use crate::alloc::capacity::avail_factor;
+use crate::alloc::{accounting, capacity::avail_factor};
 use crate::c;
 use crate::format::{BCACHEFS_STATFS_MAGIC, BCH_REPLICAS_MAX};
 use crate::opts::{bch_opts_mask, OPT_SHOW_MOUNT_STYLE, OptFlags};
-use crate::posix::dirent_format::BCH_NAME_MAX;
+use crate::posix::{dirent_format::BCH_NAME_MAX, inode_opts};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::{Fs, FsFlag};
-use crate::posix::inode_opts;
 use crate::locking::Guard as _;
 use crate::prt;
 use crate::debug::trace::events;
-use crate::os::kernel::{ktime_get_ns, uuid_to_fsid};
-use crate::util::{Nsecs, Printbuf};
-use crate::util::rcu::read_lock;
-use crate::os::seq_file::SeqFile;
+use crate::os::{kernel::{ktime_get_ns, uuid_to_fsid}, seq_file::SeqFile};
+use crate::util::{Nsecs, Printbuf, rcu::read_lock};
 use cstruct_macros::vtable;
 
 use super::dentry::Dentry;
 use super::inode::InodeInfo;
-use crate::os::super_block::{SuperOps, SuperVTable};
+use crate::os::{super_block::{SuperOps, SuperVTable}, iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME}};
 use crate::types::CStatic;
-use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
 
 /// One of ours: s_fs_info is its Fs. The type is os/linux_kernel/super_block.rs's.
 pub type SuperBlock = crate::os::super_block::SuperBlock<Fs>;

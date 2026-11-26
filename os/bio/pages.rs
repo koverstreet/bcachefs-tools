@@ -18,9 +18,8 @@ use crate::opts::bch_opts;
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::errcode::BchError;
-use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Allocator, Flags};
+use crate::util::{alloc::{flags, Alloc, AllocError, AllocGfp, Allocator, Flags}, mempool::Mempool};
 use crate::os::kernel::PAGE_SIZE;
-use crate::util::mempool::Mempool;
 use pin_init::{pin_data, pin_init, PinInit};
 
 use super::iter::page_address;

@@ -9,20 +9,17 @@
 //! the caller's address space. Then it's ended, as a read dio is: the
 //! kiocb's completion, or the caller waiting for it.
 
-use crate::btree::bkey::{pos, spos};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
+use crate::btree::{bkey::{pos, spos}, iter::{lockrestart_do, BtreeIter, BtreeIterFlags}};
 use crate::btree_trans;
 use crate::c;
-use crate::alloc::buckets::ReservationFlags;
-use crate::alloc::write_point::write_point_specifier;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::alloc::{buckets::ReservationFlags, write_point::write_point_specifier};
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
 use crate::data::durability::BkeyVDurability;
-use crate::data::write::{write, WriteBio, WriteFor, bch_write_op};
+use crate::data::write::{write, WriteBio, WriteFor, bch_write_op, WriteFlags as w};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::{Fs, WriteRef};
 use crate::posix::inode_opts;
-use crate::snapshots::subvolume;
 use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
@@ -35,11 +32,9 @@ use crate::os::ops::IntoRaw;
 use crate::os::workqueue::Queue;
 use crate::util::refcount::TryRefcount;
 use super::direct::{sync_end, End};
-use crate::vfs::folio::Mapping;
-use crate::vfs::inode::{DioStarted, InodeInfoFlag, quota_res};
+use crate::vfs::{folio::Mapping, inode::{DioStarted, InodeInfoFlag, quota_res}};
 use crate::os::kiocb::Kiocb;
 use super::file::InodeFile;
-use crate::data::write::WriteFlags as w;
 use core::ops::ControlFlow;
 use core::pin::Pin;
 use core::ptr;

@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{btree_ptr_hash_val, cached_node, node_key_hash_val};
+use super::{btree_ptr_hash_val, cached_node, node_key_hash_val, BtreeCacheGuard, BtreeCacheLists,
+    BtreeNodeList};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::node::BtreeNode;
-use super::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
 use crate::btree::bbpos::bbpos;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_counts, six_lock_wakeup_all, SixLockType};
-use crate::locking::Guard as _;
+use crate::locking::{six::{six_lock_counts, six_lock_wakeup_all, SixLockType}, Guard as _};
 use crate::prt;
-use crate::util::hash::GoldenRatio;
+use crate::util::{hash::GoldenRatio, log::LogMsg, rcu::read_lock};
 use crate::os::kernel::is_vmalloc_addr;
-use crate::util::log::LogMsg;
-use crate::util::rcu::read_lock;
 use crate::btree::cache::BtreeNodeCacheState as State;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};

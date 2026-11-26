@@ -14,11 +14,10 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::disk_groups::Target;
 use crate::alloc::foreground::{AllocWait, Blocked, OpenBucket, alloc_request, Watermark};
-use crate::btree::bkey::BkeyV;
-use crate::btree::iter::TransAttempt;
+use crate::btree::{bkey::BkeyV, iter::TransAttempt};
 use crate::alloc::dev_select::dev_stripe_state;
 use crate::init::dev::bch_devs_mask;
 use crate::data::ec::buf::{MemWait, StripeBuf};
@@ -27,14 +26,11 @@ use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, MemberState, MetadataVersion, BCH_BKEY_PTRS_MAX};
-use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Locked, Lockdep};
 use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::BitArray;
 use crate::debug::trace::events;
-use crate::util::alloc::kbox_pin_init;
-use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::Printbuf;
+use crate::util::{alloc::kbox_pin_init, rcu::{read_lock, ReadGuard}, Printbuf};
 use crate::{bch_err, new_lock, prt};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bch_enum, MaybeZeroable};

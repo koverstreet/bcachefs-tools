@@ -52,8 +52,7 @@
 //! #[derive(SizedVal)].
 
 use super::BkeyP;
-use crate::btree::bkey::{ops, BkeyOps, Ops};
-use crate::btree::iter::{BtreeIter, TransBkey};
+use crate::btree::{bkey::{ops, BkeyOps, Ops}, iter::{BtreeIter, TransBkey}};
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos, bch_val, bkey, bkey_i, BkeyType_arms};
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;

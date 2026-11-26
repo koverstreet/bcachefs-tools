@@ -31,41 +31,32 @@
 //! the per-cpu counters, whose online reservations must all be put by then.
 
 
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::alloc::buckets::{bch_fs_placeable, bch_fs_usage_base, bch_fs_usage_short,
     ReservationFlags, RESERVE_FACTOR};
 use crate::alloc::foreground::open_bucket;
-use crate::errcode::Errcode;
-use crate::errcode::BchError;
+use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, BCH_REPLICAS_MAX, WriteDegradedAction};
-use crate::fs::Fs;
-use crate::init::error::trans_inconsistent;
-use crate::percpu_field;
+use crate::init::{error::trans_inconsistent, dev::DevsMask};
+use crate::{percpu_field, new_lock};
 use crate::debug::trace::events;
 use crate::util::atomic::try_update;
 use crate::util::sleep::Sleep;
-use crate::os::kernel::unlikely;
+use crate::os::{kernel::unlikely, percpu::{CpuGuard, PerCpuRef, Counters, PerCpu}};
 use crate::util::log::{log_no_fs, LogLevel};
-use crate::os::percpu::{CpuGuard, PerCpuRef};
 use crate::util::rcu::read_lock;
 use crate::util::{HumanReadable, Printbuf};
-use crate::init::dev::DevsMask;
-use crate::alloc::dev_select::PlacementWriter;
+use crate::alloc::dev_select::{PlacementWriter, Placement};
 use core::cell::Cell;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering};
-use pin_init::pinned_drop;
+use core::sync::atomic::{AtomicBool, Ordering, AtomicU64};
+use pin_init::{pinned_drop, pin_data};
 use crate::locking::{Locked, SpinLockIrq};
-use crate::alloc::dev_select::Placement;
-use crate::new_lock;
-use crate::os::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
 use core::ffi::c_uint;
-use core::sync::atomic::AtomicU64;
 use cstruct_macros::{Fieldwise, Init, MaybeZeroable, TypeInfo};
-use pin_init::pin_data;
 
 /* capacity.pcpu's counters: each CPU's a delta, summed over them */
 #[repr(C)]

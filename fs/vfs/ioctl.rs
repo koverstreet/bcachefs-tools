@@ -32,21 +32,17 @@ use crate::bcachefs_ioctl::{bch_ioctl_pread_raw, bch_ioctl_subvolume, bch_ioctl_
     BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_PREAD_RAW,
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, BCHFS_IOC_READDIR_FLAGS, BCHFS_IOC_REINHERIT_ATTRS,
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, BCHFS_IOC_UNPOISON, FS_IOC_GOINGDOWN};
-use crate::data::extents::ReadFlags;
+use crate::data::{extents::ReadFlags, read::ReadErrReport};
 use crate::posix::dirent_format::BCH_NAME_MAX;
 use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL};
 use crate::snapshots::subvolume::subvol_inum;
-use crate::data::read::ReadErrReport;
-use crate::posix::dirent;
+use crate::posix::{dirent, str_hash, namei};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::posix::inode_opts::reinherit_attrs as reinherit;
-use crate::posix::str_hash;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::posix::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opts, reflink_p_set_may_update_opts, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path, unpoison};
-use crate::init::chardev::ioctl_ret;
-use crate::init::damage;
-use crate::posix::namei;
+use crate::init::{chardev::{ioctl_ret, copy_err_msg, fs_ioctl, ErrMsg, V2}, damage};
 use crate::util::alloc::Vec;
 use crate::os::file::File;
 use super::file::InodeFile;
@@ -56,12 +52,10 @@ use crate::util::ioctl::{dir, Ioctl};
 use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Capability};
 use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
-use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
 use crate::os::iov_iter::IovIter;
-use crate::vfs::direct::direct_io_read;
+use crate::vfs::{direct::direct_io_read, inode::{InodeInfo, InodeRef}};
 use crate::os::kiocb::Kiocb;
 use crate::os::idmap::MntIdmap;
-use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::os::mount::WriteAccess;
 use crate::os::path::{Creating, Removing, UserPath};
 use crate::os::super_block::IsInode;

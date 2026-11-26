@@ -28,9 +28,7 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use crate::errcode::{BchError, Errcode};
 use crate::os::module::ModuleExit;
-use crate::util::alloc::KBox;
-use crate::util::rcu::FreeAnytime;
-use crate::util::Printbuf;
+use crate::util::{alloc::KBox, rcu::FreeAnytime, Printbuf};
 use super::{create_dir, create_file, remove_recursive, Dentry, UserBuf};
 
 /// A debugfs file: show() is what it reads as - an async fn, in an impl.

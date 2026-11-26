@@ -6,9 +6,7 @@
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
-use crate::data::ec::format::Stripe;
-use crate::data::ec::bch_fs_ec;
-use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
+use crate::data::{ec::format::Stripe, ec::bch_fs_ec, ec::stripe::STRIPE_LRU_POS_EMPTY};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::debug::trace::events;

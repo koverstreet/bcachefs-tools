@@ -3,8 +3,7 @@
 use core::ffi::c_uint;
 use core::mem::{offset_of, size_of};
 
-use crate::alloc::replicas::SbEntry;
-use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::alloc::{replicas::SbEntry, replicas_format::bch_replicas_entry_v1};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Btree, DataType, MetadataVersion, bkey_format_bits, bkey_packed,
     BTREE_MAX_DEPTH, FsUsageType, jset, jset_entry, jset_entry_blacklist, jset_entry_blacklist_v2,
@@ -18,8 +17,7 @@ use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags, bkey_va
     BkeyValidateFrom};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
-use crate::sb::errors::SbErrorId;
-use crate::sb::members::DevName;
+use crate::sb::{errors::SbErrorId, members::DevName};
 use crate::util::log::LogMsg;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
                             Head, Unvalidated, VStructError, from_bytes};

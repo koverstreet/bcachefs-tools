@@ -26,10 +26,8 @@ use crate::data::ec::stripe::ptr_matches_stripe;
 use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::data_structures::inline_vec::InlineVec;
-use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{Unvalidated, Validated};
-use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::{inline_vec::InlineVec, array_vec::ArrayVec};
+use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated}};
 use crate::format::{Btree, MemberState, BCH_BKEY_PTRS_MAX};
 
 impl Fs {

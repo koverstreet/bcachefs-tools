@@ -5,8 +5,7 @@
 //! userspace's constructor - is the port's module.rs.
 
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::os::kobject::{fs_kobj, StaticKobject};
-use crate::os::module::{ModuleExit, ThisModule};
+use crate::os::{kobject::{fs_kobj, StaticKobject}, module::{ModuleExit, ThisModule}};
 #[cfg(kernel)]
 use crate::format::MetadataVersion;
 

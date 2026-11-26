@@ -16,8 +16,8 @@
 //! key at the walk's position, where C overwrote its iter->k with a deleted
 //! one.
 
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::Dev;
+use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::id};
+use crate::fs::{Dev, Fs};
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
@@ -37,13 +37,8 @@ use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos, reconcile_bp_get_key,
                                       BkeyVReconcile, SetNeedsReconcileCtx};
 use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::init::error::id;
 use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
-use crate::util::log::{LogLevel, LogMsg};
-use crate::util::printbuf::Msg;
-use crate::util::vstructs::plain_bytes;
-use crate::util::Printbuf;
+use crate::util::{log::{LogLevel, LogMsg}, printbuf::Msg, vstructs::plain_bytes, Printbuf};
 use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::mem::size_of;
 use crate::format::{Bpos, Btree, BkeyType, Backpointer, BTREE_MAX_DEPTH, Deleted};

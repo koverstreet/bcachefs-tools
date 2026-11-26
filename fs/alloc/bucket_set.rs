@@ -22,12 +22,10 @@ use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketR
 use crate::btree::iter::{is_restart, TransAttempt};
 use crate::alloc::dev_select::dev_stripe_state;
 use crate::alloc::write_point::WritePointLocked;
-use crate::data::write::WriteFlags;
+use crate::data::{write::WriteFlags, ec::head::{head_get, stripe_head_put}};
 use crate::format::BCH_REPLICAS_MAX;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
-use crate::errcode::Errcode;
-use crate::data::ec::head::{head_get, stripe_head_put};
-use crate::errcode::BchError;
+use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::util::ToText;

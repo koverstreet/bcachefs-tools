@@ -19,17 +19,15 @@
 //! counted as a write once its write starts; in between, the fifo is what
 //! flush_all() waits on.
 
-use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::btree::{bkey::{BkeySC, BkeyV}, iter::{BtreeIter, TransAttempt}};
 use crate::c;
 use crate::opts::bch_inode_opts;
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, BchError};
 use crate::data::moving::{BucketMove, BucketMoves, Moving, MovingIo};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{read_err_benign, IOPRIO_IDLE, data_update, data_update_opts,
     DataUpdateType};
-use crate::errcode::BchError;
 use crate::data::update_task::{self, Body};
 use crate::util::task::{requeue, Resume, Spawn};
 use crate::data::read::{read_update, ReadDone};

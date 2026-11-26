@@ -36,19 +36,15 @@ use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use crate::btree::bkey::ValidateFlags;
 use crate::format::{SbFeatures, bch_sb, SbFieldType};
 use crate::locking::Guard as _;
-use crate::sb_err_on;
-use crate::bch_verbose;
+use crate::{sb_err_on, bch_verbose};
 use crate::journal::seq_blacklist_format::{bch_sb_field_journal_seq_blacklist,
     journal_seq_blacklist_entry};
-use crate::util::vstructs::{Unvalidated, Validated};
+use crate::util::{vstructs::{Unvalidated, Validated}, rcu::RcuArray, Printbuf};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
 use crate::types::Le64;
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::rcu::RcuArray;
-use crate::util::Printbuf;
-use crate::sb::io::SbResize;
 
 type Section = bch_sb_field_journal_seq_blacklist<Validated>;
 

@@ -2,8 +2,7 @@
 
 //! gc_gens: each bucket's oldest_gen brought up to its gen, so gens can wrap.
 
-use crate::alloc::background::alloc_to_v4;
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{background::alloc_to_v4, capacity::DiskReservation};
 use crate::btree::bkey::POS_MIN;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;

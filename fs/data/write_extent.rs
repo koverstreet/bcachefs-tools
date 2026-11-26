@@ -4,7 +4,7 @@
 //! with the bios and encoding that takes.
 
 use crate::alloc::sector_alloc::LockedWritePoint;
-use crate::util::alloc::flags;
+use crate::util::{alloc::flags, volatile::Out};
 use crate::c;
 use crate::data::extents::bch_extent_crc_unpacked;
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
@@ -12,14 +12,13 @@ use crate::data::update::data_update_index;
 use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src,
     bch_compression_opt};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
-use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData, bch_write_op};
+use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData, bch_write_op,
+    WriteFlags as w};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::os::bio::{pages, BioRange, BioSubmit, Buffer, Pages};
-use crate::util::volatile::Out;
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
-use crate::data::write::WriteFlags as w;
 use core::ffi::c_void;
 use crate::format::{Bversion, BkeyType, bch_csum, bkey, CompressionType, CsumType};
 

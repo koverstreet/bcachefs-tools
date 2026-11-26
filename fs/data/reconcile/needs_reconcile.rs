@@ -15,7 +15,7 @@ use crate::data::compress::bch_compression_opt;
 use crate::data::extents_format::bch_extent_ptr;
 use crate::data::reconcile::format::{bch_extent_reconcile, ReconcileOpt, ReconcileOpt_arms};
 use crate::data::reconcile::work::ReconcileScan;
-use crate::init::dev::bch_devs_mask;
+use crate::init::{dev::bch_devs_mask, error::id};
 use crate::opts::bch_inode_opts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
@@ -25,13 +25,9 @@ use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile,
 use crate::errcode::{BchError, Errcode};
 use crate::format::{CompressionType, BkeyType, MetadataVersion, BCH_REPLICAS_MAX, bkey, CsumType};
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::posix::inode_opts::get_io_opts;
 use crate::os::kernel::unlikely;
-use crate::util::printbuf::Msg;
-use crate::util::rcu::read_lock;
-use crate::util::vstructs::Validated;
-use crate::util::Printbuf;
+use crate::util::{printbuf::Msg, rcu::read_lock, vstructs::Validated, Printbuf};
 use core::mem::size_of;
 
 /// Option @o's need_rb bit.

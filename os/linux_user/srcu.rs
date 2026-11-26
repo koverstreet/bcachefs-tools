@@ -25,10 +25,7 @@ use crate::errcode::{BchError, Errcode};
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::os::lockdep::LockClass;
-use crate::util::alloc::init_at;
-use crate::util::futex::EventCount;
-use crate::util::projections::Volatile;
-use crate::util::sleep::Sleep;
+use crate::util::{alloc::init_at, futex::EventCount, projections::Volatile, sleep::Sleep};
 
 /// counts[LOCKS + idx], counts[UNLOCKS + idx]
 const LOCKS: usize = 0;

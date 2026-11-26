@@ -2,8 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::util::futex::EventCount;
-use crate::util::sleep::Sleep;
+use crate::util::{futex::EventCount, sleep::Sleep};
 use cstruct_macros::MaybeZeroable;
 use core::marker::PhantomData;
 use core::sync::atomic::AtomicIsize;

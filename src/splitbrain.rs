@@ -26,11 +26,10 @@ use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, NO
 use bcachefs_kernel::errcode::Errcode;
 use bcachefs_kernel::format::bch_sb;
 use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::init::dev::dev_in_fs;
+use bcachefs_kernel::init::dev::{dev_in_fs, bch_sb_handle};
 use bcachefs_kernel::fs::newest;
 use bcachefs_kernel::sb::members;
 use bcachefs_kernel::util::printbuf::DateTime;
-use bcachefs_kernel::init::dev::bch_sb_handle;
 
 pub struct Divergent {
     path: PathBuf,

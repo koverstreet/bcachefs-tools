@@ -8,12 +8,10 @@ use core::mem::{offset_of, size_of};
 
 use crate::fs::Fs;
 use crate::init::passes;
-use crate::sb::errors::{prt_error_ids, SbErrorId};
-use crate::sb::io::SbFieldOps;
+use crate::sb::{errors::{prt_error_ids, SbErrorId}, io::SbFieldOps};
 use crate::types::Le64;
 use crate::data_structures::bitmap::LeBitmap;
-use crate::util::vstructs::{Validated, Unvalidated};
-use crate::util::Printbuf;
+use crate::util::{vstructs::{Validated, Unvalidated}, Printbuf};
 use crate::format::{Btree, bch_sb, bch_sb_field_ext, bch_sb_field_ext_whole};
 
 type Section = bch_sb_field_ext<Validated>;

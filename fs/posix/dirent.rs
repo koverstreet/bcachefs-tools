@@ -34,16 +34,14 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::posix::dirent_format;
+use crate::posix::{dirent_format, inode};
 use crate::posix::dirent_format::{BCH_NAME_MAX, DT_SUBVOL, bch_dirent_cf_name_block,
     bch_dirent_subvol, bch_dirent_target};
 use crate::posix::inode::bch_inode_unpacked;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BkeyType};
 use crate::fs::Fs;
-use crate::posix::inode;
-use crate::snapshots::subvolume;
 use crate::posix::str_hash::{self, HashTable, bch_hash_info};
 use crate::os::unicode::UnicodeMap;
 use crate::util::os_str::{OsStr, OsStrExt};

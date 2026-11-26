@@ -16,11 +16,8 @@ use crate::bcachefs_ioctl::{bch_ioctl_recovery_status, BCH_IOCTL_RECOVERY_STATUS
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
-use crate::util::loan::Loan;
-use crate::util::vstructs::plain_bytes;
-use crate::util::ioctl::Ioctl;
-use crate::os::file::File;
-use crate::os::thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile};
+use crate::util::{loan::Loan, vstructs::plain_bytes, ioctl::Ioctl};
+use crate::os::{file::File, thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile}};
 use kernel::sync::aref::ARef;
 use core::sync::atomic::Ordering::{Relaxed, Release};
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};

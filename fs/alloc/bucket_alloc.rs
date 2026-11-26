@@ -31,23 +31,17 @@
 //! the copies it has, when waiting won't help: alloc_should_bail().
 
 use crate::init::passes::RecoveryPass;
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::alloc::background::{FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT, alloc_to_v4};
 use crate::alloc::check::{check_freespace_key, FreespaceCheck};
 use crate::alloc::foreground::{Blocked, OpenBucket, alloc_request, Watermark};
-use crate::btree::bkey::pos;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
-use crate::data::write::WriteFlags;
-use crate::util::time_stats::TimeStat;
-use crate::errcode::Errcode;
-use crate::data::copygc::{can_make_progress, dev_wait_amount};
-use crate::errcode::BchError;
-use crate::fs::Fs;
+use crate::btree::{bkey::pos, iter::{BtreeIter, BtreeIterFlags, TransAttempt}};
+use crate::data::{write::WriteFlags, copygc::{can_make_progress, dev_wait_amount}};
+use crate::util::{time_stats::TimeStat, Printbuf, rcu::read_lock};
+use crate::errcode::{Errcode, BchError};
 use crate::opts::data_type_str;
 use crate::debug::trace::events;
-use crate::util::Printbuf;
 use crate::os::kernel::{unlikely, WRITE};
-use crate::util::rcu::read_lock;
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::alloc::foreground::AllocBtreeBitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};

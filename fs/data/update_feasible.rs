@@ -15,24 +15,20 @@
 //!
 //! Each check can explain itself into a trace, for reconcile_set_pending.
 
-use crate::alloc::disk_groups::Target;
-use crate::alloc::foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark};
-use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::TransAttempt;
+use crate::alloc::{disk_groups::Target, foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark}};
+use crate::btree::{bkey::{BkeySC, BkeyV}, iter::TransAttempt};
 use crate::data::update::{data_update_opts, DataUpdateType};
 use crate::init::dev::bch_devs_list;
 use crate::opts::bch_inode_opts;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, BchError};
 use crate::data::copygc;
 use crate::data::durability::{extent_ptr_durability, BkeyVDurability};
 use crate::data::ec::head::{head_get, stripe_head_put};
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs};
-use crate::errcode::BchError;
 use crate::format::{DataType, MemberState};
 use crate::fs::Fs;
-use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
+use crate::util::{rcu::read_lock, Printbuf};
 
 use crate::data::write::WriteFlags as w;
 

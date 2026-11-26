@@ -76,14 +76,11 @@ use crate::format::{DataType, bch_sb};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::Guard as _;
 use crate::opts::OptFn;
-use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState, SbResize};
 use crate::sb::members;
 use crate::{prt, sb_err_on};
-use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{Unvalidated, Validated};
-use crate::util::Printbuf;
+use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated}, Printbuf};
 use cstruct_macros::TypeInfo;
-use crate::sb::io::SbResize;
 
 /* a target is 0 for none, then a device's index, then a disk group's */
 pub const TARGET_DEV_START: u32 = 1;

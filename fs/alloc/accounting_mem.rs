@@ -30,9 +30,8 @@ use crate::data_structures::eytzinger::Eytzinger0;
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::os::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
 use crate::util::printbuf::{Join, Msg};
-use crate::util::rcu;
+use crate::util::{rcu, Printbuf};
 use crate::util::vstructs::{plain_bytes, ArmError, Unvalidated, Validated};
-use crate::util::Printbuf;
 use crate::{btree_trans, fsck_err, fsck_err_on, percpu_field};
 use zerocopy::IntoBytes;
 

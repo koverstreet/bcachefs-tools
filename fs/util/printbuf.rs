@@ -1,13 +1,10 @@
 use core::ffi::CStr;
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
-use crate::data_structures::array_vec::ArrayVec;
-use crate::data_structures::dst_array::DstArray;
+use crate::data_structures::{array_vec::ArrayVec, dst_array::DstArray};
 use crate::errcode::{BchError, Errcode};
 use crate::os::alloc::Global;
-use crate::util::alloc::Vec;
-use crate::util::os_str::{OsStr, OsStrExt};
-use crate::util::thin::ThinBox;
+use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, thin::ThinBox};
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
 use crate::format::{Bpos, __uuid_t};

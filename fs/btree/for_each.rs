@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::bkey::*;
-use super::iter::BtreeIter;
+use super::iter::{BtreeIter, polonius_key, BtreeIterFlags, BtreeNodeIter};
 use super::trans::BtreeTrans;
-use super::iter::{polonius_key, BtreeIterFlags, BtreeNodeIter};
 use super::trans_attempt::{is_restart, lockrestart_do, lockrestart_do_in, CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::node::BtreeNode;
-use crate::btree::path::{LockedNode, Paths};
+use crate::btree::{node::BtreeNode, path::{LockedNode, Paths}};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::SPOS_MAX;

@@ -16,13 +16,12 @@
 //!
 //! lru.h's inlines are the same encoding, for C's callers.
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
-use crate::util::vstructs::Unvalidated;
-use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
+use crate::btree::bkey::{AnyKeySC, pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
+use crate::util::{vstructs::Unvalidated, rcu::read_lock, Printbuf};
 use crate::btree::cache::BtreeCachePins;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
@@ -34,11 +33,7 @@ use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_END, BCH_LRU_BUCKET_
     BCH_LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
 use crate::btree::bbpos::bbpos;
 use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
-use crate::init::progress::Progress;
-use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
+use crate::init::{error::{id, BkeyValidate}, progress::Progress};
 use crate::{bkey_fsck_err_on, fsck_err};
 use core::ops::RangeInclusive;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};

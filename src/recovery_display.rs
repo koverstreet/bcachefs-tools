@@ -25,9 +25,8 @@ use rustix::fs::{flock, FlockOperation};
 
 use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_fs_usage, bch_ioctl_recovery_status,
     bch_recovery_pass_mask, bch_replicas_usage, ProgressUnit};
-use bcachefs_kernel::init::passes::RecoveryPass;
+use bcachefs_kernel::init::{passes::RecoveryPass, passes};
 use bcachefs_kernel::format::DataType;
-use bcachefs_kernel::init::passes;
 use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
 use crate::commands::fs_usage::replicas_spare_redundancy;

@@ -6,12 +6,11 @@
 
 use super::iter::{CommitOpts, TransAttempt};
 use super::trans_attempt::AttemptKey;
-use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{bkey_val_to_text, BkeySC};
+use crate::alloc::{capacity::DiskReservation, buckets::bch_fs_usage_base};
+use crate::btree::bkey::{bkey_val_to_text, BkeySC, BkeyI, BKEY_U64S};
 use crate::btree::path::{bch2_trans_paths_exit, bch2_trans_paths_init, table_arrays, PathIdx, Paths,
-    BTREE_ITER_INITIAL, btree_trans_paths};
+    BTREE_ITER_INITIAL, btree_trans_paths, BtreePath};
 use crate::c;
-use crate::alloc::buckets::bch_fs_usage_base;
 use crate::btree::bch_fs_btree;
 use crate::btree::locking::btree_bkey_cached_common;
 use crate::btree::update::{btree_insert_entry, btree_trans_commit_hook, btree_trans_subbuf};
@@ -22,28 +21,21 @@ use crate::journal::pins::journal_entry_pin;
 use crate::locking::seqmutex::seqmutex;
 use crate::locking::six::six_lock_waiter;
 use crate::journal::flush_wait::Flush;
-use crate::data_structures::bitmap::Bitmap;
+use crate::data_structures::{bitmap::Bitmap, dst_room::DstRoom};
 use crate::debug::trace::events;
 use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree, jset_entry};
 use crate::fs::{Fs, FsFlag};
 use crate::journal::validate::journal_entry_to_text;
-use crate::locking::MemallocFlags;
-use crate::prt;
-use crate::types::bits_to_longs;
-use crate::util::alloc::{AllocError, Vec};
+use crate::locking::{MemallocFlags, Locked, LockedBy, Mutex};
+use crate::{prt, new_lock};
+use crate::types::{bits_to_longs, NeBytes};
+use crate::util::alloc::{AllocError, Vec, Global};
 use crate::util::mempool::Mempool;
 use core::cell::Cell;
 use core::ffi::{c_int, c_long};
 use core::sync::atomic::AtomicU8;
-use crate::btree::bkey::{BkeyI, BKEY_U64S};
-use crate::btree::path::BtreePath;
-use crate::data_structures::dst_room::DstRoom;
-use crate::locking::{Locked, LockedBy, Mutex};
-use crate::new_lock;
 use crate::os::percpu::PerCpu;
-use crate::types::NeBytes;
-use crate::util::alloc::Global;
 use crate::util::ffi::Opaque;
 use crate::util::projections::Volatile;
 use crate::util::rcu::Srcu;
@@ -349,18 +341,15 @@ pub struct TransStatsJson {
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::util::backtrace::{prt_backtrace, save_backtrace};
-use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
-use crate::util::ffi::c_char;
+use crate::util::{backtrace::{prt_symbol, prt_task_backtrace}, ffi::c_char};
 use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::log::LogMsg;
 use crate::util::log::{log_no_fs, LogLevel};
-use crate::os::percpu::{Counters, CpuGuard};
-use crate::util::rcu;
+use crate::os::{percpu::{Counters, CpuGuard}, sched};
+use crate::util::{rcu, Printbuf, ToText};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
-use crate::os::sched;
 use crate::util::vstructs::{ValidatedEntries, ViewEntries};
-use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
 use core::ffi::{c_uint, c_ulong, CStr};
 use core::marker::PhantomData;

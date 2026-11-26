@@ -41,8 +41,7 @@ use crate::c;
 use crate::data_structures::dst_vec::DstVec;
 use crate::errcode::{BchError, Errcode};
 use crate::locking::MemallocFlags;
-use crate::os::blkdev::BlockDevice;
-use crate::os::module::{Quiesced, ThisModule};
+use crate::os::{blkdev::BlockDevice, module::{Quiesced, ThisModule}};
 use crate::util::alloc::{Flags, init_at, stateless, Alloc, AllocError, Allocator, Kmalloc};
 use crate::util::mempool::Mempool;
 

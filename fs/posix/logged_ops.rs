@@ -17,13 +17,11 @@ use crate::posix::logged_ops_format::LoggedOpsInum;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::id;
-use crate::util::Printbuf;
-use crate::{fs_fatal_error, fsck_err_on};
+use crate::util::{Printbuf, alloc::Vec};
+use crate::{fs_fatal_error, fsck_err_on, new_lock};
 use core::sync::atomic::{Ordering, AtomicU32};
 use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::{Locked, Mutex};
-use crate::new_lock;
-use crate::util::alloc::Vec;
 use pin_init::pin_data;
 use crate::format::{Btree, BkeyType};
 

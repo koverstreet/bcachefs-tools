@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{BkeyI, BKEY_U64S};
-use crate::btree::write_buffer::{btree_write_buffered_key, wb_key_ref};
+use crate::btree::{bkey::{BkeyI, BKEY_U64S}, write_buffer::{btree_write_buffered_key, wb_key_ref}};
 use crate::data::keylist;
 use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::{Flags, AllocError, Vec};

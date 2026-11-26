@@ -270,12 +270,10 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
-use crate::btree::trans::{cached_trans_retire, bch_fs_btree_trans};
-use crate::btree::bch_fs_btree;
+use crate::btree::{trans::{cached_trans_retire, bch_fs_btree_trans}, bch_fs_btree};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::place::{Contained, PlacedDrop};
-use crate::util::rcu::Flavor;
+use crate::util::{place::{Contained, PlacedDrop}, rcu::Flavor};
 use core::ptr::NonNull;
 
 impl PlacedDrop for bch_fs_btree_trans {

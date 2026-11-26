@@ -6,11 +6,8 @@
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError, Errcode};
-use crate::os::kobject::Kobject;
-use crate::os::bio::Bio;
-use crate::util::futex::EventCount;
-use crate::util::sleep::Sleep;
-use crate::util::Printbuf;
+use crate::os::{kobject::Kobject, bio::Bio};
+use crate::util::{futex::EventCount, sleep::Sleep, Printbuf};
 use core::ffi::{c_void, CStr};
 use core::ptr;
 use io_uring::{opcode, squeue, types, IoUring};

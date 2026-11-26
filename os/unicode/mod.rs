@@ -10,8 +10,7 @@
 
 mod tables;
 
-use crate::errcode::Errcode;
-use crate::errcode::BchError;
+use crate::errcode::{Errcode, BchError};
 use crate::util::os_str::{OsStr, OsStrExt};
 
 /// A Unicode version's map: where its trie starts, and the newest code

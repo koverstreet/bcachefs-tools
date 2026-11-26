@@ -473,7 +473,7 @@
 #![allow(non_camel_case_types)]
 
 
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::alloc::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
@@ -486,19 +486,15 @@ use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BCH_ALLOC_V4_U64s,
     BCH_ALLOC_V4_U64s_V0, BucketGens, BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
 use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
-use crate::errcode::Errcode;
-use crate::errcode::BchError;
-use crate::fs::Fs;
+use crate::errcode::{Errcode, BchError};
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
-use crate::util::varint;
-use crate::util::Join;
+use crate::util::{varint, Join, Printbuf, ToText};
 use crate::util::vstructs::{ArmRef, Unvalidated};
 use crate::util::backtrace::prt_current_backtrace;
-use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;

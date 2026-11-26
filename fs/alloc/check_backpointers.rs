@@ -23,7 +23,7 @@
 
 
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
                                  bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
@@ -47,10 +47,8 @@ use crate::data::extents::Extents;
 use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::init::damage;
+use crate::init::{damage, passes};
 use crate::init::error::id;
-use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::{AtomicBitmap, AtomicULong};

@@ -33,7 +33,7 @@
 //! repaired is rewritten without the device, so the scan goes again until
 //! it's met none.
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::alloc::accounting;
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
 use crate::alloc::buckets::bucket_to_u64;
@@ -51,17 +51,12 @@ use crate::bcachefs_ioctl::{BCH_FORCE_IF_DATA_DEGRADED, BCH_FORCE_IF_DATA_LOST,
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, BchError};
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::init::damage;
-use crate::init::error::id;
-use crate::init::progress::{Progress, progress_indicator};
+use crate::init::{damage, error::id, progress::{Progress, progress_indicator}};
 use crate::posix::inode_opts::{self, get_io_opts};
-use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
+use crate::util::{rcu::read_lock, Printbuf};
 use crate::prt;
 use core::mem::size_of;
 use crate::format::{Btree, DataType, MemberState, ErrorKeyReason, BkeyType, Backpointer,

@@ -4,7 +4,7 @@
 //! rebuilding around what's left of it - and recording, or taking out of
 //! the stripe, the extents of blocks that are lost.
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::{AllocWait, Watermark};
@@ -21,8 +21,8 @@ use crate::data::extents::extent_ptr_decoded;
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::write::WriteFlags;
-use crate::init::dev::bch_devs_mask;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::init::{dev::bch_devs_mask, damage};
+use crate::sb::{members_format::BCH_SB_MEMBER_INVALID, errors::SbErrorId};
 use crate::data::copygc;
 use crate::data::ec::buf::{blocks_good, blocks_in, validate_msg, MemWait, StripeBuf, PRE};
 use crate::data::ec::delete::stripe_delete;
@@ -38,14 +38,9 @@ use crate::data::moving::Moving;
 use crate::data::ptrs::{extent_nonce, ptr_eq, BkeyVPtrs, BkeyVPtrsMut, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::init::damage;
 use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
-use crate::sb::errors::SbErrorId;
-use crate::util::alloc::KBox;
-use crate::util::rcu::read_lock;
-use crate::util::vstructs::Validated;
+use crate::util::{alloc::KBox, rcu::read_lock, vstructs::Validated};
 use crate::{bch_err, here, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;

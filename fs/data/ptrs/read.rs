@@ -16,13 +16,12 @@ use crate::debug::params as debug_params;
 use crate::data::read::{BCH_READ_ERR_checksum, BCH_READ_ERR_decompression, BCH_READ_ERR_ec_reconstruct, BCH_READ_ERR_io};
 use crate::errcode::Errcode;
 use crate::util::Printbuf;
-use crate::sb::errors::blk_sts_sb_err;
+use crate::sb::{errors::blk_sts_sb_err, members_format::BCH_SB_MEMBER_INVALID};
 use crate::os::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
 use core::ops::{Deref, DerefMut};
 use crate::data::extents::{bch_io_failures, extent_ptr_decoded, ReadFlags};
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {

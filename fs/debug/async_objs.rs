@@ -23,8 +23,7 @@
 use crate::data_structures::fast_list::fast_list;
 use crate::errcode::Errcode;
 use crate::fs::Fs;
-use crate::util::task::TaskList;
-use crate::util::Printbuf;
+use crate::util::{task::TaskList, Printbuf};
 use core::ffi::c_uint;
 use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init};
 use pin_init::pin_data;
@@ -132,15 +131,11 @@ use core::ffi::{c_void, CStr};
 use core::ptr::NonNull;
 
 use super::{async_obj_list, AsyncObj};
-use crate::data::read::Rbio;
-use crate::data::update_task::Update;
+use crate::data::{read::Rbio, update_task::Update};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::os::debugfs::{DebugFile, DebugOut, Dir};
-use crate::util::place::Contained;
-use crate::util::rcu;
-use crate::util::task::TaskRef;
-use crate::util::Printbuf;
+use crate::util::{place::Contained, rcu, Printbuf, task::TaskRef};
 
 /// How a list's objects are shown: of the list's kind, read under RCU.
 type ObjToText = unsafe fn(&mut Printbuf, &Fs, NonNull<c_void>);

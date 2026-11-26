@@ -2,8 +2,7 @@
 
 use super::keys::Shard;
 use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, FlushingGuard, IncGuard, WB_RESIZE_GFP};
-use crate::alloc::accounting;
-use crate::alloc::accounting_mem;
+use crate::alloc::{accounting, accounting_mem};
 use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,

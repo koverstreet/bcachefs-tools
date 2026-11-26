@@ -45,10 +45,9 @@
 
 use crate::c;
 use crate::data::extents::bch_extent_crc_unpacked;
-use crate::format::CompressionOpt as opts;
-use crate::errcode::Errcode as e;
+use crate::format::{CompressionOpt as opts, Bpos, CompressionType, SbFeatures, CompressionOpt_arms};
+use crate::errcode::{Errcode as e, BchError, ZSTD_ERRS};
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
-use crate::errcode::{BchError, ZSTD_ERRS};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
@@ -60,7 +59,6 @@ use crate::os::compress::{lz4, zlib, zstd};
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
 use cstruct_macros::bitfield;
-use crate::format::{Bpos, CompressionType, SbFeatures, CompressionOpt_arms};
 
 /// A compression option's value: a type, and a level - 0 for the type's
 /// default.

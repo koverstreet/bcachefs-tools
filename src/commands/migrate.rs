@@ -13,8 +13,7 @@ use bcachefs_kernel::format::{SbFeatures, bch_sb, bch_sb_layout, BCH_SB_SECTOR};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Dev, FsFlag};
 use std::ffi::CString;
-use std::fs;
-use std::io;
+use std::{fs, io};
 use std::os::fd::{AsFd, BorrowedFd};
 
 use anyhow::{anyhow, bail, Result};

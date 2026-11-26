@@ -23,26 +23,21 @@
 
 use core::ffi::c_int;
 
-use crate::posix::acl;
-use crate::os::inode_ops::InodeAttrs;
-use crate::os::posix_acl::{AclType, PosixAcl};
+use crate::posix::{acl, inode};
+use crate::os::{inode_ops::InodeAttrs, posix_acl::{AclType, PosixAcl}};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::posix::inode::bch_inode_unpacked;
 use crate::posix::inode_format::InodeOptId;
 use crate::posix::quota_format::QuotaType;
 use crate::errcode::{Errcode, ret_to_c, BchError};
-use crate::posix::inode;
 use crate::posix::inode_opts::InodeOpt;
 use crate::posix::quota::QuotaAcctMode;
 use crate::snapshots::subvolume;
 
 use super::dentry::Dentry;
-use crate::os::iattr::Iattr;
-use crate::os::idmap::MntIdmap;
+use crate::os::{iattr::{Iattr, ATTR_CTIME, ATTR_SIZE}, idmap::MntIdmap, super_block::IsInode};
 use super::inode::InodeInfo;
-use crate::os::iattr::{ATTR_CTIME, ATTR_SIZE};
-use crate::os::super_block::IsInode;
 
 use crate::posix::inode_format::InodeFlags as F;
 

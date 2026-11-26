@@ -17,17 +17,13 @@
 
 use core::ffi::c_int;
 
-use crate::btree::bkey::{pos, spos};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
+use crate::btree::{bkey::{pos, spos}, iter::{lockrestart_do, BtreeIter, BtreeIterFlags}};
 use crate::c;
-use crate::snapshots::subvolume::subvol_inum;
-use crate::posix::dirent::{self, Dirent};
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
+use crate::posix::{dirent::{self, Dirent}, inode, namei::subvol_inum_eq};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::posix::inode;
-use crate::posix::namei::subvol_inum_eq;
 use crate::types::CStatic;
-use crate::snapshots::subvolume;
 use crate::util::os_str::OsStrExt;
 use cstruct_macros::{vtable, Plain};
 

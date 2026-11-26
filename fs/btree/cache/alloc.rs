@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::reclaim::ReclaimFlags;
-use super::{cache_node_struct_alloc, cached_node, NodeBufs};
+use super::{cache_node_struct_alloc, cached_node, NodeBufs, BtreeCacheGuard, BtreeNodeList};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
-use crate::util::alloc::{flags, Flags};
+use crate::util::{alloc::{flags, Flags}, time_stats::TimeStat, log::LogMsg};
 use crate::btree::iter::BtreeTrans;
-use crate::btree::node::BtreeNode;
+use crate::btree::node::{BtreeNode, BtreeWriteType};
 use crate::btree::path::{bch2_btree_path_to_text, LockedNode, PathIdx, Paths, Write};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write, node_read, ReadInFlightNode};
-use super::{BtreeCacheGuard, BtreeNodeList};
-use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::data::extents_format::BKEY_BTREE_PTR_U64s_MAX;
-use crate::util::time_stats::TimeStat;
 use crate::data_structures::list::Walk;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
@@ -21,9 +18,7 @@ use crate::format::{Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
-use crate::os::kernel::{cond_resched, local_clock, unlikely};
-use crate::util::log::LogMsg;
-use crate::os::sched::current;
+use crate::os::{kernel::{cond_resched, local_clock, unlikely}, sched::current};
 use crate::btree::cache::BtreeNodeCacheState as State;
 use crate::locking::six::SixLockType::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::marker::PhantomData;

@@ -4,8 +4,7 @@
 use super::BKEY_U64S;
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::errcode::BchError;
-use crate::format::BkeyField::{self, *};
-use crate::format::{bkey_format, Bpos, bkey, KEY_PACKED_BITS_START};
+use crate::format::{BkeyField::{self, *}, bkey_format, Bpos, bkey, KEY_PACKED_BITS_START};
 use crate::sb_err_on;
 use crate::types::{field_size, Le64};
 use crate::util::{Printbuf, ToText};

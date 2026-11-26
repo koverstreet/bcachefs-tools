@@ -7,9 +7,9 @@
 //! checksum can't say which of its keys went bad.
 
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{AnyKeySC, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, ByFlag, FamilyVal, FieldOffsets};
+use crate::btree::bkey::{AnyKeySC, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, ByFlag,
+    FamilyVal, FieldOffsets, BkeyOps};
 use crate::btree::bkey_buf::BtreeKeyBuf;
-use crate::btree::bkey::BkeyOps;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents_format::{BCH_INLINE_DATA_POISONED, InlineData, InlineDataCsum,
@@ -20,8 +20,7 @@ use crate::errcode::BchError;
 use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits, bch_csum, bkey, CsumOpt,
     CsumType};
 use crate::fs::{Fs, WriteRef};
-use crate::init::damage;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::{damage, error::{id, BkeyValidate}};
 use crate::util::refcount::TryRefcount;
 use crate::util::task::spawn;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};

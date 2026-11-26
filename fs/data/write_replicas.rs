@@ -4,19 +4,17 @@
 //! key's pointers, from the device's set, given to its IO and awaited - and
 //! what failed returned.
 
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeySC};
+use crate::btree::{bkey::prelude::*, bkey::{pos, BkeyI, BkeySC}};
 use crate::c;
 use crate::data::extents::bch_io_failures;
 use crate::data::extents_format::bch_extent_ptr;
-use crate::errcode::status::BLK_STS_REMOVED;
+use crate::errcode::{status::BLK_STS_REMOVED, BchError};
 use crate::init::dev::bch_devs_mask;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::dev_bio::DevBio;
 use crate::data::nocow_locking::NocowKind;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::array_vec::ArrayVec;
-use crate::errcode::BchError;
 use crate::format::{DataType, BCH_BKEY_PTRS_MAX};
 use crate::fs::{Dev, Fs};
 use crate::locking::MemallocFlags;

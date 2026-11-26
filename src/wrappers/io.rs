@@ -6,23 +6,15 @@
 // for it.
 
 use bcachefs_kernel::c;
-use bcachefs_kernel::alloc::buckets::ReservationFlags;
-use bcachefs_kernel::alloc::write_point::write_point_specifier;
-use bcachefs_kernel::data::extents::ReadFlags;
-use bcachefs_kernel::data::write::bch_write_op;
-use bcachefs_kernel::posix::inode::bch_inode_unpacked;
+use bcachefs_kernel::alloc::{buckets::ReservationFlags, write_point::write_point_specifier};
+use bcachefs_kernel::data::{extents::ReadFlags, write::bch_write_op, read::{self, Rbio}, write};
+use bcachefs_kernel::posix::{inode::bch_inode_unpacked, inode_opts};
 use bcachefs_kernel::snapshots::subvolume::subvol_inum;
 use bcachefs_kernel::btree::bkey::spos;
-use bcachefs_kernel::data::read::{self, Rbio};
-use bcachefs_kernel::data::write;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::posix::inode_opts;
-use bcachefs_kernel::util::alloc::init_at;
-use bcachefs_kernel::os::bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer};
-use bcachefs_kernel::util::sleep::Sleep;
-use bcachefs_kernel::util::task::{waiter, Join, Resume, WaitSync};
-use bcachefs_kernel::os::workqueue::Queue;
+use bcachefs_kernel::util::{alloc::init_at, sleep::Sleep, task::{waiter, Join, Resume, WaitSync}};
+use bcachefs_kernel::os::{bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer}, workqueue::Queue};
 
 /// Maximum single IO size.
 pub const MAX_IO_SIZE: usize = 1 << 20;

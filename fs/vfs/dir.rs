@@ -35,15 +35,12 @@ use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
 use crate::format::StrHashKind;
-use crate::posix::str_hash::bch_hash_info;
-use crate::posix::dirent::{self, DirEmit};
+use crate::posix::{str_hash::bch_hash_info, dirent::{self, DirEmit}, str_hash};
 use crate::os::dir_context::DirContext;
 use crate::errcode::{BchError, Errcode};
 use crate::locking::{Guard, LockedBy};
-use crate::posix::str_hash;
-use crate::util::alloc::KBox;
+use crate::util::{alloc::KBox, ffi::Opaque};
 use kernel::alloc::flags;
-use crate::util::ffi::Opaque;
 use crate::os::file::{File, FileOps, FileVTable, FPos, PosLocked, UserBuf};
 use crate::types::CStatic;
 use cstruct_macros::vtable;

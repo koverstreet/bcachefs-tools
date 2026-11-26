@@ -23,9 +23,8 @@ use std::{
 };
 
 use anyhow::{bail, Result};
-use crate::wrappers::sysfs::DevInfo;
+use crate::wrappers::{sysfs::DevInfo, fs::FsExt};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
-use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::format::bch_sb;
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::{filter_dead, Fs, OpenFs};

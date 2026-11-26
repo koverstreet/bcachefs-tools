@@ -36,8 +36,7 @@ use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reflink::lookup_indirect_extent;
 use crate::errcode::{Errcode, BchError};
-use crate::os::fiemap::Fiemap;
-use crate::os::folio::FsMapping;
+use crate::os::{fiemap::Fiemap, folio::FsMapping};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
 

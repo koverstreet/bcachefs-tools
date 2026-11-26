@@ -12,18 +12,16 @@ use std::os::unix::ffi::OsStrExt;
 use rustix::fs::FileType;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
-use crate::wrappers::fs::FsExt;
+use crate::wrappers::{fs::FsExt, io::MAX_IO_SIZE};
 use bcachefs_kernel::c;
 use bcachefs_kernel::posix::acl_format::AclEntry;
 use bcachefs_kernel::posix::inode_format::InodeFlags;
-use bcachefs_kernel::alloc::buckets::ReservationFlags;
+use bcachefs_kernel::alloc::{buckets::ReservationFlags, capacity::DiskReservation};
 use bcachefs_kernel::data::extents_format::{bch_extent_ptr, BKEY_EXTENT_U64s_MAX,
     BKEY_EXTENT_VAL_U64s_MAX};
 use bcachefs_kernel::data::reconcile::trigger::SetNeedsReconcileCtx;
 use bcachefs_kernel::posix::inode::bch_inode_unpacked;
-use bcachefs_kernel::snapshots::format::Subvolume;
-use crate::wrappers::io::MAX_IO_SIZE;
-use bcachefs_kernel::alloc::capacity::DiskReservation;
+use bcachefs_kernel::snapshots::{format::Subvolume, subvolume};
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{spos, BkeyI, BkeyV, BKEY_U64S};
 use bcachefs_kernel::btree::iter::{CommitFlags, UpdateTriggerFlags};
@@ -31,7 +29,6 @@ use bcachefs_kernel::data::extents::bkey_append_ptr;
 use bcachefs_kernel::data_structures::dst_room::DstRoom;
 use bcachefs_kernel::format::{BkeyType, Btree, bkey};
 use bcachefs_kernel::posix::inode_opts::get_io_opts;
-use bcachefs_kernel::snapshots::subvolume;
 use bcachefs_kernel::util::rcu::read_lock;
 use bcachefs_kernel::data::io_misc;
 use bcachefs_kernel::posix::xattr::XattrType;
@@ -39,9 +36,8 @@ use bcachefs_kernel::posix::{acl, dirent, inode, namei, str_hash, xattr};
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::Fs;
 
-use bcachefs_kernel::os::kernel::PAGE_SIZE;
+use bcachefs_kernel::os::{kernel::PAGE_SIZE, bio::io_buf};
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
-use bcachefs_kernel::os::bio::io_buf;
 
 const BCACHEFS_ROOT_INO: u64 = 4096;
 const BCACHEFS_ROOT_SUBVOL: u64 = 1;

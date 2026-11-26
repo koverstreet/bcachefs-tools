@@ -5,18 +5,15 @@ use super::keys::{wb_key_u64s, KeysLiveWriter, WbKeys};
 use super::{insert_checks, resize_gfp, wb_btree_idx, AccountingKey, Buf, FlushingGuard, IncGuard, SEQ_U64S, WB_RESIZE_GFP};
 use crate::alloc::accounting::{self, DiskAccountingPos};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
-use crate::btree::write_buffer::{bch_fs_btree_write_buffer, WbBtree};
-use crate::btree::write_buffer::WbFlushCaller as Caller;
-use crate::data_structures::dst_room::DstRoom;
-use crate::data_structures::eytzinger::Eytzinger0;
+use crate::btree::write_buffer::{bch_fs_btree_write_buffer, WbBtree, WbFlushCaller as Caller};
+use crate::data_structures::{dst_room::DstRoom, eytzinger::Eytzinger0};
 use crate::locking::Guard as _;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
 use crate::format::{jset_entry, BkeyType, Btree, bkey, jset_entry_write_buffer_keys, JsetEntryType};
 use crate::fs::Fs;
 use crate::prt;
-use crate::util::alloc::{Flags, AllocError};
-use crate::util::vstructs::{Validated, ValidatedEntriesMut};
+use crate::util::{alloc::{Flags, AllocError}, vstructs::{Validated, ValidatedEntriesMut}};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};

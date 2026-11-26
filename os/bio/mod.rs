@@ -60,9 +60,8 @@ use crate::errcode::{BchError, Errcode};
 use crate::os::blkdev::BlockDevice;
 use crate::util::backtrace::prt_fn_name;
 use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Completion, Done, WaitSync, Waiter};
+use crate::util::task::{waiter, Completion, Done, WaitSync, Waiter, Resumable};
 use crate::util::gather::GatherRef;
-use crate::util::task::Resumable;
 use crate::util::{Printbuf, ToText};
 use pin_init::{pin_data, pinned_drop};
 

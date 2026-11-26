@@ -30,16 +30,12 @@
 //! ended attempt's checks.
 
 use super::bkey::*;
-use super::iter::BtreeIter;
+use super::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use super::trans::BtreeTrans;
-use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{capacity::DiskReservation, buckets::bch_fs_usage_base};
 use crate::c;
-use crate::alloc::buckets::bch_fs_usage_base;
-use crate::btree::journal_overlay::journal_keys;
-use crate::btree::update::TransCommitFlags;
-use crate::data::extents_format::BKEY_BTREE_PTR_U64s_MAX;
-use crate::data::write::WriteFlags;
+use crate::btree::{journal_overlay::journal_keys, update::TransCommitFlags};
+use crate::data::{extents_format::BKEY_BTREE_PTR_U64s_MAX, write::WriteFlags};
 use crate::journal::flush_wait::Flush;
 pub use crate::alloc::foreground::Watermark;
 use crate::errcode::{

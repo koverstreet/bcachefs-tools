@@ -42,7 +42,7 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket, bch_dev_usage};
@@ -60,18 +60,15 @@ use crate::c;
 use crate::alloc::format::AllocV4;
 use crate::alloc::lru_format::LRU_TIME_MAX;
 use crate::util::time_stats::TimeStat;
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, BchError};
 use crate::data::ptrs::Ptrs;
-use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::init::damage;
-use crate::init::error::id;
-use crate::locking::{MemallocFlags, SeqLock};
+use crate::init::{damage, error::id};
+use crate::locking::{MemallocFlags, SeqLock, Locked, Mutex};
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, DevWriteRefKind};
 use crate::util::alloc::Vec;
 use crate::util::atomic::try_update;
-use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev};
+use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev, BioSet};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef, Scope};
 use crate::util::task::{waiter, WaitSync};
@@ -82,14 +79,11 @@ use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::{HumanReadable, Printbuf};
-use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
+use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt, new_lock};
 use core::pin::Pin;
 use core::sync::atomic::Ordering;
 use pin_init::{pin_data, pin_init, stack_pin_init};
 use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason, Backpointer};
-use crate::locking::{Locked, Mutex};
-use crate::new_lock;
-use crate::os::bio::BioSet;
 use crate::os::workqueue::ReffedWork;
 use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
 

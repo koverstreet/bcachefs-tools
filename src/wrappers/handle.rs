@@ -5,14 +5,12 @@ use std::path::Path;
 
 use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2, bch_ioctl_disk, bch_ioctl_disk_v2, bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2, bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2, bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2, bch_ioctl_subvolume, bch_ioctl_subvolume_v2, bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super, BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE};
 use bcachefs_kernel::sb::members_format::MemberState;
-use crate::wrappers::ioctl::*;
-use crate::wrappers::sysfs;
+use crate::wrappers::{ioctl::*, sysfs};
 use bcachefs_kernel::c;
 use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::format::bch_sb;
+use bcachefs_kernel::format::{bch_sb, DataType, MetadataVersion};
 use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::{BchError, Errcode};
-use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::path_to_cstr;
 use rustix::io::Errno;
 use uuid::Uuid;

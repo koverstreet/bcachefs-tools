@@ -11,19 +11,19 @@ use crate::btree::node::sort::{
     sort_whiteouts, CompactMode, WriteSortRuns,
 };
 use crate::btree::node::bset::MAX_BSETS;
-use crate::btree::node::{BtreeNode, NodeContents, NodeKey, NR_WRITES};
+use crate::btree::node::{BtreeNode, NodeContents, NodeKey, NR_WRITES, BtreeNodeFlags,
+    BtreeWriteType};
 use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_READ_LOCKED;
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
-use crate::btree_trans;
+use crate::{btree_trans, fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
 use crate::c;
 use crate::data::extents::bch_io_failures;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::util::time_stats::TimeStat;
-use crate::btree::node::{BtreeNodeFlags, BtreeWriteType};
 use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_replicas::write_replicas;
 use crate::data_structures::list::Walk;
@@ -33,9 +33,8 @@ use crate::fs::Fs;
 use crate::format::{Btree, DataType, bset, btree_node, btree_node_entry, MetadataVersion};
 use crate::init::error::BkeyValidate;
 use crate::posix::inode_opts::get_io_opts;
-use crate::locking::six::{six_lock_counts, six_lock_write_held, SixLockType};
+use crate::locking::{six::{six_lock_counts, six_lock_write_held, SixLockType}, MemallocFlags};
 use crate::types::{Le16, Le64};
-use crate::locking::MemallocFlags;
 use crate::util::backref::BackRef;
 use crate::os::bio::{Bio, BioInPlace, BioOwner, BvecMempool};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
@@ -47,14 +46,12 @@ use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, 
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::util::names::Names;
 use crate::util::{rcu, HumanReadable, Printbuf};
-use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
 use core::mem::offset_of;
 use core::ops::Range;
 use core::pin::Pin;
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
-use cstruct_macros::{bch_enum, in_place};
+use cstruct_macros::{bch_enum, in_place, MaybeZeroable};
 use core::sync::atomic::AtomicI64;
-use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
 #[derive(MaybeZeroable)]

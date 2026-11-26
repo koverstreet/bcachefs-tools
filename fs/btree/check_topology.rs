@@ -27,12 +27,9 @@ use crate::data::extents_format::BtreePtrV2;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Bpos, Btree, bkey, BTREE_MAX_DEPTH};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
-use crate::init::error::id;
-use crate::init::recovery::btree_lost_data;
+use crate::init::{error::id, recovery::btree_lost_data};
 use crate::sb::errors::FsckFlags;
-use crate::util::log::LogMsg;
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::util::Printbuf;
+use crate::util::{log::LogMsg, vstructs::{plain_bytes, plain_bytes_mut}, Printbuf};
 use crate::{bch_err, bch_err_fn, bch_err_msg, bch_info, btree_trans, fsck_err_flags, mustfix_fsck_err,
             mustfix_fsck_err_on, prt};
 

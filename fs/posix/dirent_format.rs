@@ -19,10 +19,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
+use crate::btree::bkey::{AnyKeySC, BkeySC, BkeyVal, ValidateFlags, BkeyValidateFrom};
 use crate::util::vstructs::{cast_plain, plain_bytes, Unvalidated};
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BkeySC, BkeyVal, ValidateFlags, BkeyValidateFrom};
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
 use crate::format::bch_val;

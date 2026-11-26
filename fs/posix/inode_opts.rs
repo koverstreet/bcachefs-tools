@@ -16,9 +16,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
-use crate::util::vstructs::Unvalidated;
-use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
+use crate::btree::bkey::{AnyKeySC, spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
+use crate::util::{vstructs::Unvalidated, ffi::c_str, Printbuf, ToText};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
@@ -38,9 +37,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::ffi::c_str;
 use crate::os::kernel::unlikely;
-use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, opts};
 use crate::posix::{inode, logged_ops};
 use core::ffi::CStr;

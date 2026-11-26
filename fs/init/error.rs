@@ -30,28 +30,25 @@
 #![allow(non_camel_case_types)]
 
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags,
     bkey_validate_context, BkeyValidateFrom};
 use crate::btree::trans::TransGuard;
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::prt;
+use crate::{prt, new_lock};
 use crate::sb::errors::{FsckFlags, SbErrorId, bch_sb_error_entry_cpu};
 use crate::util::alloc::Vec;
-use crate::os::kernel::{jiffies, time_after, HZ};
+use crate::os::{kernel::{jiffies, time_after, HZ}, workqueue::Queue};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
-use crate::os::workqueue::Queue;
 use crate::util::{Printbuf, ToText};
 use crate::util::vstructs::Unvalidated;
 use core::ffi::{c_ulong, CStr};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags, Mutex};
-use crate::new_lock;
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree, MemberState, ErrorAction};
 use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;

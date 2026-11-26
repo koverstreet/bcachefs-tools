@@ -6,8 +6,7 @@
 
 use core::ffi::CStr;
 
-use crate::posix::inode_opts::InodeOpt;
-use crate::posix::xattr::XattrType;
+use crate::posix::{inode_opts::InodeOpt, xattr::XattrType};
 
 use super::inode::InodeInfo;
 

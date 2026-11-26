@@ -4,16 +4,15 @@
 //! folding its new data blocks into the parity as they're written till it's
 //! in flight, creating the stripe, and tearing it down - see stripe_new.rs.
 
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{capacity::DiskReservation, foreground::Watermark};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags};
 use crate::c;
 use crate::data::ec::format::Stripe;
-use crate::alloc::foreground::Watermark;
 use crate::data::ec::head::StripeBlockMask;
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::posix::logged_ops_format::LoggedOpStripeUpdate;
+use crate::posix::{logged_ops_format::LoggedOpStripeUpdate, inode_opts, logged_ops};
 use crate::data::ec::buf::{blocks_good, blocks_in, generate_block_checksums, generate_checksums, parity_blocks,
                            validate_msg, MemWait, StripeBuf, POST, PRE};
 use crate::data::ec::delete::stripe_delete;
@@ -28,14 +27,12 @@ use crate::data::ec::update::{create_watermark, stripe_update_extents};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::debug::trace::events;
-use crate::sb::errors::SbErrorId;
-use crate::sb::members::{DevIoRef, DevWriteRefKind};
+use crate::sb::{errors::SbErrorId, members::{DevIoRef, DevWriteRefKind}};
 use crate::util::alloc::KBox;
 use crate::util::rcu::read_lock;
 use crate::util::task::{waiter, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, prt};
-use crate::posix::{inode_opts, logged_ops};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::SeqCst;

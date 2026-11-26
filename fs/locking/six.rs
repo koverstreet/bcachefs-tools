@@ -6,17 +6,14 @@ use crate::os::lockdep::{trace_contention_begin, trace_contention_end, LockClass
 use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, RawSpinLock, Shared, SharedGuard,
             SixIntent, SixWriteIntent};
 use crate::c;
-use crate::data_structures::dst_vec::DstVec;
-use crate::data_structures::inline_vec::InlineVec;
+use crate::data_structures::{dst_vec::DstVec, inline_vec::InlineVec};
 #[cfg(CONFIG_SMP)]
 use crate::debug::params::six_optimistic_spin_disabled;
 use crate::util::alloc::{Flags, init_at};
 use crate::util::ffi::c_char;
-use crate::os::kernel::time_after64;
-use crate::os::percpu::{CpuGuard, PerCpu};
+use crate::os::{kernel::time_after64, percpu::{CpuGuard, PerCpu}, sched};
 use crate::util::projections::Volatile;
 use crate::util::rcu::{self, FreeAnytime};
-use crate::os::sched;
 use crate::util::sleep::{sleep_until, Sleep};
 use core::convert::Infallible;
 use core::ffi::{c_int, c_uint, c_ulong, CStr};

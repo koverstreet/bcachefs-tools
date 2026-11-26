@@ -65,19 +65,14 @@ use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume,
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::init::damage;
+use crate::init::{damage, passes};
 use crate::init::error::id;
-use crate::init::passes;
 use crate::locking::{Locked, RwSem};
-use crate::new_lock;
-use crate::snapshots::check_snapshots;
-use crate::snapshots::snapshot;
-use crate::util::alloc::Vec;
+use crate::{new_lock, bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck_err, prt,
+    trans_inconsistent};
+use crate::snapshots::{check_snapshots, snapshot};
+use crate::util::{alloc::Vec, log::{self, LogLevel, LogMsg}, Printbuf};
 use crate::data_structures::eytzinger::Eytzinger1;
-use crate::util::log::{self, LogLevel, LogMsg};
-use crate::util::Printbuf;
-use crate::{bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck_err, prt,
-            trans_inconsistent};
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use pin_init::{pin_data, pin_init, PinInit};

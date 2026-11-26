@@ -14,13 +14,11 @@
 use core::mem::size_of;
 
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::acl_format::AclEntry;
-use crate::posix::acl_format::{BCH_ACL_VERSION, bch_acl_entry, bch_acl_header};
+use crate::posix::acl_format::{AclEntry, BCH_ACL_VERSION, bch_acl_entry, bch_acl_header};
 use crate::init::error::id;
 use crate::os::posix_acl::AclType;
 use crate::sb::errors::SbErrorId;
-use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
-use crate::util::Printbuf;
+use crate::util::{vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError}, Printbuf};
 use crate::posix::xattr::XattrType;
 
 impl AclEntry {

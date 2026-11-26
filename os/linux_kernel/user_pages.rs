@@ -13,12 +13,8 @@ use super::iov_iter::IovIter;
 use super::kernel::PAGE_SIZE;
 use crate::c;
 use crate::errcode::{BchError, Errcode};
-use crate::os::file::Any;
-use crate::os::folio::Folio;
-use crate::os::bio::{Bio, Bvec, FolioHold, Holds};
-use crate::util::rcu::{DropAnytime, DropAtomic};
-use crate::util::task::requeue;
-use crate::os::workqueue::Queue;
+use crate::os::{file::Any, folio::Folio, bio::{Bio, Bvec, FolioHold, Holds}, workqueue::Queue};
+use crate::util::{rcu::{DropAnytime, DropAtomic}, task::requeue};
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::NonNull;
 

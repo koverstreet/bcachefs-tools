@@ -3,11 +3,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::sb::errors_format::bch_sb_field_error_entry_v2;
-use crate::alloc::accounting_format::Accounting;
-use crate::alloc::replicas_format::bch_replicas_entry_v1;
-use crate::util::ffi::c_char;
+use crate::alloc::{accounting_format::Accounting, replicas_format::bch_replicas_entry_v1};
+use crate::util::{ffi::c_char, vstructs::Head};
 use crate::btree::bkey::BkeyI;
-use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, ioctl, counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, __uuid_t, BCH_REPLICAS_MAX};

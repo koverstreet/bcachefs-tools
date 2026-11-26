@@ -139,7 +139,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef, Watermark};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::alloc::write_point::WritePointLocked;
-use crate::data::ec::head::StripeBlockMask;
+use crate::data::ec::head::{StripeBlockMask, EcStripeNewState as State};
 use crate::init::dev::{bch_devs_mask, DevsMask};
 use crate::data::ec::buf::{parity_blocks, MemWait, StripeBuf};
 use crate::data::ec::open::StripeClaim;
@@ -168,7 +168,6 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use crate::data::ec::head::EcStripeNewState as State;
 
 // ── A stripe being made ──────────────────────────────────────────────────
 

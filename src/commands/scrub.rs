@@ -2,15 +2,13 @@ use std::io::{self, IsTerminal, Read, Write};
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::util::vstructs::read_past;
 use std::os::unix::io::FromRawFd;
-use std::process;
+use std::{process, thread};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use bcachefs_kernel::bcachefs_ioctl::bch_ioctl_data_args;
-use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_data, bch_ioctl_data_scrub};
-use bcachefs_kernel::bcachefs_ioctl::{IoctlDataEventRet, bch_ioctl_data_progress, DataOp};
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_data_args, bch_ioctl_data, bch_ioctl_data_scrub,
+    IoctlDataEventRet, bch_ioctl_data_progress, DataOp};
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;

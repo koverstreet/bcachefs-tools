@@ -9,16 +9,13 @@ use crate::fs::Dev;
 use core::ops::Range;
 
 use crate::format::{bch_sb, bch_sb_field_journal, bch_sb_field_journal_v2};
-use crate::util::vstructs::{Unvalidated, Validated};
+use crate::util::{vstructs::{Unvalidated, Validated}, alloc::Vec, Printbuf};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard, FsFlag};
 use crate::journal::buckets;
 use crate::{prt, sb_err_on};
-use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
-use crate::sb::members::sb_member;
+use crate::sb::{io::{sb_field_u64s, SbFieldOps, SbState}, members::sb_member};
 use crate::types::Le64;
-use crate::util::alloc::Vec;
-use crate::util::Printbuf;
 
 fn invalid() -> BchError {
     Errcode::invalid_sb_journal.into()

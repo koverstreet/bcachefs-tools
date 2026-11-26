@@ -8,28 +8,23 @@
 //! POSIX ACLs are xattrs too - types POSIX_ACL_ACCESS and POSIX_ACL_DEFAULT,
 //! with an empty name - and are acl.rs's.
 
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
+use crate::btree::{bkey::prelude::*, bkey::AnyKeySC};
 pub use crate::posix::xattr_format::XattrType;
 use core::mem::{offset_of, size_of};
 
-use crate::posix::acl;
+use crate::posix::{acl, inode};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{BKEY_U64S, BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::posix::inode::bch_inode_unpacked;
 use crate::posix::xattr_format::Xattr;
-use crate::snapshots::subvolume::subvol_inum;
+use crate::snapshots::{subvolume::subvol_inum, subvolume};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::posix::inode;
-use crate::snapshots::subvolume;
 use crate::posix::str_hash::{self, HashTable, bch_hash_info};
-use crate::util::os_str::{OsStr, OsStrExt};
-use crate::util::vstructs::{InPlace, Unvalidated, Validated};
-use crate::util::Printbuf;
+use crate::util::{os_str::{OsStr, OsStrExt}, vstructs::{InPlace, Unvalidated, Validated}, Printbuf};
 use crate::format::Btree;
 
 /// setxattr() flags - <uapi/linux/xattr.h>:

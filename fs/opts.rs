@@ -28,18 +28,16 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::c;
 use crate::alloc::accounting_format::DataTypes_bits;
-use crate::init::dev::bch_sb_buf;
+use crate::init::{dev::bch_sb_buf, passes_format::RecoveryPass};
 use crate::posix::dirent_format::{BCH_DT_MAX, DT_SUBVOL};
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
 use crate::posix::inode_opts::InodeOpt;
-use crate::sb::io::SbState;
+use crate::sb::{io::SbState, members, members_format::{MemberState, bch_member, bch_member_flags}};
 use crate::prt;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, plain_bytes_mut, Unvalidated};
-use crate::sb::members;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::names::{self, Names};
 use crate::util::{HumanReadable, Printbuf};
@@ -47,11 +45,9 @@ use crate::util::printbuf::parse_human_u64;
 use crate::os::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
 use crate::posix::inode_format::InodeOptId_arms;
-use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR,
-    bch_sb, bch_sb_head, bch_sb_field_ext, bch_sb_field_ext_flags0, DegradedAction, ScrubJournalOpt};
-use crate::init::passes_format::RecoveryPass;
-use crate::sb::members_format::{MemberState, bch_member, bch_member_flags};
-use crate::format::DataType;
+use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt,
+    WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR, bch_sb, bch_sb_head, bch_sb_field_ext,
+    bch_sb_field_ext_flags0, DegradedAction, ScrubJournalOpt, DataType};
 use crate::types::bits_to_longs;
 use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
 

@@ -17,8 +17,7 @@
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::format::{Btree, bkey};
 use core::mem::size_of;
-use crate::data_structures::dst_room::DstRoom;
-use crate::data_structures::dst_room::InlineOrBoxed;
+use crate::data_structures::dst_room::{DstRoom, InlineOrBoxed};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 
 const ONSTACK_U64S: usize = 12;

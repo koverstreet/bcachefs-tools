@@ -7,11 +7,9 @@ use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{AccountingEntry, DiskAccountingType, ReconcileType};
 use bcachefs_kernel::alloc::accounting_format::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::format::{DataType, MemberState, MetadataVersion};
-use bcachefs_kernel::util::vstructs::ArmError;
+use bcachefs_kernel::util::{vstructs::ArmError, printbuf::Printbuf, Bytes, Sectors, ToText};
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::btree;
-use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::util::{Bytes, Sectors, ToText};
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo, bcachefs_kernel_version};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]

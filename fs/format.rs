@@ -71,10 +71,8 @@
 #![allow(non_camel_case_types)]
 
 
-use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
-use crate::alloc::replicas_format::bch_replicas_entry_v1;
-use crate::data::extents_format::bch_extent_ptr;
-use crate::data::reconcile::format::ReconcileWorkId;
+use crate::alloc::{disk_groups_format::BCH_SB_LABEL_SIZE, replicas_format::bch_replicas_entry_v1};
+use crate::data::{extents_format::bch_extent_ptr, reconcile::format::ReconcileWorkId};
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut,
                             floored_by_self, from_bytes_mut, Head, Unvalidated,

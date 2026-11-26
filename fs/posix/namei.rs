@@ -25,7 +25,7 @@
 //! panic here: link counts saturate and schedule the repair
 //! (inode::nlink_add()), depths wrap, as C's did.
 
-use crate::os::posix_acl::PosixAcl;
+use crate::os::{posix_acl::PosixAcl, kernel::{capable, Capability}};
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
@@ -34,7 +34,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::data::reconcile::format::bch_extent_reconcile;
-use crate::posix::dirent_format;
+use crate::posix::{dirent_format, inode, str_hash};
 use crate::posix::dirent_format::DT_SUBVOL;
 use crate::posix::inode::bch_inode_unpacked;
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
@@ -44,15 +44,9 @@ use crate::posix::dirent::{self, d_type_str, Dirent, DirentTarget, Dirents, Rena
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
-use crate::posix::inode;
 use crate::posix::inode_opts::{reinherit_attrs, inode_opt_change};
 use crate::snapshots::subvolume;
-use crate::posix::str_hash;
-use crate::util::alloc::Vec;
-use crate::os::kernel::{capable, Capability};
-use crate::util::os_str::{OsStr, OsStrExt};
-use crate::util::{Printbuf, ToText};
-use crate::util::log::LogMsg;
+use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf, ToText, log::LogMsg};
 use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ops::ControlFlow;
 use crate::format::{Btree, MetadataVersion};

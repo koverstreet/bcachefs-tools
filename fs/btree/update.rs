@@ -5,18 +5,15 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::BtreeNodeType;
-use crate::btree::bkey::BkeyV;
-use crate::btree::bkey::{bch2_bkey_maybe_mergable,bkey_eq, bkey_gt, bkey_le, bkey_lt, bkey_merge, BkeyI,
-                         BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
+use crate::btree::{BtreeNodeType, journal_overlay};
+use crate::btree::bkey::{BkeyV, bch2_bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt,
+    bkey_merge, BkeyI, BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
 use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
-use crate::btree::journal_overlay;
 use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
 use crate::btree::write_buffer::insert_checks;
 use crate::journal::journal::JournalFlag;
-use crate::data::durability::BkeyVDurability;
-use crate::data::extents::{bch2_cut_back_s, bch2_cut_front_s};
+use crate::data::{durability::BkeyVDurability, extents::{bch2_cut_back_s, bch2_cut_front_s}};
 use crate::debug::trace::events;
 use crate::prt;
 use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
@@ -28,18 +25,15 @@ use crate::util::vstructs::{plain_bytes, Container, DstHead, EntryWalk, Head, Pl
                             Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
-use core::ffi::c_ulong;
+use core::ffi::{c_ulong, c_uint};
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::{bch_enum, MaybeZeroable};
+use cstruct_macros::{bch_enum, MaybeZeroable, bitfield, BitfieldMembers};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, bch_val, bkey, bkey_i, Deleted,
-    jset_entry, Set, JsetEntryType};
+    jset_entry, Set, JsetEntryType, BtreeFlags};
 use zerocopy::IntoBytes;
-use core::ffi::c_uint;
-use crate::format::BtreeFlags;
-use cstruct_macros::{bitfield, BitfieldMembers};
 use nestify::nest;
 
 /* Transaction types: */

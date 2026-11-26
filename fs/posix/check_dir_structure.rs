@@ -21,7 +21,7 @@
 //! may be queued on a path that renumbers. Today the walk only reads, and
 //! repairs return before it.
 
-use crate::posix::dirent_format;
+use crate::posix::{dirent_format, inode, lostfound, namei};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -34,15 +34,11 @@ use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
 use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
-use crate::init::error::id;
-use crate::init::progress::Progress;
+use crate::init::{error::id, progress::Progress};
 use crate::snapshots::subvolume;
 use crate::posix::dirent::{self, Dirent};
-use crate::posix::{inode, lostfound, namei};
 use crate::posix::inode::{Inodes, bch_inode_unpacked};
-use crate::util::alloc::Vec;
-use crate::util::Printbuf;
-use crate::util::log::LogMsg;
+use crate::util::{alloc::Vec, Printbuf, log::LogMsg};
 use crate::{bch_err_fn, bch_err_msg, bch_warn, here, inode_fsck_err, prt};
 use crate::format::Btree;
 

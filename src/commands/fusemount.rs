@@ -68,23 +68,19 @@ use bcachefs_kernel::posix::dirent::RenameMode;
 use bcachefs_kernel::posix::inode::bch_inode_unpacked;
 use bcachefs_kernel::posix::inode_opts::inode_opt_change;
 use bcachefs_kernel::posix::xattr_format::Xattr;
-use bcachefs_kernel::snapshots::format::Subvolume;
-use bcachefs_kernel::snapshots::subvolume::subvol_inum;
+use bcachefs_kernel::snapshots::{format::Subvolume, subvolume::subvol_inum, subvolume};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::btree;
 use bcachefs_kernel::alloc::accounting;
-use bcachefs_kernel::posix::{dirent, namei, str_hash};
+use bcachefs_kernel::posix::{dirent, namei, str_hash, inode, inode_opts};
 use bcachefs_kernel::btree::bkey::{pos, BkeyV};
 use bcachefs_kernel::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags};
 use bcachefs_kernel::format::Btree;
 use bcachefs_kernel::posix::xattr::{self, XattrType};
-use bcachefs_kernel::posix::{inode, inode_opts};
-use bcachefs_kernel::snapshots::subvolume;
 
-use bcachefs_kernel::os::kernel::PAGE_SIZE;
+use bcachefs_kernel::os::{kernel::PAGE_SIZE, bio::io_buf};
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
-use bcachefs_kernel::os::bio::io_buf;
 
 /// Guard that calls rcu_unregister_thread on drop (i.e. thread exit).
 struct RcuGuard;

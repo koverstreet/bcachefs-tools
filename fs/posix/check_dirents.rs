@@ -19,7 +19,7 @@
 //! dirent commits; if the walker refetches partway through a directory, they're
 //! recounted from the btree (recalculate_sums).
 
-use crate::posix::dirent_format;
+use crate::posix::{dirent_format, inode, namei, str_hash};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -35,12 +35,10 @@ use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
-use crate::init::error::id;
-use crate::init::progress::Progress;
+use crate::init::{error::id, progress::Progress};
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, bch_info, fsck_err, fsck_err_on, inode_fsck_err};
-use crate::posix::{inode, namei, str_hash};
 use core::ops::ControlFlow;
 use crate::format::{Btree, BkeyType};
 

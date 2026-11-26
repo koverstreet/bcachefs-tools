@@ -7,8 +7,7 @@
 use super::{Header, TaskRef};
 use crate::data_structures::fast_list::fast_list;
 use crate::locking::MemallocFlags;
-use crate::os::kernel::msleep;
-use crate::os::module::{Quiesced, ThisModule};
+use crate::os::{kernel::msleep, module::{Quiesced, ThisModule}};
 use crate::prt;
 use crate::errcode::BchError;
 use crate::util::alloc::init_at;

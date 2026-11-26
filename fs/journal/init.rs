@@ -7,12 +7,11 @@ use core::sync::atomic::Ordering::Relaxed;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::c;
 use crate::alloc::replicas::DevlistEntry;
-use crate::util::alloc::Flags;
+use crate::util::{alloc::Flags, sleep::Sleep};
 use crate::btree::bkey::prelude::*;
 use crate::journal::journal::{journal, JOURNAL_ENTRY_SIZE_MIN, journal_res_state_bits,
-    JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK, JOURNAL_STATE_BUF_NR};
+    JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK, JOURNAL_STATE_BUF_NR, JournalFlag as Journal};
 use crate::journal::write::jset_buf_alloc;
-use crate::journal::journal::JournalFlag as Journal;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::fifo::FifoRead;
 use crate::locking::Guard as _;
@@ -20,9 +19,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
 use crate::init::error::id;
-use crate::os::bio::BioSet;
-use crate::os::kernel::jiffies;
-use crate::util::sleep::Sleep;
+use crate::os::{bio::BioSet, kernel::jiffies};
 use crate::{bch_err, fsck_err_on, warn_on};
 use cstruct_macros::MaybeZeroable;
 

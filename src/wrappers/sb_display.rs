@@ -13,13 +13,10 @@ use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 use bcachefs_kernel::format::bch_sb;
-use bcachefs_kernel::sb::members_format::bch_member;
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::sb::{members_format::bch_member, self, SbFieldType, io::SbState};
+use bcachefs_kernel::util::{printbuf::Printbuf, vstructs::Unvalidated};
 use bcachefs_kernel::init::dev::bch_sb_handle;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::sb::{self, SbFieldType};
-use bcachefs_kernel::sb::io::SbState;
-use bcachefs_kernel::util::vstructs::Unvalidated;
 
 use crate::device_scan;
 

@@ -7,20 +7,17 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::io::RawFd;
 
 use bcachefs_kernel::c;
-use bcachefs_kernel::alloc::buckets::bucket;
+use bcachefs_kernel::alloc::{buckets::bucket, disk_groups::Target};
 use bcachefs_kernel::init::dev::{bch_sb_buf, bch_sb_handle};
 use bcachefs_kernel::opts::{bch_opts, OptId};
 use bcachefs_kernel::sb::members_format::{bch_member, BCH_MIN_NR_NBUCKETS, bch_sb_field_members_v2};
 use bcachefs_kernel::os::blkdev;
-use bcachefs_kernel::alloc::disk_groups::Target;
 
 use crate::util::{die, read_exact_at, write_all_at};
 use bcachefs_kernel::format::{MetadataVersion, SbFeatures, bch_encrypted_key, bch_key, bch_sb,
     bch_sb_field_crypt, bch_sb_field_ext, bch_sb_layout, BCH_SB_LAYOUT_SECTOR, BCH_SB_SECTOR};
-use bcachefs_kernel::sb::io::BCHFS_MAGIC;
+use bcachefs_kernel::sb::{io::{BCHFS_MAGIC, SbResize}, members::SbMembersMut};
 use bcachefs_kernel::util::vstructs::Head;
-use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::sb::members::SbMembersMut;
 use bcachefs_kernel::alloc::disk_groups::SbDiskGroupsMut;
 
 use crate::key::Passphrase;

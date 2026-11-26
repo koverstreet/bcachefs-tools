@@ -11,23 +11,20 @@ use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::opts::bch_inode_opts;
 use crate::sb::members::DevWriteRefKind;
 use crate::journal::flush_wait::Flush;
-use crate::data_structures::dst_room::DstRoom;
+use crate::data_structures::{dst_room::DstRoom, array_vec::ArrayVec};
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
-use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor, bch_write_op};
+use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor, bch_write_op,
+    WriteFlags as w};
 use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
-use crate::data_structures::array_vec::ArrayVec;
-use crate::os::bio::{Bio, BioRange};
+use crate::os::{bio::{Bio, BioRange}, kernel::unlikely};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::format::{Btree, DataType, BkeyType, BCH_BKEY_PTRS_MAX, BCH_REPLICAS_MAX};
 use crate::snapshots::subvolume;
-use crate::os::kernel::unlikely;
-use crate::util::rcu::read_lock;
-use crate::util::task::Resume;
+use crate::util::{rcu::read_lock, task::Resume};
 use crate::{btree_trans, fs_inconsistent};
 use crate::posix::inode;
-use crate::data::write::WriteFlags as w;
 use core::ops::ControlFlow;
 
 type Op = bch_write_op;

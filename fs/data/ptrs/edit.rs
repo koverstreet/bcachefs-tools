@@ -4,8 +4,7 @@
 //! each good until something before it moves.
 
 use super::*;
-use crate::btree::bkey::{BkeyI, BKEY_U64S};
-use crate::btree::iter::{NoRoom, TransBkey};
+use crate::btree::{bkey::{BkeyI, BKEY_U64S}, iter::{NoRoom, TransBkey}};
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::extents::{bch_extent_crc_unpacked, extent_ptr_decoded};
 use crate::data::extents_format::{bch_extent_crc32, bch_extent_flags, BKEY_EXTENT_VAL_U64s_MAX,

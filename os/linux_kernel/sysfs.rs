@@ -10,8 +10,7 @@ use core::ffi::CStr;
 
 use crate::c;
 use crate::errcode::{BchError, Errcode};
-use crate::util::ffi::c_char;
-use crate::util::Printbuf;
+use crate::util::{ffi::c_char, Printbuf};
 
 #[path = "../sysfs.rs"]
 mod common;

@@ -17,12 +17,11 @@ use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, Subvolume, SubvolumeState};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::posix::inode;
 use crate::snapshots::subvolume;
 use crate::{bch_err_msg, mustfix_fsck_err, mustfix_fsck_err_on};
 use core::ops::ControlFlow;

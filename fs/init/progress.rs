@@ -18,9 +18,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{BtreeIter, BtreeNodeRef, TransAttempt};
+use crate::btree::{iter::{BtreeIter, BtreeNodeRef, TransAttempt}, bbpos::bbpos};
 use crate::bcachefs_ioctl::ProgressUnit;
-use crate::btree::bbpos::bbpos;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::passes;

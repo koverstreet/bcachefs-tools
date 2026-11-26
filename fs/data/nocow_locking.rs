@@ -22,24 +22,20 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
-use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::TransAttempt;
+use crate::fs::{Dev, Fs};
+use crate::btree::{bkey::{BkeySC, BkeyV}, iter::TransAttempt};
 use crate::util::time_stats::TimeStat;
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, BchError};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::errcode::BchError;
-use crate::fs::Fs;
 use crate::sb::members::DevRef;
 use crate::locking::{self, SpinLockIrq};
-use crate::new_lock;
+use crate::{new_lock, warn_on_once};
 use crate::types::CacheAligned;
 use crate::util::futex::EventCount;
 use crate::util::hash::hash_64;
 use crate::util::sleep::Sleep;
 use crate::util::{Printbuf, ToText};
-use crate::warn_on_once;
 use crate::data_structures::array_vec::ArrayVec;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};

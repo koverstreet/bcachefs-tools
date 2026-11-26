@@ -221,14 +221,13 @@ use crate::opts::bch_opts;
 use crate::sb::members_format::{bch_member, BCH_MEMBER_NBUCKETS_MAX, bch_sb_field_members_v2,
     BCH_SB_MEMBERS_MAX, MemberErrorType};
 use crate::alloc::accounting::{self, dev_usage_init};
-use crate::btree::iter::{trans_commit_do, CommitFlags};
-use crate::sb::io::SbFieldOps;
+use crate::btree::iter::{trans_commit_do, CommitFlags, UpdateTriggerFlags};
+use crate::sb::io::{SbFieldOps, read_super, SbReadScratch, SbWriteFlags};
 use crate::alloc::capacity::recalc_capacity;
 use crate::alloc::check::{dev_freespace_init, fs_freespace_init};
 use crate::alloc::background::dev_remove_alloc;
 use crate::alloc::disk_groups::{dev_group_set, disk_path_to_text_sb};
 use crate::alloc::replicas::{can_write_with_devs, WriteCheck};
-use crate::btree::iter::UpdateTriggerFlags;
 use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_remove_stripes, DevDrop};
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
@@ -238,7 +237,6 @@ use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, S
 use crate::locking::{Guard as _, Locked, LockedBy, MemallocFlags, Mutex};
 use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
-use crate::sb::io::{read_super, SbReadScratch, SbWriteFlags};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
                          sb_member_alloc, DevIoRef, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID,
                          bch_dev_identity, bch_member_cpu, DevReadRefKind};
@@ -263,9 +261,9 @@ use pin_init::pin_data;
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
-use crate::os::bio::{Bio, BioBox, BioSet, IO_ALIGN};
+use crate::os::{bio::{Bio, BioBox, BioSet, IO_ALIGN}, workqueue::ReffedWork};
 use crate::data_structures::dst_room::DstRoom;
-use crate::util::alloc::AlignedBox;
+use crate::util::alloc::{AlignedBox, Vec};
 use crate::data_structures::bitmap::{AtomicBitArray, AtomicBitflags, BitArray};
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::util::ffi::{bytes_in, c_char, strscpy};
@@ -273,11 +271,9 @@ use crate::util::refcount::{AtomicRef, TryRefcount, WaitableRef};
 use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
 use crate::init::error::io_error_work;
 use crate::new_lock;
-use crate::util::alloc::Vec;
 use crate::util::late::Late;
 use crate::util::place::Placed;
 use crate::util::time_stats::{TimeStatsArray, bch2_time_stats_quantiles};
-use crate::os::workqueue::ReffedWork;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Fieldwise)]

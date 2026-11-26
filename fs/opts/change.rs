@@ -7,13 +7,12 @@
 //! change to register: opts_hooks_pre_set().
 
 use crate::format::{MemberState, SbFeature, VersionUpgradeOpt};
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use super::{opt_to_text, Opt, OptId, OPTS};
 use crate::alloc::disk_groups_format::bch_sb_field_disk_groups;
 use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
 use crate::data::compress;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Mutex};
 use crate::sb::io::SbFieldOps;
 use crate::util::printbuf::Printbuf;

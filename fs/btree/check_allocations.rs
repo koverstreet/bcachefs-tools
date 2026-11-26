@@ -28,14 +28,12 @@ use crate::data::reflink::{gc_reflink_add, gc_reflink_done, gc_reflink_free, gc_
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags, DataType, BTREE_MAX_DEPTH, Deleted};
 use crate::locking::{Locked, RwSem, SeqLock};
-use crate::new_lock;
+use crate::{new_lock, bch_err_fn, bch_err_msg, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
 use crate::fs::{Dev, Fs, FsFlag};
-use crate::init::error::id;
-use crate::init::progress::Progress;
+use crate::init::{error::id, progress::Progress};
 use crate::types::Le16;
 use crate::util::Printbuf;
 use crate::os::kernel::READ;
-use crate::{bch_err_fn, bch_err_msg, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
 
 #[bch_enum(closed)]
 #[repr(u32)]

@@ -5,15 +5,13 @@ use bcachefs_kernel::fs::Dev;
 use bcachefs_kernel::sb::members::{DevIoRef, DevReadRefKind};
 use bcachefs_kernel::btree::bkey::prelude::*;
 use std::os::fd::AsFd;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 
-use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::bkey::{AllTypes, AnyKey, BkeyP, BkeyS, FamilyVal};
-use bcachefs_kernel::btree::read::BsetHolder;
+use bcachefs_kernel::{btree, POS_MIN};
+use bcachefs_kernel::btree::{bkey::{AllTypes, AnyKey, BkeyP, BkeyS, FamilyVal}, read::BsetHolder};
 use bcachefs_kernel::data::inline_data::InlineDataMut;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::data::extents_format::{bch_extent_ptr, InlineDataCsum};
@@ -24,7 +22,6 @@ use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::read::{entry_type, JsetEntryType};
 use bcachefs_kernel::util::vstructs::{cast_plain, cast_plain_slice, from_bytes_mut, plain_bytes_mut, Head,
                                       SelfSized, Unvalidated};
-use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 

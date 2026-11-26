@@ -4,10 +4,9 @@ use super::{bch2_btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedN
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::BtreeNodeLockedType;
-use crate::btree::node::BtreeNode;
+use crate::btree::node::{BtreeNode, BtreeWriteType};
 use crate::btree::path::{bch2_btree_path_to_text, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
-use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
@@ -15,12 +14,11 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
-use crate::locking::six::SixHold;
+use crate::locking::{six::SixHold, six::SixLockType::{self, SIX_LOCK_read}};
 use crate::prt;
 use crate::types::L1_CACHE_BYTES;
 use crate::os::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::util::log::LogMsg;
-use crate::locking::six::SixLockType::{self, SIX_LOCK_read};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<BtreePtrV2>()?;

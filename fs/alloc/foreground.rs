@@ -56,7 +56,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::{Dev, FsFlag};
+use crate::fs::{Dev, FsFlag, Fs};
 use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
 use crate::data::ec::stripe_new::{IoRef, StripeNew};
@@ -68,14 +68,12 @@ use crate::data::write::WriteFlags;
 use crate::init::dev::{AtomicDevsMask, bch_devs_list, bch_devs_mask, DevsMask};
 use crate::sb::members_format::{BCH_SB_MEMBER_INVALID, BCH_SB_MEMBERS_MAX};
 use crate::util::time_stats::TimeStat;
-use crate::errcode::Errcode;
+use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::data::copygc::can_make_progress;
-use crate::errcode::{ret_to_c, BchError};
 use crate::format::{DataType, BCH_BKEY_PTRS_MAX};
-use crate::fs::Fs;
-use crate::locking::{ExclusiveGuard, SpinLockIrq};
+use crate::locking::{ExclusiveGuard, SpinLockIrq, ByteLock, Locked, Lockdep};
 use crate::opts::data_type_str;
-use crate::percpu_field;
+use crate::{percpu_field, new_lock, published};
 use crate::debug::trace::events;
 use crate::sb::members::data_types_to_text;
 use crate::util::alloc::init_at;
@@ -87,7 +85,7 @@ use crate::util::log::{print_str, LogLevel};
 use crate::util::place::Contained;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
-use crate::util::refcount::{RefBorrow, RefGuard, Refcount};
+use crate::util::refcount::{RefBorrow, RefGuard, Refcount, RefSlot};
 use crate::util::task::Resume;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_long, c_uint, c_ulong};
@@ -95,15 +93,11 @@ use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, BitfieldMembers};
+use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, BitfieldMembers, placed, Init, NonZeroWord,
+    TypeInfo};
 use nestify::nest;
-use crate::locking::{ByteLock, Locked, Lockdep};
 use crate::alloc::write_point::{WritePointsHash, write_point, WRITE_POINT_MAX};
-use crate::new_lock;
-use crate::published;
-use crate::util::refcount::RefSlot;
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8};
-use cstruct_macros::{placed, Init, NonZeroWord, TypeInfo};
 use pin_init::pin_data;
 
 /// How deep into the reserves an allocation - or a commit, its flags word's low

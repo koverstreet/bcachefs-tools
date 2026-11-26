@@ -12,8 +12,7 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::debug::trace::events;
 use crate::os::kernel::unlikely;
-use crate::util::log::{print_lines, LogLevel};
-use crate::util::Printbuf;
+use crate::util::{log::{print_lines, LogLevel}, Printbuf};
 use core::cmp::Ordering;
 use cstruct_macros::MaybeZeroable;
 

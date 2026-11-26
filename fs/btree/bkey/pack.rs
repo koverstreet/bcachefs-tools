@@ -14,8 +14,7 @@ use crate::format::BkeyField::{self, *};
 use crate::format::{bkey_format, Bpos, BkeyType, bkey, bkey_format_bits, bkey_packed,
     KEY_FORMAT_CURRENT, KEY_FORMAT_LOCAL_BTREE, KEY_PACKED_BITS_START};
 use crate::os::kernel::unlikely;
-use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut};
-use crate::util::{Printbuf, ToText};
+use crate::util::{vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut}, Printbuf, ToText};
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
 
 /*

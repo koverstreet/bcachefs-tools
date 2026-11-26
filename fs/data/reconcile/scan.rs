@@ -16,8 +16,7 @@
 //! version doesn't know - a newer one's - and is done as an fs scan, which
 //! covers anything narrower: a downgrade loses no scan.
 
-use crate::alloc::backpointers::{backpointer_get_key, BpScanIter};
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{backpointers::{backpointer_get_key, BpScanIter}, capacity::DiskReservation};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels,

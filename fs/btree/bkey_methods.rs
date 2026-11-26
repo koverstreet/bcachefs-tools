@@ -28,15 +28,12 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{BkeyP, BkeyS, BkeySC};
-use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{NoRoom, TransBkey};
-use crate::posix::inode::bch_inode_unpacked;
+use crate::btree::{bkey::{BkeyP, BkeyS, BkeySC}, bkey::prelude::*, iter::{NoRoom, TransBkey}};
+use crate::posix::{inode::bch_inode_unpacked, dirent, inode};
 use crate::snapshots::format::{SnapshotState, SubvolumeState};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion, bkey, Error};
 use crate::fs::Fs;
-use crate::posix::{dirent, inode};
 use crate::typeinfo::{self, AccessError, FieldRef, ResolveError, TypeInfo};
 use crate::util::names::Names;
 use core::fmt;

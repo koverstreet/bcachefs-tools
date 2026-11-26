@@ -19,26 +19,22 @@
 use crate::alloc::accounting::{CounterSet, DiskAccountingPos, ReplicasCounters};
 use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
-use crate::data::ec::format::Stripe;
+use crate::data::{ec::format::Stripe, ptrs::{BkeyVPtrs, Ptrs}};
 use crate::alloc::replicas_format::{bch_replicas_entry_v0, bch_replicas_entry_v1,
     bch_sb_field_replicas, bch_sb_field_replicas_v0};
 use crate::bcachefs_ioctl::{BCH_FORCE_IF_DATA_DEGRADED, BCH_FORCE_IF_DATA_LOST,
     BCH_FORCE_IF_METADATA_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
-use crate::init::dev::{bch_devs_list, bch_devs_mask};
+use crate::init::{dev::{bch_devs_list, bch_devs_mask}, passes::RecoveryPass};
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
-use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, DataTypes, MetadataVersion, BCH_BKEY_PTRS_MAX, bch_sb, SbFieldType};
 use crate::fs::{Fs, SbLockGuard, FsFlag};
-use crate::init::passes::RecoveryPass;
-use crate::sb::io::{entries_end, SbFieldOps, SbSection, SbState};
+use crate::sb::io::{entries_end, SbFieldOps, SbSection, SbState, SbResize};
 use crate::sb::members::member_exists;
 use crate::os::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{AllocError, Vec};
-use crate::data_structures::eytzinger::Eytzinger0;
-use crate::data_structures::dst_room::DstRoom;
-use crate::data_structures::strided::StridedBuf;
+use crate::data_structures::{eytzinger::Eytzinger0, dst_room::DstRoom, strided::StridedBuf};
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, Head, State, Unsized, Unvalidated,
                             Validated};
 use crate::util::{Printbuf, ToText};
@@ -46,7 +42,6 @@ use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::bch_enum;
-use crate::sb::io::SbResize;
 
 #[bch_enum(closed)]
 #[repr(u32)]

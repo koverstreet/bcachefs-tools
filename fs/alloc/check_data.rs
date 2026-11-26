@@ -23,34 +23,27 @@
 //! only because gc's walk is single threaded today.
 
 
-use crate::alloc::buckets::gen_cmp;
+use crate::alloc::{buckets::gen_cmp, background::BUCKET_GC_GEN_MAX};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::scrub::node_replica_good;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
-use crate::alloc::background::BUCKET_GC_GEN_MAX;
 use crate::data::extents_format::{bch_extent_ptr, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::write::WriteFlags;
 use crate::fs::FsFlag;
-use crate::sb::members::DevReadRefKind;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
-use crate::errcode::Errcode;
+use crate::sb::{members::DevReadRefKind, members_format::BCH_SB_MEMBER_INVALID};
+use crate::errcode::{Errcode, BchError};
 use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
-use crate::errcode::BchError;
-use crate::init::damage;
-use crate::init::error::id;
+use crate::init::{damage, error::id};
 use crate::posix::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
-use crate::util::alloc::Flags;
+use crate::util::{alloc::Flags, log::LogMsg, rcu::read_lock, Printbuf};
 use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
-use crate::util::log::LogMsg;
-use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use bitflags::bitflags;

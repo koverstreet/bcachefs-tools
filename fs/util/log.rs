@@ -14,12 +14,10 @@
 
 #[cfg(kernel)]
 use crate::c;
-use crate::fs::Dev;
+use crate::fs::{Dev, Fs};
 use crate::opts::bch_opts;
 use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::util::ratelimit::Ratelimit;
-use crate::util::{Printbuf, ToText};
+use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
 use core::ffi::CStr;
 use core::sync::atomic::Ordering;
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};

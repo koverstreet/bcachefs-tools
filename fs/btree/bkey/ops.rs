@@ -10,8 +10,7 @@ use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, Metada
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::BkeyValidate;
 use crate::prt;
-use crate::util::Printbuf;
-use crate::util::vstructs::Unvalidated;
+use crate::util::{Printbuf, vstructs::Unvalidated};
 use core::ffi::c_uint;
 use core::fmt;
 use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, MaybeZeroable};

@@ -18,13 +18,12 @@
 //! update's end ends the walk: key start positions, extent_whiteouts included,
 //! only go up (btree/update.rs's extent_whiteout_type()).
 
-use crate::alloc::capacity::DiskReservation;
+use crate::alloc::{capacity::DiskReservation, buckets::ReservationFlags};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, bkey_gt, pos, spos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, Typed};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::update::extent_whiteout_type;
-use crate::posix::inode_format::InodeFlags;
-use crate::alloc::buckets::ReservationFlags;
+use crate::posix::{inode_format::InodeFlags, inode, inode_opts};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::reflink_format::ReflinkP;
 use crate::opts::bch_inode_opts;
@@ -40,7 +39,6 @@ use crate::sb::errors::SbErrorId;
 use crate::os::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
 use crate::prt;
-use crate::posix::{inode, inode_opts};
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, BkeyType};
 

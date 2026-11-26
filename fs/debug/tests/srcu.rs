@@ -27,9 +27,7 @@ use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::new_srcu;
 use crate::os::kernel::{local_clock, msleep, num_online_cpus, random_u64_below};
-use crate::util::par::{self, Backend};
-use crate::util::rcu::{Flavor, RcuHead, RcuOwned, Srcu};
-use crate::util::task::TASKS;
+use crate::util::{par::{self, Backend}, rcu::{Flavor, RcuHead, RcuOwned, Srcu}, task::TASKS};
 
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;

@@ -21,8 +21,7 @@ use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_query_btree_keys,
 use bcachefs_kernel::btree::bkey::{AnyKey, AnyKeySC, BkeySC};
 use bcachefs_kernel::util::vstructs::{from_bytes, plain_bytes, Unvalidated};
 
-use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::grow_on_erange;
+use crate::wrappers::{handle::BcachefsHandle, ioctl::grow_on_erange};
 use bcachefs_kernel::format::{Bpos, Btree};
 
 /// Iteration flags, mirroring BCH_IOCTL_QUERY_BTREE_KEYS_*:

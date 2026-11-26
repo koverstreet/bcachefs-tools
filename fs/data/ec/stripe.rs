@@ -20,8 +20,9 @@
 
 use crate::alloc::lru::{LruId, LruPos};
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{bkey_eq, pos, AnyKeySC, BkeyI, BkeySC, BkeyV, POS_MIN};
-use crate::util::vstructs::Unvalidated;
+use crate::btree::bkey::{bkey_eq, pos, AnyKeySC, BkeyI, BkeySC, BkeyV, POS_MIN, BkeyOps};
+use crate::util::vstructs::{Unvalidated, cast_mut, cast_plain_slice, cast_plain_slice_mut,
+    plain_bytes, plain_bytes_mut, Validated};
 use crate::data::ec::format::Stripe;
 use crate::data::ec::trigger::GcStripeData;
 use crate::data::extents::extent_ptr_decoded;
@@ -31,17 +32,13 @@ use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, bch_csum, bkey, BKEY_U64s_MAX, CsumType};
 use crate::fs::Fs;
-use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
 use crate::types::Le16;
 use crate::util::alloc::Vec;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
-                            plain_bytes_mut, Validated};
 use crate::util::Printbuf;
-use crate::data_structures::array_vec::ArrayVec;
-use crate::data_structures::dst_room::DstRoom;
+use crate::data_structures::{array_vec::ArrayVec, dst_room::DstRoom};
 use core::mem::{offset_of, size_of};
 use core::ops::{Range, RangeInclusive};
 

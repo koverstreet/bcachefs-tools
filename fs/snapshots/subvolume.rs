@@ -18,8 +18,7 @@
 //! subvolume, maintained by the trigger.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::AnyKeySC;
-use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps,
+use crate::btree::bkey::{AnyKeySC, pos, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps,
     BkeyValidateFrom};
 use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::btree::trigger::{Trigger, TriggerOp};
@@ -31,8 +30,7 @@ use crate::btree::iter::{
 use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
-use crate::posix::inode::bch_inode_unpacked;
-use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::posix::{inode::bch_inode_unpacked, inode_format::BCACHEFS_ROOT_INO, inode};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState, SnapshotTree,
     Subvolume, SubvolumeState};
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
@@ -40,7 +38,6 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
-use crate::posix::inode;
 use crate::snapshots::{snapshot, bch_fs_snapshots};
 use crate::util::alloc::Vec;
 use crate::util::place::Contained;

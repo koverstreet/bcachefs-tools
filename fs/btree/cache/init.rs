@@ -2,19 +2,15 @@
 
 /* Filesystem init / exit */
 
-use super::{node_mem_alloc, node_mem_free, OwnedNode};
-use crate::btree::node::BtreeNode;
-use super::BtreeCacheGuard;
-use crate::btree::cache::bch_fs_btree_cache;
+use super::{node_mem_alloc, node_mem_free, OwnedNode, BtreeCacheGuard};
+use crate::btree::{node::BtreeNode, cache::{bch_fs_btree_cache, BtreeNodeCacheState as State}};
 use crate::data_structures::list::Walk;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::six::six_lock_counts;
 use crate::prt;
 use crate::os::kernel::cond_resched;
-use crate::util::log::LogMsg;
-use crate::util::place::{Contained, PlacedDrop};
-use crate::btree::cache::BtreeNodeCacheState as State;
+use crate::util::{log::LogMsg, place::{Contained, PlacedDrop}};
 use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;

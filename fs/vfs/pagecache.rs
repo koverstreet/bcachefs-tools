@@ -20,12 +20,10 @@ use cstruct_macros::{bitfield, bch_enum, vtable, BitfieldMembers, MaybeZeroable,
 use kernel::page::PAGE_SHIFT;
 use nestify::nest;
 
-use crate::btree::bkey::{pos, BkeySC};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags};
+use crate::btree::{bkey::{pos, BkeySC}, iter::{BtreeIter, BtreeIterFlags}};
 use crate::c;
 use self::FolioSectorState as SectorState;
-use crate::data::durability::BkeyVDurability;
-use crate::data::extents::BkeyVExtents;
+use crate::data::{durability::BkeyVDurability, extents::BkeyVExtents};
 use crate::errcode::{errptr_to_result, BchError, Errcode};
 use crate::format::{Btree, BkeyType};
 use crate::fs::Fs;
@@ -38,13 +36,12 @@ use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
 use crate::os::folio::{AddressSpaceOps, AopsVTable, FolioPrivate, FsMapping, VfsWriter, Wbc};
 use crate::os::kernel::PAGE_SECTORS_SHIFT;
 
-use super::buffered;
+use super::{buffered, writeback};
 use super::buffered_write::{self, WriteBegun};
 use super::folio::{Folio, FolioGuard, FolioLocked, FolioSpan, FolioStateGuard, HeldFolio, LockedFolio, Mapping,
                    Readahead};
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
-use super::writeback;
 
 #[bch_enum(closed)]
 #[repr(u32)]

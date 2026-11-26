@@ -27,13 +27,11 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::{POS_MIN, SPOS_MAX};
+use crate::{POS_MIN, SPOS_MAX, prt};
 use crate::format::{BkeyType, Bpos, DataType, bkey_format, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
-use crate::prt;
 use crate::os::kernel::WRITE;
-use crate::util::rcu::read_lock;
-use crate::util::sleep::Sleep;
+use crate::util::{rcu::read_lock, sleep::Sleep};
 use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, Taken, TakenNode, BTREE_RESERVE_MAX};
 
 /**

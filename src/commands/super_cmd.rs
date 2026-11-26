@@ -12,8 +12,7 @@
 use anyhow::{anyhow, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::opts::bch_opts;
-use bcachefs_kernel::sb::members_format::bch_sb_field_members_v2;
-use bcachefs_kernel::sb::SbFieldType;
+use bcachefs_kernel::sb::{members_format::bch_sb_field_members_v2, SbFieldType};
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;

@@ -16,8 +16,7 @@
 //! accesses - what an inlined memcpy() of a length known only at runtime is
 //! in C - never a slice copy, which is a call to memcpy().
 
-use crate::errcode::Errcode;
-use crate::errcode::BchError;
+use crate::errcode::{Errcode, BchError};
 
 /// The most bytes an encoded integer takes.
 pub const MAX_BYTES: usize = 9;
