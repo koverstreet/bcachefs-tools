@@ -47,6 +47,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::types::Le64;
 use crate::os::kernel::unlikely;
+use crate::util::alloc::flags;
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
 use core::fmt;
@@ -590,7 +591,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<T, BchError>
     {
         let first = {
-            let _noreclaim = MemallocFlags::noreclaim();
+            let _nowait = MemallocFlags::for_gfp(flags::NOWAIT | flags::NOWARN);
             alloc()
         };
         match first {
@@ -611,7 +612,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<T, BchError>
     {
         let first = {
-            let _noreclaim = MemallocFlags::noreclaim();
+            let _nowait = MemallocFlags::for_gfp(flags::NOWAIT | flags::NOWARN);
             alloc()
         };
         match first {
