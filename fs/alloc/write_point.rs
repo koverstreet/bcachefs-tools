@@ -161,7 +161,7 @@ impl WritePointSpecifier {
     /// One of write_points[] - the same for the same @v, while it's in use:
     /// bit 0 marks it hashed.
     pub const fn hashed(v: usize) -> Self {
-        Self { v: (v | 1) as usize }
+        Self { v: v | 1 }
     }
 
     pub(crate) fn spec(self, fs: &Fs) -> WritePointSpec<'_> {

@@ -225,7 +225,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
         strip_reconcile(fs, (&mut *i.key).as_s());
 
         let mut k = t.bkey_reassemble_room(BkeySC::from(&*i.key),
-                                           BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
+                                           BKEY_BTREE_PTR_U64s_MAX * size_of::<u64>())?;
         k.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
 
         /*

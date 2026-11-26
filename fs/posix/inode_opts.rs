@@ -288,11 +288,11 @@ pub fn get_inode(fs: &Fs, inode: &InodeUnpacked) -> InodeOpts {
         ret.data_checksum = fs.opts.data_checksum.get() as _;
         ret.set_data_checksum_from_inode(false);
     }
-    if unlikely(!bch_compression_opt::valid(ret.compression as u8)) {
+    if unlikely(!bch_compression_opt::valid(ret.compression)) {
         ret.compression = fs.opts.compression.get() as _;
         ret.set_compression_from_inode(false);
     }
-    if unlikely(!bch_compression_opt::valid(ret.background_compression as u8)) {
+    if unlikely(!bch_compression_opt::valid(ret.background_compression)) {
         ret.background_compression = fs.opts.background_compression.get() as _;
         ret.set_background_compression_from_inode(false);
     }
@@ -418,7 +418,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>, 
             opts.data_checksum = fs.opts.data_checksum.get() as _;
             opts.set_data_checksum_from_inode(false);
         }
-        if unlikely(!bch_compression_opt::valid(opts.background_compression as u8)) {
+        if unlikely(!bch_compression_opt::valid(opts.background_compression)) {
             opts.background_compression = fs.opts.background_compression.get() as _;
             opts.set_background_compression_from_inode(false);
         }

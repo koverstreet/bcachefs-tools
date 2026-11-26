@@ -73,7 +73,7 @@ pub enum WbBtree {
  * footgun at compile time: count the write_buffer bits in BCH_BTREE_IDS() and
  * compare against WbBtree::NR.
  */
-const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == WbBtree::NR as u32,
+const _: () = assert!(crate::btrees_with(BtreeFlags::write_buffer).count_ones() == WbBtree::NR,
                       "BCH_WRITE_BUFFER_BTREES() is out of sync with BCH_BTREE_IDS() write_buffer flags");
 
 #[allow(non_upper_case_globals)]

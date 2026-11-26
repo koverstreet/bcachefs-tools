@@ -860,7 +860,7 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     for btree in (0..fs.btree_id_nr_alive()).map(Btree) {
         let mut merge_count = 0;
 
-        for level in 0..BTREE_MAX_DEPTH as u32 {
+        for level in 0..BTREE_MAX_DEPTH {
             let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, level, BtreeIterFlags::PREFETCH);
             while !lockrestart_do(&trans, |t| merge_btree_node_one(t, &progress, &mut iter, &mut merge_count))? {}
         }

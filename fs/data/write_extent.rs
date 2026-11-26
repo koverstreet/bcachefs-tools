@@ -38,7 +38,7 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
     op.pos.offset += u64::from(crc.live_size);
 
     let (pos, cached) = (op.pos, op.has(w::cached));
-    op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX as usize, |e| {
+    op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX, |e| {
         e.k = Bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
                             ..Bkey::new() };
         e.k.size = crc.live_size;
@@ -555,7 +555,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
             if !(room(&out, data) != 0 &&
                  data.len() != 0 &&
                  wp.sectors_free() != 0 &&
-                 op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX as usize).is_ok()) {
+                 op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX).is_ok()) {
                 return Ok(());
             }
         }

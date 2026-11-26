@@ -231,7 +231,7 @@ impl TransBkey<'_, '_, PtrsMut> {
 pub(crate) fn extent_crc_append(k: &mut DstRoom<BkeyI>, crc: &ExtentCrcUnpacked) -> Result<(), NoRoom> {
     let e = crc_entry(crc, ExtentEntryType::crc32);
     let val_u64s = k.k.val_u64s();
-    assert!(val_u64s + e.len() <= BKEY_EXTENT_VAL_U64s_MAX as usize,
+    assert!(val_u64s + e.len() <= BKEY_EXTENT_VAL_U64s_MAX,
             "appending a crc past an extent's largest value");
     k.append_val(&e)
 }

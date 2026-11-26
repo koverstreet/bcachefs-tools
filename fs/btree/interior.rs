@@ -85,7 +85,7 @@ pub struct BtreeAlloc {
 }
 
 /* Maximum number of nodes we might need to allocate atomically: */
-pub const BTREE_RESERVE_MAX: u32 = BTREE_MAX_DEPTH as u32 + (BTREE_MAX_DEPTH as u32 - 1);
+pub const BTREE_RESERVE_MAX: u32 = BTREE_MAX_DEPTH + (BTREE_MAX_DEPTH - 1);
 
 /* Size of the freelist we allocate btree nodes from: */
 pub const BTREE_NODE_RESERVE: u32 = BTREE_RESERVE_MAX * 4;

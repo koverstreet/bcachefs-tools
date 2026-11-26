@@ -858,7 +858,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let (b, mut n) = {
             let l = node_iter.peek(self)?.expect("the node a btree node pointer points to");
             (BtreeNodeRef::from(l.node()),
-             self.bkey_reassemble_room(l.key(), BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?.into())
+             self.bkey_reassemble_room(l.key(), BKEY_BTREE_PTR_U64s_MAX * size_of::<u64>())?.into())
         };
         f(&mut n)?;
         self.btree_node_update_key(node_iter.iter(), b, n, CommitFlags::NO_ENOSPC, false)

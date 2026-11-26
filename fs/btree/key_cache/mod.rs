@@ -643,7 +643,7 @@ impl FsBtreeKeyCache {
 
     /// Ask the shrinker to free @nr keys, as memory pressure would.
     pub fn shrink(&self, nr: usize) {
-        let _ = self.scan(nr as usize);
+        let _ = self.scan(nr);
     }
 
     pub(crate) fn exit(&self) {

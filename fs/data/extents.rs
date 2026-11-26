@@ -133,7 +133,7 @@ pub enum ReadFlagBit {
  */
 const _: () = {
     let (mut extents_btrees_key_types, mut id) = (0, 0);
-    while id < Btree::NR as u32 {
+    while id < Btree::NR {
         if crate::BTREE_IS_EXTENTS_MASK & (1 << id) != 0 {
             extents_btrees_key_types |= Btree(id).key_types();
         }

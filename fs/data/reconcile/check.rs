@@ -366,7 +366,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 {
     let fs = t.fs();
     let btree = iter.btree();
-    let room = BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>();
+    let room = BKEY_BTREE_PTR_U64s_MAX * size_of::<u64>();
 
     let opts = get_io_opts(t, None, k.into())?;
     update_reconcile_opts(t, None, &opts, iter, level, k.into(),

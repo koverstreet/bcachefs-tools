@@ -171,7 +171,7 @@ fn write_update_key(t: &TransAttempt<'_, '_>, key: &NodeKey, failed: &IoFailures
     let (node, mut n) = {
         let l = iter.iter().node(t).expect("the node the iterator was got for, at its level");
         (BtreeNodeRef::from(l.node()),
-         t.bkey_reassemble_room(l.key().untyped(), BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?)
+         t.bkey_reassemble_room(l.key().untyped(), BKEY_BTREE_PTR_U64s_MAX * size_of::<u64>())?)
     };
 
     const V2: &str = "a written node's key a btree_ptr_v2: v1 nodes are need_rewrite from their read, never dirtied";

@@ -52,7 +52,7 @@ use crate::{bch_err, fs_fatal_error, fs_inconsistent, prt};
 const JSET_ENTRY_LOG_U64S: usize = 4;
 
 fn jset_u64s(u64s: usize) -> usize {
-    u64s + JSET_KEYS_U64s as usize
+    u64s + JSET_KEYS_U64s
 }
 
 fn watermark(flags: CommitOpts) -> u32 {

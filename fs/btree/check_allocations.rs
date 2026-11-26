@@ -233,7 +233,7 @@ fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, targe
 {
     let fs = trans.fs();
 
-    for level in target_depth..BTREE_MAX_DEPTH as u32 {
+    for level in target_depth..BTREE_MAX_DEPTH {
         let mut prev = None;
         BtreeIter::new_level(trans, btree, POS_MIN, level, BtreeIterFlags::PREFETCH).for_each(trans, |t, iter, k| {
             fs.gc.set_pos(GcPos::in_btree(btree, level as u16, k.k.p));

@@ -42,7 +42,7 @@ const FOREVER: isize = isize::MAX;
 
 impl<E> Sleep<E> {
     const fn state(state: u32) -> Self {
-        Sleep { state: state as u32, io: false, timeout: FOREVER, _e: PhantomData }
+        Sleep { state, io: false, timeout: FOREVER, _e: PhantomData }
     }
 
     pub const fn freezable(self) -> Self {

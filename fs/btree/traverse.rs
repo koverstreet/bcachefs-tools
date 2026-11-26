@@ -161,7 +161,7 @@ impl BtreeTrans<'_> {
 
 fn root_unpack(packed: usize) -> (Option<NonNull<BtreeNode>>, usize) {
     let mask = (1 << BTREE_ROOT_LEVEL_BITS) - 1;
-    let level = (packed & mask) as usize;
+    let level = packed & mask;
     // journal_entry_btree_root_validate() rejects a root any deeper
     invariant!(level < BTREE_MAX_DEPTH as usize);
     (NonNull::new((packed & !mask) as *mut BtreeNode), level)

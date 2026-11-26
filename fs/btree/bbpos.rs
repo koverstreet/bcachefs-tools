@@ -64,7 +64,7 @@ impl Bbpos {
     pub const MIN: Self = Bbpos { btree: Btree(0), pos: crate::btree::bkey::POS_MIN };
     /// The last of Btree::NR - 1.
     pub const MAX: Self = Bbpos {
-        btree: Btree(Btree::NR as u32 - 1),
+        btree: Btree(Btree::NR - 1),
         pos:   crate::btree::bkey::SPOS_MAX,
     };
 
@@ -74,7 +74,7 @@ impl Bbpos {
             return Bbpos { pos: self.pos.successor(), ..self };
         }
 
-        assert!(self.btree.0 != Btree::NR as u32, "no position after the last btree's last");
+        assert!(self.btree.0 != Btree::NR, "no position after the last btree's last");
         Bbpos { btree: Btree(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
     }
 }

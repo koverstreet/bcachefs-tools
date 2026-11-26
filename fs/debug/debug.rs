@@ -90,7 +90,7 @@ impl DebugFile for Formats {
         let mut from = Bpos::default();
         out.print_each(|out| {
             let trans = btree_trans!(fs);
-            while level < BTREE_MAX_DEPTH as u32 {
+            while level < BTREE_MAX_DEPTH {
                 let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), from, 0, level,
                                                   BtreeIterFlags::empty());
                 loop {

@@ -1434,7 +1434,7 @@ impl Fs {
 
         let last = &self.allocator.last_stuck;
         let old = last.load(Relaxed);
-        if (old == 0 || time_after(jiffies(), (old as usize).wrapping_add(HZ * 60 * 2))) &&
+        if (old == 0 || time_after(jiffies(), old.wrapping_add(HZ * 60 * 2))) &&
            last.compare_exchange(old, jiffies() as usize, Relaxed, Relaxed).is_ok() {
             self.print_allocator_stuck(req, err);
         }

@@ -38,7 +38,7 @@ impl Ratelimit {
             lock:        AtomicBool::new(false),
             initialized: AtomicBool::new(false),
             begin:       AtomicUsize::new(0),
-            interval:    AtomicUsize::new(INTERVAL as usize),
+            interval:    AtomicUsize::new(INTERVAL),
             n_left:      AtomicI32::new(0),
             missed:      AtomicI32::new(0),
         }
@@ -77,8 +77,8 @@ impl Ratelimit {
             }
 
             let now = jiffies();
-            let begin = self.begin.load(Relaxed) as usize;
-            let interval = self.interval.load(Relaxed) as usize;
+            let begin = self.begin.load(Relaxed);
+            let interval = self.interval.load(Relaxed);
             if time_after(now, begin.wrapping_add(interval)) {
                 /*
                  * Reset rs_n_left ASAP to reduce false positives
@@ -119,7 +119,7 @@ impl Ratelimit {
         }
         self.initialized.store(false, Relaxed);
         self.begin.store(0, Relaxed);
-        self.interval.store(INTERVAL as usize, Relaxed);
+        self.interval.store(INTERVAL, Relaxed);
         self.n_left.store(0, Relaxed);
         self.missed.store(0, Relaxed);
         self.unlock();

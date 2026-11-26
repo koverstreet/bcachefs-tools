@@ -527,9 +527,9 @@ impl DataUpdate {
                 }
             };
             let op = &mut self.op;
-            op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX as usize)?;
+            op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX)?;
             let (pos, obs) = (op.pos, &mut op.open_buckets);
-            let sectors = op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX as usize, |k| {
+            let sectors = op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX, |k| {
                 wp.unwritten_extent(k, pos, (end.offset - pos.offset) as u32, obs)
             });
             op.pos.offset += u64::from(sectors);

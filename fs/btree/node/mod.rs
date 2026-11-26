@@ -47,7 +47,7 @@ pub enum BtreeWriteType {
     interior = 4,
 }
 
-pub const BTREE_WRITE_TYPE_BITS: u32 = (BtreeWriteType::NR as u32).next_power_of_two().ilog2();
+pub const BTREE_WRITE_TYPE_BITS: u32 = BtreeWriteType::NR.next_power_of_two().ilog2();
 
 /// A btree node's flags: the pending write's type, then the node's state.
 #[bitfield(u32, atomic)]
@@ -278,7 +278,7 @@ pub struct NodeContents {
 
 pub type NodeKey = DstRoom<BkeyI, [u64; NODE_KEY_U64S]>;
 
-const NODE_KEY_U64S: usize = BKEY_U64S + BKEY_BTREE_PTR_VAL_U64s_MAX as usize;
+const NODE_KEY_U64S: usize = BKEY_U64S + BKEY_BTREE_PTR_VAL_U64s_MAX;
 
 /// A node's key, published: stored word by word with the node held for
 /// write, read with it held any way - and peeked at without it.

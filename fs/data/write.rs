@@ -1386,7 +1386,7 @@ async fn write_pass<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: 
             return pass;
         }
 
-        if op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX as usize).is_err() {
+        if op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX).is_err() {
             return pass;
         }
 

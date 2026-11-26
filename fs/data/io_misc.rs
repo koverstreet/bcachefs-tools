@@ -385,7 +385,7 @@ fn finsert_ancestor_unwritten<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
 {
     let mut r = t.bkey_alloc_init::<Reservation>(1, k.k.p)?;
     r.k_mut().size = k.k.size;
-    r.v_mut().nr_replicas = k.durability_safe(t.fs()).total as u8;
+    r.v_mut().nr_replicas = k.durability_safe(t.fs()).total;
     Ok(r.into())
 }
 

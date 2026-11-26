@@ -494,7 +494,7 @@ impl Paths<'_> {
 
         unsafe {
             ptr::copy_nonoverlapping(old_allocated, allocated, bits_to_longs(old_nr));
-            (*table_header(paths)).nr_paths = nr as usize;
+            (*table_header(paths)).nr_paths = nr;
             ptr::copy_nonoverlapping(old_paths, paths, old_nr);
             ptr::copy_nonoverlapping(old_sorted, sorted, t.nr_sorted.get() as usize);
             ptr::copy_nonoverlapping(old_updates, updates, old_nr);

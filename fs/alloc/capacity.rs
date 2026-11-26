@@ -657,7 +657,7 @@ const SECTORS_CACHE: u64 = 1024;
 /// it in bounds.
 fn disk_res_slot(nr_replicas: u32) -> usize {
     debug_assert!(nr_replicas != 0);
-    nr_replicas.clamp(1, BCH_REPLICAS_MAX as u32) as usize - 1
+    nr_replicas.clamp(1, BCH_REPLICAS_MAX) as usize - 1
 }
 
 impl Fs {

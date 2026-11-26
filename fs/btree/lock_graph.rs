@@ -116,7 +116,7 @@ unsafe fn path_locked_type(path: *const BtreePath, level: usize) -> BtreeNodeLoc
 /// # Safety
 /// @paths is a path table that stays live for 'a: the RCU read lock is held.
 unsafe fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize) {
-    let nr = unsafe { (*table_header(paths)).nr_paths } as usize;
+    let nr = unsafe { (*table_header(paths)).nr_paths };
     let words = table_arrays(paths, nr).0.cast::<AtomicUsize>();
     (AtomicBitmap::from_words(unsafe { core::slice::from_raw_parts(words, bits_to_longs(nr)) }), nr)
 }

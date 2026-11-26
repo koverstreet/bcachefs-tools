@@ -440,7 +440,7 @@ impl FsBtreeCache {
     /// Ask the shrinker to free @nr nodes, as memory pressure would. Not
     /// under bc->lock: the scan takes it.
     pub fn shrink(&self, nr: usize) {
-        let _ = self.shrinkers[0].scan(nr as usize);
+        let _ = self.shrinkers[0].scan(nr);
     }
 }
 

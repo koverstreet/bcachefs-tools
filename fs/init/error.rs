@@ -1029,7 +1029,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
     let fs = ca.fs();
 
     // XXX: if it's reads or checksums that are failing, set it to failed
-    let start = ca.write_errors_start.load(Relaxed) as usize;
+    let start = ca.write_errors_start.load(Relaxed);
     let timeout = usize::from(fs.opts.write_error_timeout.get());
     if start == 0 || !time_after(jiffies(), start.wrapping_add(timeout * HZ)) {
         return;

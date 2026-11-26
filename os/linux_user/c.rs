@@ -63,7 +63,7 @@ pub struct timespec64 {
 /// # Safety
 /// @to and @from are valid for @n bytes, and don't overlap.
 pub unsafe fn copy_to_user(to: *mut c_void, from: *const c_void, n: c_ulong) -> c_ulong {
-    unsafe { core::ptr::copy_nonoverlapping(from.cast::<u8>(), to.cast::<u8>(), n as usize) };
+    unsafe { core::ptr::copy_nonoverlapping(from.cast::<u8>(), to.cast::<u8>(), n) };
     0
 }
 

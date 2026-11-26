@@ -165,7 +165,7 @@ fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) ->
 /// overwrites, and an io ref for each of its pointers, its buckets locked.
 struct NocowExtent<'a> {
     data: BioRange<'a>,
-    k:    DstRoom<BkeyI, [u64; BKEY_EXTENT_U64s_MAX as usize]>,
+    k:    DstRoom<BkeyI, [u64; BKEY_EXTENT_U64s_MAX]>,
     cas:  [Option<DevWriteRef>; BCH_BKEY_PTRS_MAX as usize],
     nr:   usize,
 }
@@ -232,7 +232,7 @@ fn nocow_write_submit<'a>(t: &TransAttempt<'_, '_>, op: &mut Op, data: &mut BioR
         let devs = &devs[..nr_cas];
 
         /* Unlock before taking nocow locks, doing IO: */
-        let mut copy = DstRoom::<BkeyI, [u64; BKEY_EXTENT_U64s_MAX as usize]>::default();
+        let mut copy = DstRoom::<BkeyI, [u64; BKEY_EXTENT_U64s_MAX]>::default();
         if copy.reassemble(k).is_err() {
             return Ok(false);
         }
