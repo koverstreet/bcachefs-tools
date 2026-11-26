@@ -7,7 +7,7 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use zerocopy::IntoBytes;
 
-use crate::accounting::Accounting;
+use crate::alloc::accounting::Accounting;
 use crate::alloc::accounting_mem::{self, mem_add, Delta, MarkRead};
 use crate::alloc::capacity::account_disk_usage_change;
 use crate::btree::bkey::prelude::*;
@@ -20,7 +20,7 @@ use crate::btree::key_cache::{bch2_btree_insert_key_cached, bch2_btree_key_cache
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_old_key};
-use crate::btree::types::BtreeNodeType;
+use crate::btree::BtreeNodeType;
 use crate::c;
 use crate::c::JournalFlag as Journal;
 use crate::cstructs::c as cs;
@@ -421,7 +421,7 @@ impl BtreeTrans<'_> {
         }
 
         if err == Errcode::btree_insert_need_mark_replicas.into() {
-            return t.drop_locks_do_in(paths, |_| crate::accounting::update_sb(t));
+            return t.drop_locks_do_in(paths, |_| crate::alloc::accounting::update_sb(t));
         }
 
         if err == Errcode::btree_insert_need_journal_reclaim.into() {
@@ -556,7 +556,7 @@ impl BtreeTrans<'_> {
             if !ret.matches(Errcode::btree_insert_need_mark_replicas) {
                 return Err(ret);
             }
-            t.drop_locks_do(|| crate::accounting::update_sb(t))?;
+            t.drop_locks_do(|| crate::alloc::accounting::update_sb(t))?;
         }
     }
 

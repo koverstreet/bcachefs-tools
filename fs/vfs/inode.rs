@@ -29,12 +29,15 @@
 //! late as sync or eviction - so an inode write made meanwhile has to carry
 //! them, or a crash can keep it and lose them (generic/622): fold_times(),
 //! before the write's own changes, which still win - assigned, not max()ed,
-//! as times can be set backwards. fs/namei.rs's writes peek the inode
+//! as times can be set backwards. posix/namei.rs's writes peek the inode
 //! themselves: fold_times_trans() writes the folded times first, in the same
 //! transaction.
 
+#![allow(non_camel_case_types)]
+
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::{c_long, c_ulong, CStr};
+use crate::data_structures::bitmap::AtomicBitflags;
+use core::ffi::{c_long, c_uint, c_ulong, CStr};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};
@@ -45,26 +48,164 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
-use crate::inode;
-use crate::inode_opts::InodeOpt;
-use crate::locking::{ExclusiveGuard, Mutex};
-use crate::quota::{QuotaAcctMode, QuotaWarnings};
-use crate::quota;
+use crate::posix::inode;
+use crate::posix::inode_opts::InodeOpt;
+use crate::locking::{ExclusiveGuard, Locked, Mutex, SpinLock, SpinLockIrq};
+use crate::published;
+use crate::posix::quota::{QuotaAcctMode, QuotaWarnings};
+use crate::posix::quota;
 use crate::snapshots::subvolume;
 use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
 use crate::util::log::LogMsg;
+use crate::util::projections::Volatile;
 use crate::util::rcu::{read_lock, ReadGuard};
+use crate::os::workqueue::RawDelayedWork;
+use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
 use kernel::sync::aref::ARef;
+use pin_init::pin_data;
 
 use super::new_inode::NewInode;
 use crate::os::super_block::IsInode;
-use crate::os::vfs_inode::{ILocked, VfsInode};
+use crate::os::vfs_inode::{ILocked, Live, VfsInode};
 
-pub use c::InodeInfo;
 use crate::format::Btree;
+
+/*
+ * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
+ * while Rust has a &InodeInfo - so what Rust touches is typed for that: @v,
+ * the struct inode the kernel writes, a VfsInode; ei_inode a
+ * VolatileInodeUnpacked; ei_update_lock and ei_quota_lock Locked, the second
+ * over what it protects. St is @v's state: New while it's a NewInode's.
+ */
+#[pin_data]
+#[repr(C)]
+#[derive(TypeInfo)]
+pub struct InodeInfo<St = Live> {
+    #[pin]
+    pub v: VfsInode<crate::fs::Fs, St>,
+    /* the inode cache's key: set before it's in, unchanged while it is */
+    pub ei_inum: c::subvol_inum,
+
+    #[pin]
+    pub ei_reserved: Locked<SpinLockIrq, InodeReserved, InodeReservedRange>,
+
+    pub ei_inodes_idx: c_uint,
+    pub ei_flags: AtomicBitflags<c::InodeInfoFlag>,
+
+    #[pin]
+    pub ei_update_lock: Locked<Mutex>,
+    pub ei_last_dirtied: Volatile<c_ulong>,
+    #[pin]
+    pub ei_pagecache_lock: c::two_state_lock_t,
+
+    /*
+     * The quota the inode's usage is charged to: i_blocks + ei_quota_reserved
+     * is charged to ei_qid. i_blocks, the VFS inode's, changes under the lock
+     * too. ei_qid changes with ei_update_lock held as well, so C reads it
+     * under either.
+     */
+    #[pin]
+    pub ei_quota: Locked<SpinLock, InodeQuota>,
+
+    /*
+     * When we've been doing nocow writes we'll need to issue flushes to the
+     * underlying block devices
+     *
+     * XXX: a device may have had a flush issued by some other codepath. It
+     * would be better to keep for each device a sequence number that's
+     * incremented when we isusue a cache flush, and track here the sequence
+     * number that needs flushing.
+     */
+    pub ei_devs_need_flush: c::AtomicDevsMask,
+
+    /*
+     * copy of inode in btree: written after a commit, the inode's btree
+     * position still locked - which serializes its writers, not
+     * ei_update_lock - and read without a lock
+     */
+    pub ei_inode: c::VolatileInodeUnpacked,
+
+    #[pin]
+    pub ei_writeback_timer: RawDelayedWork,
+}
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum InodeInfoFlag {
+    /*
+     * A btree error on this inode: the VFS inode and the btree's may
+     * disagree
+     */
+    EI_INODE_ERROR = 0,
+    /* in a snapshot subvolume, which quotas don't count */
+    EI_INODE_SNAPSHOT = 1,
+    /*
+     * set by a truncate of a nonempty file to 0: start writeback on
+     * close - see DOC(replace-in-place) in vfs/file.rs
+     */
+    EI_INODE_FLUSH_ON_CLOSE = 2,
+}
+
+/*
+ * Cached extent allocation state for [start, end), for skipping btree
+ * lookups when initializing bch_folio state in sequential buffered
+ * writes.
+ *
+ * Staleness contract: extents may change toward allocated without
+ * notice (worst case we over-reserve); anything that deallocates must
+ * clear the range, under pagecache_block so no fill (under
+ * pagecache_add) can straddle the deallocation. Fillers build their
+ * result in locals and publish it in one go: fillers aren't
+ * serialized against each other (page_mkwrite fills without i_rwsem),
+ * and incremental publishing would let two fills interleave into a
+ * range neither of them scanned.
+ */
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct InodeReserved {
+    pub ei_reserved_replicas: u8,
+    pub ei_reserved_state: u8,
+}
+
+published! {
+    /// InodeReserved's range: written under ei_reserved_lock, and read without
+    /// it by the buffered write path, to take the lock only for a folio in it.
+    #[derive(MaybeZeroable)]
+    pub struct InodeReservedRange {
+        pub ei_reserved_start: Volatile<u64>,
+        pub ei_reserved_end: Volatile<u64>,
+    }
+}
+
+/// An inode's quota accounting, under ei_quota_lock.
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct InodeQuota {
+    pub ei_qid: c::bch_qid,
+    /// sectors reserved for writes, charged to ei_qid ahead of i_blocks
+    pub ei_quota_reserved: u64,
+}
+
+/// ei_pagecache_lock's states: adding to the page cache, or blocking adds.
+pub enum PagecacheAdd {}
+pub enum PagecacheBlock {}
+
+impl c::TwoState for PagecacheAdd {
+    const S: bool = false;
+}
+
+impl c::TwoState for PagecacheBlock {
+    const S: bool = true;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct quota_res {
+    pub sectors: u64,
+}
 
 pub type InodeRef = ARef<InodeInfo>;
 

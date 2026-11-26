@@ -9,7 +9,7 @@
 //! the buffered write path takes before btree locks.
 
 use core::convert::Infallible;
-use core::ffi::{c_int, CStr};
+use core::ffi::{c_int, c_uint, CStr};
 use core::ops::ControlFlow;
 
 use crate::btree::bkey::prelude::*;
@@ -28,6 +28,15 @@ use crate::util::task::{TaskList, TASKS};
 use crate::util::{rcu, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
 use crate::format::{Bpos, Btree};
+use cstruct_macros::{placed, Init, MaybeZeroable};
+use pin_init::pin_data;
+
+#[placed(Fs.btree_debug[], index = id: c_uint)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct btree_debug {}
+
 
 fn may_iterate(fs: &Fs) -> bool {
     fs.flags.get(c::FsFlag::may_go_rw)

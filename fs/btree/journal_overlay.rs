@@ -37,7 +37,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::iter::{polonius_key, BtreeTrans, TransAttempt};
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::node::{iter::KeyIter, BtreeNode};
@@ -58,6 +58,7 @@ use crate::util::rcu::{self, ReadGuard, RcuArray};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::{bch_err, field, prt, new_lock, published};
 use core::cmp::Ordering;
+use core::ffi::c_uint;
 use core::mem::{size_of, ManuallyDrop};
 use core::pin::Pin;
 use core::ptr::NonNull;
@@ -65,7 +66,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers, SelfSized};
 use c::Errcode as e;
 use c::FsFlag as f;
-use crate::journal::JournalEntries;
+use crate::journal::read::JournalEntries;
 use crate::util::vstructs::Head;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 use nestify::nest;
@@ -696,6 +697,20 @@ pub(crate) fn delete(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, pos: Bpos
 }
 
 // ── Iterating: a btree node's keys, with the journal's overlaid ──────────
+
+/*
+ * A btree and level's journal keys, from @pos: at index @idx, as of the keys'
+ * seq @seq - after an insert, searched for again
+ */
+#[repr(C)]
+#[derive(Default, Clone, Copy, MaybeZeroable)]
+pub struct journal_iter {
+    pub btree_id: Btree,
+    pub level: c_uint,
+    pub idx: usize,
+    pub seq: u64,
+    pub pos: Bpos,
+}
 
 impl c::journal_iter {
     fn new(jk: &c::journal_keys, btree: Btree, level: u32, pos: Bpos) -> Self {

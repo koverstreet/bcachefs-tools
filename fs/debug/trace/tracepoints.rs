@@ -76,6 +76,6 @@ macro_rules! tracepoints {
     };
 }
 c::PersistentCounter_arms!(tracepoints);
-c::BCH_NOCOUNTER_TRACEPOINTS!(tracepoints);
+super::BCH_NOCOUNTER_TRACEPOINTS!(tracepoints);
 #[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
-c::BCH_PATH_TRACEPOINTS!(tracepoints);
+super::BCH_PATH_TRACEPOINTS!(tracepoints);

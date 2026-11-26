@@ -27,7 +27,7 @@
 //! written by every repair, so one repair can't lose another's.
 
 use crate::btree::bkey::prelude::*;
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
@@ -38,13 +38,13 @@ use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::init::passes::RecoveryPass;
 use crate::c::SnapshotIdState as IdState;
-use crate::check;
+use crate::posix::check;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
-use crate::inode;
+use crate::posix::inode;
 use crate::snapshots::{delete, snapshot, subvolume};
 use crate::util::alloc::Vec;
 use crate::util::{Join, Printbuf, ToText};

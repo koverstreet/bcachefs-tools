@@ -34,7 +34,7 @@
 //! it's met none.
 
 use crate::fs::Dev;
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::capacity::DiskReservation;
@@ -54,7 +54,7 @@ use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::progress::Progress;
-use crate::inode_opts::{self, get_io_opts};
+use crate::posix::inode_opts::{self, get_io_opts};
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::prt;

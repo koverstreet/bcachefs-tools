@@ -1,20 +1,7 @@
-#![allow(non_camel_case_types)]
+// SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::ValidateFlags;
 use crate::format::{Btree, MemberState, Nonce};
-
-#[path = "buckets.rs"] pub mod buckets;
-#[path = "entries.rs"] pub mod entries;
-#[path = "flush_wait.rs"] pub mod flush_wait;
-#[path = "init.rs"] pub mod init;
-#[path = "journal.rs"] pub mod journal;
-#[path = "pins.rs"] pub mod pins;
-#[path = "reclaim.rs"] pub mod reclaim;
-#[path = "sb.rs"] pub mod sb;
-#[path = "seq_blacklist.rs"] pub mod seq_blacklist;
-#[path = "validate.rs"] pub mod validate;
-#[path = "write.rs"] pub mod write;
-
 use crate::c;
 use crate::util::Printbuf;
 use crate::data::checksum::{csum_vstruct, BCH_NONCE_JOURNAL};
@@ -38,7 +25,7 @@ use crate::util::ToText;
 use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
 use core::ops::Range;
 use pin_init::stack_pin_init;
-use validate::Jset;
+use super::validate::{self, Jset};
 
 pub use crate::c::JsetEntryType;
 

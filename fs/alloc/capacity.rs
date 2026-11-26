@@ -53,6 +53,72 @@ use core::cell::Cell;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
 use pin_init::pinned_drop;
+use crate::locking::{Locked, SpinLockIrq};
+use crate::alloc::dev_select::Placement;
+use crate::new_lock;
+use crate::os::percpu::{Counters, PerCpu};
+use crate::util::projections::Volatile;
+use core::ffi::c_uint;
+use core::sync::atomic::AtomicU64;
+use cstruct_macros::{Fieldwise, Init, MaybeZeroable, TypeInfo};
+use pin_init::pin_data;
+
+/* capacity.pcpu's counters: each CPU's a delta, summed over them */
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
+pub struct bch_fs_capacity_counters {
+    pub usage: c::bch_fs_usage_base,
+    /* Indexed by disk_res_slot(); physical sectors, not data size */
+    pub online_reserved: [u64; c::BCH_REPLICAS_MAX as usize],
+}
+
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct bch_fs_capacity_pcpu {
+    pub counters: bch_fs_capacity_counters,
+    /*
+     * The reservation caches, by disk_res_slot(): slots, each changed by
+     * its own CPU and reset by a recompute's
+     */
+    pub sectors_available: [Volatile<u64>; c::BCH_REPLICAS_MAX as usize],
+}
+
+/// See alloc/capacity.rs.
+#[pin_data(PinnedDrop)]
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
+pub struct bch_fs_capacity {
+    /* sectors: recalc_capacity()'s, under state_lock, read without it */
+    pub capacity: crate::util::projections::Volatile<u64>,
+    pub reserved: crate::util::projections::Volatile<u64>,
+
+    /*
+     * When capacity _decreases_ (due to a disk being removed), we
+     * increment capacity_gen - this invalidates outstanding reservations
+     * and forces them to be revalidated
+     */
+    pub capacity_gen: u32,
+    pub bucket_size_max: crate::util::projections::Volatile<c_uint>,
+
+    pub sectors_available: [AtomicU64; c::BCH_REPLICAS_MAX as usize],
+
+    /* the reservation caches' recompute, and the placement it decides */
+    #[pin]
+    #[init(new_lock!((), ::pin_init::zeroed(), "&c->capacity.sectors_available_lock"))]
+    pub sectors_available_lock: Locked<SpinLockIrq, (), Placement>,
+
+    #[init(PerCpu::init())]
+    pub pcpu: PerCpu<c::bch_fs_capacity_pcpu>,
+
+    #[pin]
+    #[init(new_lock!((), "&c->capacity.mark_lock"))]
+    pub mark_lock: crate::util::place::Placed<crate::locking::PercpuRwsemNoio, MarkLockAt>,
+}
+
+/// mark_lock's place, for what it covers to name.
+pub type MarkLockAt = crate::at!(bch_fs_capacity.mark_lock);
+
 
 // ── Capacity ─────────────────────────────────────────────────────────────
 

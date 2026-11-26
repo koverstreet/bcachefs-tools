@@ -11,7 +11,7 @@ use bcachefs_kernel::data::read::{self, Rbio};
 use bcachefs_kernel::data::write;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::inode_opts;
+use bcachefs_kernel::posix::inode_opts;
 use bcachefs_kernel::util::alloc::init_at;
 use bcachefs_kernel::os::bio::{Bio, BioBox, BioInPlace, BioSubmit, Buffer};
 use bcachefs_kernel::util::sleep::Sleep;
@@ -87,7 +87,7 @@ pub fn read(
     buf: &mut [u8],
 ) -> Result<(), BchError> {
     type F = c::ReadFlags;
-    let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
+    let opts = bcachefs_kernel::posix::inode_opts::get_inode(fs, inode);
 
     let mut b = BioBox::new(Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {
         let into = &mut *buf;

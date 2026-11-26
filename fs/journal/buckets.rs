@@ -32,6 +32,53 @@ use crate::os::kernel::totalram_bytes;
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree_trans, prt};
+use crate::data::dev_bio::DevBio;
+use crate::journal::reclaim::discard_work;
+use crate::locking::{Locked, Mutex};
+use crate::os::bio::BioSet;
+use crate::util::late::Late;
+use crate::new_lock;
+use crate::os::workqueue::ReffedWork;
+use core::ffi::c_uint;
+use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable};
+use pin_init::pin_data;
+
+/* Where each stage of a journal bucket's life starts: journal/buckets.rs */
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum JournalBucketStage {
+    JOURNAL_BUCKET_discard,
+    JOURNAL_BUCKET_dirty_ondisk,
+    JOURNAL_BUCKET_dirty,
+    JOURNAL_BUCKET_cur,
+}
+
+/* Embedded in struct bch_dev */
+#[placed(Dev.journal)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct journal_device {
+    #[pin]
+    #[init(crate::journal::buckets::new())]
+    pub buckets: JournalBuckets,
+
+    pub sectors_free: Volatile<c_uint>,
+
+    /*
+     * Bioset for journal write bios. Journal writes allocate from this at
+     * submit time and free on completion; the pool size bounds the
+     * mempool reserve, not in-flight depth.
+     */
+    pub bio_set: Late<BioSet<DevBio>>,
+
+    #[pin]
+    #[init(new_lock!((), "&ca->journal.discard_lock"))]
+    pub discard_lock: Locked<Mutex>,
+    #[pin]
+    pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref_write)>,
+}
+
 
 const STAGES: [Stage; 4] = [DISCARD, DIRTY_ONDISK, DIRTY, CUR];
 

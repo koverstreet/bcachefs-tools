@@ -50,6 +50,21 @@ use crate::prt;
 use c::SixLockType::SIX_LOCK_intent;
 use pin_init::{init, init_zeroed, pin_data};
 use zerocopy::IntoBytes;
+use cstruct_macros::bch_enum;
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum BtreeNodeRewriteReason {
+    none,
+    unknown,
+    error,
+    ptr_written_zero,
+}
+
+
+/* Number of nodes btree coalesce will try to coalesce at once */
+pub const GC_MERGE_NODES: u32 = 4;
+
 
 mod completion;
 mod reserve;
@@ -57,6 +72,8 @@ mod root;
 mod split_merge;
 mod update_key;
 pub(crate) use root::root_alloc_fake_trans;
+pub use root::{btree_root, BtreeRoots, BtreeRootsGuard, BtreeRootsLive, BtreeRootsLiveWriter, BTREE_ROOT_LEVEL_BITS};
+pub use split_merge::BtreeNodeSibling;
 pub(crate) use split_merge::{check_topology, check_topology_msg, foreground_maybe_merge, increase_depth, merge,
                              node_rewrite, split_leaf};
 

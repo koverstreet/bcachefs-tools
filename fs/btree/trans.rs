@@ -4,7 +4,6 @@
 //! put; beginning again, its memory, and restarts; the filesystem's list of
 //! them, and their names.
 
-pub use super::types::BtreeTrans;
 use super::iter::{CommitOpts, TransAttempt};
 use super::trans_attempt::AttemptKey;
 use crate::alloc::capacity::DiskReservation;
@@ -23,7 +22,320 @@ use crate::prt;
 use crate::types::bits_to_longs;
 use crate::util::alloc::{AllocError, Vec};
 use crate::util::mempool::Mempool;
-use super::types::TransMem;
+use core::cell::Cell;
+use core::ffi::{c_int, c_long};
+use core::sync::atomic::AtomicU8;
+use crate::btree::bkey::{BkeyI, BKEY_U64S};
+use crate::btree::path::BtreePath;
+use crate::data_structures::dst_room::DstRoom;
+use crate::locking::{Locked, LockedBy, Mutex};
+use crate::new_lock;
+use crate::os::percpu::PerCpu;
+use crate::types::NeBytes;
+use crate::util::alloc::Global;
+use crate::util::ffi::Opaque;
+use crate::util::projections::Volatile;
+use crate::util::rcu::Srcu;
+use crate::util::time_stats::TimeStatsArray;
+use crate::util::vstructs::Validated;
+use cstruct_macros::{bitfield, BitfieldMembers, Init, MaybeZeroable, placed, TypeInfo};
+use pin_init::pin_data;
+
+pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
+
+pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = c::NSEC_PER_MSEC as c_long;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct trans_kmalloc_trace {
+    pub ip: c_ulong,
+    pub bytes: usize,
+}
+
+/// The transaction's memory: a vector of u64s, bump-allocated from - what it
+/// hands out is in use, by reference - and cleared on every begin; so it's
+/// reallocated only by begin, when nothing it handed out is used again.
+#[repr(C)]
+#[derive(MaybeZeroable, Default)]
+pub struct TransMem {
+    pub(crate) buf:                    crate::util::alloc::Vec<u64, Global, u32>,
+    /* bytes: what the next begin grows it to, restarted for room */
+    pub(crate) realloc_bytes_required: u32,
+    /* a mempool element: the pool's to have back */
+    pub(crate) used_mempool:           bool,
+}
+
+/*
+ * Transaction context for btree operations.
+ *
+ * Holds iterators/paths, pending updates, locks, and a memory arena for a
+ * single logical btree operation.  On lock contention or memory pressure,
+ * the transaction restarts: releases all locks, resets state, and retries
+ * (via lockrestart_do() or similar retry loops).
+ *
+ *  - mem/mem_top: bump allocator, invalidated on every restart
+ *  - Paths kept sorted in lock order to prevent deadlocks
+ *  - SRCU read lock protects btree node memory from being freed;
+ *    released periodically to avoid stalling reclaim
+ */
+#[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
+pub struct btree_trans_bits {
+    lock_may_not_fail:              bool,
+    locked:                         bool,
+    migrate_disabled:               bool,
+    write_locked:                   bool,
+    srcu_held:                      bool,
+    /*
+     * IO was submitted under the srcu read lock (submit_bio() can block for
+     * an unbounded time): suppress the next bch2_trans_unlock_long() "held
+     * too long" warning. Scoped to one locked attempt — cleared on relock /
+     * bch2_trans_begin().
+     */
+    srcu_io_submitted:              bool,
+    btree_cache_cannibalize_locked: bool,
+    pf_memalloc_noio:               bool,
+    in_traverse_all:                bool,
+    paths_sorted:                   bool,
+    memory_allocation_failure:      bool,
+    journal_transaction_names:      bool,
+    journal_replay_not_finished:    bool,
+    pub(self) notrace_relock_fail:  bool,
+    /*
+     * Exempt bch2_trans_begin() from the dropped-updates warning. Set
+     * around a nested transaction - one that grabs trans->restart_count,
+     * does work whose inner commits discard the outer's queued updates, and
+     * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
+     * spans too many extents to be a single transaction). The begin can't
+     * see the restart that's about to be returned, so the caller vouches
+     * for it here. Set it with CLASS(trans_may_drop_updates), which
+     * restores it at the end of the scope.
+     */
+    begin_may_drop_updates:         bool,
+    has_interior_updates:           bool,
+    /* Rust's: the path table is borrowed (btree/path.rs's Paths) */
+    paths_borrowed:                 bool,
+    /* Rust's: the TransAttempts made and not yet ended */
+    #[bits(8)] attempts_live:       u8,
+    __pad25:                        u7,
+    #[bits(16)] pub restarted: c::Errcode,
+    __pad:                          u16,
+}
+
+/*
+ * Transaction context for btree operations.
+ *
+ * Holds iterators/paths, pending updates, locks, and a memory arena for a
+ * single logical btree operation.  On lock contention or memory pressure,
+ * the transaction restarts: releases all locks, resets state, and retries
+ * (via lockrestart_do() or similar retry loops).
+ *
+ *  - mem/mem_top: bump allocator, invalidated on every restart
+ *  - Paths kept sorted in lock order to prevent deadlocks
+ *  - SRCU read lock protects btree node memory from being freed;
+ *    released periodically to avoid stalling reclaim
+ */
+#[repr(C)]
+#[derive(MaybeZeroable, BitfieldMembers)]
+pub struct BtreeTrans<'f> {
+    pub c: &'f Fs,
+
+    /* the path table, by its paths: TableLayout has the rest around them */
+    pub paths: Cell<*mut BtreePath>,
+
+    /* bump allocator, invalidated on transaction restart */
+    pub mem: Cell<TransMem>,
+    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+    pub trans_kmalloc_trace: Cell<Vec<c::trans_kmalloc_trace>>,
+
+    pub nr_sorted: Cell<c::PathIdx>,
+    pub nr_paths: Cell<c::PathIdx>,
+    pub nr_paths_max: Cell<c::PathIdx>,
+    pub nr_updates: Cell<c::PathIdx>,
+    pub shard_cpu: Cell<i16>,
+    pub fn_idx: Cell<u8>,
+    pub lock_must_abort: AtomicU8,
+    #[members]
+    pub bits: Cell<btree_trans_bits>,
+    pub restart_count: Cell<u32>,
+    #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
+    pub restart_count_this_trans: Cell<u32>,
+    /*
+     * Incremented on every successful (non-empty) commit; for detecting
+     * that cached state derived from btree reads may be stale:
+     */
+    pub commit_count: Cell<u32>,
+
+    pub last_begin_time: Cell<u64>,
+    pub last_begin_ip: Cell<c_ulong>,
+    pub last_restarted_ip: Cell<c_ulong>,
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    pub last_restarted_trace: Cell<Vec<c_ulong>>,
+    pub last_unlock_ip: Cell<c_ulong>,
+    pub srcu_lock_time: Cell<c_ulong>,
+    pub srcu_idx: Cell<c_int>,
+    pub locking_root_id: Cell<Btree>,
+
+    pub locking_hash_val: Cell<u64>,
+    pub locking: Cell<*mut c::btree_bkey_cached_common>,
+    /*
+     * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
+     * bch2_six_check_for_deadlock() to detect that the node identity
+     * rotated while we were about to sleep on it. 0 for cached entries.
+     */
+    pub locking_wait: c::six_lock_waiter,
+
+    /* update path: */
+    pub journal_entries: Cell<c::btree_trans_subbuf<c::jset_entry<Validated>>>,
+    pub accounting: Cell<c::btree_trans_subbuf<BkeyI>>,
+
+    pub hooks: Cell<*mut c::btree_trans_commit_hook>,
+    pub journal_pin: Cell<*mut c::journal_entry_pin>,
+
+    pub journal_res_seq: Cell<u64>,
+    /*
+     * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
+     * derive a seq from, the caller names the journal entry the btree node
+     * write has to pin.
+     */
+    pub journal_seq_to_pin: Cell<u64>,
+    pub journal_seq: Cell<*mut u64>,
+    pub disk_res: Cell<*mut c::DiskReservation<'static>>,
+    pub flush: Cell<*mut Option<crate::journal::flush_wait::Flush<'static>>>,
+
+    pub fs_usage_delta: Cell<c::bch_fs_usage_base>,
+
+    pub journal_u64s: Cell<c_uint>,
+    pub extra_journal_u64s: Cell<u32>,
+
+    /*
+     * Space a trigger needs on top of @disk_res, charged at commit.
+     * Charge sites may disagree on the count, so keep the max: erring
+     * high only over-reserves.
+     */
+    pub extra_disk_res: Cell<u64>,
+    pub extra_disk_res_replicas: Cell<u8>,
+
+    pub btree_path_down: LockedBy<DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>>,
+
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    pub dep_map: crate::locking::LockdepMap,
+    /* Entries before this are zeroed out on every bch2_trans_get() call */
+
+    pub list: c::list_head,
+    pub ref_: crate::util::refcount::AtomicRef<()>,
+    pub rcu: c::rcu_head,
+
+    /* the first path table: Paths borrows into it */
+    pub _paths_allocated: Opaque<[c_ulong; bits_to_longs(c::BTREE_ITER_INITIAL as usize)]>,
+    pub trans_paths: Opaque<c::btree_trans_paths>,
+    pub _paths: Opaque<[BtreePath; c::BTREE_ITER_INITIAL as usize]>,
+    pub _sorted: Opaque<[c::PathIdx; c::BTREE_ITER_INITIAL as usize + 4]>,
+    pub _updates: Opaque<[c::btree_insert_entry; c::BTREE_ITER_INITIAL as usize]>,
+}
+
+impl BtreeTrans<'_> {
+    pub fn notrace_relock_fail(&self) -> bool {
+        self.bits.get().notrace_relock_fail()
+    }
+
+    /// Relock failures after IO it submitted are expected, not counted.
+    pub fn set_notrace_relock_fail(&self) {
+        self.bits.set(self.bits.get().with_notrace_relock_fail(true))
+    }
+
+    /// For the next attempt: bch2_trans_begin()'s, after a restart.
+    pub fn clear_notrace_relock_fail(&self) {
+        self.bits.set(self.bits.get().with_notrace_relock_fail(false))
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, MaybeZeroable)]
+pub struct btree_trans_buf {
+    pub trans: *mut BtreeTrans<'static>,
+}
+
+/// A transaction function's stats' lock's: what's kept of its biggest - its
+/// memory's allocations, and its paths, as text.
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct TransStatsLocked {
+    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+    pub trans_kmalloc_trace: Vec<c::trans_kmalloc_trace>,
+    pub max_paths_text: Printbuf,
+}
+
+crate::published! {
+    /// Its high water marks: raised under the lock, read without it - by
+    /// bch2_trans_get(), sizing the transaction it gets.
+    #[derive(MaybeZeroable)]
+    pub struct TransStatsMax {
+        pub nr_max_paths: Volatile<c_uint>,
+        pub max_mem: Volatile<c_uint>,
+    }
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct btree_transaction_stats {
+    #[pin]
+    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&s->lock"))]
+    pub lock: Locked<Mutex, TransStatsLocked, TransStatsMax>,
+}
+
+pub const BCH_TRANSACTIONS_NR: u32 = 128;
+
+#[placed(c::bch_fs_btree.trans)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
+pub struct bch_fs_btree_trans {
+    #[pin]
+    /* the filesystem's transactions: zeroed, it's empty - List's first push sets it up */
+    #[init(new_lock!(::pin_init::zeroed(), "&c->btree.trans.lock"))]
+    pub list: Locked<c::seqmutex, crate::btree::trans::TransList>,
+    #[pin]
+    #[init(Mempool::new(1, core::mem::size_of::<BtreeTrans<'_>>()))]
+    pub pool: Mempool,
+    #[pin]
+    #[init(Mempool::new(1, c::BTREE_TRANS_MEM_MAX as usize))]
+    pub malloc_pool: Mempool,
+    #[pin]
+    #[init(PerCpu::alloc(), ENOMEM_fs_other_alloc)]
+    pub bufs: PerCpu<c::btree_trans_buf>,
+
+    #[pin]
+    #[init(crate::new_srcu!("btree_trans_barrier"))]
+    pub barrier: Srcu,
+
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::btree_transaction_stats::init()))]
+    pub stats: [c::btree_transaction_stats; c::BCH_TRANSACTIONS_NR as usize],
+    /* each transaction function's, as stats[] */
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub duration: TimeStatsArray<c::bch2_time_stats, { c::BCH_TRANSACTIONS_NR as usize }>,
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub lock_hold_times: TimeStatsArray<c::bch2_time_stats, { c::BCH_TRANSACTIONS_NR as usize }>,
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub lock_wait_times: TimeStatsArray<c::bch2_time_stats, { c::BCH_TRANSACTIONS_NR as usize }>,
+
+    #[pin]
+    #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]
+    pub stats_json: Locked<Mutex, TransStatsJson>,
+}
+
+/// The transaction stats as JSON, for sysfs: made at a read's offset 0, read
+/// a page at a time after.
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct TransStatsJson {
+    pub buf: Printbuf,
+}
+
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::util::backtrace::{prt_backtrace, save_backtrace};
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};

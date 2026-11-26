@@ -14,9 +14,9 @@
 //! doesn't know, or PastEnd, one that runs past the value's end - which
 //! validate reports as different errors, and to_text prints differently.
 //!
-//! The bkey methods - validate, to_text, swab - are ptrs_ops.rs's; editing a
-//! key's entries, ptrs_edit.rs's; picking a pointer to read, ptrs_read.rs's;
-//! masks of a key's pointers, ptrs_mask.rs's.
+//! The bkey methods - validate, to_text, swab - are ptrs/ops.rs's; editing a
+//! key's entries, ptrs/edit.rs's; picking a pointer to read, ptrs/read.rs's;
+//! masks of a key's pointers, ptrs/mask.rs's.
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
@@ -38,13 +38,9 @@ use core::mem::{offset_of, size_of};
 use core::ops::Range;
 use crate::format::{Bversion, CompressionType, DataType, MemberState, Nonce, BkeyType, BkeyTypeFlags};
 
-#[path = "ptrs_edit.rs"]
 mod edit;
-#[path = "ptrs_read.rs"]
 mod read;
-#[path = "ptrs_ops.rs"]
 mod ops;
-#[path = "ptrs_mask.rs"]
 mod mask;
 
 pub use edit::BkeyVPtrsMut;

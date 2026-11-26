@@ -33,6 +33,66 @@ use crate::util::place::{up, FieldPath};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt, warn_once};
+use crate::data_structures::list::ListLinks;
+use core::cell::Cell;
+use cstruct_macros::{bch_enum, MaybeZeroable};
+
+/*
+ * Something that makes a journal entry dirty - i.e. a btree node that has to be
+ * flushed:
+ */
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum JournalPinType {
+    JOURNAL_PIN_TYPE_btree3,
+    JOURNAL_PIN_TYPE_btree2,
+    JOURNAL_PIN_TYPE_btree1,
+    JOURNAL_PIN_TYPE_btree0,
+    JOURNAL_PIN_TYPE_key_cache,
+    JOURNAL_PIN_TYPE_other,
+    JOURNAL_PIN_TYPE_NR,
+}
+
+pub type PinFlushFn = fn(&Fs, &c::journal_entry_pin, u64) -> Result<(), crate::errcode::BchError>;
+
+/* A pin's, its seq's pin list lock's: the list it's on, and what it's on it as */
+pub struct PinLocked {
+    pub list:     ListLinks,
+    pub pin_type: Cell<c::JournalPinType>,
+}
+
+// Zeroed, it's a pin never set: on no list, JOURNAL_PIN_TYPE_btree3
+unsafe impl ::pin_init::Zeroable for PinLocked {}
+
+pub type PinLockedBy = LockedBy<PinLocked>;
+
+pub struct journal_entry_pin {
+    pub locked: PinLockedBy,
+    /* the entry it holds, 0 for none */
+    pub seq:    Volatile<u64>,
+    /* its holder's, set when it's made: it names the pin, in messages */
+    pub(crate) flush: PinFlushFn,
+}
+
+/* pin_resize_lock's: the journal pin fifo's entries, a power of two of them */
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct PinBuf {
+    pub entries: Vec<crate::journal::pins::PinList>,
+}
+
+/*
+ * The fifo's live entries, [pin_front, pin_back), and how many there may be:
+ * j->lock's, and pin_resize_lock's writer's while it replaces the buffer
+ */
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct PinRange {
+    pub pin_front: Volatile<u64>,
+    pub pin_back:  Volatile<u64>,
+    pub pin_size:  Volatile<u64>,
+}
+
 
 const JOURNAL_PIN: u64 = 32 * 1024;
 

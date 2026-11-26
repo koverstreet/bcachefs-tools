@@ -1,0 +1,569 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! check_dirents: every dirent belongs to a live directory in its snapshot,
+//! sits where its hash says, and points at something that agrees with it - an
+//! inode whose backpointer and type match, or for DT_SUBVOL a subvolume whose
+//! root and fs_path_parent match. Each directory's subdirectories are counted
+//! and checked against i_nlink as the walk leaves it.
+//!
+//! @dir walks the directories in key order; @target is loaded per dirent with
+//! the versions of its inode visible from it.
+//!
+//! The target must exist in an ancestor of the dirent's snapshot, so every
+//! subvolume that sees the dirent sees the inode. One only in descendants gets
+//! the dirent moved down to them - ahead of the walk, so the pass runs twice,
+//! and a second pass that still finds work is an error. A target deleted in a
+//! descendant, a whiteout there, gets the dirent whited out there too.
+//!
+//! Subdirectory counts are per dir walker entry, incremented as each DT_DIR
+//! dirent commits; if the walker refetches partway through a directory, they're
+//! recounted from the btree (recalculate_sums).
+
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
+use crate::btree::iter::{
+    is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    UpdateTriggerFlags,
+};
+use crate::c;
+use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
+use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
+use crate::errcode::{Errcode, BchError, Found};
+use crate::fs::Fs;
+use crate::init::error::id;
+use crate::init::progress::Progress;
+use crate::snapshots::{snapshot, subvolume};
+use crate::util::Printbuf;
+use crate::{bch_err, bch_err_fn, bch_err_ratelimited, bch_info, fsck_err, fsck_err_on, inode_fsck_err};
+use crate::posix::{inode, namei, str_hash};
+use core::ops::ControlFlow;
+use crate::format::{Btree, BkeyType};
+
+struct CheckDirents<'f> {
+    s:                SnapshotsSeen,
+    dir:              InodeWalker,
+    target:           InodeWalker,
+    hash_info:        c::bch_hash_info<'f>,
+    need_second_pass: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Subdirectory counts
+
+/// The subdirectories of @inum as @snapshot sees them. In the caller's attempt,
+/// a restart returned, not retried: a walk of its own would begin, retrying the
+/// key even when the repair is declined (see check_dir_nlink()).
+fn count_subdirs(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
+    let mut subdirs = 0;
+    let mut iter = BtreeIter::new(t, Btree::dirents, spos(inum, 0, snapshot),
+                                  BtreeIterFlags::empty());
+
+    iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
+        if Dirent::new(k).is_some_and(|d| d.d_type() as u32 == c::DT_DIR) {
+            subdirs += 1;
+        }
+        Ok(())
+    })?;
+
+    Ok(subdirs)
+}
+
+/// Check one version of directory @inum, @i, against the subdirectories
+/// counted for it - recounting from the btree if the count disagrees, or
+/// is known to be partial (@recalculate_sums) - and repair i_nlink.
+fn check_dir_nlink(
+    t:                &TransAttempt<'_, '_>,
+    inum:             u64,
+    recalculate_sums: bool,
+    i:                &mut check::WalkerEntry,
+) -> Result<(), BchError> {
+    let fs = t.fs();
+
+    if i.inode.bi_nlink as u64 == i.count {
+        return Ok(());
+    }
+
+    let snapshot = i.inode.bi_snapshot;
+    let count = count_subdirs(t, inum, snapshot)?;
+
+    if !recalculate_sums && i.count != count {
+        bch_err_ratelimited!(fs, "fsck counted subdirectories wrong for inum {inum}:{snapshot}: got {} should be {count}",
+                             i.count);
+    }
+    i.count = count;
+
+    if i.inode.bi_nlink as u64 == i.count {
+        return Ok(());
+    }
+
+    let mut path = Printbuf::new();
+    // For the message only. In the caller's attempt: beginning one retries the
+    // key, and a declined repair would find the same count and begin another,
+    // forever.
+    if let Err(e) = namei::inum_snapshot_to_path(t, inum, snapshot, &mut path) {
+        if is_restart(&e) {
+            return Err(e);
+        }
+    }
+
+    if fsck_err!(t, id::inode_dir_wrong_nlink,
+                 "directory with wrong i_nlink: got {}, should be {}\n{path}\n{}",
+                 i.inode.bi_nlink, i.count, i.inode)? {
+        // The walker learns the fix only with the write: a restart before
+        // it, from the close's commit, leaves it to be found again
+        return Err(t.close(CommitFlags::NO_ENOSPC, |trans| {
+            i.inode.bi_nlink = i.count as u32;
+            inode::fsck_write_inode(trans, &mut i.inode)
+        }));
+    }
+
+    Ok(())
+}
+
+/// Check i_nlink of each version of the directory @w has walked against its
+/// subdirectory count. A repair commits for itself, closing the attempt -
+/// see check_subdir_dirents_count().
+fn check_subdir_count_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
+    -> Result<(), BchError>
+{
+    let Some(inum) = w.cur_inum() else { return Ok(()) };
+    let recalculate_sums = w.recalculate_sums();
+
+    bch_err_fn!(t.fs(), w.inodes_mut().iter_mut()
+        .try_for_each(|i| check_dir_nlink(t, inum, recalculate_sums, i)))
+}
+
+/// check_subdir_count_notnested() from inside the commit loop. A repair
+/// closes the attempt - committing what it queued, the fsck_err log entry
+/// with it - to commit for itself, and the key is retried: the rerun finds
+/// the versions already fixed, and goes on to the rest.
+fn check_subdir_dirents_count(t: &TransAttempt<'_, '_>, w: &mut InodeWalker) -> Result<(), BchError> {
+    check_subdir_count_notnested(t, w)
+}
+
+// ---------------------------------------------------------------------------
+// DT_SUBVOL dirents
+
+/// A subvolume whose snapshot is @snapshot or a descendant of it.
+fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Option<u32>, BchError> {
+    let mut iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN, BtreeIterFlags::empty());
+
+    iter.for_each_norestart(t, |_, k| Ok(
+        match k.arm::<c::Subvolume>().map(|k| k.v()) {
+            Some(s) if snapshot::is_ancestor(t, s.snapshot.get(), snapshot) =>
+                ControlFlow::Break(Some(k.k.p.offset as u32)),
+            _ => ControlFlow::Continue(()),
+        }))
+}
+
+/// The subvolume @k, a DT_SUBVOL dirent, lives in: it must exist and see the
+/// dirent's snapshot. Returns the subvolume, after any repair.
+fn check_dirent_parent_subvol<'t>(
+    t:      &TransAttempt<'_, 't>,
+    iter:   &BtreeIter<'t>,
+    k:      BkeySC<'_, c::Dirent>,
+    parent: u32,
+) -> Result<u32, BchError> {
+    let fs = t.fs();
+    let d_snapshot = k.k.p.snapshot;
+
+    let parent_snapshot = subvolume::get_snapshot_nowarn(t, parent).found()?;
+
+    // The root subvolume always exists (check_root() recreates it): rewiring
+    // around its absence would reparent the root's subvolume dirents onto
+    // arbitrary subvolumes.
+    if parent_snapshot.is_none() && parent == c::BCACHEFS_ROOT_SUBVOL {
+        return Ok(parent);
+    }
+
+    if parent_snapshot.is_some_and(|s| snapshot::is_ancestor(t, s, d_snapshot)) {
+        return Ok(parent);
+    }
+
+    let new_parent = find_snapshot_subvol(t, d_snapshot)?;
+
+    if new_parent.is_none() && fs.btree_lost_data(Btree::subvolumes) {
+        // No subvolume sees the dirent's snapshot - but we lost subvolumes,
+        // so reconstruct the one it names:
+        let root = check::reconstruct_subvol_root(t, d_snapshot, parent, None)?;
+        check::reconstruct_subvol(t, d_snapshot, parent, root)?;
+        return Ok(parent);
+    }
+
+    // The parent exists but doesn't see the dirent, and another subvolume
+    // does: that's the one to move it to. Otherwise it's missing, as far as
+    // the dirent is concerned:
+    let repair = match (parent_snapshot, new_parent) {
+        (Some(parent_snapshot), Some(_)) =>
+            fsck_err!(t, id::dirent_not_visible_in_parent_subvol,
+                      "dirent not visible in parent_subvol (not an ancestor of subvol snap {parent_snapshot})\n{}",
+                      k.to_text(fs))?,
+        _ =>
+            fsck_err!(t, id::dirent_to_missing_parent_subvol,
+                      "dirent parent_subvol points to missing subvolume\n{}", k.to_text(fs))?,
+    };
+    if !repair {
+        return Ok(parent);
+    }
+
+    let Some(new_parent) = new_parent else {
+        bch_err!(fs, "could not find a subvol for snapshot {d_snapshot}");
+        return Err(fs.err(Errcode::fsck_repair_unimplemented));
+    };
+
+    // The dirent is rewritten at its own position, which may be an interior
+    // snapshot node - dirents in old snapshots need this repair too:
+    let mut n = t.bkey_reassemble(k)?;
+    n.v_mut().set_parent_subvol(new_parent);
+    t.update(iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+
+    // The fs_path_parent check next repairs the subvolume to agree with the dirent:
+    // the one just written, or each fsck after moves one to match the other's
+    // stale value.
+    Ok(new_parent)
+}
+
+fn check_dirent_to_subvol<'t>(
+    t:      &TransAttempt<'_, 't>,
+    iter:   &BtreeIter<'t>,
+    d:      Dirent<'_>,
+    child:  u32,
+    parent: u32,
+) -> Result<(), BchError> {
+    let k = d.k();
+    let parent = check_dirent_parent_subvol(t, iter, k, parent)?;
+    let fs = t.fs();
+
+    let mut subvol_iter = BtreeIter::new(t, Btree::subvolumes, pos(0, child as u64),
+                                         BtreeIterFlags::empty());
+    let s = subvol_iter.peek_slot_typed::<c::Subvolume>(t).found()?;
+
+    // A deleted subvolume is a tombstone awaiting the sweep: missing, as get()
+    // would say - this is a raw read, for the key. Else the dirent outlives it,
+    // and fsck stops converging once the sweep removes it.
+    let s = s.filter(|s| {
+        s.v().state_decoded() != Some(c::SubvolumeState::deleted)
+    });
+
+    let Some(s) = s else {
+        if inode_fsck_err!(t, k.k.p, id::dirent_to_missing_subvol,
+                           "dirent points to missing subvolume\n{}", k.to_text(fs))? {
+            dirent::fsck_remove(t, k.k.p)?;
+        }
+        return Ok(());
+    };
+
+    let v = s.v();
+    let fs_path_parent  = v.fs_path_parent().get();
+    let target_inum     = v.inode.get();
+    let target_snapshot = v.snapshot.get();
+
+    if fs_path_parent != parent {
+        let mut path = Printbuf::new();
+        namei::inum_to_path(t, c::subvol_inum { subvol: child as u64, inum: target_inum }, &mut path)?;
+
+        if fsck_err!(t, id::subvol_fs_path_parent_wrong,
+                     "subvol with wrong fs_path_parent, should be {parent}\n{path}\n{}",
+                     s.to_text(fs))? {
+            // grown to a whole subvolume: one from before fs_path_parent is
+            // shorter than the field
+            let mut n = t.bkey_make_mut_noupdate(s)?;
+            n.v_mut().fs_path_parent = parent.into();
+            t.update(&subvol_iter, n, UpdateTriggerFlags::empty())?;
+        }
+    }
+
+    let Some(mut subvol_root) = inode::find_by_inum_snapshot(t, target_inum, target_snapshot,
+                                                             BtreeIterFlags::empty()).found()? else {
+        bch_err!(fs, "subvol {child} points to missing inode root {target_inum}");
+        return Err(fs.err(Errcode::fsck_repair_unimplemented));
+    };
+
+    if fsck_err_on!(t, parent != subvol_root.bi_parent_subvol, id::inode_bi_parent_wrong,
+                    "subvol root {target_inum} has wrong bi_parent_subvol: got {}, should be {parent}",
+                    subvol_root.bi_parent_subvol)? {
+        subvol_root.bi_parent_subvol = parent;
+        subvol_root.bi_snapshot      = target_snapshot;
+        inode::fsck_write(t, &mut subvol_root)?;
+    }
+
+    namei::check_dirent_target(t, iter, d, &mut subvol_root, true)
+}
+
+// ---------------------------------------------------------------------------
+// Dirents to inodes
+
+/// The target is missing but @inum has keys in @snapshot: offer to recreate it,
+/// as what its keys say it was - or for xattrs, which don't say, as @d_type.
+/// Xattrs count, or a file of only xattrs would lose its name. Whether the
+/// repair was declined: the dirent is then left alone.
+fn maybe_reconstruct_inum(
+    t:        &TransAttempt<'_, '_>,
+    inum:     u64,
+    snapshot: u32,
+    d_type:   u8,
+) -> Result<bool, BchError> {
+    for (btree, type_) in [(Btree::extents, "reg"),
+                           (Btree::dirents, "dir"),
+                           (Btree::xattrs,  "with xattrs")] {
+        let has_contents = {
+            let mut iter = BtreeIter::new(t, btree, spos(inum, 0, snapshot), BtreeIterFlags::TRIM);
+            iter.peek_max(t, pos(inum, u64::MAX))?.is_some()
+        };
+        if !has_contents {
+            continue;
+        }
+
+        if !inode_fsck_err!(t, spos(0, inum, snapshot), id::missing_inode_with_contents,
+                            "inode {inum}:{snapshot} type {type_} missing, but contents found: reconstruct?")? {
+            return Ok(true);
+        }
+
+        check::reconstruct_inode(t, btree, snapshot, inum, Some(d_type))?;
+        t.commit(None, CommitFlags::NO_ENOSPC)?;
+        return Err(t.restart(Errcode::transaction_restart_commit));
+    }
+
+    Ok(false)
+}
+
+/// The dirent's target exists only in snapshots descending from the dirent's:
+/// subvolumes in a sibling branch see the dirent and not the inode. Deleting
+/// the dirent would orphan the inodes, so copy it down to each snapshot the
+/// inode exists in, and delete the original.
+fn move_dirent_to_inode_snapshots(
+    t:  &TransAttempt<'_, '_>,
+    k:  BkeySC<'_>,
+    st: &CheckDirents,
+) -> Result<(), BchError> {
+    for i in st.target.inodes() {
+        t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+
+        let snapshot = i.inode.bi_snapshot;
+
+        // The state firing this is unchanged by the copies: skip those already
+        // committed, or a re-drive after a partial commit makes no progress
+        let copied = {
+            let mut probe = BtreeIter::new(t, Btree::dirents,
+                                           spos(k.k.p.inode, k.k.p.offset, snapshot),
+                                           BtreeIterFlags::empty());
+            let old = probe.peek_slot(t)?.expect("a slot always has a key");
+            old.k.p.snapshot == snapshot &&
+                old.k.key_type() == k.k.key_type() &&
+                old.val_bytes() == k.val_bytes()
+        };
+        if copied {
+            continue;
+        }
+
+        let mut n = t.bkey_make_mut_noupdate(k)?;
+        n.k_mut().p.snapshot = snapshot;
+        t.insert(Btree::dirents, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    }
+
+    // Delete with the hash info we already have - dirent::fsck_remove()
+    // rederives it from the first inode version it finds:
+    let mut del_iter = BtreeIter::new(t, Btree::dirents, k.k.p, BtreeIterFlags::INTENT);
+    del_iter.traverse(t)?;
+    str_hash::delete_at::<Dirents>(t, &st.hash_info, &mut del_iter,
+                                   UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+}
+
+/// Returns whether the rest of the key is to be skipped.
+fn check_dirent_to_inode<'t>(
+    t:    &TransAttempt<'_, 't>,
+    iter: &BtreeIter<'t>,
+    k:    BkeySC<'_>,
+    inum: u64,
+    st:   &mut CheckDirents,
+) -> Result<bool, BchError> {
+    let fs = t.fs();
+    let d_snapshot = k.k.p.snapshot;
+
+    st.target.get_visible(t, &st.s, inum)?;
+
+    if st.target.inodes().is_empty() {
+        let d_type = Dirent::new(k).expect("a dirent").d_type();
+        if maybe_reconstruct_inum(t, inum, d_snapshot, d_type)? {
+            return Ok(true);
+        }
+    }
+
+    // The inode must exist in an ancestor of the dirent's snapshot, for every
+    // subvolume that sees the dirent to see it: one only in descendants is
+    // invisible from a sibling branch. Versions come newest snapshot first, from
+    // the dirent's down, so an ancestor's is first.
+    if let Some(first) = st.target.inodes().first() {
+        if !snapshot::is_ancestor(t, d_snapshot, first.inode.bi_snapshot) &&
+           inode_fsck_err!(t, k.k.p, id::dirent_to_inode_in_descendant_snapshot,
+                           "dirent with inode(s) only in descendant snapshots:\n{}", k.to_text(fs))? {
+            move_dirent_to_inode_snapshots(t, k, st)?;
+            // The copies are ahead of the walk: a second pass checks them,
+            // and counts them in their directories.
+            st.need_second_pass = true;
+            return Ok(true);
+        }
+    }
+
+    if st.target.inodes().is_empty() &&
+       inode_fsck_err!(t, k.k.p, id::dirent_to_missing_inode,
+                       "dirent points to missing inode:\n{}", k.to_text(fs))? {
+        dirent::fsck_remove(t, k.k.p)?;
+    }
+
+    for i in st.target.inodes_mut() {
+        // One repair per snapshot version of the target inode, bounded only
+        // by snapshot count. The re-drive converges: get_visible() rereads
+        // the versions, and committed repairs no longer fire.
+        t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+        check::own_version(t, &mut i.inode, d_snapshot);
+        namei::check_dirent_target(t, iter, Dirent::new(k).expect("a dirent"), &mut i.inode, true)?;
+    }
+
+    for &snapshot in st.target.deletes() {
+        if st.s.has_id(snapshot) {
+            continue;
+        }
+
+        t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+
+        let mut delete_iter = BtreeIter::new(t, Btree::dirents,
+                                             spos(k.k.p.inode, k.k.p.offset, snapshot),
+                                             BtreeIterFlags::INTENT);
+
+        // Still visible here? A re-drive after a partial commit must skip the
+        // whiteouts already committed to make progress, and a dirent no longer
+        // visible mustn't be reported again.
+        let visible = delete_iter.peek_slot(t)?.expect("a slot always has a key");
+        if visible.k.key_type() != BkeyType::dirent {
+            continue;
+        }
+        let visible_pos = visible.k.p;
+
+        if inode_fsck_err!(t, visible_pos, id::dirent_to_overwritten_inode,
+                           "dirent points to inode overwritten in snapshot {snapshot}:\n{}",
+                           k.to_text(fs))? {
+            str_hash::delete_at::<Dirents>(t, &st.hash_info, &mut delete_iter,
+                                           UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        }
+    }
+
+    Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+
+fn check_dirent<'t>(
+    t:    &TransAttempt<'_, 't>,
+    iter: &BtreeIter<'t>,
+    k:    BkeySC<'_>,
+    st:   &mut CheckDirents<'t>,
+) -> Result<(), BchError> {
+    let fs = t.fs();
+
+    if snapshot::check_key_has_snapshot(t, iter, k)? {
+        return Ok(());
+    }
+
+    st.s.update(k.k.p)?;
+
+    if k.k.key_type() == BkeyType::whiteout {
+        return Ok(());
+    }
+
+    // The walk has left the last directory: its subdirectory counts are done.
+    if st.dir.cur_inum().is_some_and(|inum| inum != k.k.p.inode) {
+        check_subdir_dirents_count(t, &mut st.dir)?;
+    }
+
+    let Some(w) = st.dir.walk(t, iter, k)? else { return Ok(()) };
+    if w.first_this_inode {
+        st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
+    }
+    st.hash_info.cf_encoding = inode::cf_encoding(fs, w.inode);
+
+    match str_hash::check_key::<Dirents>(t, Some(&mut st.s), &mut st.hash_info,
+                                         k, &mut st.need_second_pass) {
+        Ok(()) => {}
+        // A casefold mismatch repair deletes the dirent and recreates it
+        // where it hashes to: nothing more to check here.
+        Err(e) if e.matches(Errcode::str_hash_key_repaired) => return Ok(()),
+        Err(e) => {
+            // A hash info repair leaves the walker's inodes - and hash_info,
+            // initialized from them - stale:
+            st.dir.invalidate();
+            return Err(e);
+        }
+    }
+
+    let Some(d) = Dirent::new(k) else { return Ok(()) };
+    let d_snapshot = k.k.p.snapshot;
+    // Key values aren't valid after a commit without revalidating:
+    let have_dir = d.d_type() as u32 == c::DT_DIR;
+
+    match d.target() {
+        DirentTarget::Subvol { child, parent } => check_dirent_to_subvol(t, iter, d, child, parent)?,
+        DirentTarget::Inode(inum) => {
+            if check_dirent_to_inode(t, iter, k, inum, st)? {
+                return Ok(());
+            }
+        }
+    }
+
+    t.commit(None, CommitFlags::NO_ENOSPC)?;
+
+    if have_dir {
+        for i in st.dir.visible_mut(t, &st.s, d_snapshot) {
+            i.count += 1;
+        }
+    }
+
+    Ok(())
+}
+
+fn check_dirents(fs: &Fs) -> Result<(), BchError> {
+    let trans = crate::btree_trans!(fs);
+    let mut st = CheckDirents {
+        s:                SnapshotsSeen::new(),
+        dir:              InodeWalker::new(),
+        target:           InodeWalker::new(),
+        hash_info:        ::pin_init::zeroed(),
+        need_second_pass: false,
+    };
+    let mut did_second_pass = false;
+
+    loop {
+        let progress = Progress::recovery(fs, c"bch2_check_dirents", &[Btree::dirents], &[]);
+        let mut iter = BtreeIter::new(&trans, Btree::dirents,
+                                      pos(c::BCACHEFS_ROOT_INO as u64, 0),
+                                      BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+
+        iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
+            progress.update(t, iter)?;
+            check_dirent(t, iter, k, &mut st)
+        })?;
+
+        // The last directory's subdirectory counts, as in the loop, with the
+        // restart it may end in retried here.
+        lockrestart_do(&trans, |t| check_subdir_dirents_count(t, &mut st.dir))?;
+
+        // A directory that's become a file, or the reverse, may have been
+        // counted in its parent before the walk got to it:
+        st.need_second_pass |= st.dir.take_changed_inode_type();
+
+        if !st.need_second_pass {
+            return Ok(());
+        }
+
+        if did_second_pass {
+            bch_err!(fs, "dirents not repairing");
+            return fs.throw(Errcode::EINVAL_dirents_not_repairing);
+        }
+
+        bch_info!(fs, "check_dirents requires second pass");
+        did_second_pass = true;
+        st.need_second_pass = false;
+    }
+}
+
+crate::recovery_pass!(check_dirents => check_dirents);

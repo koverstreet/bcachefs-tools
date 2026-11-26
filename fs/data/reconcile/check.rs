@@ -35,7 +35,7 @@ use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::printbuf::Msg;
 use crate::util::vstructs::plain_bytes;

@@ -28,7 +28,7 @@ use crate::fs::Dev;
 use core::ffi::CStr;
 
 
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{CompressionType, DataType};

@@ -55,9 +55,40 @@ use crate::util::ratelimit::Ratelimit;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
+use crate::locking::{Locked, Mutex};
 use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
+use cstruct_macros::{Init, MaybeZeroable};
+use pin_init::pin_data;
 use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType, MetadataVersion};
+
+/// A bucket_bitmap's words: replaced by a copy when the device grows.
+pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::bitmap::AtomicULong>;
+
+crate::published! {
+    /// A bucket_bitmap's bits: read without its lock - by copygc, while a
+    /// check sets and frees them - so they're atomic words under RCU.
+    #[derive(MaybeZeroable)]
+    pub struct BucketBits {
+        pub buckets: c::BucketBitmapWords,
+        /// Bits set
+        pub nr:      crate::util::projections::Volatile<u64>,
+    }
+}
+
+/// One bit per bucket of a device, allocated when the first is set:
+/// check_extents_to_backpointers' buckets whose backpointers don't add up, and
+/// those with none. The lock serializes setting, growing and freeing; C calls
+/// Rust for all of it.
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct bucket_bitmap {
+    #[pin]
+    #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
+    pub bits: Locked<Mutex, (), BucketBits>,
+}
+
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 

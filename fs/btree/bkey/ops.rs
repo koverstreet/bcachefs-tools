@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, BkeyS, BkeySC, BkeyVal, ValidateFlags};
+use crate::btree::bkey::{AnyKeySC, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
 use crate::c;
@@ -12,7 +12,52 @@ use crate::init::error::BkeyValidate;
 use crate::prt;
 use crate::util::Printbuf;
 use crate::util::vstructs::Unvalidated;
+use core::ffi::c_uint;
 use core::fmt;
+use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, MaybeZeroable};
+use nestify::nest;
+
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum ValidateFlags {
+    write = 1 << 0,
+    commit = 1 << 1,
+    silent = 1 << 2,
+}
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum BkeyValidateFrom {
+    unknown,
+    superblock,
+    journal,
+    btree_root,
+    btree_node,
+    commit,
+}
+
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers)]
+    pub struct bkey_validate_context {
+        #[members]
+        #>[bitfield(u16)]
+        pub bits: pub struct bkey_validate_context_bits {
+            #[bits(8)] pub from: c::BkeyValidateFrom,
+            #[bits(8, from = ValidateFlags::from_bits_retain)] pub flags: ValidateFlags,
+        },
+        pub level: u8,
+        pub btree: Btree,
+        #[members]
+        #>[bitfield(u8)]
+        pub root_bits: pub struct bkey_validate_context_root_bits {
+            root:  bool,
+            __pad: u7,
+        },
+        pub journal_offset: c_uint,
+        pub journal_seq: u64,
+    }
+}
 
 /// A key type's methods, on its value's type: each a no-op where the type
 /// has none.

@@ -29,6 +29,20 @@ use crate::util::backtrace::prt_symbol;
 use crate::util::log::LogMsg;
 use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
+
+/* Number of btree paths we preallocate, usually enough */
+pub const BTREE_ITER_INITIAL: u32 = 64;
+
+/* never exceed limit */
+pub const BTREE_ITER_MAX: u32 = 1 << 10;
+
+#[repr(C)]
+#[derive(Default, MaybeZeroable)]
+pub struct btree_trans_paths {
+    pub nr_paths: c_ulong,
+    pub paths: [BtreePath; 0],
+}
+
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};

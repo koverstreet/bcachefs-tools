@@ -3,7 +3,7 @@
 use super::{btree_ptr_hash_val, cached_node, node_key_hash_val};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::node::BtreeNode;
-use crate::btree::types::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
+use super::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
 use crate::c;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{Errcode, BchError};

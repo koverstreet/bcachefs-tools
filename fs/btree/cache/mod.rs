@@ -123,6 +123,234 @@ use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
 use crate::format::{Btree, BkeyType};
+use crate::btree::interior::{BtreeRoots, BtreeRootsLive};
+use core::sync::atomic::{AtomicBool, AtomicIsize};
+use crate::locking::{ExclusiveGuard, Locked, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+use crate::types::CacheAligned;
+use crate::util::projections::Volatile;
+use cstruct_macros::{bch_enum, Init, MaybeZeroable, placed, TypeInfo};
+use pin_init::pin_data;
+#[cfg(kernel)]
+use kernel::sync::SetOnce;
+#[cfg(not(kernel))]
+use bcachefs_shim::sync::SetOnce;
+
+/*
+ * Membership state of a struct btree in the btree node cache.
+ *
+ * Stored in b->cache_state and maintained by btree_node_transition_state().
+ * See DOC(btree-node-cache), in btree/cache/mod.rs, for the state machine and
+ * the bookkeeping each state implies.
+ */
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum BtreeNodeCacheState {
+    NONE,           /* off all lists; not in cache (kzalloc default) */
+    FREED,          /* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+    FREEABLE,       /* on bc->freeable; has data; not hashed */
+    CLEAN,          /* on bc->live[pinned].clean; hashed; has data */
+    DIRTY,          /* on bc->live[pinned].dirty; hashed; has data */
+}
+
+#[bch_enum(closed)]
+#[nr]
+#[repr(u32)]
+pub enum BtreeCacheNotFreedReason {
+    cache_reserve,
+    lock_intent,
+    lock_write,
+    dirty,
+    read_in_flight,
+    write_in_flight,
+    permanent,
+    noevict,
+    write_blocked,
+    will_make_reachable,
+    access_bit,
+}
+
+/// The node cache's lists: intrusive, one of list.rs's exceptions - a node
+/// moves between them on every state change, in place, and is never freed
+/// while the fs runs.
+pub type BtreeNodeList = crate::list!(BtreeNode, list);
+
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct btree_cache_list {
+    pub clean: BtreeNodeList,
+    pub dirty: BtreeNodeList,
+}
+
+/// live[idx]'s shrinker: not bc->lock's, as the lists are - the shrinker
+/// runs without it.
+#[placed(c::bch_fs_btree_cache.shrinkers[], index = idx: u32)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct btree_cache_shrinker {
+    pub(crate) shrink: Shrinker<Self>,
+}
+
+/// bc->lock's: the live lists - unpinned and pinned - the freeable and freed
+/// lists, the counts, and the window of nodes pinned.
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct BtreeCacheLists {
+    pub live: [c::btree_cache_list; 2],
+    pub freeable: BtreeNodeList,
+    pub freed_pcpu: BtreeNodeList,
+    pub freed_nonpcpu: BtreeNodeList,
+
+    pub nr_vmalloc: usize,
+    pub nr_by_btree: [usize; Btree::NR as usize],
+
+    pub pinned_nodes_start: c::bbpos,
+    pub pinned_nodes_end: c::bbpos,
+    /* btree id mask: 0 for leaves, 1 for interior */
+    pub pinned_nodes_mask: [u64; 2],
+
+    /* shrinker stats */
+    pub nr_freed: usize,
+    pub nr_requested: usize,
+    pub not_freed: [u64; c::BtreeCacheNotFreedReason::NR as usize],
+}
+
+/// bc->lock: its holder never enters reclaim, which would take it again
+/// through the node cache's shrinker. NOIO too, for the kernel's own
+/// allocations, which don't know NORECLAIM.
+pub(crate) type BtreeCacheMutex = Memalloc<Mutex, { PF_MEMALLOC_NOIO | PF_MEMALLOC_NORECLAIM | PF_MEMALLOC_NOWARN }>;
+
+/// bc->lock, held.
+pub type BtreeCacheGuard<'a> =
+    ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive, crate::locking::Exclusive, BtreeCacheLockAt>;
+
+/// bc->lock's place, for what it covers to name.
+pub type BtreeCacheLockAt = crate::at!(bch_fs_btree_cache.lock);
+
+crate::published! {
+    /// A live list's nodes, clean and dirty: changed with its list, read
+    /// without bc->lock - the shrinker's count, the write throttle.
+    #[derive(MaybeZeroable)]
+    pub struct BtreeCacheLiveNr {
+        pub nr_clean: Volatile<usize>,
+        pub nr_dirty: Volatile<usize>,
+    }
+}
+
+crate::published! {
+    #[derive(MaybeZeroable)]
+    pub struct BtreeCacheLive {
+        pub live_nr: [BtreeCacheLiveNr; 2],
+        /* read by the shrinker's count and the allocator, without bc->lock */
+        pub nr_freeable: Volatile<usize>,
+        pub nr_reserve: Volatile<usize>,
+    }
+}
+
+impl BtreeCacheLive {
+    pub fn nr_live(&self) -> usize {
+        self.live_nr.iter().map(|l| l.nr_clean.get() + l.nr_dirty.get()).sum()
+    }
+
+    pub fn nr_dirty(&self) -> usize {
+        self.live_nr.iter().map(|l| l.nr_dirty.get()).sum()
+    }
+}
+
+#[placed(c::bch_fs_btree.cache)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
+pub struct bch_fs_btree_cache {
+    #[pin]
+    #[init(crate::new_lock!(<- BtreeRoots::init(), ::pin_init::zeroed(), "&bc->root_lock"))]
+    pub roots: Locked<Mutex, BtreeRoots, BtreeRootsLive>,
+
+    #[pin]
+    #[init(::pin_init::init_zeroed())]
+    pub(crate) table: crate::btree::cache::NodeTable,
+    /*
+     * We never free a struct btree, except on shutdown - we just put it on
+     * the btree_cache_freed list and reuse it later. This simplifies the
+     * code, and it doesn't cost us much memory as the memory usage is
+     * dominated by buffers that hold the actual btree node data and those
+     * can be freed - and the number of struct btrees allocated is
+     * effectively bounded.
+     *
+     * btree_cache_freeable effectively is a small cache - we use it because
+     * high order page allocations can be rather expensive, and it's quite
+     * common to delete and allocate btree nodes in quick succession. It
+     * should never grow past ~2-3 nodes in practice.
+     */
+    #[pin]
+    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
+    pub lock: crate::util::place::Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
+    #[pin]
+    pub shrinkers: [c::btree_cache_shrinker; 2],
+
+    /*
+     * Every struct btree the cache has, whatever its state: to walk them all
+     * without bc->lock. A node keeps its slot until it's freed, at exit, so a
+     * walk can drop RCU and pick up from where it was. Node scan's buffers
+     * aren't the cache's, and are freed while we run: they're not on it.
+     */
+    #[pin]
+    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_btree_cache_init))]
+    pub nodes: c::fast_list,
+
+    /* Number of nodes with BTREE_NODE_write_in_flight set. */
+    #[pin]
+    #[init(AtomicIsize::new(0))]
+    pub nr_in_flight: AtomicIsize,
+    pub nr_in_flight_inner: AtomicIsize,
+    pub nr_in_flight_wait: crate::util::futex::EventCount,
+    pub __should_throttle_align: CacheAligned,
+    pub should_throttle: AtomicBool,
+
+    /*
+     * Times the allocator hit the memory-pressure self reclaim path:
+     * journal replay watches for this going nonzero to switch off the
+     * sorted-order fastpath, which holds every journal pin until replay
+     * finishes - pins must be released for reclaim to clean btree nodes.
+     */
+    #[pin]
+    #[init(AtomicIsize::new(0))]
+    pub nr_self_reclaim: AtomicIsize,
+
+    /*
+     * If we need to allocate memory for a new btree node and that
+     * allocation fails, we can cannibalize another node in the btree cache
+     * to satisfy the allocation - lock to guarantee only one thread does
+     * this at a time:
+     */
+    #[pin]
+    #[init(core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))]
+    pub alloc_lock: core::sync::atomic::AtomicPtr<c::task_struct>,
+    #[pin]
+    #[init(crate::util::futex::EventCount::new())]
+    pub alloc_wait: crate::util::futex::EventCount,
+}
+
+/*
+ * Sidecar cache: when a btree node is evicted (transitioned out of the in-cache
+ * hash table) we stash its live_u64s here, keyed by btree_ptr_hash_val. The
+ * merge gate uses this as a cheap "what would be the combined size?" estimate
+ * for siblings that aren't currently in cache, before paying for a real read.
+ *
+ * Fixed-size, no chaining: insert overwrites whatever's in the slot. Lookup
+ * verifies the stored hash matches the request; collisions naturally degrade
+ * to "no info" and the caller falls back to reading the sibling. Sized at
+ * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
+ */
+#[repr(C)]
+pub struct btree_evicted_size {
+    /* a power of 2 of them; none until btree_init_rw() */
+    pub entries: SetOnce<Box<[AtomicU64]>>,
+}
+
+pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
+pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << c::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
+
 
 impl c::btree_evicted_size {
     fn pack(hash: u64, live_u64s: u16) -> u64 {

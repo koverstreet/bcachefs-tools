@@ -211,9 +211,9 @@ impl Bcachefs {
             sb.set_ops(&super::super_block::SUPER_OPS);
             sb.set_export_ops(&super::export::EXPORT_OPS);
             #[cfg(CONFIG_BCACHEFS_QUOTA)]
-            sb.set_quotactl(&crate::quota::QUOTACTL_OPS,
+            sb.set_quotactl(&crate::posix::quota::QUOTACTL_OPS,
                             c::QTYPE_MASK_USR | c::QTYPE_MASK_GRP | c::QTYPE_MASK_PRJ);
-            sb.set_xattr_handlers(&crate::xattr::XATTR_HANDLERS);
+            sb.set_xattr_handlers(&crate::posix::xattr::XATTR_HANDLERS);
             sb.set_magic(c::BCACHEFS_STATFS_MAGIC as _);
 
             let units = fs.sb.time_units_per_sec.get() as i64;

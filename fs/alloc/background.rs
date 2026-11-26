@@ -475,7 +475,7 @@
 
 use crate::fs::Dev;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
 use crate::alloc::lru::{dev_remove_lrus, lru_change, LruId};
 use crate::btree::bkey::prelude::*;

@@ -209,9 +209,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
 use crate::c;
-use crate::accounting::{self, dev_usage_init};
+use crate::alloc::accounting::{self, dev_usage_init};
 use crate::btree::iter::{trans_commit_do, CommitFlags};
 use crate::sb::io::SbFieldOps;
 use crate::alloc::capacity::recalc_capacity;
@@ -225,7 +224,7 @@ use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, StateLockWrite};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
-use crate::locking::{Guard as _, LockedBy, MemallocFlags};
+use crate::locking::{Guard as _, Locked, LockedBy, MemallocFlags, Mutex};
 use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
 use crate::sb::io::{read_super, SbReadScratch};
@@ -235,17 +234,19 @@ use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
-use crate::os::kobject::{into_ref, GroupList, KobjOwner};
+use crate::os::kobject::{into_ref, GroupList, KobjOwner, Kobject};
 use crate::util::log::{log_dev, log_no_fs, LogLevel};
-use crate::os::percpu::PerCpu;
+use crate::os::percpu::{Counters, PerCpu};
 use crate::util::printbuf::{DateTime, Msg};
-use crate::util::rcu::read_lock;
+use crate::util::rcu::{read_lock, RcuHead};
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{bch_err_fn, prt};
-use core::ffi::CStr;
+use core::ffi::{c_uint, CStr};
 use core::pin::Pin;
+use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{MaybeZeroable, TypeInfo};
+use cstruct_macros::{bch_enum, Fieldwise, Init, MaybeZeroable, TypeInfo};
+use pin_init::pin_data;
 #[cfg(kernel)]
 use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
      crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
@@ -253,9 +254,213 @@ use crate::types::bits_to_longs;
 use crate::os::bio::{Bio, BioBox, BioSet, IO_ALIGN};
 use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::AlignedBox;
-use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
+use crate::data_structures::bitmap::{AtomicBitArray, AtomicBitflags, BitArray};
+use crate::data_structures::genradix::SharedGenRadix;
 use crate::util::ffi::{bytes_in, c_char, strscpy};
-use crate::util::refcount::{TryRefcount, WaitableRef};
+use crate::util::refcount::{AtomicRef, TryRefcount, WaitableRef};
+use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
+use crate::init::error::io_error_work;
+use crate::new_lock;
+use crate::util::alloc::Vec;
+use crate::util::late::Late;
+use crate::util::place::Placed;
+use crate::util::time_stats::TimeStatsArray;
+use crate::os::workqueue::ReffedWork;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
+pub struct io_count {
+    pub sectors: [[u64; c::DataType::NR as usize]; 2],
+}
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum DevFlag {
+    /// a write completed that the device may still hold in its volatile
+    /// cache; journal_write_preflush() clears it when it flushes the
+    /// device.
+    unflushed_writes,
+}
+
+pub const CONGESTED_MAX: u32 = 1024;
+
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo, Init, RcuHead)]
+#[init_args(fs: &crate::fs::Fs)]
+pub struct Dev {
+    #[pin]
+    #[init(crate::util::refcount::PercpuRef::new())]
+    pub ref_: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.ref_)>,
+    /*
+     * ref_outer keeps the bch_dev allocation alive - nothing more.
+     * Unlike ca->ref, holding it does NOT mean the device is still a
+     * member of the filesystem.
+     *
+     * ca->ref drains inside the device removal protocol, under
+     * state_lock - so a ca->ref holder must never block on state_lock.
+     * Contexts that do block on state_lock with a device in hand (work
+     * items, ioctl lookups) hold ref_outer instead, and recheck
+     * ca->removing under the lock before touching member state.
+     */
+    #[pin]
+    #[init(AtomicRef::new(()))]
+    pub ref_outer: Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>,
+    #[pin]
+    #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
+    pub io_ref_read: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_read)>,
+    #[pin]
+    #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
+    pub io_ref_write: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_write)>,
+
+    /// Its filesystem, from the start, attached or not: bch2_dev_add()
+    /// writes its superblock before it has a slot, and what fails before then
+    /// reaches the filesystem through it. A device is freed before its
+    /// filesystem - bch2_dev_free(), in the filesystem's teardown, drains
+    /// ref_outer's holders first - so the filesystem outlives every use.
+    #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
+    pub fs: crate::util::backref::BackRef<crate::fs::Fs>,
+
+    pub dev_idx: u8,
+    /*
+     * Device is being removed and its alloc info and stripe pointers are
+     * about to be deleted: new references must not be created. Checked by
+     * __ec_stripe_create(), which may hold pre-invalidation copies of
+     * stripe pointers; set by bch2_dev_remove() before the data drop,
+     * cleared if removal fails.
+     */
+    pub removing: crate::util::projections::Volatile<bool>,
+    /*
+     * Cached version of this device's member info from superblock
+     * Committed by bch2_write_super() -> bch_fs_mi_update(): written under
+     * sb_lock, read without it
+     */
+    pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
+    pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
+    pub errors: [AtomicI64; c::MemberErrorType::NR as usize],
+    /// Written racing C's plain reads and stores, as C's are: atomic here,
+    /// so Rust's are through a shared bch_dev.
+    pub write_errors_start: crate::data_structures::bitmap::AtomicULong,
+    pub flags: AtomicBitflags<c::DevFlag>,
+
+    pub uuid: c::__uuid_t,
+    pub name: crate::util::projections::Volatile<crate::sb::members::DevName>,
+    #[pin]
+    #[init(unsafe { Kobject::new::<Dev>() })]
+    pub(crate) kobj: Placed<Kobject, crate::at!(Dev.kobj)>,
+
+    /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
+    /// device it's on, fixed while it's attached.
+    #[init(LockedBy::new(Default::default(), ::pin_init::zeroed()))]
+    pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::at!(Fs.sb)>,
+    /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
+    /// whose buffer write_super can reallocate: the allocator, steering clear
+    /// of superblock buckets. Copied as it's attached, and as it's edited -
+    /// DevSbMut::edit_layout(), under sb_lock.
+    pub sb_layout: crate::util::projections::Volatile<c::bch_sb_layout>,
+    #[pin]
+    #[init(None)]
+    pub(crate) sb_read_scratch: Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>,
+    pub dev: crate::util::projections::Volatile<c::dev_t>,
+
+    pub self_mask: c::bch_devs_mask,
+
+    /*
+     * Buckets:
+     * Per-bucket arrays are protected by either rcu_read_lock or
+     * state_lock, for device resize.
+     */
+    pub buckets_gc: SharedGenRadix<c::bucket>,
+    pub bucket_gens: LockedBy<(), c::BucketGensArray, crate::at!(Fs.state_lock)>,
+    /* allocated once, by migrate, and read without a lock */
+    pub buckets_nouse: LockedBy<(), c::BucketBitmapWords, crate::at!(Fs.state_lock)>,
+
+    #[pin]
+    #[init(c::bucket_bitmap::init())]
+    pub bucket_backpointer_mismatch: c::bucket_bitmap,
+    #[pin]
+    #[init(c::bucket_bitmap::init())]
+    pub bucket_backpointer_empty: c::bucket_bitmap,
+
+    pub usage: PerCpu<c::bch_dev_usage_full>,
+
+    /* Allocator: */
+    /* where each btree_bitmap kind of allocation scans from: racy, as in C */
+    pub alloc_cursor: [crate::util::projections::Volatile<u64>; 3],
+
+    /*
+     * Incremented by alloc_wake() at every site that wakes
+     * freelist_events for a specific device. Waiters on
+     * c->allocator.freelist_events snapshot the counters for the devices
+     * they need at park time and compare on wake: if none have advanced,
+     * the wake didn't concern this waiter and it re-parks without the
+     * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
+     * instead (see alloc_wake_all()).
+     */
+    pub alloc_wake_counter: AtomicI32,
+
+    /* Buckets copygc has queued for evacuation on this device: */
+    pub copygc_in_flight: AtomicI32,
+
+    /* open buckets still free: under freelist_lock, read without it */
+    pub nr_open_buckets: crate::util::projections::Volatile<c_uint>,
+    /* on the partial list: written under freelist_lock */
+    pub nr_partial_buckets: crate::util::projections::Volatile<c_uint>,
+    pub nr_btree_reserve: c_uint,
+
+    /* this device's share of c->capacity.reserved, which is their sum:
+     * recalc_capacity()'s, under state_lock, read without it */
+    pub reserved_sectors: crate::util::projections::Volatile<u64>,
+
+    #[pin]
+    pub(crate) invalidate_work:
+        ReffedWork<do_invalidates_work, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
+
+    #[pin]
+    pub(crate) discard_fast_work:
+        ReffedWork<do_discards_fast, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
+    /// Buckets queued for fast discard: alloc/discard.rs's alone.
+    #[pin]
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) discard_fast: Locked<Mutex, Vec<u64>>,
+    /// Discards in flight on it, by every worker: a futex word, a worker at
+    /// the limit sleeping on it.
+    #[pin]
+    #[init(core::sync::atomic::AtomicU8::new(0))]
+    pub(crate) discards_in_flight: core::sync::atomic::AtomicU8,
+    /// c->devs[]'s RCU readers may still have it, and take its io refs, which
+    /// its drop exits: dropped a grace period on, in process context.
+    #[pin]
+    #[rcu_head]
+    #[init(crate::util::rcu::RcuDropWorkMember::default())]
+    pub(crate) _rcu: crate::util::rcu::RcuDropWorkMember<crate::util::rcu::RcuWorkHead>,
+
+    pub rebalance_work: AtomicI64,
+
+    #[pin]
+    pub journal: c::journal_device,
+    pub prev_journal_sector: Volatile<u64>,
+
+    /// The bios of writes' replicas on it: write_replicas.rs's
+    pub(crate) write_clones: Late<BioSet<crate::data::dev_bio::DevBio>>,
+
+    #[pin]
+    pub(crate) io_error_work: ReffedWork<io_error_work, crate::field!(ref_outer)>,
+
+    /* The rest of this all shows up in sysfs */
+    pub cur_latency: [AtomicI64; 2],
+    #[pin]
+    #[init(TimeStatsArray::new())]
+    pub io_latency: TimeStatsArray<c::bch2_time_stats_quantiles, 2>,
+
+    pub congested: AtomicI32,
+    /* written racily, by bch2_latency_acct() */
+    pub congested_last: AtomicU64,
+
+    pub io_done: PerCpu<c::io_count>,
+}
+
 
 /// What a superblock's read into, and kept in: IO-aligned, as it's read and
 /// written in place.

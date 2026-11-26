@@ -52,7 +52,7 @@ use kernel::alloc::flags::GFP_KERNEL;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefGuard, TryRefcount};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::alloc::accounting_mem;
 use crate::btree::iter::{btree_iter_params_valid, BtreeIter, BtreeIterFlags};
 use crate::btree_trans;
@@ -76,7 +76,7 @@ use crate::format::{Btree, DataType, MemberState};
 /* The dispatch */
 
 pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
-    use crate::check::ioctl::fsck_online;
+    use crate::posix::check::ioctl::fsck_online;
     use crate::sb::counters::ioctl::query_counters;
 
     use Errcode as E;
@@ -153,7 +153,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
 }
 
 fn global_ioctl(cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
-    use crate::check::ioctl::fsck_offline;
+    use crate::posix::check::ioctl::fsck_offline;
 
     match cmd {
         <c::BCH_IOCTL_FSCK_OFFLINE as Ioctl>::OPCODE =>

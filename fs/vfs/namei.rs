@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The namespace operations as the VFS makes them: each takes the update
-//! locks of the inodes it changes, runs its transaction - fs/namei.rs's - and
+//! locks of the inodes it changes, runs its transaction - posix/namei.rs's - and
 //! brings the VFS inodes up to date with what it wrote - and gives the dentry
 //! a link or create made its inode. They're a directory's inode ops, DirOps's
 //! InodeOps (inode_ops.rs), and InodeInfo's where something else calls them.
@@ -17,21 +17,21 @@ use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
 use crate::c;
-use crate::dirent::{self, Dirent};
+use crate::posix::dirent::{self, Dirent};
 use crate::errcode::{Errcode, BchError};
 use crate::init::passes;
-use crate::inode;
-use crate::namei;
-use crate::quota::{QuotaAcctMode, QuotaWarnings};
-use crate::quota;
+use crate::posix::inode;
+use crate::posix::namei;
+use crate::posix::quota::{QuotaAcctMode, QuotaWarnings};
+use crate::posix::quota;
 use crate::snapshots::subvolume;
-use crate::str_hash;
+use crate::posix::str_hash;
 use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::util::log::LogMsg;
 use crate::os::file::OpeningTmpfile;
 use crate::os::security;
 use crate::util::os_str::OsStr;
-use crate::xattr::{self, XattrType};
+use crate::posix::xattr::{self, XattrType};
 use cstruct_macros::vtable;
 use kernel::sync::aref::ARef;
 

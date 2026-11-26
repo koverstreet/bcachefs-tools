@@ -21,14 +21,17 @@
 //! MovingCtxt owns one; moving through it is Moving's, a borrow of one. IO
 //! that outlives the borrow, counted in the context, is a MovingIo.
 
+#![allow(non_camel_case_types)]
+
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
 use crate::btree::trans::{__bch2_trans_get, TransGuard};
 use crate::c;
 use crate::c::Errcode;
 use crate::errcode::BchError;
-use crate::format::DataType;
+use crate::format::{Bpos, DataType};
 use crate::fs::Fs;
+use crate::util::projections::Volatile;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
@@ -39,13 +42,49 @@ use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
 use crate::util::gather::{Gather, GatherRef};
 use core::cell::{Cell, UnsafeCell};
+use core::ffi::c_uint;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicI32;
+use core::sync::atomic::{AtomicI32, AtomicI64};
 use core::sync::atomic::Ordering::Relaxed;
+use cstruct_macros::{MaybeZeroable, TypeInfo};
+use nestify::nest;
 use pin_init::{pin_data, pin_init};
 
-pub use c::MoveStats;
+nest! {
+    /// What moves count into - whoever issues them, and their completions,
+    /// on any thread - and what a data job's progress reads as it goes.
+    /// Shared throughout, so every field is a Volatile, written one writer at
+    /// a time, or an atomic, by many.
+    #[derive(Default, MaybeZeroable, TypeInfo)]*
+    #[repr(C)]*
+    pub struct MoveStats {
+        pub ret: Volatile<c::IoctlDataEventRet>,
+
+        /* Where the walk is: data_type and pos, or for phys, dev and offset */
+        pub at: pub struct bch_move_stats_at {
+            pub data_type: Volatile<DataType>,
+            pub pos: Volatile<c::bbpos>,
+            pub dev: Volatile<c_uint>,
+            pub offset: Volatile<u64>,
+        },
+
+        pub keys_moved: AtomicI64,
+        pub keys_raced: AtomicI64,
+        pub sectors_seen: AtomicI64,
+        pub sectors_moved: AtomicI64,
+        pub sectors_raced: AtomicI64,
+        pub sectors_error_corrected: AtomicI64,
+        pub sectors_error_uncorrected: AtomicI64,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
+pub struct move_bucket_key {
+    pub bucket: Bpos,
+    pub generation: c_uint,
+}
 
 impl MoveStats {
     /// Zeroed - field by field, as a data job's progress may be read

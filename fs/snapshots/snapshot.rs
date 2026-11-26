@@ -322,6 +322,56 @@ use core::fmt;
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::format::{Bpos, Btree, MetadataVersion};
+use crate::data_structures::bitmap::AtomicBitArray;
+use crate::types::bits_to_longs;
+use cstruct_macros::{bch_enum, MaybeZeroable};
+
+pub const IS_ANCESTOR_BITMAP: u32 = 128;
+
+/*
+ * In-memory snapshot table entry, indexed by snapshot ID.
+ *
+ * Snapshots form a binary tree where IDs decrease going deeper: a parent's ID
+ * is always greater than its children's.
+ *
+ * Ancestor lookups use a three-tier strategy:
+ *  1. Skiplist (skip[]): jump up the tree in O(log n) steps
+ *  2. Bitmap (is_ancestor[]): O(1) lookup for ancestors within 128 IDs
+ *  3. Parent walk: fallback linear traversal
+ *
+ * Read under RCU; partial is_ancestor[] updates are tolerable since readers
+ * fall back to the skiplist.
+ */
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum SnapshotIdState {
+    SNAPSHOT_ID_empty,
+    SNAPSHOT_ID_live,
+    SNAPSHOT_ID_deleted,
+}
+
+/*
+ * A table entry: rewritten in place by mark_snapshot() (snapshot.rs) under
+ * table_lock while readers read it under RCU alone, so every field is an
+ * atomic - C still sees plain integers.
+ */
+#[repr(C)]
+#[derive(MaybeZeroable, zerocopy_derive::FromBytes)]
+pub struct snapshot_t {
+    pub state: AtomicU32,
+    pub parent: AtomicU32,
+    /* skiplist: random ancestors, sorted ascending; try [2] first */
+    pub skip: [AtomicU32; 3],
+    pub depth: AtomicU32,
+    pub children: [AtomicU32; 2], /* normalized: [0] >= [1] */
+    pub subvol: AtomicU32, /* Nonzero only if a subvolume points to this node: */
+    pub tree: AtomicU32,
+    /* bit (ancestor - id - 1) set for ancestors within 128 IDs */
+    pub is_ancestor: AtomicBitArray<{ bits_to_longs(c::IS_ANCESTOR_BITMAP as usize) }>,
+}
+
+/// c->snapshots.table, published under RCU.
+pub type SnapshotTable = crate::util::rcu::RcuArray<c::snapshot_t>;
 
 // ── The table ────────────────────────────────────────────────────────────
 
@@ -816,7 +866,7 @@ impl c::bch_fs_snapshots {
         SnapshotAccounting(core::array::from_fn(|_| {
             let btree = btrees.next().expect("NR_SNAPSHOT_BTREES is the mask's popcount");
 
-            let v = crate::accounting::read(fs, crate::accounting::Snapshot { id, btree: btree.0 });
+            let v = crate::alloc::accounting::read(fs, crate::alloc::accounting::Snapshot { id, btree: btree.0 });
 
             BtreeAccounting {
                 btree,
@@ -1549,7 +1599,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
                 match subvolume::get(t, subvol, false) {
                     Err(e) if is_restart(&e) => return Err(e),
                     Err(e) => { let _ = write!(out, "{}", e.msg()); }
-                    Ok(sv) => crate::namei::inum_to_path(
+                    Ok(sv) => crate::posix::namei::inum_to_path(
                         t, c::subvol_inum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
                 }
             }
@@ -1557,7 +1607,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
 
             // only the extents btree (btree 0, the default here) carries
             // sectors - so this one read is the snapshot's total on-disk usage.
-            let v = crate::accounting::read(t.fs(), crate::accounting::Snapshot { id, btree: 0 });
+            let v = crate::alloc::accounting::read(t.fs(), crate::alloc::accounting::Snapshot { id, btree: 0 });
             prt!(out, "{}\r", HumanReadable(v.sectors << 9));
         }
     }

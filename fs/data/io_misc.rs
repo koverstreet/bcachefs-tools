@@ -9,7 +9,7 @@
 //! fpunch deletes a range of an inode's extents in a loop of its own, a commit
 //! each.
 //!
-//! truncate and finsert/fcollapse are logged ops (fs/logged_ops.rs): the op
+//! truncate and finsert/fcollapse are logged ops (posix/logged_ops.rs): the op
 //! key goes in first, each step commits with the op advanced to it, and
 //! recovery resumes an op a crash interrupted. Logged ops aren't atomic w.r.t.
 //! snapshot creation - creating a snapshot while one is in progress, then
@@ -34,7 +34,8 @@ use crate::snapshots::subvolume;
 use crate::os::kernel::{MAX_FILE_SIZE, WRITE};
 use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
-use crate::{bch_err_fn, bch_err_ratelimited, inode, logged_ops};
+use crate::{bch_err_fn, bch_err_ratelimited};
+use crate::posix::{inode, logged_ops};
 use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
 
 // ── fallocate ────────────────────────────────────────────────────────────

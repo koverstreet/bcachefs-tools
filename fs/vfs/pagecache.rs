@@ -5,6 +5,8 @@
 //! and from a read, marked by walks over the page cache, read by its seeks,
 //! and freed by the aops. Reserving and dirtying are folio_reservation.rs's.
 
+#![allow(non_camel_case_types)]
+
 use core::cmp::{max, min};
 use core::alloc::Layout;
 use core::mem::{align_of, size_of};
@@ -12,9 +14,11 @@ use core::borrow::Borrow;
 use core::ffi::{c_int, c_uint, c_void};
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32};
 
-use cstruct_macros::vtable;
+use cstruct_macros::{bitfield, bch_enum, vtable, BitfieldMembers, MaybeZeroable, TypeInfo};
 use kernel::page::PAGE_SHIFT;
+use nestify::nest;
 
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
@@ -27,7 +31,7 @@ use crate::format::{Btree, BkeyType};
 use crate::fs::Fs;
 use crate::new_lock;
 use crate::snapshots::subvolume;
-use crate::locking::MemallocFlags;
+use crate::locking::{Locked, MemallocFlags, SpinLockIrq};
 use crate::data_structures::inline_vec::InlineVec;
 use crate::types::CStatic;
 use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
@@ -41,6 +45,110 @@ use super::folio::{Folio, FolioGuard, FolioLocked, FolioSpan, FolioStateGuard, H
 use super::folio_reservation::FolioReservation;
 use super::inode::InodeInfo;
 use super::writeback;
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum FolioSectorState {
+    unallocated,
+    reserved,
+    dirty,
+    dirty_reserved,
+    allocated,
+}
+
+impl FolioSectorState {
+    pub fn dirty(self) -> Self {
+        match self {
+            Self::unallocated => Self::dirty,
+            Self::reserved    => Self::dirty_reserved,
+            s                 => s,
+        }
+    }
+
+    pub fn undirty(self) -> Self {
+        match self {
+            Self::dirty          => Self::unallocated,
+            Self::dirty_reserved => Self::reserved,
+            s                    => s,
+        }
+    }
+
+    pub fn reserve(self) -> Self {
+        match self {
+            Self::unallocated => Self::reserved,
+            Self::dirty       => Self::dirty_reserved,
+            s                 => s,
+        }
+    }
+}
+
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, TypeInfo)]
+    pub struct bch_folio_sector {
+        #[members]
+        #>[bitfield(u8)]
+        pub bits: pub struct bch_folio_sector_bits {
+            /* Uncompressed, fully allocated replicas (or on disk reservation): */
+            nr_replicas:       u4,
+            /* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
+            replicas_reserved: u4,
+        },
+        /*
+         * FIXME: a FolioSectorState, once buffered.c is Rust: C can't
+         * have it as one - an enum bitfield takes the enum's alignment, and
+         * would make this 4 bytes, not 2.
+         */
+        pub state: u8,
+    }
+}
+
+/*
+ * Worst-case bytes for a per-folio bch_folio_sector snapshot: a folio can be up
+ * to MAX_PAGECACHE_ORDER pages, each contributing PAGE_SECTORS sector entries.
+ * Used to size the writepage_buf_pool reserve.
+ */
+pub const BCH_WRITEPAGE_BUF_BYTES: usize =
+    ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<c::bch_folio_sector>();
+
+/// A folio's sector state, under its bch_folio's lock: written by writeback
+/// completion with the folio unlocked, so the folio lock doesn't cover it.
+/// s[] has a sector of the folio each.
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct FolioState {
+    /* is s[] up to date with the btree? says nothing about the data */
+    pub state_uptodate: bool,
+    /* the count s[].replicas_reserved is charged at, and released at */
+    pub replicas_reserved_at: u8,
+    /*
+     * A foreground reservation fell back: writeback shouldn't insist on the
+     * inode's count - see Folio::reserve_writeback().
+     */
+    pub reserved_degraded: bool,
+    pub s: [c::bch_folio_sector; 0],
+}
+
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct bch_folio {
+    pub write_count: AtomicI32,
+    pub read_count: AtomicU32,
+    /* the read's window handed out all of the folio from read_from on */
+    pub read_covered: AtomicBool,
+    pub read_failed: AtomicBool,
+    /* the lock's the caller's, waiting for the read: the last count keeps it */
+    pub read_callers: AtomicBool,
+    /*
+     * The data: sectors [0, partially_uptodate) are read but the folio
+     * isn't uptodate. One offset suffices because reads start at the front
+     * of the folio; 0 means nothing partial. Set by a read's window as it
+     * stops inside the folio; cleared by the read's last count if it failed,
+     * or read the rest.
+     */
+    pub partially_uptodate: AtomicU16,
+    pub state: Locked<SpinLockIrq, FolioState>,
+}
 
 impl Mapping {
     /// The folios over [@start, @end), contiguous from @start, as

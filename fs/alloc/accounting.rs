@@ -72,7 +72,7 @@ use crate::{bch_err_fn, bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, p
 use core::mem::size_of;
 use zerocopy::{FromBytes, IntoBytes};
 
-pub use crate::format::accounting::*;
+pub use crate::alloc::accounting_format::*;
 pub use crate::format::CompressionType;
 pub use c::ReconcileType;
 
@@ -172,7 +172,7 @@ macro_rules! acct_counters {
             }
         }
 
-        impl<T: Copy + Default> $crate::accounting::CounterSet<T> for $name<T> {
+        impl<T: Copy + Default> $crate::alloc::accounting::CounterSet<T> for $name<T> {
             fn from_slice(d: &[T]) -> Self {
                 let mut d = d.iter().copied();
                 Self { $($f: d.next().unwrap_or_default()),+ }

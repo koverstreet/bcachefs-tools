@@ -30,7 +30,8 @@
 //! ended attempt's checks.
 
 use super::bkey::*;
-use super::types::{BtreeIter, BtreeTrans};
+use super::iter::BtreeIter;
+use super::trans::BtreeTrans;
 use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use crate::alloc::capacity::DiskReservation;
 use crate::c;

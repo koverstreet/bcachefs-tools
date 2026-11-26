@@ -249,7 +249,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     }
     sb.sb_mut().set_clean(true);
 
-    crate::journal::journal_pos_from_member_info_set(fs, guard);
+    crate::journal::read::journal_pos_from_member_info_set(fs, guard);
 }
 
 /// Strip alloc info from a clean filesystem: removes alloc btree roots

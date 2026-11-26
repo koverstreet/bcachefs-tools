@@ -17,7 +17,7 @@ use crate::errcode::{Errcode, ret_to_class, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
-use crate::{inode, inode_opts};
+use crate::posix::{inode, inode_opts};
 use crate::debug::trace::events;
 use crate::snapshots::subvolume;
 use crate::os::file::File;

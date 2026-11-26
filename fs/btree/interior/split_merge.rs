@@ -17,7 +17,7 @@ use crate::btree::node::iter::KeyIter;
 use crate::btree::node::sort::{btree_sort_into, build_aux_trees, maybe_compact_whiteouts};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::shard::key_is_shard_boundary;
-use crate::btree::types::BtreeWriteType;
+use crate::btree::node::BtreeWriteType;
 use crate::btree::validate::{bkey_in_btree_node, validate_from};
 use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
@@ -39,6 +39,15 @@ use crate::os::sched;
 use crate::util::vstructs::Head;
 
 use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts, TakenNode};
+use cstruct_macros::bch_enum;
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum BtreeNodeSibling {
+    btree_prev_sib,
+    btree_next_sib,
+}
+
 
 /// A btree node held locked: by a path, or new from the update's reserve.
 type Node<'n> = LockedNode<'n, BtreeNode>;

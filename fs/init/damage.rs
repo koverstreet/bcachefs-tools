@@ -37,7 +37,7 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::inode;
+use crate::posix::inode;
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};

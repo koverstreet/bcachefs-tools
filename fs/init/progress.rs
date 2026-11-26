@@ -165,7 +165,7 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
             continue;
         }
 
-        let v = crate::accounting::read(fs, crate::accounting::Btree { id: i });
+        let v = crate::alloc::accounting::read(fs, crate::alloc::accounting::Btree { id: i });
 
         // Better to estimate as 0 than the total node count
         if inner_mask & bit != 0 {

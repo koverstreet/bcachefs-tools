@@ -79,7 +79,7 @@ pub enum DataType {
 }
 
 pub type Replicas = Head<c::bch_replicas_entry_v1>;
-crate::accounting::acct_counters!(ReplicasCounters { sectors });
+crate::alloc::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {
     #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*

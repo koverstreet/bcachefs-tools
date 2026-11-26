@@ -37,7 +37,7 @@ use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrs
 use crate::errcode::BchError;
 use crate::init::damage;
 use crate::init::error::id;
-use crate::inode_opts::get_io_opts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::alloc::Flags;
 use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};

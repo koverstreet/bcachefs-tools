@@ -51,8 +51,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::init::passes::RecoveryPass;
-use crate::accounting::ReconcileType;
-use crate::accounting;
+use crate::alloc::accounting::ReconcileType;
+use crate::alloc::accounting;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
@@ -71,7 +71,7 @@ use crate::data::reconcile::scan::ScanCookie;
 use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::prt;
 use crate::util::alloc::Vec;

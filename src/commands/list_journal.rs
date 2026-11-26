@@ -3,7 +3,7 @@ use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::BkeyI;
 use bcachefs_kernel::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
-use bcachefs_kernel::journal::{
+use bcachefs_kernel::journal::read::{
     entry_type, entry_btree_id, entry_log_str_eq,
     journal_entry_missing_range, JsetEntryType, journal_ptrs_to_text,
 };

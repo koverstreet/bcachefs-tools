@@ -35,7 +35,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
-use crate::inode;
+use crate::posix::inode;
 use crate::snapshots::snapshot;
 use crate::util::alloc::Vec;
 use crate::util::place::Contained;
@@ -45,6 +45,20 @@ use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
+use cstruct_macros::MaybeZeroable;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, MaybeZeroable)]
+pub struct subvol_inum {
+    /* we can't have padding in this struct: */
+    pub subvol: u64,
+    pub inum: u64,
+}
+
+impl subvol_inum {
+    /// The root directory, in the root subvolume.
+    pub const ROOT: Self = Self { subvol: c::BCACHEFS_ROOT_SUBVOL as u64, inum: c::BCACHEFS_ROOT_INO as u64 };
+}
 
 /// Whether subvolume key @k is long enough to have @field.
 macro_rules! has_field {

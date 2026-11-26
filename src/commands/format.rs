@@ -590,7 +590,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
             256 << 10
         };
 
-        let bits = bcachefs_kernel::inode::shard_bits_default(nr_cpus, total_fs_size,
+        let bits = bcachefs_kernel::posix::inode::shard_bits_default(nr_cpus, total_fs_size,
                                                               btree_node_bytes);
         cfg.fs_opts.set_shard_inode_numbers_bits(bits as u8);
     }

@@ -27,10 +27,44 @@ use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, U
 use core::ffi::{c_int, c_ulong, CStr};
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
-use cstruct_macros::{MaybeZeroable, TypeInfo, VolatileValue};
+use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo, VolatileValue};
 use crate::util::projections::TearSafe;
 use super::io::*;
 use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
+
+#[bch_enum(closed)]
+#[nr]
+#[repr(u32)]
+pub enum DevReadRefKind {
+    rust,
+    bch2_online_devs,
+    read_fua_test,
+    journal_read,
+    fs_journal_alloc,
+    fs_resize_on_mount,
+    btree_node_read,
+    btree_node_scrub,
+    btree_node_write,
+    btree_node_scan,
+    btree_verify_replicas,
+    io_read,
+}
+
+#[bch_enum(closed)]
+#[nr]
+#[repr(u32)]
+pub enum DevWriteRefKind {
+    rust,
+    journal_write,
+    journal_discard,
+    discard_bucket,
+    discard_one_bucket_fast,
+    do_invalidates,
+    nocow_flush,
+    io_write,
+    ec_bucket_zero,
+}
+
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]

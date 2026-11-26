@@ -9,9 +9,9 @@ use super::handle::BcachefsHandle;
 use super::ioctl::{grow_on_erange, ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
 use super::sysfs::bcachefs_kernel_version;
 
-// Re-export types and functions from bcachefs_kernel::accounting for consumers
+// Re-export types and functions from bcachefs_kernel::alloc::accounting for consumers
 // that were importing from this module.
-pub use bcachefs_kernel::accounting::*;
+pub use bcachefs_kernel::alloc::accounting::*;
 
 /// Result of query_accounting ioctl.
 pub struct AccountingResult {

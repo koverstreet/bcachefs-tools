@@ -84,6 +84,36 @@ use core::pin::Pin;
 use core::sync::atomic::Ordering;
 use pin_init::{pin_data, pin_init, stack_pin_init};
 use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason};
+use crate::locking::{Locked, Mutex};
+use crate::new_lock;
+use crate::os::bio::BioSet;
+use crate::os::workqueue::ReffedWork;
+use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
+
+/// The discard worker's: its work, its bios, the discards in flight - see
+/// alloc/discard.rs.
+#[placed(Fs.discards)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo, Init)]
+pub struct bch_fs_discards {
+    #[pin]
+    pub(crate) work: ReffedWork<do_discards_work, crate::field!(super.writes)>,
+    #[pin]
+    #[init(BioSet::new(4))]
+    pub(crate) bioset: BioSet<DiscardBio>,
+
+    /// Buckets with a discard issued, by any worker, not yet marked free.
+    #[pin]
+    #[init(new_lock!(Vec::new()))]
+    pub(crate) in_flight: Locked<Mutex, Vec<u64>>,
+
+    /// The worker's progress, for sysfs and the allocator's stuck report.
+    #[pin]
+    #[init(SeqLock::new(DiscardState::default()))]
+    pub(crate) s: SeqLock<DiscardState>,
+}
+
 
 /// Discards in flight at once on a device.
 const DEV_IN_FLIGHT_MAX: u8 = 4;

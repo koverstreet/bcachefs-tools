@@ -60,7 +60,7 @@ impl SbFieldOps for Section {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::btree::types::btree_id_str;
+    use crate::btree::btree_id_str;
     use crate::types::Le32;
     use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated};
 

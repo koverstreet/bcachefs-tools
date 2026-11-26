@@ -18,7 +18,7 @@ use crate::data::write::{write, WriteBio, WriteFor};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::{Fs, WriteRef};
-use crate::inode_opts;
+use crate::posix::inode_opts;
 use crate::snapshots::subvolume;
 use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::mempool::Mempool;

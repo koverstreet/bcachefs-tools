@@ -51,7 +51,8 @@ use crate::os::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::util::Printbuf;
-use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
+use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode_fsck_err, prt};
+use crate::posix::inode;
 use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
@@ -785,7 +786,7 @@ pub fn make_extent_indirect<'a, 't>(
      * or the inode's options match the defaults, this is a no-op.) The
      * allocation below reserves room for the entry + invalid-device padding.
      */
-    let opts = crate::inode_opts::get_io_opts(t, None, BkeySC::from(&orig))?;
+    let opts = crate::posix::inode_opts::get_io_opts(t, None, BkeySC::from(&orig))?;
 
     let mut reflink_iter = BtreeIter::new(t, Btree::reflink, POS_MAX, BtreeIterFlags::INTENT);
     reflink_iter.peek_prev(t)?;

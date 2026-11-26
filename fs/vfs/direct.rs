@@ -17,7 +17,7 @@ use crate::c;
 use crate::data::read::{self, ReadErrReport, Rbio};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::inode_opts::get_inode;
+use crate::posix::inode_opts::get_inode;
 use crate::os::blkdev::plugged;
 use crate::os::bio::{Bio, BvecMempool, Holds};
 use crate::util::gather::{Gather, Scope};

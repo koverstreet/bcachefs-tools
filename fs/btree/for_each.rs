@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use super::bkey::*;
-use super::types::{BtreeIter, BtreeTrans};
+use super::iter::BtreeIter;
+use super::trans::BtreeTrans;
 use super::iter::{polonius_key, BtreeIterFlags, BtreeNodeIter};
 use super::trans_attempt::{is_restart, lockrestart_do, lockrestart_do_in, CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;

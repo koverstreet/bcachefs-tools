@@ -4,7 +4,7 @@
 
 use super::{node_mem_alloc, node_mem_free, OwnedNode};
 use crate::btree::node::BtreeNode;
-use crate::btree::types::BtreeCacheGuard;
+use super::BtreeCacheGuard;
 use crate::c;
 use crate::data_structures::list::Walk;
 use crate::errcode::{Errcode, BchError};

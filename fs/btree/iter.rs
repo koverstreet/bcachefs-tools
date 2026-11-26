@@ -140,7 +140,7 @@
  */
 
 use super::bkey::*;
-pub use super::types::{BtreeIter, BtreeTrans};
+pub use super::trans::BtreeTrans;
 pub use super::for_each::*;
 pub use super::trans_attempt::*;
 use crate::btree::cache::cached_node;
@@ -165,6 +165,131 @@ use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
 use cstruct_macros::MaybeZeroable;
 use crate::format::{Bpos, Btree, BkeyType};
+use core::ffi::c_uint;
+use cstruct_macros::{bch_enum, bitfield, BitfieldMembers};
+use nestify::nest;
+
+#[bch_enum(closed)]
+#[mask(BtreeIterUpdateTriggerFlags: u32)]
+#[repr(u32)]
+pub enum BtreeIterFlagBit {
+    slots,
+    prev,
+    intent,
+    prefetch,
+    is_extents,
+    not_extents,
+    cached,
+    with_key_cache,
+    with_journal,
+    snapshot_field,
+    all_snapshots,
+    filter_snapshots,
+    nofilter_whiteouts,
+    nopreserve,
+    nofill,
+    cached_nofill,
+    key_cache_fill,
+    committed,
+    trim,
+    read_errors,
+
+    internal_snapshot_node,
+    nojournal,
+    key_cache_reclaim,
+    overwrite_triggered,
+
+    /*
+     * norun - don't run triggers at all
+     *
+     * transactional - we're running transactional triggers as part of
+     * a transaction commit: triggers may generate new updates
+     *
+     * atomic - we're running atomic triggers during a transaction
+     * commit: we have our journal reservation, we're holding btree node write
+     * locks, and we know the transaction is going to commit (returning an error
+     * here is a fatal error, causing us to go emergency read-only)
+     *
+     * gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
+     *
+     * transactional, atomic and gc are the phase a trigger runs in, and every
+     * caller passes exactly one - commit's three passes, gc's check, interior
+     * updates. Triggers rely on it: the reflink_p trigger's transactional and
+     * gc passes share one walk position, right only because one of them runs.
+     * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
+     * trigger's type, dependent typing over the flags.
+     *
+     * inserting - @new is entering the btree
+     * overwriting - @old is leaving the btree
+     */
+    norun,
+    transactional,
+    atomic,
+    gc,
+    inserting,
+    overwriting,
+    is_discard,
+    set_needs_reconcile_done,
+}
+
+/*
+ * btree_iter: the high level btree iterator API, iterates over keys.
+ * btree_path: the low level path to a btree node, holds locks.
+ *
+ * Multiple iterators can share the same btree_path via refcounting.
+ */
+nest! {
+    /// A btree iterator, in transaction 't - C's struct btree_iter. Its
+    /// position, and the key a peek returned - whose header is in the
+    /// iterator, k - change only through &mut self, iter.rs's methods; through
+    /// &self, only key_cache_path, which an update sets up. Hence its Cell.
+    #[repr(C)]
+    #[derive(BitfieldMembers)]
+    pub struct BtreeIter<'t> {
+        pub(in crate::btree) trans: &'t BtreeTrans<'t>,
+        pub(in crate::btree) path: c::PathIdx,
+        pub(in crate::btree) update_path: c::PathIdx,
+        pub(in crate::btree) key_cache_path: core::cell::Cell<c::PathIdx>,
+
+        #[members]
+        #>[bitfield(u8)]
+        pub(in crate::btree) bits: pub struct btree_iter_bits {
+            #[bits(8)] pub(self) btree_id: Btree,
+        },
+        pub(in crate::btree) min_depth: u8,
+
+        /* btree_iter_copy starts here: */
+        pub(in crate::btree) flags: u32,
+
+        /* When we're filtering by snapshot, the snapshot ID we're looking for: */
+        pub(in crate::btree) snapshot: c_uint,
+
+        pub(in crate::btree) pos: Bpos,
+        /*
+         * Current unpacked key - so that advancing the iterator can
+         * correctly advance pos.
+         */
+        pub(in crate::btree) k: c::bkey,
+
+        /* BTREE_ITER_with_journal: */
+        pub(in crate::btree) journal_idx: usize,
+        /* C's TRACK_PATH_ALLOCATED: see btree_path */
+        #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+        pub(in crate::btree) ip_allocated: c_ulong,
+    }
+}
+
+impl BtreeIter<'_> {
+    /// Set when it's initialized.
+    pub fn btree(&self) -> Btree {
+        self.bits.btree_id()
+    }
+
+    pub(in crate::btree) fn set_btree(&mut self, btree: Btree) {
+        self.bits.set_btree_id(btree);
+    }
+}
+
 
 /*
  * Exempt bch2_trans_begin() from the dropped-updates warning for a scope (see

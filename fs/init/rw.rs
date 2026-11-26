@@ -18,7 +18,7 @@
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::init::passes::RecoveryPass;
-use crate::accounting::verify_accounting_clean;
+use crate::alloc::accounting::verify_accounting_clean;
 use crate::alloc::capacity::recalc_capacity;
 use crate::btree::init::btree_init_rw;
 use crate::c::FsFlag as Flag;

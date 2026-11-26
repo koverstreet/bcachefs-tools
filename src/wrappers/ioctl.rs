@@ -13,7 +13,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::os::fd::AsFd;
 
-pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
+pub use bcachefs_kernel::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
 use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedHead, SelfSized, Plain, Unsized, Unvalidated, VStructError};
 

@@ -270,7 +270,7 @@ impl Fs {
         prt!(out, "checksum_paranoia:\t{}\n", u8::from(data_opts.bits.checksum_paranoia()));
 
         prt!(out, "io path options:\t");
-        crate::inode_opts::opts_to_text(out, self, io_opts);
+        crate::posix::inode_opts::opts_to_text(out, self, io_opts);
         out.newline();
     }
 }

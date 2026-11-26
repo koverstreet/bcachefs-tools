@@ -7,7 +7,7 @@ use crate::btree::locking::BtreeNodeLockedType;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{bch2_btree_path_to_text, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
-use crate::btree::types::BtreeWriteType;
+use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::debug::trace::events;

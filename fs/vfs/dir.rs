@@ -34,11 +34,11 @@ use core::pin::Pin;
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
-use crate::dirent::{self, DirEmit};
+use crate::posix::dirent::{self, DirEmit};
 use crate::os::dir_context::DirContext;
 use crate::errcode::BchError;
 use crate::locking::{Guard, LockedBy};
-use crate::str_hash;
+use crate::posix::str_hash;
 use crate::util::alloc::KBox;
 use kernel::alloc::flags;
 use crate::util::ffi::Opaque;

@@ -3,7 +3,7 @@
 //! Tracepoints - sb/counters.h's event_trace() - for Rust, each a type,
 //! events::<name>: every counter's (BCH_PERSISTENT_COUNTERS(), sb/counters.rs),
 //! and those with no counter, BCH_NOCOUNTER_TRACEPOINTS() and
-//! BCH_PATH_TRACEPOINTS() (debug/trace_types.rs). A path tracepoint exists only
+//! BCH_PATH_TRACEPOINTS(). A path tracepoint exists only
 //! with CONFIG_BCACHEFS_PATH_TRACEPOINTS, and is never on without it.
 //!
 //! A tracepoint is checked as C's trace_<name>_enabled() is, a static branch on
@@ -17,8 +17,40 @@
 use crate::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
+use cstruct_macros::xmacro;
 
 mod tracepoints;
+
+/* The tracepoints that have no counter: */
+xmacro! {
+    BCH_NOCOUNTER_TRACEPOINTS {
+        (accounting_mem_insert),
+        (journal_entry_close),
+        (extent_trim_atomic),
+        (path_downgrade),
+        (btree_iter_peek_slot),
+        (__btree_iter_peek),
+        (btree_iter_peek_max),
+        (btree_iter_peek_prev_min),
+    }
+}
+
+xmacro! {
+    BCH_PATH_TRACEPOINTS {
+        (update_by_path),
+        (btree_path_traverse_start),
+        (btree_path_traverse_end),
+        (btree_path_set_pos),
+        (btree_path_lock),
+        (btree_path_should_be_locked),
+        (btree_path_clone),
+        (btree_path_get_ll),
+        (btree_path_put_ll),
+        (btree_path_get),
+        (btree_path_alloc),
+        (btree_path_free),
+    }
+}
 
 /// A tracepoint - one of BCH_PERSISTENT_COUNTERS()'s, or of those that have
 /// no counter, BCH_NOCOUNTER_TRACEPOINTS() and BCH_PATH_TRACEPOINTS(). One
@@ -50,8 +82,8 @@ macro_rules! event_types {
 pub mod events {
     use crate::c;
     c::PersistentCounter_arms!(event_types);
-    c::BCH_NOCOUNTER_TRACEPOINTS!(event_types);
-    c::BCH_PATH_TRACEPOINTS!(event_types);
+    super::BCH_NOCOUNTER_TRACEPOINTS!(event_types);
+    super::BCH_PATH_TRACEPOINTS!(event_types);
 }
 
 /// Their tracepoints.
@@ -78,11 +110,11 @@ macro_rules! no_trace_events {
     };
 }
 c::PersistentCounter_arms!(trace_events);
-c::BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
+BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
 #[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
-c::BCH_PATH_TRACEPOINTS!(trace_events);
+BCH_PATH_TRACEPOINTS!(trace_events);
 #[cfg(not(CONFIG_BCACHEFS_PATH_TRACEPOINTS))]
-c::BCH_PATH_TRACEPOINTS!(no_trace_events);
+BCH_PATH_TRACEPOINTS!(no_trace_events);
 
 impl Fs {
     /// Fire @e's tracepoint, if it's on, with the message @msg writes - its

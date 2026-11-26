@@ -2,17 +2,61 @@
 
 //! The faults-disabled-mapping table: the DIO write path's side, which sets a
 //! task's mapping while it pins user pages, and the page fault handler's,
-//! which reads it. vfs/fdm.h has the design.
+//! which reads it.
+//!
+//! Replaces the per-task faults_disabled_mapping field (removed in 7.0)
+//! with a fixed-size cuckoo hash in bch_fs. Used to prevent deadlock
+//! when the page fault handler is invoked for a mapping that is already
+//! being written to by the current task (DIO path).
+//!
+//! Properties:
+//!  - O(1) lookup: exactly three slots to check (3-way cuckoo)
+//!  - No locks: each task only writes/removes its own entry
+//!  - No resize: table is oversized at init, occupancy stays very low
+//!  - Low bit of mapping pointer stolen for dropped_locks signaling
+//!  - Waits on the table's EventCount if all slots full (just a read when empty)
+//!
+//! Hash function approach borrowed from buckets_waiting_for_journal:
+//! random seeds with hash_64() give truly independent distributions.
+//! With 3 hash functions and 512 slots at ~16 concurrent tasks,
+//! probability of all 3 slots occupied is ~(16/512)^3 ≈ 0.003%.
+
+#![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::util::futex::EventCount;
 use crate::util::hash::hash_64;
+use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
 use crate::os::kernel::{current_id, random_u64};
+use core::ffi::c_ulong;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
+use cstruct_macros::MaybeZeroable;
 use pin_init::Zeroable;
 
 use super::folio::Mapping;
+
+pub const FDM_NR_HASH: u32 = 3;
+
+pub const FDM_HASH_BITS: u32 = 9;
+
+pub const FDM_HASH_SIZE: u32 = 1 << c::FDM_HASH_BITS;
+
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct fdm_slot {
+    pub task: Volatile<usize>,
+    pub mapping: Volatile<c_ulong>, /* address_space * | dropped_locks bit */
+}
+
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct fdm_hash {
+    pub hash_seeds: [u64; c::FDM_NR_HASH as usize],
+    pub wait: EventCount,
+    pub slots: [c::fdm_slot; c::FDM_HASH_SIZE as usize],
+}
 
 impl c::fdm_hash {
     /// Empty, its hash seeds random.

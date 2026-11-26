@@ -3,8 +3,8 @@
 //! A gap buffer: an array whose free space is at @gap rather than its end, so
 //! an insert near the last one moves only what's between the two - sorted
 //! inserts, as recovery makes into the journal keys, are O(n) in all, not
-//! O(n) each. Laid out as btree/journal_overlay_types.rs's journal_keys has
-//! it, a darray's nr, size and data, then gap, while C reads those.
+//! O(n) each. Laid out as btree/journal_overlay.rs's journal_keys has it, a
+//! darray's nr, size and data, then gap.
 //!
 //! An element's index is its place in the sequence, 0..len(); where it's
 //! stored is the index, or past the gap the index plus the gap's size. It

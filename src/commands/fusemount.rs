@@ -65,12 +65,14 @@ use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
+use bcachefs_kernel::btree;
+use bcachefs_kernel::alloc::accounting;
+use bcachefs_kernel::posix::{dirent, namei, str_hash};
 use bcachefs_kernel::btree::bkey::{pos, BkeyV};
 use bcachefs_kernel::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags};
 use bcachefs_kernel::format::Btree;
-use bcachefs_kernel::xattr::{self, XattrType};
-use bcachefs_kernel::{inode, inode_opts};
+use bcachefs_kernel::posix::xattr::{self, XattrType};
+use bcachefs_kernel::posix::{inode, inode_opts};
 use bcachefs_kernel::snapshots::subvolume;
 
 use bcachefs_kernel::os::kernel::PAGE_SIZE;

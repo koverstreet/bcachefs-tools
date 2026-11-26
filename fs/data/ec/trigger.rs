@@ -16,7 +16,7 @@
 
 use crate::init::passes::RecoveryPass;
 use crate::fs::Dev;
-use crate::accounting::ReconcileType;
+use crate::alloc::accounting::ReconcileType;
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_change, LruId};
@@ -36,10 +36,47 @@ use crate::util::alloc::AllocError;
 use crate::os::kernel::{cold_path, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::vstructs::plain_bytes;
-use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
+use crate::{bch_err, fs_inconsistent, fsck_err_on, prt};
+use crate::alloc::accounting;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, DataType};
+use crate::locking::{ByteLock, Locked};
+use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
+use nestify::nest;
+
+/// gc's copy of a stripe, which check_allocations counts its blocks' sectors
+/// into.
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct gc_stripe {
+    pub lock: Locked<ByteLock, GcStripeData>,
+}
+crate::genradix_entry!(gc_stripe);
+
+nest! {
+    /// What a gc_stripe's lock protects. Not packed, as a bucket's is:
+    /// @ptrs are referenced, and there's one of these per stripe, not per
+    /// bucket.
+    #[repr(C)]
+    #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
+    pub struct GcStripeData {
+        #[members]
+        #>[bitfield(u8)]
+        pub bits: pub struct gc_stripe_bits {
+            /* does a corresponding key exist in stripes btree? */
+            alive: u1,
+            __pad: u7,
+        },
+        pub sectors: u16,
+        pub nr_blocks: u8,
+        pub nr_redundant: u8,
+        pub block_sectors: [u16; c::BCH_BKEY_PTRS_MAX as usize],
+        pub ptrs: [c::bch_extent_ptr; c::BCH_BKEY_PTRS_MAX as usize],
+
+        pub r: c::bch_replicas_padded,
+    }
+}
 
 // ── A bucket's stripes ───────────────────────────────────────────────────
 

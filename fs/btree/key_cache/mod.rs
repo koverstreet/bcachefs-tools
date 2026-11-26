@@ -48,6 +48,67 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::{placed, Init, MaybeZeroable, Plain, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};
+use crate::btree::path::NodeLock;
+use crate::locking::LockedBy;
+use crate::util::alloc::Flags;
+use crate::util::projections::Volatile;
+use crate::util::rcu::RcuDropMember;
+
+pub const BKEY_CACHED_ACCESSED: u32 = 0;
+pub const BKEY_CACHED_DIRTY: u32 = 1;
+pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
+
+#[pin_data]
+#[repr(C)]
+#[derive(RcuHead, Init)]
+#[init_args(lock_flags: c::SixLockInitFlags)]
+pub struct bkey_cached {
+    #[pin]
+    #[init(c::btree_bkey_cached_common::init(true, lock_flags, Flags::empty()))]
+    pub c: c::btree_bkey_cached_common,
+
+    #[init(AtomicUsize::new(0))]
+    pub flags: AtomicUsize,
+    /* set write locked; read unlocked, by the table's lookups and the flush walk */
+    pub key: Volatile<c::bkey_cached_key>,
+
+    pub journal: c::journal_entry_pin,
+
+    #[init(LockedBy::new(Default::default(), ()))]
+    pub contents: LockedBy<crate::btree::key_cache::EntryContents, (), NodeLock<bkey_cached>>,
+    /* the key cache's lookups lock it: dropped once they're past it */
+    #[rcu_head]
+    #[init(unsafe { RcuDropMember::new() })]
+    pub rcu: RcuDropMember<RcuHead>,
+}
+
+impl bkey_cached {
+    /* C's test_bit()s and set_bit()s */
+    fn flag(&self, bit: u32) -> bool {
+        self.flags.load(Relaxed) & (1 << bit) != 0
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.flag(c::BKEY_CACHED_DIRTY)
+    }
+
+    pub fn accessed(&self) -> bool {
+        self.flag(c::BKEY_CACHED_ACCESSED)
+    }
+
+    pub fn immediate_flush(&self) -> bool {
+        self.flag(c::BKEY_CACHED_IMMEDIATE_FLUSH)
+    }
+
+    pub fn set_flag(&self, bit: u32) {
+        self.flags.fetch_or(1 << bit, Relaxed);
+    }
+
+    pub fn clear_flag(&self, bit: u32) {
+        self.flags.fetch_and(!(1 << bit), Relaxed);
+    }
+}
+
 
 pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
 

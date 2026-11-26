@@ -7,8 +7,9 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::ReconcileType;
-use crate::{accounting, bkey_fsck_err_on, fsck_err};
+use crate::alloc::accounting::ReconcileType;
+use crate::{bkey_fsck_err_on, fsck_err};
+use crate::alloc::accounting;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVal};
 use crate::btree::trigger::TriggerOp;

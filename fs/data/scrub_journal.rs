@@ -21,7 +21,7 @@ use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
-use crate::inode_opts::{get_fs, get_io_opts};
+use crate::posix::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
 use crate::util::alloc::{Global, Vec};
 use crate::util::log::LogMsg;

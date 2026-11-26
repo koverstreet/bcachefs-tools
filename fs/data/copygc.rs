@@ -55,7 +55,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::fs::Dev;
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::alloc::accounting_mem::MarkHeld;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;

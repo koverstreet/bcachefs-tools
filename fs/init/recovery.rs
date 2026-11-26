@@ -4,7 +4,7 @@
 //! new one initialized.
 
 use crate::init::passes::RecoveryPass;
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -16,7 +16,7 @@ use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs};
 use crate::init::error::{self, id};
 use crate::init::passes::{self, run_explicit_sb};
-use crate::journal::{journal_pos_from_member_info_resume, journal_read, journal_reread_for_rewind};
+use crate::journal::read::{journal_pos_from_member_info_resume, journal_read, journal_reread_for_rewind};
 use crate::journal::sb as journal_sb;
 use crate::journal::seq_blacklist::blacklist_entries_gc;
 use crate::opts::opts_hooks_pre_set;
@@ -30,7 +30,7 @@ use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
-use crate::{inode, logged_ops, namei, quota};
+use crate::posix::{inode, logged_ops, namei, quota};
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
             message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
 use c::FsFlag as Flag;

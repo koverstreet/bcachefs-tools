@@ -35,7 +35,7 @@ use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion};
 use crate::fs::Fs;
-use crate::{dirent, inode};
+use crate::posix::{dirent, inode};
 use crate::typeinfo::{self, AccessError, FieldRef, ResolveError, TypeInfo};
 use crate::util::names::Names;
 use core::fmt;

@@ -6,8 +6,8 @@
 
 use core::ffi::CStr;
 
-use crate::inode_opts::InodeOpt;
-use crate::xattr::XattrType;
+use crate::posix::inode_opts::InodeOpt;
+use crate::posix::xattr::XattrType;
 
 use super::inode::InodeInfo;
 
@@ -24,6 +24,6 @@ impl<'a> Dentry<'a> {
     /// The prefix xattrs of @ty list under, here - None for a type that
     /// isn't listed, or that the caller may not see.
     pub fn xattr_list_prefix(&self, ty: XattrType) -> Option<&'static CStr> {
-        crate::xattr::list_prefix(ty, *self)
+        crate::posix::xattr::list_prefix(ty, *self)
     }
 }

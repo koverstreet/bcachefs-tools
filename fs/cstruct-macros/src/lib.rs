@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-//! The macros our types are written with - see fs/types/lib.rs.
+//! The macros our types are written with - see fs/types.rs.
 //! Each parses its input with cstruct.rs, so a mistake is a compile error at
 //! the item, and expands to its Rust side:
 //!
@@ -338,8 +338,8 @@ pub fn counters(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
         let counters = quote::format_ident!("{name}Counters");
         Ok(quote::quote! {
             #s
-            crate::accounting::acct_counters!(#counters { #attr });
-            impl crate::accounting::KeyType for #name {
+            crate::alloc::accounting::acct_counters!(#counters { #attr });
+            impl crate::alloc::accounting::KeyType for #name {
                 type Delta = #counters<i64>;
                 type Read  = #counters<u64>;
             }

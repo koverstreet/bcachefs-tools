@@ -20,6 +20,43 @@ use crate::os::bio::BioSet;
 use crate::os::kernel::jiffies;
 use crate::util::sleep::Sleep;
 use crate::{bch_err, fsck_err_on, warn_on};
+use cstruct_macros::MaybeZeroable;
+
+/*
+ * Computed by bch2_journal_read(), consumed by bch2_fs_recovery() and
+ * journal.start():
+ *
+ * After journal read we have three sequence number zones:
+ *
+ *   [last_seq ... replay_end]  [replay_end+1 ... cur_seq-1]  [cur_seq ...]
+ *         replay these              blacklist these            new writes
+ *
+ * @last_seq:	Start of replay window — from last flush entry's last_seq.
+ *		All entries >= last_seq are needed for recovery.
+ *
+ * @replay_end:	End of replay window — last flush entry's seq.
+ *		Entries past this may exist on disk (noflush/torn writes)
+ *		but are unreliable.
+ *
+ * @cur_seq:	First sequence number available for new journal writes.
+ *		Initialized to highest on-disk entry + 1, then bumped
+ *		further by recovery (+64 for unclean
+ *		shutdown) and max'd with last blacklisted seq.
+ *		Must be strictly greater than every entry found on disk,
+ *		including noflush/blacklisted entries — we must never
+ *		reuse a sequence number that was already written.
+ *
+ * @clean:	Last flush entry was empty (filesystem was clean).
+ */
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct journal_start_info {
+    pub last_seq: u64,
+    pub replay_end: u64,
+    pub cur_seq: u64,
+    pub clean: bool,
+}
+
 
 impl c::journal {
     /* startup/shutdown: */
@@ -147,7 +184,7 @@ impl c::journal {
                 self.lock.lock().last_empty_seq = seq;
             }
 
-            let seq_devs = if !info.clean { crate::journal::replay_devs(fs, i) } else { Default::default() };
+            let seq_devs = if !info.clean { crate::journal::read::replay_devs(fs, i) } else { Default::default() };
 
             if seq_devs.nr != 0 {
                 let r = DevlistEntry::new(DataType::journal, seq_devs);

@@ -34,6 +34,116 @@ use crate::os::kernel::local_clock;
 use crate::os::workqueue::Queue;
 use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
+use crate::format::DataType;
+use crate::locking::Locked;
+use crate::new_lock;
+use crate::published;
+use crate::types::CacheAligned;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::util::projections::Volatile;
+use crate::util::task::RunQueue;
+use cstruct_macros::{Init, MaybeZeroable, NonZeroWord};
+use pin_init::pin_data;
+
+pub const WRITE_POINT_HASH_NR: u32 = 32;
+pub const WRITE_POINT_MAX: u32 = 32;
+
+/// A write point's index in c->allocator.write_points, plus one: a link in
+/// the write point hash, which C has as a u8, 0 for none.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, NonZeroWord)]
+pub struct WritePointIdx(core::num::NonZero<u8>);
+
+// SAFETY: None is all zeroes, as an Option of a NonZero is
+unsafe impl pin_init::ZeroableOption for WritePointIdx {}
+
+// SAFETY: a u8, any of which is an Option of one - 0 None
+unsafe impl crate::util::vstructs::Plain for Option<WritePointIdx> {}
+
+impl WritePointIdx {
+    pub fn new(idx: usize) -> Self {
+        WritePointIdx(u8::try_from(idx + 1).ok().and_then(core::num::NonZero::new).expect("a write point's index"))
+    }
+
+    pub fn get(self) -> usize {
+        usize::from(self.0.get()) - 1
+    }
+}
+
+/* the write point lock's: what a write allocating from it uses */
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct WritePointLocked {
+    /* calculated based on how many pointers we're actually going to use: */
+    pub sectors_free: c_uint,
+    pub prev_sectors_free: c_uint,
+
+    pub ptrs: c::open_buckets,
+    pub stripe: c::dev_stripe_state,
+
+    pub sectors_allocated: u64,
+}
+
+published! {
+    /// Which write point it is, and when it was last used: written under its
+    /// lock - and the identity under write_points_hash_lock too - and read
+    /// without either, to find one or the one to reuse.
+    #[derive(MaybeZeroable)]
+    pub struct WritePointId {
+        pub last_used: Volatile<u64>,
+        pub write_point: Volatile<c_ulong>,
+    }
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+#[init_args(data_type: DataType)]
+pub struct write_point_alloc {
+    pub __align: CacheAligned,
+    /* the next in its hash chain: write_points_hash_lock's */
+    pub hash_next: Volatile<Option<WritePointIdx>>,
+    #[init(data_type)]
+    pub data_type: DataType,
+    #[pin]
+    #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
+    pub lock: Locked<Lockdep<ByteLock>, WritePointLocked, WritePointId>,
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+#[init_args(data_type: DataType)]
+pub struct write_point {
+    #[pin]
+    #[init(write_point_alloc::init(data_type))]
+    pub alloc: write_point_alloc,
+    pub __align: CacheAligned,
+    /*
+     * its writes, their IO done, run by its work item: their index updates -
+     * queued on the queue it's given, once that's made
+     */
+    #[init(MaybeRcuAlloc::new(RunQueue::init()))]
+    pub index_updates: MaybeRcuAlloc<RunQueue>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable)]
+pub struct write_point_specifier {
+    pub v: c_ulong,
+}
+
+published! {
+    /// The write points in use, of write_points[], and their hash, by the
+    /// specifier each was last used for: read without write_points_hash_lock
+    /// - write_point.rs.
+    #[derive(MaybeZeroable)]
+    pub struct WritePointsHash {
+        pub write_points_nr: Volatile<c_uint>,
+        pub write_points_hash: [Volatile<Option<WritePointIdx>>; c::WRITE_POINT_HASH_NR as usize],
+    }
+}
+
 
 /// write_points_hash_lock, held.
 type HashGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, (), c::WritePointsHash>;

@@ -17,7 +17,7 @@ use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::journal::{entry_type, JsetEntryType};
+use bcachefs_kernel::journal::read::{entry_type, JsetEntryType};
 use bcachefs_kernel::util::vstructs::{cast_plain, cast_plain_slice, from_bytes_mut, plain_bytes_mut, Head,
                                       SelfSized, Unvalidated};
 use bcachefs_kernel::POS_MIN;
@@ -611,7 +611,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
                           cli.single_replica);
                 Ok(())
             }).map_err(|e| anyhow!("error walking btree {}: {}",
-                btree::types::btree_id_str(id), e))?;
+                btree::btree_id_str(id), e))?;
         }
     }
 

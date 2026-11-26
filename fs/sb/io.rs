@@ -588,7 +588,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
             let m = crate::sb::members::sb_member(sb, i).unwrap_or_else(::pin_init::zeroed);
             m.nbuckets.get() * u64::from(m.bucket_size.get())
         }).sum::<u64>();
-        let bits = crate::inode::shard_bits_default(
+        let bits = crate::posix::inode::shard_bits_default(
             crate::os::kernel::num_online_cpus(), fs_size << 9, btree_node_bytes);
         sb.set_shard_inums_nbits(bits as u8);
     }

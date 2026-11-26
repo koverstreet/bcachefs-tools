@@ -810,7 +810,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
     -> Result<(), BchError>
 {
     path.reset();
-    match crate::namei::inum_snapshot_to_path(t, inum, snapshot, path) {
+    match crate::posix::namei::inum_snapshot_to_path(t, inum, snapshot, path) {
         Err(e) if !is_restart(&e) => {}
         r => return r,
     }
@@ -824,7 +824,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
         let snap = k.k.p.snapshot;
         if snap != snapshot && k.k.is_inode() {
             path.reset();
-            match crate::namei::inum_snapshot_to_path(t, inum, snap, path) {
+            match crate::posix::namei::inum_snapshot_to_path(t, inum, snap, path) {
                 Err(e) if !is_restart(&e) => ret = Err(e),
                 r => return r,
             }
@@ -893,9 +893,9 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
     -> Result<(), BchError>
 {
     let ret = if subvol != 0 {
-        crate::namei::inum_to_path(t, c::subvol_inum { subvol: subvol.into(), inum: pos.inode }, out)
+        crate::posix::namei::inum_to_path(t, c::subvol_inum { subvol: subvol.into(), inum: pos.inode }, out)
     } else if pos.snapshot != 0 {
-        crate::namei::inum_snapshot_to_path(t, pos.inode, pos.snapshot, out)
+        crate::posix::namei::inum_snapshot_to_path(t, pos.inode, pos.snapshot, out)
     } else {
         Ok(())
     };

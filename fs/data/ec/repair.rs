@@ -33,7 +33,7 @@ use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
-use crate::inode_opts::get_io_opts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
 use crate::util::alloc::KBox;

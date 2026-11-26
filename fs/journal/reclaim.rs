@@ -34,6 +34,39 @@ use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, Sleep, SleepError};
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt};
+use crate::util::projections::Volatile;
+use crate::published;
+use core::ffi::{c_uint, c_ulong};
+use cstruct_macros::{bch_enum, MaybeZeroable};
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct journal_space {
+    /* Units of 512 bytes sectors: */
+    pub next_entry: c_uint, /* How big the next journal entry can be */
+    pub total: c_uint,
+}
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum JournalSpaceFrom {
+    journal_space_discarded,
+    journal_space_clean_ondisk,
+    journal_space_clean,
+    journal_space_total,
+    journal_space_nr,
+}
+
+published! {
+    /// reclaim_lock's: written by reclaim, read by anyone.
+    #[derive(MaybeZeroable)]
+    pub struct ReclaimPublished {
+        pub last_flushed: Volatile<c_ulong>,
+        pub nr_direct_reclaim: Volatile<u64>,
+        pub nr_background_reclaim: Volatile<u64>,
+    }
+}
+
 
 type ReclaimGuard<'a> = ExclusiveGuard<'a, Mutex, (), c::ReclaimPublished>;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //! Options: mount options, the sysfs options/ files, format options, and the
-//! filesystem defaults the superblock keeps - one list, bch_opts' fields
-//! (opts_types.rs), and OPTS, the table #[derive(Options)] makes from them.
+//! filesystem defaults the superblock keeps - one list, bch_opts' fields,
+//! and OPTS, the table #[derive(Options)] makes from them.
 //!
 //! Terms:
 //! - An option, Opt: what its field's #[opt] says of one - its type and
@@ -32,7 +32,7 @@ use crate::fs::Dev;
 use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::inode_opts::InodeOpt;
+use crate::posix::inode_opts::InodeOpt;
 use crate::sb::io::SbState;
 use crate::prt;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, plain_bytes_mut, Unvalidated};

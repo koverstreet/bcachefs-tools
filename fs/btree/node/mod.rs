@@ -37,6 +37,57 @@ use crate::format::BkeyType;
 use crate::util::alloc::Flags;
 use cstruct_macros::{Init, MaybeZeroable};
 use pin_init::pin_data;
+use cstruct_macros::{bch_enum, bitfield};
+
+#[bch_enum(closed)]
+#[nr]
+#[repr(u32)]
+pub enum BtreeWriteType {
+    initial = 0,
+    init_next_bset = 1,
+    cache_reclaim = 2,
+    journal_reclaim = 3,
+    interior = 4,
+}
+
+pub const BTREE_WRITE_TYPE_BITS: u32 = (c::BtreeWriteType::NR as u32).next_power_of_two().ilog2();
+
+/// A btree node's flags: the pending write's type, then the node's state.
+#[bitfield(u32, atomic)]
+pub struct BtreeNodeFlags {
+    #[bits(3)] write_type: BtreeWriteType,
+    read_in_flight: bool,
+    read_error: bool,
+    dirty: bool,
+    need_write: bool,
+    write_blocked: bool,
+    will_make_reachable: bool,
+    noevict: bool,
+    #[bits(2)] write_idx: u8,
+    accessed: bool,
+    write_in_flight: bool,
+    write_in_flight_inner: bool,
+    just_written: bool,
+    dying: bool,
+    fake: bool,
+    need_rewrite: bool,
+    need_rewrite_error: bool,
+    need_rewrite_ptr_written_zero: bool,
+    never_write: bool,
+    pinned: bool,
+    permanent: bool,
+    #[bits(2)] nr_written_bsets: u8,
+    /* the journal's flushed the accumulating write's pin */
+    pin_flushed: bool,
+    /* a write behind the accumulating one: one the journal's flushed */
+    prev_write_pending: bool,
+    prev_write_blocked: bool,
+    #[bits(3)] __: u8,
+}
+
+const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
+                      BtreeNodeFlags::WRITE_TYPE_BITS == c::BTREE_WRITE_TYPE_BITS as usize);
+
 
 /* Btree nodes: */
 
@@ -110,7 +161,7 @@ pub struct BtreeNode {
 
     pub hash_val: core::cell::UnsafeCell<u64>,
 
-    pub flags: cs::AtomicBtreeNodeFlags,
+    pub flags: AtomicBtreeNodeFlags,
     /*
      * XXX: written and whiteout_u64s are the node writer's: the thread that
      * cleared BTREE_NODE_dirty, which may hold only a read lock. They want a
@@ -162,7 +213,7 @@ pub struct BtreeNode {
     /* lru list */
     pub list: ListLinks,
 
-    pub cache_state: LockedBy<cs::BtreeNodeCacheState, (), crate::btree::types::BtreeCacheLockAt>,
+    pub cache_state: LockedBy<cs::BtreeNodeCacheState, (), crate::btree::cache::BtreeCacheLockAt>,
 
     /* its slot in bc->nodes */
     pub nodes_idx: u32,

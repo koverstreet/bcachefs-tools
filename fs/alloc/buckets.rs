@@ -4,7 +4,7 @@
 
 use crate::init::passes::RecoveryPass;
 use crate::fs::{Dev, StateLockWrite};
-use crate::accounting::{self, mod_dev_cached_sectors};
+use crate::alloc::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;

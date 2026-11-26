@@ -15,7 +15,7 @@ use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::path::{LockedNode, PathIdx, PathsUpdates, Write};
-use crate::btree::types::BtreeWriteType;
+use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{init_next, node_write, post_write_cleanup, BtreeWriteFlags};
 use crate::c;
 use crate::errcode::{BchError, Errcode};

@@ -53,7 +53,7 @@ use crate::data::scrub_journal::BadRef;
 use crate::data::update::{fail_should_trace, is_scrub};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
-use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
+use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::debug::trace::events;
 use crate::os::kernel::current_id;
 use crate::util::Printbuf;

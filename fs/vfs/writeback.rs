@@ -12,7 +12,7 @@ use crate::c;
 use crate::data::write::{write, WriteBio, WriteFor};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::inode_opts;
+use crate::posix::inode_opts;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Box;
 use crate::os::blkdev::plugged;

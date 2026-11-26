@@ -21,7 +21,8 @@ use crate::snapshots::subvolume;
 use crate::os::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::task::Resume;
-use crate::{btree_trans, fs_inconsistent, inode};
+use crate::{btree_trans, fs_inconsistent};
+use crate::posix::inode;
 use c::WriteFlags as w;
 use core::ops::ControlFlow;
 

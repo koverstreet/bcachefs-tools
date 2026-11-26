@@ -191,7 +191,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
 {
     let fs = t.fs();
     let btree = u.btree;
-    let opts = crate::inode_opts::get_fs(fs, true);
+    let opts = crate::posix::inode_opts::get_fs(fs, true);
 
     /*
      * Our caller uses BCH_TRANS_COMMIT_no_check_rw, so after emergency

@@ -51,7 +51,7 @@ use bcachefs_kernel::btree::iter::{
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::inode;
+use bcachefs_kernel::posix::inode;
 use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::{Head, Unvalidated};
 use bcachefs_kernel::c::DegradedAction;

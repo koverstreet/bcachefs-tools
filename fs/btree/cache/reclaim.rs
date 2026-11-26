@@ -3,7 +3,8 @@
 use super::{bch2_btree_pos_to_text, cached_node, OwnedNode};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::LockedNode;
-use crate::btree::types::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard, BtreeWriteType};
+use super::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard};
+use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
 use crate::data_structures::list::Walk;

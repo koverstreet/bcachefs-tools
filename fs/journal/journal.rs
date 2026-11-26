@@ -115,6 +115,8 @@
  * journal is unreadable, recovery proceeds from the other copies.
  */
 
+#![allow(non_camel_case_types)]
+
 use core::cell::Cell;
 use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::mem;
@@ -127,7 +129,6 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::c::JournalCycleFlags as Cycle;
 use crate::c::JournalFlag as Journal;
-use crate::c::JournalGuard;
 use crate::journal::flush_wait::{BufWait, FlushEntry, FlushWait, Waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
                                  JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::debug::trace::events;
@@ -154,7 +155,717 @@ use crate::util::vstructs::Head;
 use crate::util::refcount::TryRefcount;
 use crate::util::{Printbuf, ToText};
 use crate::{prt, warn_once};
+use crate::fs::Fs;
+use cstruct_macros::bch_enum;
 use zerocopy::IntoBytes;
+use crate::types::CacheAligned;
+use crate::journal::write::{journal_buf_bits, BufJset, BufLocked, JournalKey, JournalWrite, JournalWriteRef, JsetBuf, WriteAlloc};
+use crate::journal::reclaim::ReclaimPublished;
+use crate::util::late::Late;
+use crate::journal::buckets::drop_retired;
+use crate::journal::pins::{flush_degraded, pin_resize, PinBuf, PinRange};
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::util::place::{Contained, Placed};
+use crate::util::projections::Volatile;
+use crate::util::refcount::AtomicRef;
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, Mutex, MutexNoio, PercpuRwSem, SpinLockIrq};
+use crate::os::kthread::Daemon;
+use crate::os::workqueue::{DelayedWork, OnQueue, ReffedWork, Workqueue, WqFlags};
+use crate::{new_lock, published};
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicI64, AtomicU64};
+use cstruct_macros::{bitfield, placed, Init, Late, MaybeZeroable};
+use nestify::nest;
+use pin_init::pin_data;
+
+/* btree write buffer steals 8 bits for its own purposes: */
+pub const JOURNAL_SEQ_MAX: u64 = (1 << 56) - 1;
+
+pub const JOURNAL_STATE_BUF_BITS: u32 = 2;
+pub const JOURNAL_STATE_BUF_NR: u32 = 1 << c::JOURNAL_STATE_BUF_BITS;
+pub const JOURNAL_STATE_BUF_MASK: u32 = c::JOURNAL_STATE_BUF_NR - 1;
+
+/* journal bufs: entries open or in flight, at most */
+pub const JOURNAL_BUF_NR: u32 = 256;
+
+/*
+ * One journal buffer: staging area for a journal entry. A slot of
+ * j->in_flight, made with the journal: an entry from the moment it's
+ * opened until its write completes and seq_ondisk advances past it.
+ *
+ * Reservation concurrency is bounded by JOURNAL_STATE_BUF_NR via the
+ * reservation state encoded in j->reservations; in-flight depth is
+ * bounded by JOURNAL_BUF_NR, and natural memory/device backpressure.
+ */
+#[placed(InFlightLocked.bufs[], index = idx: u8)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct journal_buf {
+    /* the entry's jset, till its write starts */
+    pub data: BufJset,
+    /* and the write, made with it */
+    #[init(LockedBy::new(None, ()))]
+    pub write: BufLocked<Option<MaybeRcuAlloc<JournalWrite>>>,
+    /* its write's ref on the journal's writes_in_flight */
+    #[init(LockedBy::new(None, ()))]
+    pub in_flight: BufLocked<Option<JournalWriteRef>>,
+
+    /* its write's, published as it's allocated */
+    #[init(LockedBy::new(Default::default(), ()))]
+    pub key: BufLocked<JournalKey>,
+
+    pub last_seq: BufLocked<u64>, /* copy of data->last_seq */
+
+    pub sectors: BufLocked<c_uint>, /* maximum size for current entry */
+    pub disk_sectors: BufLocked<c_uint>, /* maximum size entry could have been, if
+                                            buf_size was bigger */
+    pub u64s_reserved: BufLocked<c_uint>,
+
+    pub bits: BufLocked<journal_buf_bits>,
+
+    /* must not be memset, only manipulated by xchg/cmpxchg */
+    #[init(AtomicPtr::new(crate::journal::flush_wait::JOURNAL_BUF_NOT_IN_FLIGHT))]
+    pub wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
+}
+
+// its wait word only ever touched atomically, the rest had only as its
+// LockedBys and BufJset let their holders have it, on any thread
+unsafe impl Sync for journal_buf {}
+
+impl journal_buf {
+    /// Its journal, as 'static: a buf is retired before its journal goes, and
+    /// what it hands out of it goes no further than the buf's write.
+    pub fn journal(&self) -> &'static c::journal {
+        self.container().journal()
+    }
+}
+
+/*
+ * The bufs of the entries open or in flight, a fifo by seq - locked(), with
+ * j->lock held - whose front and back are the journal's: (seq_ondisk, seq],
+ * which j->lock moves both ends of - an entry's opened at seq's increment,
+ * and leaves as seq_ondisk passes it.
+ */
+#[placed(journal.in_flight)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct InFlight {
+    #[pin]
+    locked: InFlightLocked,
+}
+
+const _: () = assert!(JOURNAL_BUF_NR.is_power_of_two(), "a seq's buf is its low bits");
+
+impl InFlight {
+    pub fn journal(&self) -> &'static c::journal {
+        unsafe { &*core::ptr::from_ref(self.container()) }
+    }
+
+    /// The buf @seq's entry has, if it's open or in flight - or another seq's:
+    /// for what reads its wait word without j->lock.
+    pub fn buf(&self, seq: u64) -> &journal_buf {
+        &self.locked.bufs[seq as usize & (JOURNAL_BUF_NR as usize - 1)]
+    }
+
+    /// Its fifo, under the j->lock that moves its ends. Of the journal, not
+    /// the guard: the bufs it hands out have fields the guard then writes.
+    pub fn locked(&self, _: &c::JournalGuard<'_>) -> &InFlightLocked {
+        &self.locked
+    }
+}
+
+/// InFlight's bufs, as the fifo they are with j->lock held.
+#[placed(InFlight.locked)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct InFlightLocked {
+    #[pin]
+    bufs: [journal_buf; JOURNAL_BUF_NR as usize],
+}
+
+impl InFlightLocked {
+    fn journal(&self) -> &'static c::journal {
+        self.container().journal()
+    }
+}
+
+// every slot a journal_buf, made with the journal
+unsafe impl FifoRead for InFlightLocked {
+    type Elem = journal_buf;
+    type Idx = u64;
+
+    fn front_idx(&self) -> u64 {
+        self.journal().lock.seq_ondisk.get() + 1
+    }
+
+    fn back_idx(&self) -> u64 {
+        self.journal().fs().journal_cur_seq() + 1
+    }
+
+    fn capacity(&self) -> usize {
+        JOURNAL_BUF_NR as usize
+    }
+
+    fn slot(&self, seq: u64) -> *const journal_buf {
+        &self.bufs[seq as usize & (JOURNAL_BUF_NR as usize - 1)]
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct journal_res {
+    pub ref_: bool,
+    pub has_overwrites: bool,
+    pub u64s: u16,
+    pub offset: u32,
+    pub seq: u64,
+}
+
+/// The journal's reservation state, one word: its fields are
+/// journal_res_state_bits.
+#[repr(transparent)]
+#[derive(Clone, Copy, MaybeZeroable)]
+pub struct journal_res_state {
+    pub v: u64,
+}
+
+/*
+ * The bit layout within the word is the same on both byte orders:
+ * cur_entry_offset at bit 0, idx at 22, then the four counts at bit
+ * 24 + idx*10. That invariant lets count() / inc() / state_buf_put()
+ * index a count with a single shift, not a switch.
+ */
+#[bitfield(u64)]
+pub struct journal_res_state_bits {
+    cur_entry_offset: u22,
+    idx:              u2,
+    buf0_count:       u10,
+    buf1_count:       u10,
+    buf2_count:       u10,
+    buf3_count:       u10,
+}
+
+pub const JOURNAL_STATE_BUF_COUNT_BITS: u32 = 10; /* matches bufN_count:10 above */
+pub const JOURNAL_STATE_BUF_COUNT_MAX: u32 = (1 << c::JOURNAL_STATE_BUF_COUNT_BITS) - 1;
+pub const JOURNAL_STATE_BUF0_SHIFT: u32 = 24; /* cur_entry_offset:22 + idx:2 */
+
+/* bytes: */
+pub const JOURNAL_ENTRY_SIZE_MIN: u32 = 64 << 10; /* 64k */
+
+/*
+ * The block layer is fragile with large bios - it should be able to process any
+ * IO incrementally, but...
+ *
+ * 4MB corresponds to bio_kmalloc() -> UIO_MAXIOV
+ */
+pub const JOURNAL_ENTRY_SIZE_MAX: u32 = 4 << 20; /* 4M */
+
+/*
+ * We stash some journal state as sentinal values in cur_entry_offset:
+ * note - cur_entry_offset is in units of u64s
+ */
+pub const JOURNAL_ENTRY_OFFSET_MAX: u32 = (1 << 22) - 1;
+
+pub const JOURNAL_ENTRY_BLOCKED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 2;
+pub const JOURNAL_ENTRY_CLOSED_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX - 1;
+pub const JOURNAL_ENTRY_ERROR_VAL: u32 = c::JOURNAL_ENTRY_OFFSET_MAX;
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum JournalFlag {
+    degraded,
+    replay_done,
+    running,
+    may_skip_flush,
+    need_flush_write,
+    med_on_space,
+    low_on_space,
+    low_on_pin,
+    low_on_wb,
+    stuck_reported,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct journal_rewind_range {
+    pub from: u64,
+    pub to: u64,
+}
+
+/* j->lock's: reached only with it held */
+#[placed(journal.lock.*)]
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct JournalLocked {
+    pub cur_entry_sectors: c_uint,
+    pub cur_entry_offset_if_blocked: c_uint,
+    pub flushes_outstanding: c_uint,
+
+    pub seq_write_started: u64,
+    pub last_empty_seq: u64,
+
+    /* the next entry's buffer and write: both, or neither */
+    pub free_buf:   Option<JsetBuf>,
+    pub free_write: Option<MaybeRcuAlloc<JournalWrite>>,
+
+    pub dirty_entry_bytes: usize,
+    pub space: [c::journal_space; c::JournalSpaceFrom::journal_space_nr as usize],
+    pub last_flush_write: c_ulong,
+    pub nr_flush_writes: u64,
+    pub nr_noflush_writes: u64,
+    pub entry_bytes_written: u64,
+
+    /*
+     * We may queue up some things to be journalled (log messages) before
+     * the journal has actually started - stash them here:
+     */
+    pub early_journal_entries: Vec<u64>,
+}
+
+published! {
+    /// Everything a reservation reads, in one cacheline, beside the counter
+    /// its cmpxchg takes the line exclusive for.
+    #[derive(MaybeZeroable)]
+    pub struct JournalHot {
+        pub __align: CacheAligned,
+        pub reservations: AtomicU64,
+        /*
+         * seq, as reservations read it: a copy, set with it, so seq's own
+         * readers don't share this line with every reservation's cmpxchg
+         */
+        pub res_seq: AtomicI64,
+        /* Max size of current journal entry */
+        pub cur_entry_u64s: Volatile<c_uint>,
+        pub watermark: Volatile<u32>,
+        /*
+         * Each open reservation's ring slot, indexed by seq &
+         * JOURNAL_STATE_BUF_MASK: its journal_buf's data, and whether the
+         * entry has overwrites - copies, so a reservation doesn't touch the
+         * journal_buf. Set in journal_entry_open().
+         */
+        pub ring_data: [AtomicPtr<Head<c::jset>>; c::JOURNAL_STATE_BUF_NR as usize],
+        pub ring_has_overwrites: [Volatile<bool>; c::JOURNAL_STATE_BUF_NR as usize],
+    }
+}
+
+published! {
+    /// j->lock's, written under it and read without it.
+    #[derive(MaybeZeroable)]
+    pub struct JournalPublished {
+        pub hot: JournalHot,
+
+        /* Sequence number of most recent journal entry (last entry in @pin) */
+        pub seq: AtomicI64,
+
+        /*
+         * 0, or -ENOSPC if waiting on journal reclaim, or -EROFS if
+         * insufficient devices:
+         */
+        pub cur_entry_error: Volatile<c_int>,
+        /* if nonzero, we may not open a new journal entry: */
+        pub blocked: Volatile<c_uint>,
+        pub can_discard: Volatile<bool>,
+
+        /*
+         * We have to ratelimit at the journal for the allocator because the
+         * btree write buffer allocates btree nodes after the journal -
+         * otherwise we'd get HOL blocking and priority inversion:
+         */
+        pub watermark_open_buckets: Volatile<u8>,
+
+        /* Reserved space in journal entry to be used just prior to write */
+        pub entry_u64s_reserved: Volatile<c_uint>,
+
+        /* seq, last_seq from the most recent journal entry successfully written */
+        pub seq_ondisk: Volatile<u64>,
+        pub last_seq_ondisk: Volatile<u64>,
+        pub err_seq: Volatile<u64>,
+        pub last_seq: Volatile<u64>,
+        pub replay_journal_seq_end: Volatile<u64>,
+
+        pub flushed_seq_ondisk: Volatile<u64>,
+        /* Oldest journal seq that is safe to rewind to — discards of buckets
+         * freed at >= this seq have not yet been issued */
+        pub rewind_seq: Volatile<u64>,
+        pub rewind_seq_ondisk: Volatile<u64>,
+        pub buf_size_want: Volatile<c_uint>,
+    }
+}
+
+impl JournalPublished {
+    /* No entry open */
+    fn closed() -> Self {
+        let p: Self = ::pin_init::Zeroable::zeroed();
+        p.hot.reservations.store(c::JOURNAL_ENTRY_CLOSED_VAL.into(), core::sync::atomic::Ordering::Relaxed);
+        p
+    }
+}
+
+pub type JournalGuard<'a> =
+    ExclusiveGuard<'a, SpinLockIrq, JournalLocked, JournalPublished, crate::locking::Exclusive, JournalLockAt>;
+
+/// The journal lock's place, for what it covers to name.
+pub type JournalLockAt = crate::at!(journal.lock);
+
+pub(super) type WritesInFlightAt = crate::at!(journal.writes_in_flight);
+
+/* The filesystem's write refs, from the journal: nest!() takes no macro in a type */
+type FsWrites = crate::field!(super.writes);
+/* And its ro refs, for what doesn't need it rw */
+type FsRoRef = crate::field!(super.ro_ref);
+/* And its own queue */
+type JournalWq = OnQueue<crate::field!(wq)>;
+pub type ReclaimThread = Daemon;
+pub type RewindRanges = LockedBy<Vec<c::journal_rewind_range>, (), NotRw<'static>>;
+
+/* Embedded in struct bch_fs */
+nest! {
+    #[placed(Fs.journal)]
+    #[pin_data]
+    #[derive(MaybeZeroable)]*
+    #[derive(Init, Late)]
+    #[repr(C)]*
+    pub struct journal {
+        pub __align: CacheAligned,
+
+        #[pin]
+        #[init_locked(JournalPublished::closed(), "&j->lock")]
+        pub lock: Placed<Locked<SpinLockIrq, JournalLocked, JournalPublished>, JournalLockAt>,
+
+        #[pin]
+        pub in_flight: InFlight,
+
+        pub flags: crate::data_structures::bitmap::AtomicBitflags<c::JournalFlag>,
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        #[init(AtomicPtr::new((-(c::EROFS as isize)) as *mut c::task_struct))]
+        pub stop_thread: AtomicPtr<c::task_struct>,
+
+        /*
+         * Protects journal_buf->data, when accessing without a jorunal
+         * reservation: for synchronization between the btree write buffer code
+         * and the journal write path:
+         */
+        #[pin]
+        #[init(new_lock!((), "&j->buf_lock"))]
+        pub buf_lock: MutexNoio,
+
+        /*
+         * When we need a flush but no open journal entry was flushable, wait
+         * here - transferred to journal_buf.wait on entry open
+         */
+        pub flush_wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
+
+        /* Used when waiting because the journal was full */
+        pub async_wait: EventCount,
+        pub reclaim_flush_wait: EventCount,
+
+        #[pin]
+        pub(crate) write_work: DelayedWork<journal_write_work, JournalWq>,
+        #[late(Workqueue::new(c"bcachefs_journal",
+                              WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::PERCPU, 512),
+               ENOMEM_fs_other_alloc)]
+        pub wq: Late<Workqueue>,
+        #[late(Workqueue::new(c"bcachefs_journal_discard",
+                              WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::UNBOUND | WqFlags::MEM_RECLAIM, 512),
+               ENOMEM_fs_other_alloc)]
+        pub discard_wq: Late<Workqueue>,
+
+        pub flushing_seq: AtomicI64,
+        /* each write's ref, held to the end of write_done() - past waking its
+         * flushers: the filesystem's exit waits them out */
+        #[pin]
+        #[init(AtomicRef::new(()))]
+        pub writes_in_flight: Placed<AtomicRef<()>, WritesInFlightAt>,
+        pub oldest_seq_found_ondisk: Volatile<u64>,
+
+        /*
+         * Rewind ranges: keys from journal entries with seq
+         * in (to, from] use overwrite entries instead of
+         * btree_keys entries.
+         */
+        pub rewind_ranges: RewindRanges,
+
+        /*
+         * FIFO of journal entries whose btree updates have not yet been
+         * written out.
+         *
+         * Each entry is a reference count. The position in the FIFO is the
+         * entry's sequence number relative to @seq.
+         *
+         * The journal entry itself holds a reference count, put when the
+         * journal entry is written out. Each btree node modified by the journal
+         * entry also holds a reference count, put when the btree node is
+         * written.
+         *
+         * When a reference count reaches zero, the journal entry is no longer
+         * needed. When all journal entries in the oldest journal bucket are no
+         * longer needed, the bucket can be discarded and reused.
+         */
+        #[pin]
+        #[init(new_lock!(PinBuf { entries: Vec::new() }, ::pin_init::zeroed(),
+                         "&j->pin_resize_lock"))]
+        pub pin_resize_lock: Locked<PercpuRwSem, PinBuf, PinRange>,
+        #[pin]
+        pub(crate) pin_resize_work: ReffedWork<pin_resize, FsRoRef>,
+
+        /* Flushes under-replicated pins when a device comes back: */
+        #[pin]
+        pub(crate) flush_degraded_work: ReffedWork<flush_degraded, FsRoRef>,
+
+        /* Drops retired journal buckets reclaim is done with: buckets.rs */
+        #[pin]
+        pub(crate) drop_retired_work: ReffedWork<drop_retired, FsWrites>,
+
+        pub replay_journal_seq: Volatile<u64>,
+
+        /* the allocating write's: journal writes allocate one at a time, in order */
+        #[pin]
+        #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&j->write_alloc"))]
+        pub write_alloc: Locked<Mutex, WriteAlloc>,
+
+        #[pin]
+        #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
+        pub reclaim_lock: Locked<Mutex, (), ReclaimPublished>,
+        /*
+         * Used for waiting until journal reclaim has freed up space in the
+         * journal:
+         */
+        pub reclaim_wait: EventCount,
+        /* from reclaim_start() to reclaim_stop(): journal/reclaim.rs */
+        #[pin]
+        #[init(Daemon::new())]
+        pub reclaim_thread: ReclaimThread,
+        pub next_reclaim: Volatile<c_ulong>,
+
+        pub flush_in_progress: AtomicPtr<c::journal_entry_pin>,
+        pub flush_in_progress_dropped: Volatile<bool>,
+        /* its flush function, for messages: the pin can be freed under them */
+        pub flush_in_progress_fn: AtomicPtr<c_void>,
+        /* Woken as a pin's flush ends: journal/reclaim.rs */
+        pub pin_flush_wait: EventCount,
+
+        pub write_start_time: Volatile<u64>,
+
+        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+        #[pin]
+        #[init(crate::new_lockdep_map!("journal res"))]
+        pub res_map: crate::locking::LockdepMap,
+    }
+}
+const _: () = assert!(core::mem::size_of::<JournalHot>() == core::mem::align_of::<JournalHot>(),
+                      "JournalHot is more than a cacheline");
+
+impl journal {
+    pub fn fs(&self) -> &Fs {
+        self.container()
+    }
+}
+
+/*
+ * journal_entry_res - reserve space in every journal entry:
+ */
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct journal_entry_res {
+    /* written by entry_res_resize(), under j->lock */
+    pub u64s: Volatile<c_uint>,
+}
+
+
+#[bch_enum(flags)]
+#[repr(u32)]
+pub enum JournalCycleFlags {
+    must_close = 1 << 0,
+    must_open = 1 << 1,
+    force_close = 1 << 2,
+}
+
+/* First bits for BCH_WATERMARK: */
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum JournalResFlag {
+    __JOURNAL_RES_GET_NONBLOCK = c::BCH_WATERMARK_BITS,
+    __JOURNAL_RES_GET_CHECK,
+}
+
+pub const JOURNAL_RES_GET_NONBLOCK: u32 = 1 << c::JournalResFlag::__JOURNAL_RES_GET_NONBLOCK as u32;
+pub const JOURNAL_RES_GET_CHECK: u32 = 1 << c::JournalResFlag::__JOURNAL_RES_GET_CHECK as u32;
+
+impl c::journal {
+    /// For C, which writes what it changes through it as its locks allow.
+    pub fn as_ptr(&self) -> *mut c::journal {
+        core::ptr::from_ref(self).cast_mut()
+    }
+
+    pub fn halted(&self) -> bool {
+        self.reservations().cur_entry_offset() == c::JOURNAL_ENTRY_ERROR_VAL
+    }
+
+    /// journal_shutdown if it's halted: bch2_journal_error().
+    pub fn error(&self) -> Result<(), BchError> {
+        if self.halted() {
+            Err(crate::errcode::Errcode::journal_shutdown.into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/* idx follows cur_entry_offset's 22 bits, the buf counts idx's 2 */
+const STATE_IDX_SHIFT: u32 = c::JOURNAL_ENTRY_OFFSET_MAX.count_ones();
+
+impl c::journal_res_state {
+    pub fn from_v(v: u64) -> Self {
+        c::journal_res_state { v }
+    }
+
+    pub fn v(self) -> u64 {
+        self.v
+    }
+
+    fn count_shift(idx: u32) -> u32 {
+        c::JOURNAL_STATE_BUF0_SHIFT + idx * c::JOURNAL_STATE_BUF_COUNT_BITS
+    }
+
+    pub fn count(self, idx: u32) -> u32 {
+        (self.v() >> Self::count_shift(idx)) as u32 & c::JOURNAL_STATE_BUF_COUNT_MAX
+    }
+
+    /// Where the open entry's next reservation goes, in u64s - or one of the
+    /// JOURNAL_ENTRY_*_VALs, for no entry open.
+    pub fn cur_entry_offset(self) -> u32 {
+        (self.v() & u64::from(c::JOURNAL_ENTRY_OFFSET_MAX)) as u32
+    }
+
+    pub fn set_cur_entry_offset(&mut self, offset: u32) {
+        let mask = u64::from(c::JOURNAL_ENTRY_OFFSET_MAX);
+        *self = Self::from_v(self.v() & !mask | u64::from(offset) & mask);
+    }
+
+    /// The ring slot of the entry open, or last open.
+    pub fn idx(self) -> u32 {
+        (self.v() >> STATE_IDX_SHIFT) as u32 & c::JOURNAL_STATE_BUF_MASK
+    }
+
+    /// @idx, wrapped to a ring slot, as C's 2 bit field wraps.
+    pub fn set_idx(&mut self, idx: u32) {
+        let mask = u64::from(c::JOURNAL_STATE_BUF_MASK) << STATE_IDX_SHIFT;
+        *self = Self::from_v(self.v() & !mask | u64::from(idx) << STATE_IDX_SHIFT & mask);
+    }
+
+    pub fn is_open(self) -> bool {
+        self.cur_entry_offset() < c::JOURNAL_ENTRY_CLOSED_VAL
+    }
+
+    /// A ref on idx()'s buf - false, and none, if its count is full.
+    pub fn inc(&mut self) -> bool {
+        let idx = self.idx();
+        if self.count(idx) == c::JOURNAL_STATE_BUF_COUNT_MAX {
+            return false;
+        }
+        *self = Self::from_v(self.v() + (1 << Self::count_shift(idx)));
+        true
+    }
+}
+
+const _: () = assert!(STATE_IDX_SHIFT + c::JOURNAL_STATE_BUF_MASK.count_ones() == c::JOURNAL_STATE_BUF0_SHIFT,
+                      "journal_res_state: idx between cur_entry_offset and the counts");
+
+impl c::journal {
+    /// j->reservations, as it is now.
+    #[inline]
+    pub fn reservations(&self) -> c::journal_res_state {
+        c::journal_res_state::from_v(self.lock.hot.reservations.load(Relaxed))
+    }
+
+    /// @f of the state swapped in, retried until it sticks: Ok(the state before
+    /// it), or Err(the state @f gave None for).
+    #[inline]
+    pub fn reservations_update(&self, mut f: impl FnMut(c::journal_res_state) -> Option<c::journal_res_state>)
+        -> Result<c::journal_res_state, c::journal_res_state>
+    {
+        let mut old = self.reservations();
+        loop {
+            let Some(new) = f(old) else {
+                return Err(old);
+            };
+            match self.lock.hot.reservations.compare_exchange(old.v(), new.v(), SeqCst, Relaxed) {
+                Ok(_) => return Ok(old),
+                Err(v) => old = c::journal_res_state::from_v(v),
+            }
+        }
+    }
+
+    /// A ref put on ring slot @idx's buf: the state after.
+    #[inline]
+    pub fn state_buf_put(&self, idx: u32) -> c::journal_res_state {
+        let d = 1u64 << c::journal_res_state::count_shift(idx);
+        c::journal_res_state::from_v(self.lock.hot.reservations.fetch_sub(d, SeqCst) - d)
+    }
+
+    /// @seq's buf's reservation count in @s, 0 for a seq too old to have one.
+    pub fn state_seq_count(&self, s: c::journal_res_state, seq: u64) -> u32 {
+        if self.fs().journal_cur_seq().wrapping_sub(seq) < u64::from(c::JOURNAL_STATE_BUF_NR) {
+            s.count((seq & u64::from(c::JOURNAL_STATE_BUF_MASK)) as u32)
+        } else {
+            0
+        }
+    }
+}
+
+impl ToText for c::journal {
+    fn to_text(&self, out: &mut Printbuf) {
+        self.debug_to_text(out)
+    }
+}
+
+impl Fs {
+    /// Write a journal entry with nothing in it but metadata, and wait for
+    /// it to be flushed.
+    pub fn journal_meta(&self) -> Result<(), BchError> {
+        self.journal.meta()
+    }
+
+    /// Ask the journal not to flush seqs [@start, @end), whose entries hold
+    /// nothing that needs it - false if it can't: one's been flushed.
+    pub fn journal_noflush_seq(&self, start: u64, end: u64) -> bool {
+        self.journal.noflush_seq(start, end)
+    }
+
+    /// What every journal entry reserves for @res, made @u64s.
+    pub fn journal_entry_res_resize(&self, res: &c::journal_entry_res, u64s: c_uint) {
+        self.journal.entry_res_resize(res, u64s)
+    }
+
+    /// Advance the rewind limit to @seq: buckets emptied before it may be
+    /// discarded, once a journal flush has the limit on disk.
+    pub fn journal_advance_rewind_seq(&self, seq: u64) {
+        self.journal.advance_rewind_seq(seq)
+    }
+
+    /// Start writes of whatever's ready to be written.
+    pub fn journal_do_writes(&self) {
+        self.journal.do_writes()
+    }
+
+    pub fn journal_reclaim_to_text(&self, out: &mut Printbuf) {
+        self.journal.reclaim_to_text(out)
+    }
+
+    /* journal_replicas, or metadata_replicas when it isn't set: */
+    pub fn journal_replicas(&self) -> u32 {
+        let opts = self.opts();
+        match opts.journal_replicas.get() {
+            0 => opts.metadata_replicas.get().into(),
+            r => r.into(),
+        }
+    }
+}
+
 
 fn state_idx(seq: u64) -> u32 {
     (seq & u64::from(c::JOURNAL_STATE_BUF_MASK)) as u32

@@ -1,749 +1,322 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#![allow(non_camel_case_types)]
+//! The types the format and the structs C once shared are built from: C's
+//! little-endian integers, the container C laid out (Fifo), and
+//! what C reads that Rust defines - CStatic, an ops table.
 
-use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
-use crate::init::error::io_error_work;
-use crate::init::rw::read_only_work;
-use crate::sb::counters::recent_counters;
-use crate::sb::members::btree_bitmap_gc_schedule;
-use crate::cstructs::c;
-use crate::new_lock;
-use crate::util::alloc::Vec;
-use crate::data_structures::bitmap::AtomicBitflags;
-use crate::os::kobject::Kobject;
-use crate::util::projections::Volatile;
-use crate::os::bio::{Bio, BioSet};
-use crate::util::late::Late;
-use crate::util::place::Placed;
-use crate::util::time_stats::TimeStatsArray;
-use crate::util::refcount::AtomicRef;
-use crate::os::workqueue::{DelayedWork, ReffedWork, Workqueue, WqFlags};
-use crate::locking::{Locked, LockedBy, Mutex, MutexNoio, PercpuRwsemNoio, RwSem};
-use crate::os::percpu::{Counters, PerCpu};
-use crate::os::unicode::UnicodeMap;
-#[cfg(kernel)]
-use kernel::sync::SetOnce;
-#[cfg(not(kernel))]
-use bcachefs_shim::sync::SetOnce;
-use crate::data_structures::genradix::SharedGenRadix;
-use crate::types::{bits_to_longs};
-use crate::util::rcu::RcuHead;
-use crate::util::ffi::c_char;
-use core::ffi::{c_uint, c_ushort};
-use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, AtomicU16, AtomicU32, AtomicU64};
-use cstruct_macros::{bch_enum, placed, MaybeZeroable, Fieldwise, Init, Late, TypeInfo};
-use pin_init::pin_data;
-use crate::format::{Bpos, Btree};
-
-#[bch_enum(closed)]
-#[nr]
-#[repr(u32)]
-pub enum TimeStat {
-    /// Allocate memory in the btree node cache for a new btree node
-    btree_node_mem_alloc,
-    /// Of that, asking mm for a new node's buffers: both attempts, whether
-    /// they succeed or not
-    btree_node_buf_alloc,
-    /// Split a full btree node into two new nodes
-    btree_node_split,
-    /// Compact a full btree node on disk
-    btree_node_compact,
-    /// Merge two adjacent btree nodes
-    btree_node_merge,
-    /// Sort and resort entire btree nodes in memory, after reading from
-    /// disk or for compacting
-    btree_node_sort,
-    /// Read btree nodes from disk
-    btree_node_read,
-    /// Post-read btree node processing
-    btree_node_read_done,
-    /// Write btree node to disk
-    btree_node_write,
-    /// Foreground time for topology-changing btree updates (splits,
-    /// compactions, merges); roughly corresponds to lock held time
-    btree_interior_update_foreground,
-    /// Total time for topology-changing btree updates, including background
-    /// transaction phase after new nodes are written
-    btree_interior_update_total,
-    /// scan btree node cache for eviction
-    btree_node_cache_scan,
-    /// scan btree key cache for eviction
-    btree_key_cache_scan,
-    /// Flush btree write buffer to btree
-    btree_write_buffer_flush,
-    /// Per-shard: queued to start of execution (workqueue scheduling delay)
-    btree_write_buffer_flush_shard_sched_delay,
-    /// Per-shard: actual flush work duration (wb_flush_sorted_range)
-    btree_write_buffer_flush_shard_work,
-    /// GC pass recalculating oldest generation numbers
-    btree_gc,
-    /// Core write path: allocate space, compress, encrypt, checksum, issue
-    /// writes, update extents btree
-    data_write,
-    /// Core read path: look up extents btree, issue reads, checksum,
-    /// decrypt, decompress
-    data_read,
-    /// Promote: write a cached copy of an extent to promote_target on read
-    data_promote,
-    /// Flush journal writes: cache flush to devices then FUA journal writes
-    journal_flush_write,
-    /// Non-flush journal writes, without cache flushes or FUA
-    journal_noflush_write,
-    /// Flush a journal sequence number to disk for sync, fsync, and bucket
-    /// reuse
-    journal_flush_seq,
-    /// Flush btree journal pins
-    journal_pin_flush_btree,
-    /// Flush key cache journal pins
-    journal_pin_flush_key_cache,
-    /// Flush other journal pins
-    journal_pin_flush_other,
-    /// Write the superblock to every member device; held under sb_lock, so
-    /// this is what other superblock writers wait behind
-    sb_write,
-    /// Blocked: journal reclaim not keeping up with reclaiming space
-    blocked_journal_low_on_space,
-    /// Blocked: journal pins (dirty btree nodes, key cache entries) not
-    /// flushed fast enough
-    blocked_journal_low_on_pin,
-    /// Blocked: open buckets running low, throttling new journal work so
-    /// reclaim can free them
-    blocked_journal_low_on_open_buckets,
-    /// Blocked: too many journal writes in flight
-    blocked_journal_max_in_flight,
-    /// Blocked: too many journal entries open, not yet closed for writing
-    blocked_journal_max_open,
-    /// Blocked: waiting for write buffer flush
-    blocked_journal_blocked,
-    /// Blocked: writer hit journal_full (no room in current entry, reclaim
-    /// not keeping up)
-    blocked_journal_full,
-    /// Blocked: writer hit journal_pin_full (pin fifo full, btree node /
-    /// key cache flushers not keeping up)
-    blocked_journal_pin_full,
-    /// Blocked: writer hit journal_buf_enomem (preallocated data buffer not
-    /// topped up)
-    blocked_journal_buf_enomem,
-    /// Blocked: writer hit journal_stuck (10s timeout fired in slowpath
-    /// wait)
-    blocked_journal_stuck,
-    /// Blocked: waiting for key cache flush
-    blocked_key_cache_flush,
-    /// Blocked: bucket allocation waiting, copygc or allocator thread not
-    /// keeping up
-    blocked_allocate,
-    /// Blocked: all open bucket handles in use
-    blocked_allocate_open_bucket,
-    /// Blocked: write buffer full
-    blocked_write_buffer_full,
-    /// Blocked: writeback throttle
-    blocked_writeback_throttle,
-    /// Nocow lock contention
-    nocow_lock_contended,
-    /// Blocked: discard worker waiting for journal flush to advance
-    /// rewind_seq and release buckets
-    blocked_discard_journal_flush,
+/// The size of the field @f takes out - by its type, so a field of a packed
+/// struct needs no reference. @f is never called.
+pub const fn field_size<S, F>(_f: fn(S) -> F) -> u64 {
+    core::mem::size_of::<F>() as u64
 }
 
-/* Number of nodes btree coalesce will try to coalesce at once */
-pub const GC_MERGE_NODES: u32 = 4;
+// ---- C's little-endian integers -------------------------------------------
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, MaybeZeroable, Fieldwise)]
-#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct io_count {
-    pub sectors: [[u64; c::DataType::NR as usize]; 2],
+/// __le16, __le32, __le64 as C has them: little-endian, and aligned as the
+/// integer is - on every target, i386's 4-aligned u64 included, since they're
+/// the integer underneath. zerocopy's le::U16..le::U64 are aligned to 1, so a
+/// field of one is placed, and aligns its struct, as no C __le field is.
+/// The same new(), get(), set(), From conversions and comparison with the
+/// integer.
+///
+/// Or what the field holds, stored as the integer: Le16<MetadataVersion>'s
+/// get() is a MetadataVersion. Le8 is a byte that holds one - a u8 field of
+/// an enum that's a u32 elsewhere.
+macro_rules! le_int {
+    ($($name:ident: $t:ty),*) => { $(
+        #[repr(transparent)]
+        #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, cstruct_macros::Plain)]
+        #[plain(own_native)]
+        pub struct $name<T = $t>($t, core::marker::PhantomData<T>);
+
+        impl LeValue<$t> for $t {
+            fn from_int(v: $t) -> Self { v }
+            fn into_int(self) -> $t { self }
+        }
+
+        // SAFETY: the integer, and zero is one
+        unsafe impl<T> ::pin_init::Zeroable for $name<T> {}
+
+        impl crate::util::vstructs::Native for $name {
+            type Native = $t;
+            fn to_native(self) -> $t { self.get() }
+            fn from_native(n: $t) -> Self { Self::new(n) }
+        }
+
+        impl $name {
+            pub const fn new(v: $t) -> Self { Self(v.to_le(), core::marker::PhantomData) }
+        }
+
+        impl<T> $name<T> {
+            /// The integer it's stored as, whatever it holds - const, as
+            /// get() can't be.
+            pub const fn to_int(self) -> $t { <$t>::from_le(self.0) }
+        }
+
+        impl<T: LeValue<$t>> $name<T> {
+            pub fn get(self) -> T { T::from_int(self.to_int()) }
+            pub fn set(&mut self, v: T) { self.0 = v.into_int().to_le() }
+            pub fn update(&mut self, f: impl FnOnce(T) -> T) { self.set(f(self.get())) }
+        }
+
+        impl<T: LeValue<$t>> From<T> for $name<T> {
+            fn from(v: T) -> Self { Self(v.into_int().to_le(), core::marker::PhantomData) }
+        }
+
+        /// Bits set: OR is the same in either byte order.
+        impl core::ops::BitOrAssign<$t> for $name {
+            fn bitor_assign(&mut self, v: $t) { self.0 |= v.to_le() }
+        }
+
+        /// Bits cleared: as is AND.
+        impl core::ops::BitAndAssign<$t> for $name {
+            fn bitand_assign(&mut self, v: $t) { self.0 &= v.to_le() }
+        }
+
+        impl From<$name> for $t {
+            fn from(v: $name) -> Self { v.get() }
+        }
+
+        impl<T: LeValue<$t> + PartialEq> PartialEq<T> for $name<T> {
+            fn eq(&self, v: &T) -> bool { self.get() == *v }
+        }
+
+        impl<T: LeValue<$t> + core::fmt::Debug> core::fmt::Debug for $name<T> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                self.get().fmt(f)
+            }
+        }
+
+        impl core::fmt::LowerHex for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::LowerHex::fmt(&self.get(), f)
+            }
+        }
+
+        #[cfg(feature = "std")]
+        impl zeroize::Zeroize for $name {
+            fn zeroize(&mut self) { self.0.zeroize() }
+        }
+    )* };
+}
+le_int!(Le8: u8, Le16: u16, Le32: u32, Le64: u64);
+
+/// What an LeN field holds, stored as @I: its integer, or a type made from
+/// one.
+pub trait LeValue<I>: Copy {
+    fn from_int(v: I) -> Self;
+    fn into_int(self) -> I;
 }
 
-#[bch_enum(closed)]
-#[nr]
-#[repr(u32)]
-pub enum DevReadRefKind {
-    rust,
-    bch2_online_devs,
-    read_fua_test,
-    journal_read,
-    fs_journal_alloc,
-    fs_resize_on_mount,
-    btree_node_read,
-    btree_node_scrub,
-    btree_node_write,
-    btree_node_scan,
-    btree_verify_replicas,
-    io_read,
+/// How a tagged_union! says which arm it holds: stabby's IDeterminant
+/// (docs.rs/stabby), n-way, over a layout that's given rather than chosen.
+///
+/// get() is the tag - a function of the whole value; tagged_union!'s is its
+/// stored tag field. A tagged union is written payload first, then set()
+/// marks it as holding that arm - stabby's order, so that a tag that's bits
+/// of the payload would be written after the payload that would otherwise
+/// overwrite it.
+pub trait Determinant<U: ?Sized> {
+    type Tag: Copy + PartialEq;
+    fn get(u: &U) -> Self::Tag;
+    fn set(u: &mut U, tag: Self::Tag);
 }
 
-#[bch_enum(closed)]
-#[nr]
-#[repr(u32)]
-pub enum DevWriteRefKind {
-    rust,
-    journal_write,
-    journal_discard,
-    discard_bucket,
-    discard_one_bucket_fast,
-    do_invalidates,
-    nocow_flush,
-    io_write,
-    ec_bucket_zero,
+/// An arm of tagged_union! U, by its type: the tag that selects it - for what's
+/// generic over the arms, U::from_arm(). tagged_union! implements it for each
+/// arm, so two arms of one type are an error.
+pub trait ArmOf<U: ?Sized> {
+    type Tag;
+    const TAG: Self::Tag;
 }
 
-/// A bucket_bitmap's words: replaced by a copy when the device grows.
-pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::bitmap::AtomicULong>;
+// ---- Rust's own, that C reads ------------------------------------------------
 
-crate::published! {
-    /// A bucket_bitmap's bits: read without its lock - by copygc, while a
-    /// check sets and frees them - so they're atomic words under RCU.
-    #[derive(MaybeZeroable)]
-    pub struct BucketBits {
-        pub buckets: c::BucketBitmapWords,
-        /// Bits set
-        pub nr:      crate::util::projections::Volatile<u64>,
+/// What one borrow lends out of another, @A, for as long as it lives: a
+/// transaction's paths.
+pub trait Lent<'a, A: ?Sized>: Sized {
+    /// # Safety
+    /// Nothing else has what it lends while it lives.
+    unsafe fn lent(from: &'a A) -> Self;
+}
+
+/// A static C reads, defined in Rust: an ops table - vfs_ops!' of P's ops, or
+/// with P (), no one's. Sync for the pointers a C struct holds, which aren't:
+/// C reads it from anywhere, and nothing writes it.
+#[repr(transparent)]
+pub struct CStatic<T, P = ()>(T, core::marker::PhantomData<fn() -> P>);
+
+// SAFETY: new()'s
+unsafe impl<T, P> Sync for CStatic<T, P> {}
+
+impl<T, P> CStatic<T, P> {
+    /// # Safety
+    /// Nothing in @v is written through a shared reference - no Cell, no
+    /// atomic: its pointers are its only parts that aren't Sync.
+    pub const unsafe fn new(v: T) -> Self {
+        CStatic(v, core::marker::PhantomData)
     }
 }
 
-/// One bit per bucket of a device, allocated when the first is set:
-/// check_extents_to_backpointers' buckets whose backpointers don't add up, and
-/// those with none. The lock serializes setting, growing and freeing; C calls
-/// Rust for all of it.
-#[pin_data]
+impl<T, P> core::ops::Deref for CStatic<T, P> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+pub use crate::data_structures::genradix::GenRadix;
+
+// Opaque to TypeInfo, as bindgen's were: size only.
+macro_rules! typeinfo_opaque {
+    ($name:ident <$($g:tt),*>, $($bound:tt)*) => {
+        impl<$($bound)*> crate::typeinfo::TypeInfo for $name<$($g),*> {
+            const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {
+                name:   stringify!($name),
+                size:   core::mem::size_of::<Self>(),
+                shape:  crate::typeinfo::Shape::Struct,
+                fields: &[],
+            };
+        }
+    };
+}
+typeinfo_opaque!(GenRadix<T>, T: crate::data_structures::genradix::Entry);
+typeinfo_opaque!(Fifo<T, I>, T, I: crate::data_structures::fifo::FifoIdx);
+
+/// FIFO(T), FIFO_U16_IDX(T)... - data_structures/fifo.h: __FIFO(T, I). Its methods are
+/// data_structures/fifo.rs's.
 #[repr(C)]
-#[derive(MaybeZeroable, Init)]
-pub struct bucket_bitmap {
-    #[pin]
-    #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
-    pub bits: Locked<Mutex, (), BucketBits>,
+pub struct Fifo<T, I: crate::data_structures::fifo::FifoIdx = usize> {
+    pub front: I,
+    pub back:  I,
+    pub size:  I,
+    pub mask:  I,
+    pub data:  *mut T,
 }
 
-#[bch_enum(closed)]
-#[repr(u32)]
-pub enum DevFlag {
-    /// a write completed that the device may still hold in its volatile
-    /// cache; journal_write_preflush() clears it when it flushes the
-    /// device.
-    unflushed_writes,
+// SAFETY: zeroed is empty, nothing allocated - as before init_fifo()
+unsafe impl<T, I: crate::data_structures::fifo::FifoIdx + ::pin_init::Zeroable> ::pin_init::Zeroable for Fifo<T, I> {}
+
+/// XXX migration only: rip this out once the types are Rust's alone. It's
+/// here so the converted types keep the C layout exactly, where a run of C
+/// bitfields happens to end mid-word; Rust's own layout won't need it.
+///
+/// The storage of a run of C bitfields N bytes long, N not an integer's
+/// size - 3, say: C puts what follows the run right after the bytes it uses.
+/// The low N bytes of a u32 or u64, in native byte order, as C's: a
+/// #[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into =
+/// NeBytes::<3>::to_u32)] type.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, cstruct_macros::Plain)]
+pub struct NeBytes<const N: usize>(pub [u8; N]);
+
+impl<const N: usize> Default for NeBytes<N> {
+    fn default() -> Self { Self([0; N]) }
 }
 
-pub const CONGESTED_MAX: u32 = 1024;
+impl<const N: usize> NeBytes<N> {
+    // where the low N bytes of a W byte integer are
+    const fn low(w: usize) -> usize {
+        if cfg!(target_endian = "little") { 0 } else { w - N }
+    }
 
-#[pin_data]
+    pub const fn from_u32(v: u32) -> Self {
+        let b = v.to_ne_bytes();
+        let mut out = [0u8; N];
+        let mut i = 0;
+        while i < N {
+            out[i] = b[Self::low(4) + i];
+            i += 1;
+        }
+        Self(out)
+    }
+
+    pub const fn to_u32(self) -> u32 {
+        let mut b = [0u8; 4];
+        let mut i = 0;
+        while i < N {
+            b[Self::low(4) + i] = self.0[i];
+            i += 1;
+        }
+        u32::from_ne_bytes(b)
+    }
+
+    pub const fn from_u64(v: u64) -> Self {
+        let b = v.to_ne_bytes();
+        let mut out = [0u8; N];
+        let mut i = 0;
+        while i < N {
+            out[i] = b[Self::low(8) + i];
+            i += 1;
+        }
+        Self(out)
+    }
+
+    pub const fn to_u64(self) -> u64 {
+        let mut b = [0u8; 8];
+        let mut i = 0;
+        while i < N {
+            b[Self::low(8) + i] = self.0[i];
+            i += 1;
+        }
+        u64::from_ne_bytes(b)
+    }
+}
+
+/// The storage of u64 bitfields C aligns to 8 - __aligned(8), which i386
+/// needs said: its u64 is 4-aligned. #[bitfield(u64, align = 8)] uses it.
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, cstruct_macros::Plain)]
+pub struct Align8U64(pub u64);
+
+impl Align8U64 {
+    pub const fn from_u64(v: u64) -> Self { Self(v) }
+    pub const fn to_u64(self) -> u64 { self.0 }
+}
+
+/// Bit @i of a run of one-bit C bitfields, an x-macro list's - stored as bytes,
+/// @b, from the run's start. C allocates bitfields from the low bit of each
+/// unit on a little-endian target, from the high bit on a big-endian one; a
+/// unit is stored low byte or high byte first to match, so either way bit i is
+/// in byte i / 8, whatever the unit's size.
+const fn c_bit_mask(i: usize) -> u8 {
+    if cfg!(target_endian = "little") { 1 << (i % 8) } else { 0x80 >> (i % 8) }
+}
+
+pub fn c_bit(b: &[u8], i: usize) -> bool {
+    b[i / 8] & c_bit_mask(i) != 0
+}
+
+pub const fn set_c_bit(b: &mut [u8], i: usize, v: bool) {
+    if v {
+        b[i / 8] |= c_bit_mask(i);
+    } else {
+        b[i / 8] &= !c_bit_mask(i);
+    }
+}
+
+/// BITS_TO_LONGS(): the unsigned longs a bitmap of @nr bits takes, for an
+/// array dimension - C's `unsigned long d[BITS_TO_LONGS(nr)]`.
+pub const fn bits_to_longs(nr: usize) -> usize {
+    nr.div_ceil(core::ffi::c_ulong::BITS as usize)
+}
+
+/// SMP_CACHE_BYTES, as an alignment: a CacheAligned field - zero-sized -
+/// aligns what follows it, and its struct, as C's __aligned(SMP_CACHE_BYTES)
+/// does; repr(align) takes only a literal. The generator writes C's
+/// __aligned() from it: the struct's, for a first field, or the next
+/// member's. The kernel's L1_CACHE_BYTES for each target; the generated
+/// headers assert it, so a wrong or missing target fails its build.
+#[cfg_attr(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64",
+               target_arch = "arm", target_arch = "riscv64", target_arch = "loongarch64"),
+           repr(align(64)))]
+#[cfg_attr(target_arch = "powerpc64", repr(align(128)))]
+#[cfg_attr(target_arch = "s390x", repr(align(256)))]
 #[repr(C)]
-#[derive(MaybeZeroable, TypeInfo, Init, RcuHead)]
-#[init_args(fs: &crate::fs::Fs)]
-pub struct Dev {
-    #[pin]
-    #[init(crate::util::refcount::PercpuRef::new())]
-    pub ref_: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.ref_)>,
-    /*
-     * ref_outer keeps the bch_dev allocation alive - nothing more.
-     * Unlike ca->ref, holding it does NOT mean the device is still a
-     * member of the filesystem.
-     *
-     * ca->ref drains inside the device removal protocol, under
-     * state_lock - so a ca->ref holder must never block on state_lock.
-     * Contexts that do block on state_lock with a device in hand (work
-     * items, ioctl lookups) hold ref_outer instead, and recheck
-     * ca->removing under the lock before touching member state.
-     */
-    #[pin]
-    #[init(AtomicRef::new(()))]
-    pub ref_outer: Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>,
-    #[pin]
-    #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
-    pub io_ref_read: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_read)>,
-    #[pin]
-    #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
-    pub io_ref_write: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_write)>,
+#[derive(Clone, Copy, Default, ::pin_init::Zeroable)]
+pub struct CacheAligned([u8; 0]);
 
-    /// Its filesystem, from the start, attached or not: bch2_dev_add()
-    /// writes its superblock before it has a slot, and what fails before then
-    /// reaches the filesystem through it. A device is freed before its
-    /// filesystem - bch2_dev_free(), in the filesystem's teardown, drains
-    /// ref_outer's holders first - so the filesystem outlives every use.
-    #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
-    pub fs: crate::util::backref::BackRef<crate::fs::Fs>,
+pub const SMP_CACHE_BYTES: usize = align_of::<CacheAligned>();
+pub const L1_CACHE_BYTES: usize = SMP_CACHE_BYTES;
 
-    pub dev_idx: u8,
-    /*
-     * Device is being removed and its alloc info and stripe pointers are
-     * about to be deleted: new references must not be created. Checked by
-     * __ec_stripe_create(), which may hold pre-invalidation copies of
-     * stripe pointers; set by bch2_dev_remove() before the data drop,
-     * cleared if removal fails.
-     */
-    pub removing: crate::util::projections::Volatile<bool>,
-    /*
-     * Cached version of this device's member info from superblock
-     * Committed by bch2_write_super() -> bch_fs_mi_update(): written under
-     * sb_lock, read without it
-     */
-    pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
-    pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
-    pub errors: [AtomicI64; c::MemberErrorType::NR as usize],
-    /// Written racing C's plain reads and stores, as C's are: atomic here,
-    /// so Rust's are through a shared bch_dev.
-    pub write_errors_start: crate::data_structures::bitmap::AtomicULong,
-    pub flags: AtomicBitflags<c::DevFlag>,
-
-    pub uuid: c::__uuid_t,
-    pub name: crate::util::projections::Volatile<crate::sb::members::DevName>,
-    #[pin]
-    #[init(unsafe { Kobject::new::<Dev>() })]
-    pub(crate) kobj: Placed<Kobject, crate::at!(Dev.kobj)>,
-
-    /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
-    /// device it's on, fixed while it's attached.
-    #[init(LockedBy::new(Default::default(), ::pin_init::zeroed()))]
-    pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::at!(Fs.sb)>,
-    /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
-    /// whose buffer write_super can reallocate: the allocator, steering clear
-    /// of superblock buckets. Copied as it's attached, and as it's edited -
-    /// DevSbMut::edit_layout(), under sb_lock.
-    pub sb_layout: crate::util::projections::Volatile<c::bch_sb_layout>,
-    #[pin]
-    #[init(None)]
-    pub(crate) sb_read_scratch: Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>,
-    pub dev: crate::util::projections::Volatile<c::dev_t>,
-
-    pub self_mask: c::bch_devs_mask,
-
-    /*
-     * Buckets:
-     * Per-bucket arrays are protected by either rcu_read_lock or
-     * state_lock, for device resize.
-     */
-    pub buckets_gc: SharedGenRadix<c::bucket>,
-    pub bucket_gens: LockedBy<(), c::BucketGensArray, crate::at!(Fs.state_lock)>,
-    /* allocated once, by migrate, and read without a lock */
-    pub buckets_nouse: LockedBy<(), c::BucketBitmapWords, crate::at!(Fs.state_lock)>,
-
-    #[pin]
-    #[init(c::bucket_bitmap::init())]
-    pub bucket_backpointer_mismatch: c::bucket_bitmap,
-    #[pin]
-    #[init(c::bucket_bitmap::init())]
-    pub bucket_backpointer_empty: c::bucket_bitmap,
-
-    pub usage: PerCpu<c::bch_dev_usage_full>,
-
-    /* Allocator: */
-    /* where each btree_bitmap kind of allocation scans from: racy, as in C */
-    pub alloc_cursor: [crate::util::projections::Volatile<u64>; 3],
-
-    /*
-     * Incremented by alloc_wake() at every site that wakes
-     * freelist_events for a specific device. Waiters on
-     * c->allocator.freelist_events snapshot the counters for the devices
-     * they need at park time and compare on wake: if none have advanced,
-     * the wake didn't concern this waiter and it re-parks without the
-     * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
-     * instead (see alloc_wake_all()).
-     */
-    pub alloc_wake_counter: AtomicI32,
-
-    /* Buckets copygc has queued for evacuation on this device: */
-    pub copygc_in_flight: AtomicI32,
-
-    /* open buckets still free: under freelist_lock, read without it */
-    pub nr_open_buckets: crate::util::projections::Volatile<c_uint>,
-    /* on the partial list: written under freelist_lock */
-    pub nr_partial_buckets: crate::util::projections::Volatile<c_uint>,
-    pub nr_btree_reserve: c_uint,
-
-    /* this device's share of c->capacity.reserved, which is their sum:
-     * recalc_capacity()'s, under state_lock, read without it */
-    pub reserved_sectors: crate::util::projections::Volatile<u64>,
-
-    #[pin]
-    pub(crate) invalidate_work:
-        ReffedWork<do_invalidates_work, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
-
-    #[pin]
-    pub(crate) discard_fast_work:
-        ReffedWork<do_discards_fast, (crate::field!(io_ref_write), crate::field!(fs->writes))>,
-    /// Buckets queued for fast discard: alloc/discard.rs's alone.
-    #[pin]
-    #[init(new_lock!(Vec::new()))]
-    pub(crate) discard_fast: Locked<Mutex, Vec<u64>>,
-    /// Discards in flight on it, by every worker: a futex word, a worker at
-    /// the limit sleeping on it.
-    #[pin]
-    #[init(core::sync::atomic::AtomicU8::new(0))]
-    pub(crate) discards_in_flight: core::sync::atomic::AtomicU8,
-    /// c->devs[]'s RCU readers may still have it, and take its io refs, which
-    /// its drop exits: dropped a grace period on, in process context.
-    #[pin]
-    #[rcu_head]
-    #[init(crate::util::rcu::RcuDropWorkMember::default())]
-    pub(crate) _rcu: crate::util::rcu::RcuDropWorkMember<crate::util::rcu::RcuWorkHead>,
-
-    pub rebalance_work: AtomicI64,
-
-    #[pin]
-    pub journal: c::journal_device,
-    pub prev_journal_sector: Volatile<u64>,
-
-    /// The bios of writes' replicas on it: write_replicas.rs's
-    pub(crate) write_clones: Late<BioSet<crate::data::dev_bio::DevBio>>,
-
-    #[pin]
-    pub(crate) io_error_work: ReffedWork<io_error_work, crate::field!(ref_outer)>,
-
-    /* The rest of this all shows up in sysfs */
-    pub cur_latency: [AtomicI64; 2],
-    #[pin]
-    #[init(TimeStatsArray::new())]
-    pub io_latency: TimeStatsArray<c::bch2_time_stats_quantiles, 2>,
-
-    pub congested: AtomicI32,
-    /* written racily, by bch2_latency_acct() */
-    pub congested_last: AtomicU64,
-
-    pub io_done: PerCpu<c::io_count>,
-}
-
-/*
- * initial_gc_unfixed
- * error
- * topology error
- */
-#[bch_enum(closed)]
-#[repr(u32)]
-pub enum FsFlag {
-    new_fs,
-    start_begun,
-    started,
-    clean_recovery,
-    btree_running,
-    accounting_replay_done,
-    may_go_rw,
-    scrub_journal,
-    may_upgrade_downgrade,
-    rw,
-    rw_init_done,
-    was_rw,
-    stopping,
-    emergency_ro,
-    going_ro,
-    clean_shutdown,
-    in_recovery,
-    running_recovery_passes,
-    in_fsck,
-    initial_gc_unfixed,
-    error,
-    topology_error,
-    errors_fixed,
-    errors_fixed_silent,
-    errors_not_fixed,
-    no_invalid_checks,
-    discard_mount_opt_set,
-    sb_dirty,
-    all_devs_rw,
-}
-
-#[cfg(CONFIG_DEBUG_FS)]
-#[placed(Fs.btree_debug[], index = id: c_uint)]
-#[pin_data]
-#[repr(C)]
-#[derive(MaybeZeroable, Init)]
-pub struct btree_debug {}
-
-pub const BCH_LINK_MAX: u32 = c::U32_MAX;
-
-/// The filesystem: struct bch_fs, to C. Rust allocates it and frees it -
-/// alloc(), its kobject's release - so its Rust-typed fields get their
-/// initializers, from Fs::init(), and their Drop; init_from() and the
-/// subsystems' inits and exits do the rest.
-/// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
-#[pin_data]
-#[repr(C)]
-#[derive(MaybeZeroable, TypeInfo, Init, Late)]
-#[init_args(options: &c::bch_opts)]
-pub struct Fs {
-    #[pin]
-    #[init(unsafe { Kobject::new::<Fs>() })]
-    pub(crate) kobj: Placed<Kobject, crate::at!(Fs.kobj)>,
-    pub flags: AtomicBitflags<c::FsFlag>,
-
-    /// Its control device, from online() to stop()
-    #[cfg(kernel)]
-    #[pin]
-    #[init(crate::locking::Locked::new_const(None, ()))]
-    pub(crate) chardev: crate::locking::Locked<crate::locking::ByteLock, Option<crate::init::chardev::CtlDev>>,
-    #[cfg(kernel)]
-    #[init(SetOnce::new())]
-    pub vfs_sb: crate::os::super_block::MountedOn<Fs>,
-    /// What its devices are claimed for: the open's, from alloc()
-    #[pin]
-    #[init(None)]
-    pub(crate) holder: Option<crate::util::alloc::Arc<crate::sb::io::Holder>>,
-    /* from init_early(), put by its release, after it's dropped */
-    #[init(None)]
-    pub(crate) module_ref: Option<crate::os::module::ModuleRef>,
-    pub name: [c_char; 40],
-
-    /// This, stdio_filter and stdio_user_only: set as a redirect attaches and
-    /// detaches - the status fd's, online fsck's - and read by every print,
-    /// on any thread. stdio published last, Release, and read Acquire.
-    pub stdio: AtomicPtr<crate::os::thread_with_file::StdioRedirect>,
-    pub stdio_filter: AtomicPtr<c::task_struct>,
-    /*
-     * Online fsck redirects everything it prints; mounting doesn't - a boot
-     * splash wants the questions and the hard errors, not a running
-     * commentary of IO errors. Set this and the redirect carries only what
-     * bch2_print_str_user() sends.
-     */
-    pub stdio_user_only: core::sync::atomic::AtomicBool,
-    /*
-     * Someone is polling BCH_IOCTL_RECOVERY_STATUS on that redirect, so
-     * they're drawing progress themselves and progress indicators keep off
-     * the console entirely. Set by the first such ioctl, cleared when the
-     * channel detaches - a mount that asks for a status fd but never polls
-     * still gets its progress in dmesg.
-     */
-    pub stdio_progress_reader: core::sync::atomic::AtomicBool,
-    /// These two and recovery_task: C's plain fields, atomic here, so Rust
-    /// writes them through a shared Fs.
-    pub loglevel: AtomicU32,
-    pub prev_loglevel: AtomicU32,
-    /*
-     * Certain operations are only allowed in single threaded mode, during
-     * recovery, and we want to assert that this is the case:
-     */
-    pub recovery_task: AtomicPtr<c::task_struct>,
-
-    /* ro/rw, add/remove/resize devices: */
-    #[pin]
-    #[init(new_lock!((), "&c->state_lock"))]
-    pub state_lock: Placed<Locked<RwSem>, crate::at!(Fs.state_lock)>,
-
-    /* Counts outstanding writes, for clean transition to read-only */
-    #[init(crate::util::alloc::init_or(
-        crate::util::refcount::PercpuRef::new_dead::<crate::init::rw::WritesDisabled>(),
-        c::Errcode::ENOMEM_fs_other_alloc))]
-    #[pin]
-    pub writes: Placed<crate::util::refcount::PercpuRef, crate::at!(Fs.writes)>,
-
-    /*
-     * Analagous to c->writes, for asynchronous ops that don't necessarily
-     * need fs to be read-write
-     */
-    #[pin]
-    #[init(AtomicRef::new(()))]
-    pub(crate) ro_ref: Placed<AtomicRef<()>, crate::at!(Fs.ro_ref)>,
-    /// Woken as it starts and as it stops
-    #[pin]
-    #[init(crate::util::futex::EventCount::new())]
-    pub(crate) ro_ref_events: crate::util::futex::EventCount,
-    #[pin]
-    pub(crate) read_only_work: ReffedWork<read_only_work, crate::field!(ro_ref)>,
-
-    /// Written under state_lock: StateLockWrite::devs().
-    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::sb::members::DevKobjRef>; c::BCH_SB_MEMBERS_MAX as usize],
-                       crate::at!(Fs.state_lock)>,
-    pub devs_online: c::AtomicDevsMask,
-    pub devs_removed: c::AtomicDevsMask,
-    pub devs_rotational: c::AtomicDevsMask,
-
-    /// The options: read by anyone, an option at a time - written under
-    /// sb_lock, which publishes them - Fs::opts_writer().
-    #[init(LockedBy::new((), (*options).into()))]
-    pub opts: LockedBy<(), c::PublishedOpts, crate::at!(Fs.sb)>,
-    #[pin]
-    #[init(new_lock!((), "&c->opt_change_lock"))]
-    pub opt_change_lock: Locked<Mutex>,
-    /// Odd while options change, bumped under opt_change_lock by
-    /// OptChange, taking it and dropping it; read without it.
-    pub opt_change_cookie: crate::util::projections::Volatile<u32>,
-    /// The options the mount set: what show_options lists. An option set
-    /// since is no longer one.
-    pub mount_opts: c::AtomicOptsMask,
-
-    /// The superblock, c->disk_sb, behind sb_lock - Fs::sb_lock() is the way
-    /// in - and what of it is read without the lock, c->sb, which it
-    /// publishes.
-    #[pin]
-    #[init(crate::new_lock!(Default::default(), ::pin_init::zeroed(), "&c->sb_lock"))]
-    pub sb: Placed<MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>, crate::at!(Fs.sb)>,
-    pub incompat_versions_requested: crate::data_structures::bitmap::AtomicBitArray<{
-        bits_to_longs(c::MetadataVersion::CURRENT.minor() as usize) }>,
-    #[init(SetOnce::new())]
-    pub cf_encoding: SetOnce<UnicodeMap>,
-
-    #[init((options.block_size >> 9).ilog2() as c_ushort)]
-    pub block_bits: c_ushort, /* ilog2(block_size) */
-
-    /*
-     * shard → preferred CPU mapping for wake_cpu hinting from
-     * bch2_trans_begin(): each shard's worth of btree-node working set
-     * gravitates to a fixed CPU's L1/L2.
-     */
-    pub inode_shard_cpu: [AtomicU16; 256],
-
-    #[pin]
-    pub(crate) maybe_schedule_btree_bitmap_gc: DelayedWork<btree_bitmap_gc_schedule, crate::field!(ro_ref)>,
-
-    #[pin]
-    #[init(crate::util::alloc::init_or(c::bch_fs_counters::init(), c::Errcode::ENOMEM_fs_counters_init))]
-    pub counters: c::bch_fs_counters,
-    #[pin]
-    pub(crate) counters_recent: DelayedWork<recent_counters, crate::field!(ro_ref)>,
-    #[pin]
-    #[init(TimeStatsArray::new())]
-    pub times: TimeStatsArray<c::bch2_time_stats, { c::TimeStat::NR as usize }>,
-    #[pin]
-    #[init(c::bch_fs_errors::init())]
-    pub errors: c::bch_fs_errors,
-
-    /* What's in flight, for debugfs: debug/async_objs.rs */
-    #[pin]
-    pub async_objs: [c::async_obj_list; c::AsyncObjKind::NR as usize],
-
-    #[pin]
-    #[late]
-    pub journal: c::journal,
-    pub journal_replay_seq_start: Volatile<u64>,
-    /*
-     * Journal scrub: where its first flush range starts - the newest flush
-     * before journal_replay_seq_start - while it runs; 0 otherwise.
-     */
-    pub journal_scrub_seq: Volatile<u64>,
-    pub journal_replay_seq_end: Volatile<u64>,
-    pub journal_entries_base_seq: Volatile<u64>,
-    #[pin]
-    #[init(AtomicRef::pin_init(c::journal_keys::init()))]
-    pub journal_keys: Placed<AtomicRef<c::journal_keys>, crate::at!(Fs.journal_keys)>,
-    /// The blacklist, in memory: journal/seq_blacklist.rs's alone, rebuilt
-    /// under sb_lock.
-    pub(crate) journal_seq_blacklist: LockedBy<(), crate::journal::seq_blacklist::JournalSeqBlacklist, crate::at!(Fs.sb)>,
-
-    #[pin]
-    pub recovery: c::bch_fs_recovery,
-
-    #[pin]
-    #[init(c::bch_fs_logged_ops::init())]
-    pub logged_ops: c::bch_fs_logged_ops,
-
-    #[pin]
-    #[placed_args(options)]
-    #[late]
-    pub btree: c::bch_fs_btree,
-
-    #[pin]
-    #[init(c::bch_fs_gc::init())]
-    pub gc: c::bch_fs_gc,
-    pub gc_gens: c::bch_fs_gc_gens,
-
-    /// The in-memory accounting table, under mark_lock.
-    #[pin]
-    #[init(LockedBy::new(crate::alloc::accounting_mem::Table::default(), ()))]
-    pub(crate) accounting: LockedBy<crate::alloc::accounting_mem::Table, (), c::MarkLockAt>,
-    /// The replicas table, behind its own lock: alloc/replicas.rs's alone.
-    #[pin]
-    #[init(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas"))]
-    pub(crate) replicas: PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>,
-    pub disk_groups: LockedBy<(), crate::alloc::disk_groups::DiskGroups, crate::at!(Fs.sb)>,
-    #[pin]
-    #[init(c::bch_fs_capacity::init())]
-    pub capacity: c::bch_fs_capacity,
-    #[pin]
-    pub allocator: c::bch_fs_allocator,
-    #[pin]
-    pub discards: c::bch_fs_discards,
-
-    #[pin]
-    pub snapshots: c::bch_fs_snapshots,
-
-    /*
-     * Use a dedicated wq for write ref holder tasks. Required to avoid
-     * dependency problems with other wq tasks that can block on ref
-     * draining, such as read-only transition.
-     */
-    #[late(Workqueue::new(c"bcachefs_write_ref", WqFlags::FREEZABLE | WqFlags::PERCPU, 0), ENOMEM_fs_other_alloc)]
-    pub write_ref_wq: Late<Workqueue>,
-
-    #[late(Workqueue::new(c"bcachefs_promotes", WqFlags::FREEZABLE | WqFlags::PERCPU, 2), ENOMEM_fs_other_alloc)]
-    pub promote_wq: Late<Workqueue>,
-    /* Promotes in flight, against their limit: data/promote.rs */
-    pub promotes_in_flight: core::sync::atomic::AtomicU32,
-
-    #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| c::io_clock::init()))]
-    pub io_clock: [c::io_clock; 2],
-    pub super_entries_journal_res: c::journal_entry_res,
-    pub rewind_limit_res: c::journal_entry_res,
-
-    /* IO PATH */
-    #[late(Workqueue::new(c"bcachefs",
-                          WqFlags::HIGHPRI | WqFlags::FREEZABLE | WqFlags::MEM_RECLAIM | WqFlags::UNBOUND, 512),
-           ENOMEM_fs_other_alloc)]
-    pub btree_update_wq: Late<Workqueue>,
-    #[pin]
-    #[init(crate::data::read::retry_pool(), ENOMEM_fs_other_alloc)]
-    pub read_retry_pool: crate::util::mempool::Mempool,
-    #[late(BioSet::new(1), ENOMEM_bio_write_init)]
-    pub(crate) bio_write: Late<BioSet<Bio<crate::data::write::ExtentBuf>>>,
-    #[pin]
-    #[init(crate::os::bio::pages::BouncePool::new(options), ENOMEM_bio_bounce_pages_init)]
-    pub(crate) bio_bounce: crate::os::bio::pages::BouncePool,
-    #[pin]
-    #[init(crate::data::nocow_locking::NocowLocks::new())]
-    pub(crate) nocow_locks: crate::data::nocow_locking::NocowLocks,
-    /// The data updates in flight, by data_update_key.
-    #[pin]
-    #[init(::pin_init::zeroed::<crate::data::update::InFlightTable>())]
-    pub(crate) update_table: crate::data::update::InFlightTable,
-
-    pub key_version: AtomicI64,
-
-    /* Journal scrub: extents needing repair after recovery */
-    #[pin]
-    #[init(crate::new_lock!(crate::util::alloc::Vec::new()))]
-    pub(crate) scrub_journal_repairs:
-        Locked<Mutex, crate::util::alloc::Vec<crate::data::scrub_journal::Repair>>,
-
-    /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
-    #[pin]
-    #[init(crate::new_lock!(crate::util::alloc::Vec::new()))]
-    pub(crate) lost_extents_ranges: Locked<Mutex, crate::util::alloc::Vec<core::ops::Range<Bpos>>>,
-
-    #[pin]
-    #[init(::pin_init::zeroed::<crate::data::compress::Compress>())]
-    pub(crate) compress: crate::data::compress::Compress,
-    #[pin]
-    pub reconcile: c::bch_fs_reconcile,
-    #[pin]
-    #[init(c::bch_fs_copygc::init())]
-    #[late]
-    pub copygc: c::bch_fs_copygc,
-    #[pin]
-    pub ec: c::bch_fs_ec,
-
-    /// gc's count of references to indirect extents: reflink.rs's alone.
-    #[pin]
-    #[init(crate::data::reflink::ReflinkGc::new())]
-    pub(crate) reflink_gc: crate::data::reflink::ReflinkGc,
-
-    #[cfg(kernel)]
-    #[pin]
-    #[init(c::bch_fs_vfs::init())]
-    #[late]
-    pub vfs: c::bch_fs_vfs,
-    #[cfg(kernel)]
-    #[init(c::fdm_hash::init())]
-    pub fdm_table: c::fdm_hash,
-
-    /// The in-memory quotas: quota.rs's alone.
-    #[pin]
-    #[init(c::Quotas::new())]
-    pub(crate) quotas: c::Quotas,
-
-    /* DEBUG JUNK */
-
-    #[cfg(CONFIG_DEBUG_FS)]
-    pub fs_debug_dir: Option<crate::os::debugfs::DebugDir>,
-    #[cfg(CONFIG_DEBUG_FS)]
-    #[pin]
-    pub btree_debug: [c::btree_debug; Btree::NR as usize],
-}

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::accounting;
+use bcachefs_kernel::alloc::accounting;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::util::{HumanReadable, ToText};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};

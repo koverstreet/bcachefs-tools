@@ -19,13 +19,14 @@ use crate::data::ptrs::{brand, BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, Ptrs, PtrsM
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
-use crate::inode_opts::get_io_opts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::{events, TraceEvent};
 use crate::sb::errors::FsckFlags;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::Validated;
 use crate::util::{Join, Printbuf};
-use crate::{bch_err, fs_inconsistent, fsck_err_flags, logged_ops, prt};
+use crate::{bch_err, fs_inconsistent, fsck_err_flags, prt};
+use crate::posix::logged_ops;
 use core::mem::size_of;
 use core::ops::RangeInclusive;
 use crate::format::{Bpos, Btree, BkeyType};

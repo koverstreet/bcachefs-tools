@@ -28,6 +28,19 @@ use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_afte
 use crate::os::percpu::{migrate_disable, migrate_enable, raw_smp_processor_id};
 use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
+use crate::util::projections::Volatile;
+use cstruct_macros::MaybeZeroable;
+
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct btree_bkey_cached_common {
+    pub lock: Locked<c::six_lock>,
+    /* set write locked, on a reused node or entry that others may still be reading */
+    pub level: Volatile<u8>,
+    pub btree_id: Volatile<u8>,
+    pub cached: bool,
+}
+
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::os::kernel::local_clock;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]

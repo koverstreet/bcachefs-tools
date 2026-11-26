@@ -80,10 +80,8 @@ use crate::btree::bkey::{AllTypes, AnyKey, BkeyP, BkeyPHeader, FamilyVal};
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 
-#[path = "alloc/accounting_format.rs"] pub mod accounting;
-pub use accounting::{DataType, DataTypes};
-#[path = "sb/members_format.rs"] pub mod members;
-pub use members::{MemberInitialized, MemberState};
+pub use crate::alloc::accounting_format::{DataType, DataTypes};
+pub use crate::sb::members_format::{MemberInitialized, MemberState};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, MaybeZeroable, Plain)]

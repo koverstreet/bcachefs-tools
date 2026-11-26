@@ -168,10 +168,11 @@ use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::place::Contained;
 use crate::os::workqueue::Queue;
 use crate::util::{DateTime, Nsecs, Printbuf};
-use crate::{bch_err, bch_info, here, inode, message, prt};
+use crate::{bch_err, bch_info, here, message, prt};
+use crate::posix::inode;
 use core::mem::size_of;
 
-pub use crate::cstructs::init_passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
+pub use crate::init::passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
 
 type Pass = RecoveryPass;
 type Flags = c::RunRecoveryPassFlags;

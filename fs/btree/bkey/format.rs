@@ -3,7 +3,6 @@
 
 use super::BKEY_U64S;
 use crate::c;
-use crate::cstructs::c::{bkey_fields, bkey_format_state};
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::errcode::BchError;
 use crate::format::BkeyField::{self, *};
@@ -11,6 +10,25 @@ use crate::format::{bkey_format, Bpos};
 use crate::sb_err_on;
 use crate::types::{field_size, Le64};
 use crate::util::{Printbuf, ToText};
+use cstruct_macros::{xmacro, MaybeZeroable};
+
+xmacro! {
+    bkey_fields {
+        (BKEY_FIELD_INODE, p.inode),
+        (BKEY_FIELD_OFFSET, p.offset),
+        (BKEY_FIELD_SNAPSHOT, p.snapshot),
+        (BKEY_FIELD_SIZE, size),
+        (BKEY_FIELD_VERSION_HI, bversion.hi),
+        (BKEY_FIELD_VERSION_LO, bversion.lo),
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, MaybeZeroable)]
+pub struct bkey_format_state {
+    pub field_min: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
+    pub field_max: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
+}
 
 pub(super) const NR_FIELDS: usize = BKEY_NR_FIELDS as usize;
 

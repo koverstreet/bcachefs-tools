@@ -111,8 +111,9 @@ pub(crate) fn invariant_failed(cond: &'static str) -> ! {
     panic!("invariant failed: {cond}")
 }
 
-#[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod alloc {
+    pub mod accounting;
+    pub mod accounting_format;
     pub mod accounting_mem;
     pub mod background;
     pub mod backpointers;
@@ -126,13 +127,18 @@ pub mod alloc {
     pub mod dev_select;
     pub mod discard;
     pub mod disk_groups;
+    pub mod disk_groups_format;
+    pub mod format;
     pub mod foreground;
     pub mod gc_gens;
     pub mod lru;
+    pub mod lru_format;
     pub mod replicas;
+    pub mod replicas_format;
     pub mod sector_alloc;
     pub mod write_point;
 }
+pub mod bcachefs_ioctl;
 pub mod btree;
 pub mod debug {
     pub mod async_objs;
@@ -144,51 +150,59 @@ pub mod debug {
     pub mod tests;
     pub mod trace;
 }
-#[path = "fs/acl.rs"]          pub mod acl;
-#[path = "fs/check.rs"]        pub mod check;
-#[path = "fs/check_dir_structure.rs"] pub mod check_dir_structure;
-#[path = "fs/check_nlinks.rs"] pub mod check_nlinks;
-#[path = "fs/check_dirents.rs"] pub mod check_dirents;
-#[path = "fs/check_extents.rs"] pub mod check_extents;
-#[path = "fs/check_inodes.rs"] pub mod check_inodes;
-#[path = "fs/check_root.rs"]   pub mod check_root;
-#[path = "fs/check_unreachable_inodes.rs"] pub mod check_unreachable_inodes;
-#[path = "fs/check_xattrs.rs"] pub mod check_xattrs;
-#[path = "fs/fix_reflink_p.rs"] pub mod fix_reflink_p;
-#[path = "fs/dirent.rs"]       pub mod dirent;
-#[path = "init/fs.rs"]          pub mod fs;
+/// The POSIX filesystem on the btrees: inodes, directories, xattrs, ACLs,
+/// quotas, and their fsck.
+pub mod posix {
+    pub mod acl;
+    pub mod acl_format;
+    pub mod check;
+    pub mod check_dir_structure;
+    pub mod check_dirents;
+    pub mod check_extents;
+    pub mod check_inodes;
+    pub mod check_nlinks;
+    pub mod check_root;
+    pub mod check_unreachable_inodes;
+    pub mod check_xattrs;
+    pub mod dirent;
+    pub mod dirent_format;
+    pub mod fix_reflink_p;
+    pub mod inode;
+    pub mod inode_format;
+    pub mod inode_opts;
+    #[cfg(kernel)]
+    pub mod ioctl;
+    pub mod logged_ops;
+    pub mod logged_ops_format;
+    pub mod lostfound;
+    pub mod namei;
+    pub mod quota;
+    pub mod quota_format;
+    pub mod str_hash;
+    pub mod xattr;
+    pub mod xattr_format;
+}
+pub mod fs;
 pub mod init {
     #[cfg(kernel)]
-    #[path = "chardev.rs"] pub mod chardev;
-    #[path = "damage.rs"] pub mod damage;
-    #[path = "dev.rs"] pub mod dev;
-    #[path = "error.rs"] pub mod error;
-    #[path = "module.rs"] pub mod module;
-    #[path = "passes.rs"] pub mod passes;
-    #[path = "progress.rs"] pub mod progress;
-    #[path = "recovery.rs"] pub mod recovery;
-    #[path = "registry.rs"] pub mod registry;
-    #[path = "rw.rs"] pub mod rw;
+    pub mod chardev;
+    pub mod damage;
+    pub mod damage_format;
+    pub mod dev;
+    pub mod error;
+    pub mod module;
+    pub mod passes;
+    pub mod passes_format;
+    pub mod progress;
+    pub mod recovery;
+    pub mod registry;
+    pub mod rw;
 }
-#[path = "fs/inode.rs"]        pub mod inode;
-#[path = "fs/inode_opts.rs"]   pub mod inode_opts;
-#[cfg(kernel)]
-#[path = "fs/ioctl.rs"]        pub mod ioctl;
-#[path = "fs/logged_ops.rs"]   pub mod logged_ops;
-#[path = "fs/lostfound.rs"]    pub mod lostfound;
-#[path = "journal/read.rs"]     pub mod journal;
-#[path = "fs/namei.rs"]        pub mod namei;
-#[path = "fs/quota.rs"]        pub mod quota;
+pub mod journal;
 pub mod sb;
-pub mod snapshots {
-    #[path = "check_snapshots.rs"] pub mod check_snapshots;
-    #[path = "delete.rs"] pub mod delete;
-    #[path = "snapshot.rs"] pub mod snapshot;
-    #[path = "subvolume.rs"] pub mod subvolume;
-}
-#[path = "fs/str_hash.rs"]     pub mod str_hash;
+pub mod snapshots;
 /// The records types defined in Rust that C shares are written from.
-#[path = "types/lib.rs"]       pub mod types;
+pub mod types;
 pub mod cstructs;
 pub mod data_structures;
 pub mod locking;
@@ -199,60 +213,19 @@ pub mod typeinfo;
 pub mod util;
 /// The VFS, for its Rust entry points - kernel only.
 #[cfg(kernel)]
-pub mod vfs {
-    pub mod attr;
-    pub mod buffered;
-    pub mod buffered_write;
-    pub mod dentry;
-    pub mod dir;
-    pub mod direct;
-    pub mod direct_write;
-    pub mod export;
-    pub mod fdm;
-    pub mod fiemap;
-    pub mod file;
-    pub mod folio;
-    pub mod folio_reservation;
-    pub mod fs_type;
-    pub mod inode;
-    pub mod inode_cache;
-    pub mod inode_ops;
-    pub mod io;
-    pub mod namei;
-    pub mod new_inode;
-    pub mod pagecache;
-    pub mod path;
-    pub mod status_fd;
-    pub mod super_block;
-    pub mod ioctl;
-    pub mod writeback;
-}
-#[path = "fs/xattr.rs"]        pub mod xattr;
+pub mod vfs;
 pub mod data {
     pub mod checksum;
     pub mod compress;
     pub mod copygc;
     pub mod dev_bio;
     pub mod durability;
-    pub mod ec {
-        pub mod buf;
-        pub mod check;
-        pub mod delete;
-        pub mod head;
-        pub mod io;
-        pub mod open;
-        pub mod repair;
-        pub mod stripe;
-        pub mod stripe_new;
-        pub mod stripe_new_blocks;
-        pub mod stripe_new_reuse;
-        pub mod stripe_new_tasks;
-        pub mod trigger;
-        pub mod update;
-    }
+    pub mod ec;
     pub mod extent_update;
     pub mod extents;
+    pub mod extents_format;
     pub mod extents_sb;
+    pub mod extents_sb_format;
     pub mod inline_data;
     pub mod io_misc;
     pub mod keylist;
@@ -264,15 +237,9 @@ pub mod data {
     pub mod promote;
     pub mod ptrs;
     pub mod read;
-    pub mod reconcile {
-        pub mod check;
-        pub mod needs_reconcile;
-        pub mod plan;
-        pub mod scan;
-        pub mod trigger;
-        pub mod work;
-    }
+    pub mod reconcile;
     pub mod reflink;
+    pub mod reflink_format;
     pub mod scrub_journal;
     pub mod update;
     pub mod update_feasible;

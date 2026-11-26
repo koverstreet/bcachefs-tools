@@ -49,7 +49,7 @@
 //!
 //! ptrs_kill and ptrs_kill_ec are PtrMasks of the key planned for, made and
 //! combined under its brand, the drop simulation's copies adopted as it
-//! (ptrs_mask.rs), and erased into data_update_opts.
+//! (ptrs/mask.rs), and erased into data_update_opts.
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};

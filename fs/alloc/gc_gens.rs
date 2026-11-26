@@ -18,7 +18,16 @@ use crate::util::alloc::Vec;
 use crate::os::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
+use crate::util::projections::Volatile;
 use crate::{bch_err, btree_trans};
+use cstruct_macros::{MaybeZeroable, TypeInfo};
+
+#[repr(C)]
+#[derive(MaybeZeroable, TypeInfo)]
+pub struct bch_fs_gc_gens {
+    /* gc_gens's: where its walk is, for sysfs */
+    pub pos: Volatile<c::bbpos>,
+}
 
 fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
     let enomem = |_| fs.err(Errcode::ENOMEM_gc_gens);

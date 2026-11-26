@@ -23,15 +23,15 @@
 
 use core::ffi::c_int;
 
-use crate::acl;
+use crate::posix::acl;
 use crate::os::inode_ops::InodeAttrs;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{Errcode, ret_to_c, BchError};
-use crate::inode;
-use crate::inode_opts::InodeOpt;
-use crate::quota::QuotaAcctMode;
+use crate::posix::inode;
+use crate::posix::inode_opts::InodeOpt;
+use crate::posix::quota::QuotaAcctMode;
 use crate::snapshots::subvolume;
 
 use super::dentry::Dentry;
@@ -237,7 +237,7 @@ impl InodeAttrs for InodeInfo {
     }
 
     fn listxattr(dentry: Dentry<'_>, buf: Option<&mut [u8]>) -> Result<usize, BchError> {
-        crate::xattr::listxattr(dentry, buf)
+        crate::posix::xattr::listxattr(dentry, buf)
     }
 }
 

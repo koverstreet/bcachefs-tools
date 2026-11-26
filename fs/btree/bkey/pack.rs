@@ -5,18 +5,45 @@
 use core::cmp::Ordering;
 use core::mem::offset_of;
 
-use super::format::{fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
+use super::format::{bkey_fields, fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
 use super::packed::BkeyPHeader;
 use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::c;
-use crate::cstructs::c::{bkey_fields, BkeyPackPosRet};
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::format::BkeyField::{self, *};
 use crate::format::{bkey_format, Bpos, BkeyType};
 use crate::os::kernel::unlikely;
 use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut};
 use crate::util::{Printbuf, ToText};
+use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
+
+/*
+ * Wrapper for stack-allocated struct bkey_packed.
+ *
+ * The byte-aligned fast paths (BtreeNode::unpack_key_at(), unpack_pos_at(),
+ * pack_pos()) issue an 8-byte unaligned load at @bytes +
+ * uf->byte_offset, where byte_offset is signed and can be as low as -7
+ * (and unpack_key_at()'s header trick reads @bytes - 1). This
+ * is safe for bkeys inside a bset (preceded by the bset header or by
+ * another bkey), but reads into the stack redzone for a bare stack-local
+ * struct bkey_packed. Wrap stack copies in this to provide the leading
+ * padding.
+ */
+#[repr(C)]
+#[derive(Clone, Copy, MaybeZeroable, Plain)]
+pub struct bkey_packed_padded {
+    pub _pad: [u8; 8],
+    pub k: c::bkey_packed,
+}
+
+#[bch_enum(closed)]
+#[repr(u32)]
+pub enum BkeyPackPosRet {
+    BKEY_PACK_POS_EXACT,
+    BKEY_PACK_POS_SMALLER,
+    BKEY_PACK_POS_FAIL,
+}
 
 const POS_FIELDS: [BkeyField; 3] = [BKEY_FIELD_INODE, BKEY_FIELD_OFFSET, BKEY_FIELD_SNAPSHOT];
 

@@ -248,7 +248,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "\nBtree usage:\n");
                 for entry in &btrees {
                     if let Ok(Acct::btree(r)) = entry.pos.get() {
-                        write!(sub, "{}:\t{}\r\n", btree::types::btree_id_str(r.id), Sectors(entry.counter(0)));
+                        write!(sub, "{}:\t{}\r\n", btree::btree_id_str(r.id), Sectors(entry.counter(0)));
                     }
                 }
             });

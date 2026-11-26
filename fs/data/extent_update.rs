@@ -34,7 +34,8 @@ use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
 use crate::os::kernel::{likely, unlikely};
 use crate::util::log::LogMsg;
-use crate::{inode, inode_opts, prt};
+use crate::prt;
+use crate::posix::{inode, inode_opts};
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, BkeyType};
 

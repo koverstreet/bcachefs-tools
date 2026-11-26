@@ -22,11 +22,11 @@ use bcachefs_kernel::btree::iter::{CommitFlags, UpdateTriggerFlags};
 use bcachefs_kernel::data::extents::bkey_append_ptr;
 use bcachefs_kernel::data_structures::dst_room::DstRoom;
 use bcachefs_kernel::format::{BkeyType, Btree};
-use bcachefs_kernel::inode_opts::get_io_opts;
+use bcachefs_kernel::posix::inode_opts::get_io_opts;
 use bcachefs_kernel::util::rcu::read_lock;
 use bcachefs_kernel::data::io_misc;
-use bcachefs_kernel::xattr::XattrType;
-use bcachefs_kernel::{acl, dirent, inode, namei, str_hash, xattr};
+use bcachefs_kernel::posix::xattr::XattrType;
+use bcachefs_kernel::posix::{acl, dirent, inode, namei, str_hash, xattr};
 use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::Fs;
 

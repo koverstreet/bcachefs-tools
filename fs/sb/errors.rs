@@ -21,7 +21,7 @@ use core::ffi::c_int;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use crate::btree::bkey::ValidateFlags;
 use crate::c;
-pub use crate::cstructs::sb_errors_format::{FsckFlags, SbErrorId};
+pub use crate::sb::errors_format::{FsckFlags, SbErrorId};
 use crate::util::vstructs::{Unvalidated, Validated};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};

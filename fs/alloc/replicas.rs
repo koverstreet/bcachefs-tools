@@ -16,7 +16,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::accounting::{CounterSet, DiskAccountingPos, ReplicasCounters};
+use crate::alloc::accounting::{CounterSet, DiskAccountingPos, ReplicasCounters};
 use crate::alloc::accounting_mem::{self, MarkWrite};
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::c;

@@ -3,7 +3,7 @@
 use super::flush::move_keys_from_inc_to_flushing;
 use super::keys::{wb_key_u64s, KeysLiveWriter, WbKeys};
 use super::{insert_checks, resize_gfp, wb_btree_idx, AccountingKey, Buf, FlushingGuard, IncGuard, SEQ_U64S, WB_RESIZE_GFP};
-use crate::accounting::{self, DiskAccountingPos};
+use crate::alloc::accounting::{self, DiskAccountingPos};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
 use crate::c;
 use crate::c::WbFlushCaller as Caller;

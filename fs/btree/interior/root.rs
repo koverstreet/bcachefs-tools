@@ -22,6 +22,105 @@ use crate::util::printbuf::ToText;
 use crate::util::vstructs::Validated;
 use crate::{POS_MIN, SPOS_MAX};
 use super::{reserve, InteriorUpdate, NewNode};
+use core::ffi::c_int;
+use crate::btree::bkey::{BkeyI, BKEY_U64S};
+use crate::data_structures::dst_room::DstRoom;
+use crate::locking::{ExclusiveGuard, Mutex};
+use crate::util::alloc::Vec;
+use crate::util::projections::Volatile;
+use cstruct_macros::{Init, MaybeZeroable};
+use pin_init::pin_data;
+
+/* On disk root - see async splits: */
+#[repr(C)]
+#[derive(Default)]
+pub struct btree_root {
+    pub key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
+    pub level: u8,
+    pub alive: u8,
+}
+
+/// root_lock's: each btree's root as the journal and the clean section
+/// record it - key, level, alive. The known btrees', and the rest's, which
+/// early journal replay adds as it finds them: the slots only move then.
+#[pin_data]
+#[repr(C)]
+#[derive(MaybeZeroable, Init)]
+pub struct BtreeRoots {
+    #[init(::pin_init::init_array_from_fn(|_| c::btree_root::default()))]
+    pub roots_known: [c::btree_root; Btree::NR as usize],
+    #[pin]
+    #[init(Vec::new())]
+    pub roots_extra: Vec<c::btree_root>,
+}
+
+impl BtreeRoots {
+    /// Btree @id's: a known btree's, or past them, roots_extra's -
+    /// bch2_btree_id_root(). None for one past those.
+    pub fn get(&self, id: u32) -> Option<&c::btree_root> {
+        let nr_known = Btree::NR;
+        if id < nr_known {
+            return Some(&self.roots_known[id as usize]);
+        }
+        self.roots_extra.get((id - nr_known) as usize)
+    }
+
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut c::btree_root> {
+        let nr_known = Btree::NR;
+        if id < nr_known {
+            return Some(&mut self.roots_known[id as usize]);
+        }
+        self.roots_extra.get_mut((id - nr_known) as usize)
+    }
+}
+
+/// root_lock, held: the roots, and what it publishes of them.
+pub type BtreeRootsGuard<'a> = ExclusiveGuard<'a, Mutex, BtreeRoots, BtreeRootsLive>;
+
+impl BtreeRootsGuard<'_> {
+    /// Slots up to btree @id's, empty, and how many there are published: for
+    /// a btree past the known ones that the journal has a root for.
+    pub fn grow_to(&mut self, id: u32) -> Result<(), BchError> {
+        while id >= self.roots_extra.len() as u32 + Btree::NR {
+            self.roots_extra.push(Default::default())?;
+        }
+        let nr = self.roots_extra.len() as u32;
+        self.published().roots_nr_extra.set(nr);
+        Ok(())
+    }
+}
+
+/* A packed root's level, in its node pointer's low bits */
+pub const BTREE_ROOT_LEVEL_BITS: u32 = 3;
+
+crate::published! {
+    /// The roots as they're read without root_lock, by btree id: the root
+    /// node, packed with its level - so btree_path_lock_root() reads both in
+    /// one load, without a miss into the node - and the error reading it
+    /// left; and how many btrees there are past the known ones. Fixed at
+    /// BTREE_ID_NR_MAX, so nothing here moves when roots_extra grows.
+    #[derive(MaybeZeroable)]
+    pub struct BtreeRootsLive {
+        pub roots_b: [Volatile<c_ulong>; c::BTREE_ID_NR_MAX as usize],
+        pub roots_error: [Volatile<i16>; c::BTREE_ID_NR_MAX as usize],
+        pub roots_nr_extra: Volatile<u32>,
+    }
+}
+
+impl BtreeRootsLive {
+    /// Btree @id's root node: bch2_btree_id_root_b().
+    pub fn node(&self, id: u32) -> Option<&BtreeNode> {
+        let b = self.roots_b.get(id as usize)?.get() & !((1 << c::BTREE_ROOT_LEVEL_BITS) - 1);
+        // SAFETY: a root's node, live while it's the root
+        unsafe { (b as *const BtreeNode).as_ref() }
+    }
+
+    /// The error reading btree @id's root left.
+    pub fn error(&self, id: u32) -> c_int {
+        self.roots_error.get(id as usize).map_or(0, |e| e.get().into())
+    }
+}
+
 
 fn root_pack(b: &BtreeNode) -> c_ulong {
     let mask = (1 << c::BTREE_ROOT_LEVEL_BITS) - 1;

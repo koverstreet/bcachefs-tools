@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::init::passes::RecoveryPass;
-use crate::accounting::{self, accounting_bkey, is_mem, key_to_text,
+use crate::alloc::accounting::{self, accounting_bkey, is_mem, key_to_text,
                         replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
 use crate::alloc::buckets::bch_fs_usage_base;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};

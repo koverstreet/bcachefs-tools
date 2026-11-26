@@ -5,6 +5,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::capacity::DiskReservation;
+use crate::btree::BtreeNodeType;
 use crate::btree::bkey::BkeyV;
 use crate::btree::bkey::{bch2_bkey_maybe_mergable,bkey_eq, bkey_gt, bkey_le, bkey_lt, bkey_merge, BkeyI,
                          BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
@@ -12,7 +13,6 @@ use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, 
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay;
 use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
-use crate::btree::types::QueuedKey;
 use crate::btree::write_buffer::insert_checks;
 use crate::c;
 use crate::data::durability::BkeyVDurability;
@@ -36,6 +36,150 @@ use core::ptr::NonNull;
 use cstruct_macros::{bch_enum, MaybeZeroable};
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 use zerocopy::IntoBytes;
+use core::ffi::c_uint;
+use crate::format::BtreeFlags;
+use cstruct_macros::{bitfield, BitfieldMembers};
+use nestify::nest;
+
+/* Transaction types: */
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
+    pub struct btree_insert_entry {
+        pub flags: c_uint,
+        pub sort_order: u8,
+        pub bkey_type: u8,
+        #[members]
+        #>[bitfield(u16)]
+        pub bits: pub struct btree_insert_entry_bits {
+            #[bits(8)] pub btree_id: Btree,
+            level:                     u3,
+            cached:                    bool,
+            insert_trigger_run:        bool,
+            overwrite_trigger_run:     bool,
+            key_cache_already_flushed: bool,
+            key_cache_flushing:        bool,
+        },
+        /*
+         * @old_k may be a key from the journal or the key cache;
+         * @old_btree_u64s always refers to the size of the key being
+         * overwritten in the btree:
+         */
+        pub old_btree_u64s: u8,
+        k_buf_u64s: u8,
+        pub path: c::PathIdx,
+        k: *mut c::bkey_i,
+        /* key being overwritten: */
+        pub old_k: c::bkey,
+        pub old_v: *const c::bch_val,
+        pub ip_allocated: c_ulong,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, MaybeZeroable)]
+pub struct btree_trans_commit_hook {
+    pub fn_: Option<unsafe fn(&TransAttempt<'_, '_>, *mut c::btree_trans_commit_hook) -> Result<(), BchError>>,
+    pub next: *mut c::btree_trans_commit_hook,
+}
+
+/*
+ * The node types whose updates run triggers, a bit each: a leaf's node type
+ * is its btree's id + 1. Every snapshotted btree runs transactional triggers,
+ * so that bch2_trigger_snapshot_nr_keys() runs for its keys; and interior
+ * nodes do, for their pointers.
+ */
+const TRANS_TRIGGERS: u64 = 1 << BtreeNodeType::btree.0 |
+    crate::btrees_with(BtreeFlags::trans_triggers.union(BtreeFlags::snapshots)) << 1;
+const ATOMIC_TRIGGERS: u64 = crate::btrees_with(BtreeFlags::atomic_triggers) << 1;
+
+/// An update's node type - which may be a btree's this code doesn't know - in
+/// @mask.
+const fn node_type_in(bkey_type: u8, mask: u64) -> bool {
+    bkey_type < 64 && mask & (1 << bkey_type) != 0
+}
+
+/// Where an update's key is, and its room: a TransBkey's - so the key is as
+/// good as one is, until the attempt's over - or an update's already queued.
+#[derive(Clone, Copy)]
+pub(crate) struct QueuedKey {
+    k:        NonNull<c::bkey_i>,
+    buf_u64s: u8,
+}
+
+impl QueuedKey {
+    pub(crate) fn as_ptr(self) -> *mut c::bkey_i {
+        self.k.as_ptr()
+    }
+}
+
+impl<V: ?Sized> From<&mut TransBkey<'_, '_, V>> for QueuedKey {
+    fn from(k: &mut TransBkey<'_, '_, V>) -> Self {
+        let (k, buf_u64s) = k.as_raw();
+        QueuedKey { k, buf_u64s: buf_u64s.min(u8::MAX.into()) as u8 }
+    }
+}
+
+impl btree_insert_entry {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(key: QueuedKey, path: c::PathIdx, btree: Btree, level: u32, cached: bool,
+                      flags: c_uint, ip: c_ulong) -> Self {
+        let mut bits = btree_insert_entry_bits::default();
+        bits.set_btree_id(btree);
+        bits.set_level(level as u8);
+        bits.set_cached(cached);
+
+        btree_insert_entry {
+            flags,
+            sort_order:     btree.trigger_order(),
+            bkey_type:      BtreeNodeType::of(level, btree).0 as u8,
+            bits,
+            old_btree_u64s: 0,
+            k_buf_u64s:     key.buf_u64s,
+            path,
+            k:              key.k.as_ptr(),
+            old_k:          c::bkey::new(),
+            old_v:          core::ptr::null(),
+            ip_allocated:   ip,
+        }
+    }
+
+    pub(crate) fn key(&self) -> &BkeyI {
+        unsafe { &*BkeyI::from_raw(self.k) }
+    }
+
+    /// The key, for a trigger to change in place: it may be one the update's
+    /// caller lent.
+    pub(crate) fn key_ptr(&self) -> *mut c::bkey_i {
+        self.k
+    }
+
+    pub(crate) fn key_buf_u64s(&self) -> u32 {
+        self.k_buf_u64s.into()
+    }
+
+    pub(crate) fn queued_key(&self) -> QueuedKey {
+        QueuedKey { k: NonNull::new(self.k).expect("an update of no key"), buf_u64s: self.k_buf_u64s }
+    }
+
+    pub(crate) fn set_key(&mut self, key: QueuedKey) {
+        self.k          = key.k.as_ptr();
+        self.k_buf_u64s = key.buf_u64s;
+    }
+
+    pub const fn has_trans_triggers(&self) -> bool {
+        node_type_in(self.bkey_type, TRANS_TRIGGERS)
+    }
+
+    pub const fn has_atomic_triggers(&self) -> bool {
+        node_type_in(self.bkey_type, ATOMIC_TRIGGERS)
+    }
+
+    pub const fn has_triggers(&self) -> bool {
+        node_type_in(self.bkey_type, TRANS_TRIGGERS | ATOMIC_TRIGGERS)
+    }
+}
+
 
 #[bch_enum(closed)]
 #[mask(TransCommitFlags: u32)]

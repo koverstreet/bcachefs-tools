@@ -10,12 +10,12 @@
 
 use core::ffi::c_int;
 
-use crate::accounting;
+use crate::alloc::accounting;
 use crate::alloc::capacity::avail_factor;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::inode_opts;
+use crate::posix::inode_opts;
 use crate::locking::Guard as _;
 use crate::prt;
 use crate::debug::trace::events;

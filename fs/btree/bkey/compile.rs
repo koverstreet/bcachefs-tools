@@ -4,10 +4,9 @@
 
 use core::mem::offset_of;
 
-use super::format::FIELDS;
+use super::format::{bkey_fields, FIELDS};
 use super::BKEY_U64S;
 use crate::c;
-use crate::cstructs::c::bkey_fields;
 use crate::format::BkeyField::{self, *};
 use crate::format::bkey_format;
 use crate::types::field_size;

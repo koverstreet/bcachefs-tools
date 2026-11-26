@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //! Userspace (cargo) build script: the build configuration's cfgs. The fs
 //! crate's C interface - its types, and the C functions it calls - is Rust's
-//! own (types/lib.rs), so nothing here reads the C.
+//! own (types.rs), so nothing here reads the C.
 
 include!("build_config.rs");
 

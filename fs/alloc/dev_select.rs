@@ -24,6 +24,44 @@ use crate::debug::trace::events;
 use crate::os::kernel::likely;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
+use crate::published;
+use core::ffi::c_ulong;
+use cstruct_macros::MaybeZeroable;
+
+/*
+ * Per-(write_point, target) WFQ state: next_alloc[i] is the virtual time at
+ * which device i should next be served. The smallest hand wins; the per-pick
+ * increment is 1/free_space[i], so devs with more free space win more often -
+ * the proportional bias is in the increment size.
+ *
+ * cached_devs records which dev mask the next_alloc values are valid for.
+ * On mask change (target switch, rw_devs change, write_point recycled to a
+ * different stream) we bump newly-included devs to min(next_alloc[i] of devs
+ * that were already in scope), so they join at "current virtual time" rather
+ * than at 0 - which would otherwise win every comparison until catching up
+ * to the rest of the hands, starving the other devs in the meantime.
+ */
+#[repr(C)]
+#[derive(Clone, Copy, MaybeZeroable)]
+pub struct dev_stripe_state {
+    pub next_alloc: [u64; c::BCH_SB_MEMBERS_MAX as usize],
+    pub cached_devs: c::bch_devs_mask,
+}
+
+published! {
+    /// Where copies have to go, when free space is lopsided enough that it
+    /// decides how much fits: recomputed with the reservation caches - from
+    /// what it was, for hysteresis - and read without the lock by the
+    /// allocator, as a placement preference - see dev_alloc_required().
+    #[derive(MaybeZeroable)]
+    pub struct Placement {
+        /* bit n - 1: placement decides how much fits at n replicas */
+        pub placement_constrained: Volatile<c_ulong>,
+        /* at n replicas, the devices every such allocation has to use */
+        pub placement_required: [Volatile<c::DevsMask>; c::BCH_REPLICAS_MAX as usize],
+    }
+}
+
 
 const NR_DEVS: usize = c::BCH_SB_MEMBERS_MAX as usize;
 

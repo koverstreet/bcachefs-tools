@@ -33,7 +33,7 @@ use crate::errcode::{Errcode as err, BchError};
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::init::error::bch2_inum_offset_err_msg_trans;
-use crate::inode_opts::get_inode;
+use crate::posix::inode_opts::get_inode;
 use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
 use crate::os::blkdev::plugged;

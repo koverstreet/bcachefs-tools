@@ -3,7 +3,7 @@
 //! A mounted filesystem's file ioctls, and their dispatch,
 //! bch2_fs_file_ioctl() - the filesystem's file_operations'. Here are those
 //! tied to the VFS: to the file, its inode, the mount. Those that only need
-//! the filesystem are fs/fs/ioctl.rs's, and the rest go to the filesystem's
+//! the filesystem are posix/ioctl.rs's, and the rest go to the filesystem's
 //! dispatch, fs_ioctl().
 //!
 //! A subvolume is created as mkdir(2) makes a directory - the same lookup,
@@ -24,16 +24,16 @@
 use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
 use crate::data::read::ReadErrReport;
-use crate::dirent;
+use crate::posix::dirent;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::inode_opts::reinherit_attrs as reinherit;
-use crate::str_hash;
+use crate::posix::inode_opts::reinherit_attrs as reinherit;
+use crate::posix::str_hash;
 use crate::util::os_str::{OsStr, OsStrExt};
-use crate::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opts, reflink_p_set_may_update_opts, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path, unpoison};
+use crate::posix::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opts, reflink_p_set_may_update_opts, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path, unpoison};
 use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
-use crate::namei;
+use crate::posix::namei;
 use crate::util::alloc::Vec;
 use crate::os::file::File;
 use super::file::InodeFile;

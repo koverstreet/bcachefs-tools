@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A mean_and_variance's estimators - see mean_and_variance_types.rs for the
+//! A mean_and_variance's estimators - see the struct, below, for the
 //! design: an exact sum and count for the mean, and a streaming median and
 //! MAD, each stepped by a fraction of the MAD per sample.
 //!

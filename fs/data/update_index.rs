@@ -43,7 +43,7 @@ use crate::data::reconcile::plan::{offline_devs, park, ParkReason};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
-use crate::inode_opts::get_io_opts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::debug::trace::{events, TraceEvent};
 use crate::util::log::LogMsg;

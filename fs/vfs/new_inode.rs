@@ -87,7 +87,7 @@ impl NewInode {
         self.v.set_generation(bi.bi_generation);
         self.v.set_size(bi.bi_size);
 
-        *self.ei_quota.get_mut() = InodeQuota { ei_qid: crate::quota::qid(bi), ei_quota_reserved: 0 };
+        *self.ei_quota.get_mut() = InodeQuota { ei_qid: crate::posix::quota::qid(bi), ei_quota_reserved: 0 };
         if subvol.snap() {
             self.ei_flags.set(c::InodeInfoFlag::EI_INODE_SNAPSHOT, true);
         }

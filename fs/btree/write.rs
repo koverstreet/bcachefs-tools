@@ -28,7 +28,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::format::{Btree, DataType};
 use crate::init::error::BkeyValidate;
-use crate::inode_opts::get_io_opts;
+use crate::posix::inode_opts::get_io_opts;
 use crate::locking::six::{six_lock_counts, six_lock_write_held};
 use crate::types::{Le16, Le64};
 use crate::locking::MemallocFlags;
@@ -49,6 +49,16 @@ use core::ops::Range;
 use core::pin::Pin;
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
 use cstruct_macros::{bch_enum, in_place};
+use core::sync::atomic::AtomicI64;
+use cstruct_macros::MaybeZeroable;
+
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct btree_write_stats {
+    pub nr: AtomicI64,
+    pub bytes: AtomicI64,
+}
+
 
 /*
  * blk-wbt.c throttles all writes except those that have both REQ_SYNC
