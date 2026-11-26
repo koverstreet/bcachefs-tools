@@ -11,16 +11,15 @@ CONFIG_BCACHEFS_FS := m
 # (It logs to stderr: stdout is our "hit" or nothing.) Not on clean, which
 # reads this file too.
 ifneq ($(.DEFAULT_GOAL),__clean)
-bcachefs-version := $(shell sed -n 's/.*bcachefs_version "\(.*\)".*/\1/p' $(src)/version.h 2>/dev/null)
-ifneq ($(bcachefs-version),)
-ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
+ifneq ($(BCACHEFS_VERSION),)
+ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(BCACHEFS_VERSION)' '$(obj)/bcachefs.ko' && echo hit),hit)
 CONFIG_BCACHEFS_FS :=
 bcachefs-prebuilt := y
 endif
-# The module's version, in its .modinfo: init/module.rs
-RUSTFLAGS_mod.o += --cfg bch_version -Zunstable-options --env-set BCACHEFS_VERSION=$(bcachefs-version)
+# The module's version, in its .modinfo: init/module.rs, from the environment
+RUSTFLAGS_mod.o += --cfg bch_version
 else
-$(warning bcachefs: no version in $(src)/version.h - the module will carry none, and we're not looking for a prebuilt one (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
+$(warning bcachefs: no BCACHEFS_VERSION - the module will carry none, and we're not looking for a prebuilt one (bcachefs-tools' 'make install_dkms' puts it in build.vars; a hand-copied kernel fs/bcachefs/ tree lacks it))
 endif
 endif
 

@@ -8,12 +8,10 @@ version=$1
 
 git checkout v$version
 git clean -xfd
-make generate_version
 
 cargo license > COPYING.rust-dependencies
 
 git ls-files|
-    { cat; echo "version.h"; }|
     tar --create --file bcachefs-tools-$version.tar -T -	\
 	--transform="s_^_bcachefs-tools-$version/_"
 

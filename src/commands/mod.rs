@@ -221,8 +221,7 @@ static FS_CMD: CmdDef = CmdDef {
 
 static VERSION_CMD: CmdDef = {
     fn __run(_argv: Vec<String>) -> ExitCode {
-        let vh = include_str!("../../version.h");
-        println!("{}", vh.split('"').nth(1).unwrap_or("unknown"));
+        println!("{}", option_env!("BCACHEFS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")));
         ExitCode::SUCCESS
     }
     CmdDef { name: "version", about: "Display version", aliases: &[],

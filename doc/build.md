@@ -15,5 +15,5 @@ make -k -C ../.. O=.linux EXTRA_CFLAGS=-Werror W=1 fs/bcachefs/
 
 ## Notes
 
-- `make` writes version.h, which the Rust include_str!s, then runs cargo:
-  after a `make`, `cargo build` alone is enough.
+- `make` gives cargo the git version, as BCACHEFS_VERSION; a plain
+  `cargo build`'s `bcachefs version` is Cargo.toml's.

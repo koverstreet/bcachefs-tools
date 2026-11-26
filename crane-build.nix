@@ -148,13 +148,10 @@ let
       inherit cargoArtifacts;
       doCheck = true;
 
-      enableParallelChecking = true;
-
       pnameSuffix = "-test";
       buildPhaseCargoCommand = "";
 
       checkPhaseCargoCommand = ''
-        make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags version.h
         cargo test --profile release -- --nocapture $checkFlags
       '';
     }

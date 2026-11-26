@@ -1,5 +1,5 @@
 # `:=` (simple expansion) is load-bearing here: VERSION feeds into DKMSDIR,
-# the dkms.conf PACKAGE_VERSION, version.h, and the `dkms add/remove` args.
+# the dkms.conf PACKAGE_VERSION, BCACHEFS_VERSION, and the `dkms add/remove` args.
 # With recursive `=` the $(shell git describe) re-runs on every $(VERSION)
 # expansion — so HEAD moving mid-recipe (e.g. a commit/rebase landing during
 # a long `make install_dkms`) can land the install steps in two
@@ -11,11 +11,12 @@
 # and we always build locally from the modified source (see fs/Makefile).
 ifneq ($(wildcard .git),)
 VERSION:=$(shell git -c safe.directory=$$PWD -c core.abbrev=12 describe --dirty)
-else ifneq ($(wildcard .version),)
-VERSION:=$(shell cat .version)
 else
 VERSION:=$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select(.name | test("bcachefs-tools")) | .version')
 endif
+
+# `bcachefs version`'s, by env!, which cargo tracks; and in build.vars, the module's
+export BCACHEFS_VERSION:=$(VERSION)
 
 PREFIX?=/usr/local
 DKMSDIR?=/usr/src/bcachefs-$(VERSION)
@@ -121,7 +122,7 @@ PKGCONFIG_LIBS="blkid liburcu zlib liblz4 libzstd"
 
 # Only query pkg-config for targets that compile or do a full install.
 # Targets like install_dkms and clean don't need build dependencies.
-NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf generate_version TAGS tags
+NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf TAGS tags
 ifneq ($(filter-out $(NO_PKGCONFIG_TARGETS),$(or $(MAKECMDGOALS),all)),)
 
 # The libraries cargo links: missing, said here rather than mid-build
@@ -199,35 +200,22 @@ TAGS:
 tags:
 	ctags -R .
 
-# Always cargo's to decide: it tracks every source, build scripts and the
-# include_str!'d version.h. make's mtimes can't - a binary newer than its
-# sources (crane's deps-only build, sources at mtime 1 in the nix store)
-# was taken as built, and the dummy installed.
-bcachefs: force version.h
+# Always cargo's to decide: it tracks every source, build script and env!.
+# make's mtimes can't - a binary newer than its sources (crane's deps-only
+# build, sources at mtime 1 in the nix store) was taken as built, and the
+# dummy installed.
+bcachefs: force
 	$(Q)$(CARGO_BUILD)
 
 # The cargo test suite, as the nix check runs it (crane-build.nix).
 .PHONY: check
-check: | version.h
+check:
 	$(Q)$(CARGO_TEST) -- --nocapture
 
 .PHONY: force
 
-.version: force
-	$(Q)echo "$(VERSION)" > .version.new
-	$(Q)cmp -s .version.new .version || mv .version.new .version
-
-VERSION_H:=$(shell echo "#define bcachefs_version \\\"$(VERSION)\\\"")
-
-version.h: force
-	$(Q)echo "$(VERSION_H)" > version.h.new
-	$(Q)cmp -s version.h.new version.h || mv version.h.new version.h
-
-.PHONY: generate_version
-generate_version: .version version.h
-
 .PHONY: dkms/dkms.conf
-dkms/dkms.conf: dkms/dkms.conf.in version.h
+dkms/dkms.conf: dkms/dkms.conf.in
 	@echo "    [SED]    $@"
 	$(Q)sed "s|@PACKAGE_VERSION@|$(VERSION)|g" dkms/dkms.conf.in > dkms/dkms.conf
 
@@ -330,10 +318,10 @@ install_dracut: dracut/90bcachefs/module-setup.sh
 # dkms/install.rs. In a target directory of its own: dkms-reload runs as root,
 # and root's files in target/debug would fail the user's next build.
 bch-stage-module = $(Q)$(CARGO) run -q -p bcachefs-dkms --target-dir target/dkms -- $(1) \
-	$(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),'$(v)=$($(v))'))
+	$(foreach v,BCACHEFS_VERSION $(BCACHEFS_DKMS_FORWARD),$(if $($(v)),'$(v)=$($(v))'))
 
 .PHONY: install_dkms
-install_dkms: dkms/dkms.conf version.h
+install_dkms: dkms/dkms.conf
 	$(call bch-stage-module,$(DESTDIR)$(DKMSDIR))
 	$(INSTALL) -m0644 dkms/dkms.conf $(DESTDIR)$(DKMSDIR)
 
@@ -376,7 +364,7 @@ KDIR			?= /lib/modules/$(shell uname -r)/build
 DKMS_INTERACTIVE_DIR	?= /ktest-out/bcachefs-module
 
 .PHONY: dkms-reload-interactive
-dkms-reload-interactive: version.h
+dkms-reload-interactive:
 	@if [ "$$(id -u)" -ne 0 ]; then \
 		echo "$@: must run as root"; exit 1; \
 	fi
@@ -395,7 +383,7 @@ dkms-reload-interactive: version.h
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) .version dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
+	$(Q)$(RM) dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
 	$(Q)$(CARGO_CLEAN)
 	$(Q)$(RM) -f $(built_scripts)
 
