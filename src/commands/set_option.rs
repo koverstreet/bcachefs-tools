@@ -2,6 +2,9 @@
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::{Fs, OpenFs};
+use bcachefs_kernel::init::passes::{passes_to_stable, RecoveryPass};
+use bcachefs_kernel::opts::OptId;
+use bcachefs_kernel::sb::io::SbResize;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::rcu;
 use clap::{Arg, ArgAction, Command};
@@ -13,6 +16,41 @@ use crate::wrappers::sysfs;
 
 fn opt_flags() -> u32 {
     c::OptFlags::fs.bits() | c::OptFlags::device.bits()
+}
+
+fn reconcile_stable_bit() -> u64 {
+    passes_to_stable(1u64 << RecoveryPass::set_fs_needs_reconcile as u64)
+}
+
+/// The options whose change makes existing data need a reconcile scan:
+/// opt_hook_io()'s, which only runs on a started filesystem.
+fn changes_io_options(id: OptId) -> bool {
+    use OptId as O;
+    matches!(id,
+        O::foreground_target | O::background_target | O::promote_target |
+        O::compression | O::background_compression | O::data_checksum |
+        O::data_replicas | O::erasure_code | O::nocow |
+        O::metadata_target | O::metadata_checksum | O::metadata_replicas)
+}
+
+/// Bit-math shared by preset/restore so the unit tests pin it down.
+fn with_marker_bit(cur: u64, set: bool) -> u64 {
+    let bit = reconcile_stable_bit();
+    if set { cur | bit } else { cur & !bit }
+}
+
+/// Set (or restore) the reconcile marker in the superblock's recovery passes
+/// required: returns its previous state.
+fn set_reconcile_marker(fs: &Fs, set: bool) -> Result<bool> {
+    let mut sb = fs.sb_lock();
+    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+    let mut disk_sb = fs.sb_resize(&mut sb);
+    let ext = disk_sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s)
+        .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+    let r = &mut ext.recovery_passes_required[0];
+    let was_set = r.get() & reconcile_stable_bit() != 0;
+    r.set(with_marker_bit(r.get(), set));
+    Ok(was_set)
 }
 
 fn set_option_cmd() -> Command {
@@ -162,6 +200,9 @@ fn set_option_offline(
 ) -> Result<()> {
     let mut modified = false;
     let mut failed = std::collections::BTreeSet::new();
+    let mut needs_reconcile = false;
+    let mut marker_preset = false;
+    let mut marker_was_set = false;
 
     for (name, value) in opts {
 
@@ -194,12 +235,27 @@ fn set_option_offline(
                 failed.insert(name.as_str());
                 continue;
             }
-            if let Err(e) = fs.opt_set_sb(None, opt, val, Some(value.as_bytes())) {
-                eprintln!("Error setting {name}={value}: {e}");
-                failed.insert(name.as_str());
-                continue;
+            // opt_set_sb() writes the superblock itself when the value
+            // changed, so pre-set the reconcile marker first: then the option
+            // change and the marker persist in the same write, and a crash
+            // between them can't leave the option without its scan. When the
+            // value is unchanged the marker is restored below.
+            let is_inode_opt = changes_io_options(opt_id);
+            if is_inode_opt && !marker_preset {
+                marker_was_set = set_reconcile_marker(&fs, true)?;
+                marker_preset = true;
             }
-            modified = true;
+            match fs.opt_set_sb(None, opt, val, Some(value.as_bytes())) {
+                Err(e) => {
+                    eprintln!("Error setting {name}={value}: {e}");
+                    failed.insert(name.as_str());
+                    continue;
+                }
+                Ok(changed) => {
+                    modified |= changed;
+                    needs_reconcile |= changed && is_inode_opt;
+                }
+            }
         }
 
         if flags & c::OptFlags::device.bits() != 0 {
@@ -249,6 +305,10 @@ fn set_option_offline(
         }
     }
 
+    if marker_preset && !needs_reconcile {
+        set_reconcile_marker(&fs, marker_was_set)?;
+    }
+
     if modified {
         fs.write_super_ret(&mut fs.sb_lock())
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
@@ -270,3 +330,30 @@ fn name_to_dev_idx(fs: &Fs, name: &str) -> Option<usize> {
 }
 
 pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options", cmd_set_option);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconcile_marker_bit_is_nonzero_and_stable() {
+        let pass = 1u64 << RecoveryPass::set_fs_needs_reconcile as u64;
+        let want = passes_to_stable(pass);
+        assert_ne!(want, 0);
+        assert_eq!(with_marker_bit(0, true), want);
+    }
+
+    #[test]
+    fn reconcile_marker_set_is_idempotent_and_keeps_other_bits() {
+        let once = with_marker_bit(1, true);
+        assert_eq!(with_marker_bit(once, true), once);
+        assert_eq!(once & 1, 1);
+    }
+
+    #[test]
+    fn reconcile_marker_restore_clears_only_our_bit() {
+        let bit = reconcile_stable_bit();
+        assert_eq!(with_marker_bit(bit | 1, false), 1);
+        assert_eq!(with_marker_bit(1, true) & 1, 1);
+    }
+}
