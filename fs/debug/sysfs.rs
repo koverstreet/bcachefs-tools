@@ -154,7 +154,7 @@ const INTERNAL: &[Attr<Fs>] = &gated(started, [
 /// index in the btree.trans stats.
 fn trans_stats(c: &Fs) -> impl Iterator<Item = (&'static [u8], usize)> {
     transaction_fns()
-        .map(CStr::to_bytes)
+        .map(str::as_bytes)
         .zip(0..c.btree.trans.stats.len())
 }
 

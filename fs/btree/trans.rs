@@ -340,7 +340,11 @@ pub struct TransStatsJson {
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::util::backtrace::{prt_backtrace, save_backtrace};
-use crate::util::{backtrace::{prt_symbol, prt_task_backtrace}, ffi::c_char};
+use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
+#[cfg(kernel)]
+use kernel::sync::SetOnce;
+#[cfg(not(kernel))]
+use bcachefs_shim::sync::SetOnce;
 use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
 #[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
 use crate::util::log::LogMsg;
@@ -349,13 +353,11 @@ use crate::os::{percpu::{Counters, CpuGuard}, sched};
 use crate::util::{rcu, Printbuf, ToText};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::util::vstructs::{ValidatedEntries, ViewEntries};
-use core::cell::UnsafeCell;
-use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of, size_of_val};
 use core::ops::ControlFlow;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// btree_trans!(fs): a transaction named for the function it's created in.
 /// Transaction stats and lock contention are reported per function, under that
@@ -383,18 +385,13 @@ macro_rules! trans_fn_idx {
     }};
 }
 
-/// One btree_trans!() call site's registered name.
+/// One btree_trans!() call site's index in TRANSACTION_FNS, once its name is
+/// registered.
 #[doc(hidden)]
 pub struct TransFnName {
     idx:   AtomicU32,
     claim: AtomicBool,
-    /* NUL-terminated, truncated to fit */
-    name:  UnsafeCell<[u8; 64]>,
 }
-
-// name is written once, by the thread that claims the call site, and only read
-// - by C, through TRANSACTION_FNS - once that's published it.
-unsafe impl Sync for TransFnName {}
 
 impl Default for TransFnName {
     fn default() -> Self {
@@ -407,7 +404,6 @@ impl TransFnName {
         TransFnName {
             idx:   AtomicU32::new(0),
             claim: AtomicBool::new(false),
-            name:  UnsafeCell::new([0; 64]),
         }
     }
 
@@ -432,12 +428,7 @@ impl TransFnName {
         }
         let name = name.rsplit("::").next().unwrap_or(name);
 
-        let buf = unsafe { &mut *self.name.get() };
-        let n = name.len().min(buf.len() - 1);
-        buf[..n].copy_from_slice(&name.as_bytes()[..n]);
-        buf[n] = 0;
-
-        let idx = trans_get_fn_idx(buf.as_ptr().cast());
+        let idx = trans_get_fn_idx(name);
         self.idx.store(idx, Ordering::Release);
         idx
     }
@@ -1407,38 +1398,34 @@ impl BtreeTrans<'_> {
 
 // ── Transaction names ───────────────────────────────────────────────────────
 
-/// Each btree_trans!() call site's and C caller's name, by fn_idx: the
-/// transaction's, and its stats'. 0 is "(unknown)". A name is a TransFnName's,
-/// written as it's registered: published by a release, read by an acquire.
-static TRANSACTION_FNS: [AtomicPtr<c_char>; BCH_TRANSACTIONS_NR as usize] = {
-    let mut fns = [const { AtomicPtr::new(ptr::null_mut()) }; BCH_TRANSACTIONS_NR as usize];
-    fns[0] = AtomicPtr::new(c"(unknown)".as_ptr().cast_mut().cast());
-    fns
-};
+/// Each btree_trans!() call site's name, by fn_idx: the transaction's, and its
+/// stats'. Slot 0 is never registered: it's "(unknown)".
+static TRANSACTION_FNS: [SetOnce<&'static str>; BCH_TRANSACTIONS_NR as usize] =
+    [const { SetOnce::new() }; BCH_TRANSACTIONS_NR as usize];
 
 /// The name registered at @idx, if one is.
-pub fn transaction_fn(idx: usize) -> Option<&'static CStr> {
-    let p = TRANSACTION_FNS.get(idx)?.load(Ordering::Acquire);
-    (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) })
+pub fn transaction_fn(idx: usize) -> Option<&'static str> {
+    match idx {
+        0 => Some("(unknown)"),
+        _ => TRANSACTION_FNS.get(idx)?.as_ref().copied(),
+    }
 }
 
 /// The name registered at @idx, for messages.
 pub fn transaction_fn_name(idx: u8) -> &'static str {
-    transaction_fn(idx.into()).and_then(|s| s.to_str().ok()).unwrap_or("?")
+    transaction_fn(idx.into()).unwrap_or("?")
 }
 
 /// The names registered, by index, up to the first slot that isn't.
-pub fn transaction_fns() -> impl Iterator<Item = &'static CStr> {
+pub fn transaction_fns() -> impl Iterator<Item = &'static str> {
     (0..TRANSACTION_FNS.len()).map_while(transaction_fn)
 }
 
-pub fn trans_get_fn_idx(fn_: *const c_char) -> u32 {
-    for (i, slot) in TRANSACTION_FNS.iter().enumerate() {
-        let cur = slot.load(Ordering::Acquire);
-        if cur.is_null() || ptr::eq(cur, fn_) {
-            slot.store(fn_.cast_mut(), Ordering::Release);
-            return i as u32;
-        }
+/// @name in the first free slot, claimed - so call sites registering at once
+/// get one each: its index, or 0 if the table's full.
+fn trans_get_fn_idx(name: &'static str) -> u32 {
+    if let Some(i) = (1..TRANSACTION_FNS.len()).find(|&i| TRANSACTION_FNS[i].populate(name)) {
+        return i as u32;
     }
 
     static WARNED: AtomicBool = AtomicBool::new(false);

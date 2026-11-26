@@ -272,7 +272,7 @@ impl DebugFile for TransactionStats {
     async fn show(fs: &Fs, out: &mut DebugOut) -> Result<(), BchError> {
         let mut idx = 1;
         while let Some(name) = transaction_fn(idx) {
-            out.write_bytes(name.to_bytes());
+            out.write_bytes(name.as_bytes());
             prt!(out, ":\n");
             transaction_stats_to_text(&mut out.indent(2), fs, idx);
             idx += 1;
