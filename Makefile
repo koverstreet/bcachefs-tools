@@ -25,29 +25,13 @@ INSTALL=install
 LN=ln
 .DEFAULT_GOAL=all
 
-
-
-ifeq ("$(origin V)", "command line")
-  BUILD_VERBOSE = $(V)
+ifeq ($(origin V),command line)
+  BUILD_VERBOSE := $(V)
 endif
-ifndef BUILD_VERBOSE
-  BUILD_VERBOSE = 0
-endif
-
-ifeq ($(BUILD_VERBOSE),1)
-  Q =
-  CARGO_CLEAN_ARGS = --verbose
-else
-  Q = @
-  CARGO_CLEAN_ARGS = --quiet
-endif
+Q := $(if $(filter 1,$(BUILD_VERBOSE)),,@)
 
 # when cross compiling, cargo places the built binary in a different location
-ifdef CARGO_BUILD_TARGET
-	BUILT_BIN = target/$(CARGO_BUILD_TARGET)/release/bcachefs
-else
-	BUILT_BIN = target/release/bcachefs
-endif
+BUILT_BIN := target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)release/bcachefs
 
 # Persist build-option vars across invocations: `make debug` writes
 # build.vars; subsequent `make` / `make install` re-reads it. `make clean`
@@ -103,17 +87,7 @@ endif
 # fs/build_config.rs.
 export BCACHEFS_CONFIG
 
-ifdef CARGO_TOOLCHAIN_VERSION
-  CARGO_TOOLCHAIN = +$(CARGO_TOOLCHAIN_VERSION)
-endif
-
-override CARGO_ARGS+=${CARGO_TOOLCHAIN}
 CARGO=cargo $(CARGO_ARGS)
-CARGO_BUILD=$(CARGO) build --release
-
-CARGO_TEST=$(CARGO) test --release
-
-CARGO_CLEAN=$(CARGO) clean $(CARGO_CLEAN_ARGS)
 
 # Cold paths out of line, as the module's are: fs/Makefile.rust
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries -C llvm-args=-hot-cold-split=true
@@ -122,7 +96,7 @@ PKGCONFIG_LIBS="blkid liburcu zlib liblz4 libzstd"
 
 # Only query pkg-config for targets that compile or do a full install.
 # Targets like install_dkms and clean don't need build dependencies.
-NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf TAGS tags
+NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf
 ifneq ($(filter-out $(NO_PKGCONFIG_TARGETS),$(or $(MAKECMDGOALS),all)),)
 
 # The libraries cargo links: missing, said here rather than mid-build
@@ -193,24 +167,17 @@ debug: write-build-vars bcachefs
 write-build-vars:
 	@$(call bch-build-vars,$(BCACHEFS_LOCAL_PERSIST),build.vars)
 
-.PHONY: TAGS tags
-TAGS:
-	ctags -e -R .
-
-tags:
-	ctags -R .
-
 # Always cargo's to decide: it tracks every source, build script and env!.
 # make's mtimes can't - a binary newer than its sources (crane's deps-only
 # build, sources at mtime 1 in the nix store) was taken as built, and the
 # dummy installed.
 bcachefs: force
-	$(Q)$(CARGO_BUILD)
+	$(Q)$(CARGO) build --release
 
 # The cargo test suite, as the nix check runs it (crane-build.nix).
 .PHONY: check
 check:
-	$(Q)$(CARGO_TEST) -- --nocapture
+	$(Q)$(CARGO) test --release -- --nocapture
 
 .PHONY: force
 
@@ -254,15 +221,16 @@ SKIP_COMPLETIONS := 1
 endif
 endif
 
+# The names it's run by: src/bcachefs.rs dispatches on argv[0]
+SBIN_LINKS := $(foreach t,mkfs fsck mount,$(foreach f,bcachefs fuse.bcachefs fuseblk.bcachefs,$(t).$(f)))
+
 install: INITRAMFS_HOOK=$(INITRAMFS_DIR)/hooks/bcachefs
 install: all install_dkms $(optional_install)
 	$(INSTALL) -m0755 -D $(BUILT_BIN)  -t $(DESTDIR)$(ROOT_SBINDIR)
 	$(INSTALL) -m0644 -D bcachefs.8    -t $(DESTDIR)$(PREFIX)/share/man/man8/
 	$(INSTALL) -m0755 -D initramfs/hook   $(DESTDIR)$(INITRAMFS_HOOK)
 	$(INSTALL) -m0644 -D udev/64-bcachefs.rules -t $(DESTDIR)$(PKGCONFIG_UDEVRULESDIR)/
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.bcachefs
+	$(foreach l,$(SBIN_LINKS),$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/$(l);)
 	$(INSTALL) -d $(DESTDIR)$(BASH_COMPLETION_DIR)
 # Generating completions runs the built binary; on a true cross compile
 # we can't, so skip (SKIP_COMPLETIONS is computed at top level above).
@@ -271,25 +239,10 @@ ifdef SKIP_COMPLETIONS
 else
 	$(BUILT_BIN) completions bash > $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
 endif
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuseblk.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuseblk.bcachefs
-	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.fuseblk.bcachefs
 
 .PHONY: uninstall
 uninstall:
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuseblk.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuseblk.bcachefs
-	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.fuseblk.bcachefs
+	$(RM) $(addprefix $(DESTDIR)$(ROOT_SBINDIR)/,bcachefs $(SBIN_LINKS))
 	$(RM) $(DESTDIR)$(PREFIX)/share/man/man8/bcachefs.8
 	$(RM) $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
 	$(RM) -r $(DESTDIR)$(DKMSDIR)
@@ -383,9 +336,8 @@ dkms-reload-interactive:
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
-	$(Q)$(CARGO_CLEAN)
-	$(Q)$(RM) -f $(built_scripts)
+	$(Q)$(RM) dkms/dkms.conf build.vars $(DOCGENERATED) $(built_scripts)
+	$(Q)$(CARGO) clean $(if $(Q),--quiet)
 
 .PHONY: deb
 deb: all
@@ -407,7 +359,7 @@ bcachefs-principles-of-operation.pdf: doc/bcachefs-principles-of-operation.tex d
 
 .PHONY: docgen
 docgen: bcachefs
-	target/release/bcachefs _doc_gen
+	$(BUILT_BIN) _doc_gen
 	cargo run -p bch-docgen --release
 
 doc: bcachefs-principles-of-operation.pdf
@@ -416,20 +368,3 @@ doc: bcachefs-principles-of-operation.pdf
 cargo-update-msrv:
 	cargo +nightly generate-lockfile -Zmsrv-policy
 	cargo +nightly generate-lockfile --manifest-path fs/Cargo.toml -Zmsrv-policy
-
-SRCTARXZ = bcachefs-tools-$(VERSION).tar.xz
-SRCDIR=bcachefs-tools-$(VERSION)
-
-.PHONY: tarball
-tarball: $(SRCTARXZ)
-
-$(SRCTARXZ) : .gitcensus
-	$(Q)tar --transform "s,^,$(SRCDIR)/," -Jcf $(SRCDIR).tar.xz  \
-	    `cat .gitcensus`
-	@echo Wrote: $@
-
-.PHONY: .gitcensus
-.gitcensus:
-	$(Q)if test -d .git; then \
-	  git ls-files > .gitcensus; \
-	fi
