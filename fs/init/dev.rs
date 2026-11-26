@@ -896,8 +896,44 @@ impl StateLockWrite<'_> {
             let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
             new_rw_devs.d.clear(ca.dev_idx.into());
 
-            return can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
-                                       flags, err);
+            if can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
+                                   flags, err) {
+                return true;
+            }
+
+            /*
+             * can_write_with_devs() has already explained which replication
+             * constraint failed; add which device/transition triggered it,
+             * the other non-rw member states, and what the admin can do
+             * about it - so the ioctl error message that comes back out of
+             * this rejection is actionable instead of a bare EINVAL.
+             */
+            prt!(err, "{ca}: can't leave rw for {new_state}\n");
+
+            // dev_get(), not an RCU walk: formatting into err may allocate
+            let mut nr_listed = 0;
+            let mut nr_evacuating = 0;
+            for idx in 0..fs.nr_devices() {
+                let Some(ca2) = fs.dev_get(idx) else { continue };
+                let state = ca2.mi.get().state;
+                if state != rw {
+                    prt!(err, "{}{} ({state})",
+                         if nr_listed == 0 { "Other members not in rw state: " } else { ", " }, &*ca2);
+                    nr_listed += 1;
+                    nr_evacuating += (state == MemberState::evacuating) as u32;
+                }
+            }
+            if nr_listed != 0 {
+                err.newline();
+            }
+
+            prt!(err, "{}\n", if nr_evacuating != 0 {
+                "An evacuating member is not writable until its state is changed: restore it, or add enough writable redundancy, before retrying"
+            } else {
+                "Add or restore enough writable redundancy before retrying"
+            });
+
+            return false;
         }
 
         true
