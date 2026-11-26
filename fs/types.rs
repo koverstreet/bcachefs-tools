@@ -299,7 +299,7 @@ pub const fn set_c_bit(b: &mut [u8], i: usize, v: bool) {
 /// BITS_TO_LONGS(): the unsigned longs a bitmap of @nr bits takes, for an
 /// array dimension - C's `unsigned long d[BITS_TO_LONGS(nr)]`.
 pub const fn bits_to_longs(nr: usize) -> usize {
-    nr.div_ceil(core::ffi::c_ulong::BITS as usize)
+    nr.div_ceil(usize::BITS as usize)
 }
 
 /// SMP_CACHE_BYTES, as an alignment: a CacheAligned field - zero-sized -

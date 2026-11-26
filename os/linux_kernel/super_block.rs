@@ -17,8 +17,8 @@
 //!
 //! vfs/super_block.rs is bcachefs's own: SuperBlock<Fs>, and its ops.
 
-use core::ffi::{c_int, CStr};
-use kernel::ffi::c_ulong;
+use core::ffi::CStr;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use kernel::sync::SetOnce;
@@ -201,7 +201,7 @@ crate::vfs_ops! {
         -> Result<(), BchError>;
     /// I_FREEING: ours to evict, the superblock still up.
     fn evict_inode(&self = inode, inode: &Self::Inode);
-    fn sync_fs(&self = sb, sb: &SuperBlock<Self>, wait: c_int) -> Result<(), BchError>;
+    fn sync_fs(&self = sb, sb: &SuperBlock<Self>, wait: i32) -> Result<(), BchError>;
     fn statfs(&self = dentry, dentry: Dentry<'_, Self::Inode>, buf: &mut c::kstatfs) -> Result<(), BchError>;
     fn show_devname(&self = root, m: &SeqFile, root: Dentry<'_, Self::Inode>) -> Result<(), BchError>;
     fn show_options(&self = root, m: &SeqFile, root: Dentry<'_, Self::Inode>) -> Result<(), BchError>;
@@ -467,7 +467,7 @@ impl<T: FsType> NewSuper<T> {
 
     /// The superblock shrinker's seeks: 0 for a filesystem with its own cache
     /// policy.
-    pub fn set_shrinker_seeks(&self, seeks: c_int) {
+    pub fn set_shrinker_seeks(&self, seeks: i32) {
         unsafe { (*(*self.raw()).s_shrink).seeks = seeks }
     }
 

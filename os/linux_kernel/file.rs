@@ -46,17 +46,16 @@ use {
     crate::os::iov_iter::IovIter,
     crate::os::kiocb::Kiocb,
     crate::os::super_block::IsInode,
-    core::ffi::{c_uint, c_void},
+    core::ffi::c_void,
     core::mem::MaybeUninit,
     core::ptr::NonNull,
     kernel::fs::file::FileDescriptorReservation,
     kernel::sync::aref::{ARef, AlwaysRefCounted},
-    crate::os::kernel::current_comm,
-};
+    crate::os::kernel::current_comm};
 
 // long, as the bindings have it: the kernel's is isize, core's i64
 #[cfg(kernel)]
-use kernel::ffi::{c_long as CLong, c_ulong as CUlong};
+use crate::util::ffi::{c_long as CLong, c_ulong as CUlong};
 
 /// A file, open: of D's - its FileData, whose table dispatched it - or of
 /// any type, Any's.
@@ -248,7 +247,7 @@ impl File {
     #[cfg(kernel)]
     pub fn verify_read(&self, pos: c::loff_t, len: usize) -> Result<(), BchError> {
         crate::errcode::ret_to_result_void(unsafe {
-            c::rw_verify_area(c::READ as c_int, self.as_ptr(), &pos, len)
+            c::rw_verify_area(c::READ as i32, self.as_ptr(), &pos, len)
         })
     }
 
@@ -281,14 +280,14 @@ impl File {
     /// SEEK_SET, SEEK_CUR or SEEK_END: the new position, at most the
     /// filesystem's s_maxbytes - generic_file_llseek().
     #[cfg(kernel)]
-    pub fn generic_llseek(&self, offset: i64, whence: c_int) -> Result<u64, BchError> {
+    pub fn generic_llseek(&self, offset: i64, whence: i32) -> Result<u64, BchError> {
         loff_to_result(unsafe { c::generic_file_llseek(self.as_ptr(), offset, whence) })
     }
 
     /// generic_llseek(), within @max, SEEK_END from @eof:
     /// generic_file_llseek_size().
     #[cfg(kernel)]
-    pub fn generic_llseek_size(&self, offset: i64, whence: c_int, max: u64, eof: u64)
+    pub fn generic_llseek_size(&self, offset: i64, whence: i32, max: u64, eof: u64)
         -> Result<u64, BchError>
     {
         loff_to_result(unsafe { c::generic_file_llseek_size(self.as_ptr(), offset, whence, loff(max), loff(eof)) })
@@ -380,13 +379,13 @@ impl<O: FileOps<Data = O>> crate::locking::Alone for PosLocked<'_, O> {}
 pub fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
     #[cfg(kernel)]
     unsafe {
-        let file = c::filp_open(path.as_ptr().cast(), c::O_RDONLY as c_int, 0);
+        let file = c::filp_open(path.as_ptr().cast(), c::O_RDONLY as i32, 0);
         let file = errptr_to_result(NonNull::new(file).expect("a file, or an error"))?.as_ptr();
 
         let mut pos = 0;
         let r = c::kernel_read(file, buf.as_mut_ptr().cast(), buf.len(), &mut pos);
         c::fput(file);
-        if r < 0 { Err(BchError::from_raw(r as c_int)) } else { Ok(r as usize) }
+        if r < 0 { Err(BchError::from_raw(r as i32)) } else { Ok(r as usize) }
     }
     #[cfg(not(kernel))]
     {
@@ -432,7 +431,7 @@ crate::vfs_ops! {
     /// For a file opened by path: its private data. The file isn't yet of
     /// Data's - that's what this makes.
     fn open(inode: &Opaque<c::inode>, file: &File) -> Result<Pin<KBox<Self>>, BchError>
-        => extern (inode: *mut c::inode, file: *mut c::file) -> c_int
+        => extern (inode: *mut c::inode, file: *mut c::file) -> i32
     {
         // SAFETY: a file being opened, and its inode
         let (i, f) = unsafe { (&*inode.cast::<Opaque<c::inode>>(), File::from_raw(file)) };
@@ -479,21 +478,21 @@ crate::vfs_ops! {
     fn poll(&self = file, file: &File<Self::Data>, pt: PollTable<'_>) -> u32;
     /// What close(2) returns.
     #[cfg(kernel)]
-    fn flush(&self = file, file: &File<Self::Data>) -> c_int
-        => extern (file: *mut c::file, _id: c::fl_owner_t) -> c_int
+    fn flush(&self = file, file: &File<Self::Data>) -> i32
+        => extern (file: *mut c::file, _id: c::fl_owner_t) -> i32
     {
         // SAFETY: an open file of P's
         unsafe { P::ops_of(file).flush(File::<P>::of_raw(file)) }
     };
     #[cfg(kernel)]
-    fn unlocked_ioctl(&self = file, file: &File<Self::Data>, cmd: c_uint, arg: CUlong) -> CLong;
+    fn unlocked_ioctl(&self = file, file: &File<Self::Data>, cmd: u32, arg: CUlong) -> CLong;
     #[cfg(kernel)]
-    fn compat_ioctl(&self = file, file: &File<Self::Data>, cmd: c_uint, arg: CUlong) -> CLong;
+    fn compat_ioctl(&self = file, file: &File<Self::Data>, cmd: u32, arg: CUlong) -> CLong;
     /// The new position.
     #[cfg(kernel)]
-    fn llseek(&self = file, file: &File<Self::Data>, fpos: &mut PosLocked<'_, Self>, offset: i64, whence: c_int)
+    fn llseek(&self = file, file: &File<Self::Data>, fpos: &mut PosLocked<'_, Self>, offset: i64, whence: i32)
         -> Result<u64, BchError>
-        => extern (file: *mut c::file, offset: c::loff_t, whence: c_int) -> c::loff_t
+        => extern (file: *mut c::file, offset: c::loff_t, whence: i32) -> c::loff_t
     {
         // the VFS holds the file's position across the call
         let ops = unsafe { P::ops_of(file) };
@@ -503,7 +502,7 @@ crate::vfs_ops! {
     #[cfg(kernel)]
     fn iterate_shared(&self = file, file: &File<Self::Data>, fpos: &mut PosLocked<'_, Self>, ctx: DirContext<'_>)
         -> Result<(), BchError>
-        => extern (file: *mut c::file, ctx: *mut c::dir_context) -> c_int
+        => extern (file: *mut c::file, ctx: *mut c::dir_context) -> i32
     {
         // the VFS holds the file's position across the call
         let ops = unsafe { P::ops_of(file) };
@@ -511,16 +510,16 @@ crate::vfs_ops! {
         crate::errcode::ret_to_class(ops.iterate_shared(unsafe { File::<P>::of_raw(file) }, &mut PosLocked(ops), ctx))
     };
     #[cfg(kernel)]
-    fn fsync(&self = file, file: &File<Self::Data>, start: i64, end: i64, datasync: c_int)
+    fn fsync(&self = file, file: &File<Self::Data>, start: i64, end: i64, datasync: i32)
         -> Result<(), BchError>;
     #[cfg(kernel)]
-    fn fallocate(&self = file, file: &File<Self::Data>, mode: c_int, offset: i64, len: i64)
+    fn fallocate(&self = file, file: &File<Self::Data>, mode: i32, offset: i64, len: i64)
         -> Result<(), BchError>;
     /// How much was remapped. @file_out is Data's too: the VFS remaps only
     /// within a filesystem, between regular files.
     #[cfg(kernel)]
     fn remap_file_range(&self = file_in, file_in: &File<Self::Data>, pos_in: i64,
-                        file_out: &File<Self::Data>, pos_out: i64, len: i64, remap_flags: c_uint)
+                        file_out: &File<Self::Data>, pos_out: i64, len: i64, remap_flags: u32)
         -> Result<u64, BchError>;
     /// A mapping about to be made: its vm_ops, and whether it may be.
     #[cfg(kernel)]
@@ -703,7 +702,7 @@ impl<P: FileData> NewFile<P> {
 
         let p = into_private(data);
         let file = unsafe {
-            c::anon_inode_getfile(name.as_cstr().as_ptr().cast(), &FileVTable::<P>::OPS, p, flags as c_int)
+            c::anon_inode_getfile(name.as_cstr().as_ptr().cast(), &FileVTable::<P>::OPS, p, flags as i32)
         };
         match errptr_to_result(NonNull::new(file).expect("a file, or an error")) {
             // SAFETY: anon_inode_getfile()'s ref, now ours
@@ -727,10 +726,10 @@ impl<P: FileData> NewFile<P> {
     }
 
     /// The fd - from here userspace may close it at any moment.
-    pub fn install(self) -> c_int {
+    pub fn install(self) -> i32 {
         let fd = self.fd.reserved_fd();
         self.fd.fd_install(self.file);
-        fd as c_int
+        fd as i32
     }
 }
 

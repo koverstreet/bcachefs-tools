@@ -18,7 +18,7 @@ mod supplied {
     use core::cell::UnsafeCell;
     use core::ffi::{c_int, c_void};
     use core::sync::atomic::{AtomicPtr, Ordering::{AcqRel, Acquire, Relaxed}};
-    use kernel::ffi::c_ulong;
+    use crate::util::ffi::c_ulong;
 
     pub(crate) fn on_battery() -> bool {
         unsafe { c::power_supply_is_system_supplied() == 0 }

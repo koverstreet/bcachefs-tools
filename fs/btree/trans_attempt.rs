@@ -375,7 +375,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn wait_until_timeout<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>,
-                                 timeout: core::ffi::c_long) -> Option<T> {
+                                 timeout: isize) -> Option<T> {
         self.trans.wait_until_timeout(ev, cond, timeout)
     }
 

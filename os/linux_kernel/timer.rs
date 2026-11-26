@@ -7,7 +7,8 @@
 
 use crate::c;
 use core::cell::UnsafeCell;
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::ptr::NonNull;

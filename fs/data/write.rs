@@ -751,7 +751,6 @@ use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{btree_trans, log_msg_ratelimited, prt};
 use self::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
-use core::ffi::c_uint;
 use core::fmt;
 use core::pin::Pin;
 use cstruct_macros::{MaybeZeroable, Init, bitfield, bch_enum, TypeInfo, BitfieldMembers};
@@ -789,7 +788,7 @@ nest! {
         pub c: crate::util::backref::BackRef<Fs>,
         pub start_time: u64,
 
-        pub written: c_uint, /* sectors */
+        pub written: u32, /* sectors */
         pub flags: u16,
         pub error: i16, /* dio write path expects it to hold -ERESTARTSYS... */
         pub io_error: u8,

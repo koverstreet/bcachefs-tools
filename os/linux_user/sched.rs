@@ -6,30 +6,31 @@
 use crate::c;
 use crate::os::kernel::{jiffies, HZ, NSEC_PER_SEC};
 use core::cell::Cell;
-use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
+use core::ffi::{c_char, c_int, c_void};
+use crate::util::ffi::{c_long, c_ulong};
 use core::ptr::null_mut;
 use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 use rustix::thread::futex;
 use std::time::{Duration, Instant};
 
-pub const TASK_RUNNING:         c_uint = 0;
-pub const TASK_INTERRUPTIBLE:   c_uint = 1;
-pub const TASK_UNINTERRUPTIBLE: c_uint = 2;
-pub const TASK_WAKEKILL:        c_uint = 128;
-pub const TASK_NOLOAD:          c_uint = 1024;
-pub const TASK_FREEZABLE:       c_uint = 1 << 14;
+pub const TASK_RUNNING:         u32 = 0;
+pub const TASK_INTERRUPTIBLE:   u32 = 1;
+pub const TASK_UNINTERRUPTIBLE: u32 = 2;
+pub const TASK_WAKEKILL:        u32 = 128;
+pub const TASK_NOLOAD:          u32 = 1024;
+pub const TASK_FREEZABLE:       u32 = 1 << 14;
 
 /* Convenience macros for the sake of set_task_state */
-pub const TASK_KILLABLE:        c_uint = TASK_WAKEKILL | TASK_UNINTERRUPTIBLE;
+pub const TASK_KILLABLE:        u32 = TASK_WAKEKILL | TASK_UNINTERRUPTIBLE;
 
-pub const TASK_IDLE:            c_uint = TASK_UNINTERRUPTIBLE | TASK_NOLOAD;
+pub const TASK_IDLE:            u32 = TASK_UNINTERRUPTIBLE | TASK_NOLOAD;
 
 pub const TASK_COMM_LEN:        usize = 16;
 
-pub const PF_MEMALLOC_NOIO:      c_uint = 0x00080000;	/* Allocating memory without IO involved */
-pub const PF_KTHREAD:            c_uint = 0x00200000;	/* I am a kernel thread */
-pub const PF_MEMALLOC_NORECLAIM: c_uint = 0x00800000;	/* All allocation requests will clear __GFP_DIRECT_RECLAIM */
-pub const PF_MEMALLOC_NOWARN:    c_uint = 0x01000000;	/* All allocation requests will inherit __GFP_NOWARN */
+pub const PF_MEMALLOC_NOIO:      u32 = 0x00080000;	/* Allocating memory without IO involved */
+pub const PF_KTHREAD:            u32 = 0x00200000;	/* I am a kernel thread */
+pub const PF_MEMALLOC_NORECLAIM: u32 = 0x00800000;	/* All allocation requests will clear __GFP_DIRECT_RECLAIM */
+pub const PF_MEMALLOC_NOWARN:    u32 = 0x01000000;	/* All allocation requests will inherit __GFP_NOWARN */
 
 /// Zeroed, it's a task, not yet a thread's.
 #[allow(non_camel_case_types)]
@@ -44,10 +45,10 @@ pub struct task_struct {
     /* kthread: */
     pub(super) kthread_flags: AtomicUsize,
 
-    pub(crate) flags:         c_uint,
+    pub(crate) flags:         u32,
 
     pub(crate) comm:          [c_char; TASK_COMM_LEN],
-    pub(super) pid:           c_int,
+    pub(super) pid:           i32,
 }
 
 thread_local! {
@@ -98,7 +99,7 @@ pub fn need_resched() -> bool {
 
 /// This task's state, @state, ordered before what it then checks: as
 /// set_current_state()'s smp_store_mb().
-pub fn set_current_state(state: c_uint) {
+pub fn set_current_state(state: u32) {
     self::state(current()).store(state, Relaxed);
     fence(SeqCst);
 }
@@ -114,19 +115,19 @@ pub fn might_sleep() {}
 
 /// # Safety
 /// @task is a task, live.
-pub unsafe fn task_pid(task: *mut task_struct) -> c_int {
+pub unsafe fn task_pid(task: *mut task_struct) -> i32 {
     unsafe { (*task).pid }
 }
 
-pub fn current_pid() -> c_int {
+pub fn current_pid() -> i32 {
     unsafe { task_pid(current()) }
 }
 
 /// Nothing to tell a scheduler here.
-pub fn set_current_wake_cpu(_cpu: c_int) {}
+pub fn set_current_wake_cpu(_cpu: i32) {}
 
 /// Nothing signals a thread here.
-pub fn signal_pending_state(_state: c_uint) -> bool {
+pub fn signal_pending_state(_state: u32) -> bool {
     false
 }
 
@@ -166,7 +167,7 @@ unsafe fn __put_task_struct(t: *mut task_struct) {
 /* returns true if process was woken up, false if it was already running */
 /// # Safety
 /// @p is a task, live - or RCU-freed, and the caller in a read section.
-pub unsafe fn wake_up_process(p: *mut task_struct) -> c_int {
+pub unsafe fn wake_up_process(p: *mut task_struct) -> i32 {
     /*
      * A full barrier before the task state, as try_to_wake_up(): else on
      * arm64 the waker's condition store can land after TASK_RUNNING, and
@@ -178,7 +179,7 @@ pub unsafe fn wake_up_process(p: *mut task_struct) -> c_int {
     let s = state(p);
     let ret = s.swap(TASK_RUNNING, Relaxed) != TASK_RUNNING;
     let _ = futex::wake(s, futex::Flags::PRIVATE, i32::MAX as u32);
-    ret as c_int
+    ret as i32
 }
 
 pub fn schedule() {

@@ -414,7 +414,7 @@ pub(crate) fn kthread_should_stop() -> bool {
 
 /// Set kthread_should_stop() for @p, wake it, and wait for it to exit. It
 /// may never have been woken: it runs its function, then exits.
-pub(crate) unsafe fn kthread_stop(p: *mut task_struct) -> c_int {
+pub(crate) unsafe fn kthread_stop(p: *mut task_struct) -> i32 {
     unsafe {
         get_task_struct(p);
 

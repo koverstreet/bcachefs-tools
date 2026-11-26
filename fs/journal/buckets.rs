@@ -34,7 +34,6 @@ use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree
     new_lock};
 use crate::data::dev_bio::DevBio;
 use crate::journal::reclaim::{discard_work, JournalSpaceFrom};
-use core::ffi::c_uint;
 use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable};
 use pin_init::pin_data;
 
@@ -58,7 +57,7 @@ pub struct JournalDevice {
     #[init(crate::journal::buckets::new())]
     pub buckets: JournalBuckets,
 
-    pub sectors_free: Volatile<c_uint>,
+    pub sectors_free: Volatile<u32>,
 
     /*
      * Bioset for journal write bios. Journal writes allocate from this at

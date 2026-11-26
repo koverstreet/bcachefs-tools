@@ -40,22 +40,17 @@ impl<T> Opaque<T> {
     }
 }
 
-/// C's char, as C compiles it here. core::ffi::c_char is the platform ABI's -
-/// i8 on x86, u8 on arm64 - which is userspace's; the kernel builds with
-/// -funsigned-char, so u8 on every arch, as the kernel's own ffi::c_char. The
-/// types differ only to Rust, but that includes kCFI: a function C calls
-/// through a pointer taking `char *` as `*const i8` never hashes as C's
-/// prototype does.
+/// C's types as the port's bindings have them, codegen.rs's --ctypes-prefix:
+/// the kernel crate's, which userspace's shim mirrors. Not core::ffi's: its
+/// c_char is the platform ABI's - i8 on x86 - where the kernel builds with
+/// -funsigned-char, and a function C calls through a pointer taking `char *`
+/// as `*const i8` never hashes as C's prototype does, to kCFI.
 #[cfg(kernel)]
-#[allow(non_camel_case_types)]
-pub type c_char = u8;
+pub use kernel::ffi::{c_char, c_int, c_long, c_longlong, c_schar, c_short, c_uchar, c_uint,
+                      c_ulong, c_ulonglong, c_ushort, c_void};
 #[cfg(not(kernel))]
-pub use core::ffi::c_char;
-
-/// The rest of C's types, which are the same in either build: with c_char,
-/// codegen.rs's bindings' --ctypes-prefix.
-pub use core::ffi::{c_int, c_long, c_longlong, c_schar, c_short, c_uchar, c_uint, c_ulong,
-                    c_ulonglong, c_ushort, c_void};
+pub use bcachefs_shim::ffi::{c_char, c_int, c_long, c_longlong, c_schar, c_short, c_uchar, c_uint,
+                             c_ulong, c_ulonglong, c_ushort, c_void};
 
 /// @size bytes at @p - nothing, for none.
 ///

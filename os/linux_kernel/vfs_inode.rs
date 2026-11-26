@@ -13,7 +13,8 @@
 //! Its reference count, i_count, is AlwaysRefCounted's - ihold(), iput() - so
 //! an InodeRef, ARef<InodeInfo>, holds one.
 
-use core::ffi::{c_int, c_long, CStr};
+use core::ffi::CStr;
+use crate::util::ffi::c_long;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::{read_volatile, write_volatile, NonNull};
@@ -177,7 +178,7 @@ impl<S, St> VfsInode<S, St> {
     /// None caches that there's none. The cache takes a reference of its own.
     pub fn set_cached_acl(&self, ty: AclType, acl: Option<&PosixAcl>) {
         let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
-        unsafe { c::set_cached_acl(self.as_ptr(), ty as c_int, acl) }
+        unsafe { c::set_cached_acl(self.as_ptr(), ty as i32, acl) }
     }
 }
 
@@ -201,7 +202,7 @@ impl<S> VfsInode<S> {
     /// A symlink's target, @target, written into its page cache:
     /// page_symlink().
     pub fn page_symlink(&self, target: &CStr) -> Result<(), BchError> {
-        let len = target.to_bytes_with_nul().len() as c_int;
+        let len = target.to_bytes_with_nul().len() as i32;
         ret_to_result_void(unsafe { c::page_symlink(self.as_ptr(), target.as_ptr().cast(), len) })
     }
 
@@ -324,7 +325,7 @@ impl<S> VfsInode<S> {
         let mut wait: c::wait_bit_queue_entry = ::pin_init::zeroed();
         unsafe {
             let wq = c::inode_bit_waitqueue(&mut wait, inode.as_ptr().cast(), c::__I_NEW);
-            c::prepare_to_wait(wq, &mut wait.wq_entry, c::TASK_UNINTERRUPTIBLE as c_int);
+            c::prepare_to_wait(wq, &mut wait.wq_entry, c::TASK_UNINTERRUPTIBLE as i32);
             if still() {
                 c::schedule_timeout(timeout as _);
             }
@@ -345,7 +346,7 @@ impl<S> VfsInode<S> {
 
     /// Written back now - and waited for, if @sync: write_inode_now().
     pub fn write_now(&self, sync: bool) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { c::write_inode_now(self.as_ptr(), sync as c_int) })
+        ret_to_result_void(unsafe { c::write_inode_now(self.as_ptr(), sync as i32) })
     }
 
     // ── Eviction ─────────────────────────────────────────────────────────

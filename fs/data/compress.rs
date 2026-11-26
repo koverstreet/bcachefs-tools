@@ -56,7 +56,6 @@ use crate::util::{alloc::Box,
                   late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
                   volatile::{Out, VolatileSlice}, Printbuf, ToText};
 use crate::os::compress::{lz4, zlib, zstd};
-use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
 use cstruct_macros::bitfield;
 
@@ -301,7 +300,7 @@ pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, 
             }
         }
         CompressionType::gzip => {
-            match zlib::inflate(src, dst, ws, -(c::MAX_WBITS as c_int)) {
+            match zlib::inflate(src, dst, ws, -(c::MAX_WBITS as i32)) {
                 None => return fs.throw(e::decompress_gzip),
                 Some(d) if d.len() == dst_len => d,
                 Some(_) => return fs.throw(e::decompress_gzip_size_mismatch),
@@ -390,7 +389,7 @@ pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: Extent
 
 /// Ours go to 15, zstd's to 22.
 fn zstd_params(fs: &Fs, level: u32) -> zstd::Params {
-    zstd::get_params(((level * 3) / 2).min(zstd::max_clevel() as u32) as c_int, extent_max(fs) as u64)
+    zstd::get_params(((level * 3) / 2).min(zstd::max_clevel() as u32) as i32, extent_max(fs) as u64)
 }
 
 /*
@@ -402,7 +401,7 @@ fn compress_workspace_size(fs: &Fs, t: usize, level: u32) -> usize {
     match opts(t as u32) {
         opts::lz4 if level < lz4::HC_MIN_CLEVEL => lz4::MEM_COMPRESS,
         opts::lz4 => lz4::HC_MEM_COMPRESS,
-        opts::gzip => zlib::deflate_workspace_size(c::MAX_WBITS as c_int, zlib::DEF_MEM_LEVEL),
+        opts::gzip => zlib::deflate_workspace_size(c::MAX_WBITS as i32, zlib::DEF_MEM_LEVEL),
         opts::zstd => zstd::cctx_workspace_bound(&zstd_params(fs, level)),
         _ => panic!("compression opt type {t}"),
     }
@@ -436,11 +435,11 @@ fn attempt_compress<'a>(fs: &Fs, ws: &mut [MaybeUninit<u8>], dst: Out<'a>, src: 
         }
         opts::gzip => {
             let level = match level {
-                0 => c::Z_DEFAULT_COMPRESSION as c_int,
-                l => (l as c_int).clamp(c::Z_BEST_SPEED as c_int, c::Z_BEST_COMPRESSION as c_int),
+                0 => c::Z_DEFAULT_COMPRESSION as i32,
+                l => (l as i32).clamp(c::Z_BEST_SPEED as i32, c::Z_BEST_COMPRESSION as i32),
             };
-            zlib::deflate(src, dst, ws, level, -(c::MAX_WBITS as c_int), zlib::DEF_MEM_LEVEL,
-                          c::Z_DEFAULT_STRATEGY as c_int)
+            zlib::deflate(src, dst, ws, level, -(c::MAX_WBITS as i32), zlib::DEF_MEM_LEVEL,
+                          c::Z_DEFAULT_STRATEGY as i32)
                 .ok_or(0)
         }
         opts::zstd => {
@@ -579,7 +578,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
 /// uncompressed write too.
 #[inline(never)]
 pub(crate) fn bio_compress(fs: &Fs, dst: BioRange<'_>, dst_len: &mut usize,
-                           src: BioRange<'_>, src_len: &mut usize, compression_opt: c_uint,
+                           src: BioRange<'_>, src_len: &mut usize, compression_opt: u32,
                            write_pos: Bpos, bounce_source: bool) -> CompressionType {
     // Don't consume more than encoded_extent_max from @src, or make more than it:
     let consume_src = src.len().min(extent_max(fs) as u32);
@@ -637,7 +636,7 @@ pub(crate) fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Res
 fn init_features(fs: &Fs, sb: &SbLockGuard<'_>, features: SbFeatures) -> Result<(), BchError> {
     let types = [
         (opts::lz4, lz4::MEM_COMPRESS.max(lz4::HC_MEM_COMPRESS), 0),
-        (opts::gzip, zlib::deflate_workspace_size(c::MAX_WBITS as c_int, zlib::DEF_MEM_LEVEL),
+        (opts::gzip, zlib::deflate_workspace_size(c::MAX_WBITS as i32, zlib::DEF_MEM_LEVEL),
          zlib::inflate_workspace_size()),
         (opts::zstd, zstd::cctx_workspace_bound(&zstd::get_params(zstd::max_clevel(), extent_max(fs) as u64)),
          zstd::dctx_workspace_bound()),

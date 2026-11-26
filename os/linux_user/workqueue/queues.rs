@@ -29,7 +29,8 @@
 use crate::c;
 use crate::os::kthread::{kthread_create_name, kthread_should_stop, kthread_stop};
 use crate::os::kernel::{jiffies, jiffies_to_msecs, time_after_eq};
-use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_char, c_int, c_void, CStr};
+use crate::util::ffi::c_ulong;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::collections::VecDeque;
@@ -72,7 +73,7 @@ pub struct Workqueue {
 }
 
 impl Workqueue {
-    const fn new(name: &[u8], max_active: c_int) -> Self {
+    const fn new(name: &[u8], max_active: i32) -> Self {
         let mut buf = [0; 24];
         let mut i = 0;
         while i < name.len() && i < buf.len() - 1 {
@@ -509,8 +510,8 @@ pub unsafe fn destroy_workqueue(wq: *mut Workqueue) {
 
 /// alloc_workqueue(), the name formatted. @flags are the kernel's, and
 /// ignored: one kind of worker here.
-pub unsafe fn alloc_workqueue_name(name: *const c_char, _flags: c_uint,
-                                   max_active: c_int) -> *mut Workqueue {
+pub unsafe fn alloc_workqueue_name(name: *const c_char, _flags: u32,
+                                   max_active: i32) -> *mut Workqueue {
     let name = unsafe { CStr::from_ptr(name) };
 
     /*

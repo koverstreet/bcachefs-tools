@@ -33,7 +33,6 @@ use crate::types::{bits_to_longs, NeBytes};
 use crate::util::alloc::{AllocError, Vec, Global};
 use crate::util::mempool::Mempool;
 use core::cell::Cell;
-use core::ffi::{c_int, c_long};
 use core::sync::atomic::AtomicU8;
 use crate::os::percpu::PerCpu;
 use crate::util::ffi::Opaque;
@@ -46,12 +45,12 @@ use pin_init::pin_data;
 
 pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
 
-pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = c::NSEC_PER_MSEC as c_long;
+pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: isize = c::NSEC_PER_MSEC as isize;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct TransKmallocTrace {
-    pub ip: c_ulong,
+    pub ip: usize,
     pub bytes: usize,
 }
 
@@ -169,13 +168,13 @@ pub struct BtreeTrans<'f> {
     pub commit_count: Cell<u32>,
 
     pub last_begin_time: Cell<u64>,
-    pub last_begin_ip: Cell<c_ulong>,
-    pub last_restarted_ip: Cell<c_ulong>,
+    pub last_begin_ip: Cell<usize>,
+    pub last_restarted_ip: Cell<usize>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_restarted_trace: Cell<Vec<c_ulong>>,
-    pub last_unlock_ip: Cell<c_ulong>,
-    pub srcu_lock_time: Cell<c_ulong>,
-    pub srcu_idx: Cell<c_int>,
+    pub last_restarted_trace: Cell<Vec<usize>>,
+    pub last_unlock_ip: Cell<usize>,
+    pub srcu_lock_time: Cell<usize>,
+    pub srcu_idx: Cell<i32>,
     pub locking_root_id: Cell<Btree>,
 
     pub locking_hash_val: Cell<u64>,
@@ -207,7 +206,7 @@ pub struct BtreeTrans<'f> {
 
     pub fs_usage_delta: Cell<FsUsageBase>,
 
-    pub journal_u64s: Cell<c_uint>,
+    pub journal_u64s: Cell<u32>,
     pub extra_journal_u64s: Cell<u32>,
 
     /*
@@ -229,7 +228,7 @@ pub struct BtreeTrans<'f> {
     pub rcu: rcu_head,
 
     /* the first path table: Paths borrows into it */
-    pub _paths_allocated: Opaque<[c_ulong; bits_to_longs(BTREE_ITER_INITIAL as usize)]>,
+    pub _paths_allocated: Opaque<[usize; bits_to_longs(BTREE_ITER_INITIAL as usize)]>,
     pub trans_paths: Opaque<BtreeTransPaths>,
     pub _paths: Opaque<[BtreePath; BTREE_ITER_INITIAL as usize]>,
     pub _sorted: Opaque<[PathIdx; BTREE_ITER_INITIAL as usize + 4]>,
@@ -273,8 +272,8 @@ crate::published! {
     /// bch2_trans_get(), sizing the transaction it gets.
     #[derive(MaybeZeroable)]
     pub struct TransStatsMax {
-        pub nr_max_paths: Volatile<c_uint>,
-        pub max_mem: Volatile<c_uint>,
+        pub nr_max_paths: Volatile<u32>,
+        pub max_mem: Volatile<u32>,
     }
 }
 
@@ -351,7 +350,7 @@ use crate::util::{rcu, Printbuf, ToText};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::util::vstructs::{ValidatedEntries, ViewEntries};
 use core::cell::UnsafeCell;
-use core::ffi::{c_uint, c_ulong, CStr};
+use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of, size_of_val};
 use core::ops::ControlFlow;
@@ -573,7 +572,7 @@ impl<'f> BtreeTrans<'f> {
     /// TransAttempt::restart(), for what C calls in the middle of an attempt
     /// without one: the lock paths.
     pub(crate) fn restart(&self, error: Errcode) -> BchError {
-        self.restart_ip(error, Self::restart as *const () as c_ulong)
+        self.restart_ip(error, Self::restart as *const () as usize)
     }
 
     /// A panic, in debug builds, if the transaction's unlocked or in a
@@ -1071,7 +1070,7 @@ impl BtreeTrans<'_> {
         })
     }
 
-    pub(crate) fn maybe_inject_restart(&self, ip: c_ulong) -> Result<(), BchError> {
+    pub(crate) fn maybe_inject_restart(&self, ip: usize) -> Result<(), BchError> {
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
         if crate::os::kernel::ktime_get_ns() & !(!0u64 << (10 + self.restart_count_this_trans.get()).min(63)) == 0 {
             self.fs().event_inc_trace(events::trans_restart_injected, |out| prt!(out, "{}", self.fn_name()));
@@ -1096,10 +1095,10 @@ impl BtreeTrans<'_> {
     /// @size bytes that don't fit: the memory grown by the next begin, the
     /// transaction restarted for it - so the memory never moves within an
     /// attempt.
-    pub(crate) fn kmalloc_grow(&self, size: usize, ret_ip: c_ulong) -> BchError {
+    pub(crate) fn kmalloc_grow(&self, size: usize, ret_ip: usize) -> BchError {
         let c = self.fs();
         let (top, old_bytes) = self.mem_with(|m| (m.top_bytes(), m.bytes()));
-        let new_top = (top + size) as c_uint;
+        let new_top = (top + size) as u32;
         let new_bytes = new_top.next_power_of_two();
 
         if crate::warn_on_once!(new_bytes > BTREE_TRANS_MEM_MAX) {
@@ -1155,7 +1154,7 @@ impl BtreeTrans<'_> {
      * may return transaction_restart when the trylock fails. When this
      * occurs bch2_trans_begin() should be called and the transaction retried.
      */
-    fn begin_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) -> u32 {
+    fn begin_from(&self, paths: &mut Paths<'_>, ret_ip: usize) -> u32 {
         let c = self.fs();
 
         c.event_inc_trace(events::transaction_begin, |out| {
@@ -1344,7 +1343,7 @@ impl BtreeTrans<'_> {
 impl BtreeTrans<'_> {
     /// restart_ip(), less the backtrace: for a transaction this thread may not
     /// be running, whose restart this thread's backtrace wouldn't explain.
-    pub(crate) fn restart_foreign_task(&self, err: Errcode, ip: c_ulong) -> BchError {
+    pub(crate) fn restart_foreign_task(&self, err: Errcode, ip: usize) -> BchError {
         assert!(BchError::from(err).matches(Errcode::transaction_restart));
 
         self.set_restarted(err);
@@ -1352,7 +1351,7 @@ impl BtreeTrans<'_> {
         err.into()
     }
 
-    pub(crate) fn restart_ip(&self, err: Errcode, ip: c_ulong) -> BchError {
+    pub(crate) fn restart_ip(&self, err: Errcode, ip: usize) -> BchError {
         self.restart_foreign_task(err, ip);
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {
@@ -1433,12 +1432,12 @@ pub fn transaction_fns() -> impl Iterator<Item = &'static CStr> {
     (0..TRANSACTION_FNS.len()).map_while(transaction_fn)
 }
 
-pub fn trans_get_fn_idx(fn_: *const c_char) -> c_uint {
+pub fn trans_get_fn_idx(fn_: *const c_char) -> u32 {
     for (i, slot) in TRANSACTION_FNS.iter().enumerate() {
         let cur = slot.load(Ordering::Acquire);
         if cur.is_null() || ptr::eq(cur, fn_) {
             slot.store(fn_.cast_mut(), Ordering::Release);
-            return i as c_uint;
+            return i as u32;
         }
     }
 
@@ -1451,7 +1450,7 @@ pub fn trans_get_fn_idx(fn_: *const c_char) -> c_uint {
 
 // ── C's entry points ────────────────────────────────────────────────────────
 
-pub fn __bch2_trans_get(c: &Fs, fn_idx: c_uint) -> *mut BtreeTrans<'static> {
+pub fn __bch2_trans_get(c: &Fs, fn_idx: u32) -> *mut BtreeTrans<'static> {
     TransGuard::new_fn(c, fn_idx).into_raw().cast()
 }
 

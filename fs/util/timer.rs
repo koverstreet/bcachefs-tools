@@ -15,7 +15,6 @@ use crate::util::sleep::SleepError;
 use crate::util::task::{waiter, DynComplete, DynDone, Resumable, Resume, Select, WaitList, WaitlistCompletion};
 use core::cell::UnsafeCell;
 use core::convert::Infallible;
-use core::ffi::c_ulong;
 use core::mem::offset_of;
 use core::pin::{pin, Pin};
 use core::ptr::NonNull;
@@ -34,7 +33,7 @@ unsafe impl Sync for Timer<'_> {}
 
 impl<'a> Timer<'a> {
     /// @done completed in @delay jiffies.
-    pub fn new(done: DynDone<'a>, delay: c_ulong) -> impl PinInit<Self> {
+    pub fn new(done: DynDone<'a>, delay: usize) -> impl PinInit<Self> {
         pin_init!(Self {
             timer <- crate::new_timer!(run_raw::<Self>, "bcachefs timer"),
             done:  UnsafeCell::new(Some(done)),
@@ -67,7 +66,7 @@ impl PinnedDrop for Timer<'_> {
 /// Waits on @list, under @key, for a wake - or for @ready(), checked once
 /// it's on, as WaitlistCompletion::new() does - for at most @timeout jiffies:
 /// Err(Timeout) if the timeout came first.
-pub async fn with_timeout<K>(timeout: c_ulong, at: Resume<'_>, list: &WaitList<K>, key: K,
+pub async fn with_timeout<K>(timeout: usize, at: Resume<'_>, list: &WaitList<K>, key: K,
                              ready: impl FnOnce() -> bool) -> Result<(), SleepError>
 {
     const DONE: u32 = 1 << 0;

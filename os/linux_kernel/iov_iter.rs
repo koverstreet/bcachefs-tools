@@ -8,7 +8,7 @@ use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::{ret_to_result_void, BchError};
 #[cfg(kernel)]
 use crate::util::alloc::AllocError;
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 
@@ -29,7 +29,7 @@ impl<'a> IovIter<'a> {
         -> Result<Self, BchError>
     {
         ret_to_result_void(unsafe {
-            c::import_ubuf(c::ITER_DEST as c_int, addr as usize as *mut c_void, len, slot.as_mut_ptr())
+            c::import_ubuf(c::ITER_DEST as i32, addr as usize as *mut c_void, len, slot.as_mut_ptr())
         })?;
         Ok(Self(unsafe { slot.assume_init_mut() }))
     }
@@ -52,7 +52,7 @@ impl<'a> IovIter<'a> {
     /// for a bvec iter, which C's bio borrows the bvecs of and ours copies.
     #[cfg(kernel)]
     pub fn bio_pages(&mut self) -> u16 {
-        unsafe { c::iov_iter_npages(self.0, c::BIO_MAX_VECS as c_int) as u16 }
+        unsafe { c::iov_iter_npages(self.0, c::BIO_MAX_VECS as i32) as u16 }
     }
 
     /// user_backed_iter(): its pages are the user's.

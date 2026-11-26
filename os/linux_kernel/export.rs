@@ -8,7 +8,6 @@
 //! and reads back from a FileHandle as a Plain T - packed, as a handle's
 //! u32s are only u32-aligned.
 
-use core::ffi::c_int;
 use core::mem::{align_of, size_of};
 
 use crate::c;
@@ -31,21 +30,21 @@ from_raw! {
 /// back.
 pub struct HandleBuf<'a> {
     fh:  &'a mut [u32],
-    len: &'a mut c_int,
+    len: &'a mut i32,
 }
 
 impl HandleBuf<'_> {
     /// @v as a handle of type @ty: @ty - or FILEID_INVALID if there isn't
     /// room - the length told back the handle's either way.
-    pub fn put<T: Plain>(&mut self, ty: u32, v: &T) -> c_int {
+    pub fn put<T: Plain>(&mut self, ty: u32, v: &T) -> i32 {
         const { assert!(size_of::<T>() % size_of::<u32>() == 0) };
         let n = size_of::<T>() / size_of::<u32>();
-        *self.len = n as c_int;
+        *self.len = n as i32;
         let Some(fh) = self.fh.get_mut(..n) else {
-            return c::fid_type_FILEID_INVALID as c_int;
+            return c::fid_type_FILEID_INVALID as i32;
         };
         plain_bytes_mut(fh).copy_from_slice(plain_bytes(v));
-        ty as c_int
+        ty as i32
     }
 }
 
@@ -58,7 +57,7 @@ pub struct FileHandle<'a> {
 impl FileHandle<'_> {
     /// # Safety
     /// @fid is exportfs's handle, @len u32s, for the call.
-    unsafe fn from_raw<'a>(fid: *mut c::fid, len: c_int, ty: c_int) -> FileHandle<'a> {
+    unsafe fn from_raw<'a>(fid: *mut c::fid, len: i32, ty: i32) -> FileHandle<'a> {
         let fh = unsafe { core::slice::from_raw_parts(fid.cast::<u32>(), len.max(0) as usize) };
         FileHandle { fh, ty: ty as u32 }
     }
@@ -86,8 +85,8 @@ crate::vfs_ops! {
 
     /// @inode's handle - with @parent's, if given - into @fh: HandleBuf::put()'s.
     fn encode_fh(&self = inode, inode: &Self::Inode, fh: &mut HandleBuf<'_>,
-                 parent: Option<&Self::Inode>) -> c_int
-        => extern (inode: *mut c::inode, fh: *mut u32, max_len: *mut c_int, parent: *mut c::inode) -> c_int
+                 parent: Option<&Self::Inode>) -> i32
+        => extern (inode: *mut c::inode, fh: *mut u32, max_len: *mut i32, parent: *mut c::inode) -> i32
     {
         unsafe {
             let mut buf = HandleBuf {
@@ -100,13 +99,13 @@ crate::vfs_ops! {
     /// The dentry @fh names: NULL for one that isn't ours, an ERR_PTR, or
     /// d_obtain_alias()'s.
     fn fh_to_dentry(&self = sb, fh: FileHandle<'_>) -> *mut c::dentry
-        => extern (sb: *mut c::super_block, fid: *mut c::fid, fh_len: c_int, fh_type: c_int) -> *mut c::dentry
+        => extern (sb: *mut c::super_block, fid: *mut c::fid, fh_len: i32, fh_type: i32) -> *mut c::dentry
     {
         unsafe { SelfOf::<T>::self_of(&sb).fh_to_dentry(FileHandle::from_raw(fid, fh_len, fh_type)) }
     };
     /// As fh_to_dentry(), the handle's parent's.
     fn fh_to_parent(&self = sb, fh: FileHandle<'_>) -> *mut c::dentry
-        => extern (sb: *mut c::super_block, fid: *mut c::fid, fh_len: c_int, fh_type: c_int) -> *mut c::dentry
+        => extern (sb: *mut c::super_block, fid: *mut c::fid, fh_len: i32, fh_type: i32) -> *mut c::dentry
     {
         unsafe { SelfOf::<T>::self_of(&sb).fh_to_parent(FileHandle::from_raw(fid, fh_len, fh_type)) }
     };

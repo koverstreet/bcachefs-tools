@@ -60,7 +60,6 @@ use crate::util::vstructs::{cast_plain_slice_mut, SelfSized, ValidatedEntriesMut
 use crate::{log_msg_ratelimited, prt};
 use crate::os::bio::{BioRange, MappedPages};
 use crate::util::place::Placed;
-use core::ffi::c_uint;
 use core::mem;
 use cstruct_macros::bitfield;
 use super::journal::{JournalLockAt, WritesInFlightAt};
@@ -75,7 +74,7 @@ use super::journal::{JournalLockAt, WritesInFlightAt};
 pub type JsetBuf = DstRoom<Jset<Unvalidated>, Box<MappedPages>>;
 
 impl JsetBuf {
-    pub fn new(size: c_uint, gfp: Flags) -> Result<Self, BchError> {
+    pub fn new(size: u32, gfp: Flags) -> Result<Self, BchError> {
         let pages = MappedPages::new(size as usize, gfp)?;
         Ok(DstRoom::from_storage(Box::into_unflagged(Box::init_in(init_with(|| pages), Global.with_flags(gfp))?)))
     }
@@ -85,8 +84,8 @@ impl JsetBuf {
         self.storage().bio().range().take(bytes)
     }
 
-    pub fn size(&self) -> c_uint {
-        self.capacity() as c_uint
+    pub fn size(&self) -> u32 {
+        self.capacity() as u32
     }
 
     pub fn as_ptr(&self) -> *mut Head<Jset> {
@@ -138,7 +137,7 @@ impl JsetBuf {
 }
 
 /// An entry's buffer of @size, and the write that writes it.
-pub fn jset_buf_alloc(size: c_uint, gfp: Flags) -> Result<(JsetBuf, MaybeRcuAlloc<JournalWrite>), BchError> {
+pub fn jset_buf_alloc(size: u32, gfp: Flags) -> Result<(JsetBuf, MaybeRcuAlloc<JournalWrite>), BchError> {
     let buf = JsetBuf::new(size, gfp)?;
     let write = MaybeRcuAlloc::new_gfp(JournalWrite::new(), gfp)?;
     Ok((buf, write))
@@ -169,7 +168,7 @@ impl BufJset {
         unsafe { data.header_mut() }
     }
 
-    pub fn size(&self, g: &JournalGuard<'_>) -> c_uint {
+    pub fn size(&self, g: &JournalGuard<'_>) -> u32 {
         g.get_of(&self.0).as_ref().map_or(0, JsetBuf::size)
     }
 
@@ -1490,7 +1489,7 @@ impl Journal {
         }
 
         time_after_eq(jiffies(),
-                      g.last_flush_write.wrapping_add(msecs_to_jiffies(self.fs().opts().journal_flush_delay.get().into())))
+                      g.last_flush_write.wrapping_add(msecs_to_jiffies(self.fs().opts().journal_flush_delay.get())))
     }
 
     fn should_flush(&self, g: &JournalGuard<'_>, w: &JournalBuf, seq: u64) -> bool {
@@ -1549,7 +1548,7 @@ impl Journal {
              * journal_flush_delay.
              */
             if seq != fs.journal_cur_seq() {
-                self.write_work.modify(Own, msecs_to_jiffies(fs.opts().journal_flush_delay.get().into()));
+                self.write_work.modify(Own, msecs_to_jiffies(fs.opts().journal_flush_delay.get()));
             } else {
                 self.write_work.cancel();
             }

@@ -32,7 +32,6 @@ use crate::os::ops::from_raw;
 use crate::os::folio::Wbc;
 use super::folio::{Folio, FolioGuard, FolioSpan, Mapping};
 use crate::vfs::folio::Writeback;
-use core::ffi::c_int;
 use core::pin::Pin;
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init};
@@ -110,7 +109,7 @@ fn writepage_io_done(io: &mut Io) {
         inode.ei_flags.set(InodeInfoFlag::EI_INODE_ERROR, true);
 
         folios_clear_replicas(io, |folio| {
-            folio.mapping().expect("a folio in writeback with no mapping").set_error(-(c::EIO as c_int))
+            folio.mapping().expect("a folio in writeback with no mapping").set_error(-(c::EIO as i32))
         });
     }
 
@@ -219,7 +218,7 @@ fn throttle_writes(fs: &Fs) {
     }
 }
 
-fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [FolioSector]) -> c_int {
+fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [FolioSector]) -> i32 {
     let mapping = folio.mapping().expect("a folio in writeback with no mapping");
     let inode = mapping.inode();
     let fs = inode.fs();
@@ -339,7 +338,7 @@ fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut
     0
 }
 
-pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
+pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> i32 {
     let inode = mapping.inode();
     let fs = inode.fs();
     let pool = &fs.vfs.writepage_buf_pool;

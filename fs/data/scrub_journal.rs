@@ -33,7 +33,6 @@ use crate::util::gather::{Fold, Gather, GatherRef, Scope};
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Spawn, TaskSlot, WaitSync};
 use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
-use core::ffi::c_int;
 use pin_init::{stack_pin_init, PinInit};
 use crate::format::Btree;
 
@@ -48,11 +47,11 @@ use crate::format::Btree;
 pub struct Repair {
     key:      BtreeKeyBuf,
     bad_devs: u32,
-    read_err: c_int,
+    read_err: i32,
 }
 
 /// Queued for do_repairs(): see Repair. What's bad, for the scrub's Gather.
-pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, read_err: c_int) -> Bad {
+pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, read_err: i32) -> Bad {
     let r = Repair { key: BtreeKeyBuf::new(btree, level, k), bad_devs, read_err };
     let repair = fs.scrub_journal_repairs.lock().push(r).is_ok();
     if !repair {

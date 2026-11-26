@@ -38,7 +38,7 @@ pub const BTREE_ITER_MAX: u32 = 1 << 10;
 #[repr(C)]
 #[derive(Default, MaybeZeroable)]
 pub struct BtreeTransPaths {
-    pub nr_paths: c_ulong,
+    pub nr_paths: usize,
     pub paths: [BtreePath; 0],
 }
 
@@ -48,7 +48,6 @@ use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Alone, Guard, Locked, LockedBy};
 use crate::locking::six::{six_trylock_ip, SixHold, SixLock, SixLockWaiter, SixLockType};
 use core::cmp::Ordering;
-use core::ffi::{c_int, c_ulong};
 use core::marker::PhantomData;
 use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
@@ -171,7 +170,7 @@ pub struct BtreePath<T: PathNode = BtreeBkeyCachedCommon> {
     /* C's TRACK_PATH_ALLOCATED, which btree/types_inline.h defines from
      * these: rustc sees only the configuration */
     #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-    pub ip_allocated: core::ffi::c_ulong,
+    pub ip_allocated: usize,
 }
 
 /// A path as it was, for a trace: a copy that can't be had as a path, so
@@ -243,9 +242,9 @@ impl Paths<'_> {
     /// node set aside meanwhile. On failure, six's error: the lock's back to
     /// intent, and the caller marks the level so, after the wait.
     pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &SixLockWaiter,
-                                    should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
+                                    should_sleep_fn: impl FnMut() -> i32, ip: usize) -> Result<(), i32> {
         let (node, intent) = self[idx].hold_marked_write(level);
-        let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[SixLockType::SIX_LOCK_read as usize] as c_int;
+        let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[SixLockType::SIX_LOCK_read as usize] as i32;
 
         match unsafe { ManuallyDrop::into_inner(intent).write_waiting_over(readers, wait, should_sleep_fn, ip) } {
             Ok(write) => {
@@ -433,7 +432,7 @@ struct TableLayout {
 
 impl TableLayout {
     const fn of(nr: usize) -> Self {
-        let header  = bits_to_longs(nr) * size_of::<c_ulong>();
+        let header  = bits_to_longs(nr) * size_of::<usize>();
         let paths   = header + offset_of!(BtreeTransPaths, paths);
         let sorted  = paths + nr * size_of::<BtreePath>();
         let updates = sorted + (nr + 4) * size_of::<PathIdx>();
@@ -459,7 +458,7 @@ pub(crate) fn table_header(paths: *mut BtreePath) -> *mut BtreeTransPaths {
 /// The rest of the table whose @nr paths start at @paths: its allocated
 /// bitmap - trans_paths_allocated()'s, its start - sorted and updates.
 pub(crate) fn table_arrays(paths: *mut BtreePath, nr: usize)
-    -> (*mut c_ulong, *mut PathIdx, *mut BtreeInsertEntry)
+    -> (*mut usize, *mut PathIdx, *mut BtreeInsertEntry)
 {
     let l = TableLayout::of(nr);
     let start = paths.cast::<u8>().wrapping_sub(l.paths);
@@ -470,7 +469,7 @@ impl BtreeTrans<'_> {
     /// A table of @nr paths the transaction's done with, from its allocated
     /// bitmap: freed once readers are done with it, unless it's the embedded
     /// one.
-    fn table_retire(&self, allocated: *mut c_ulong, nr: usize) {
+    fn table_retire(&self, allocated: *mut usize, nr: usize) {
         if allocated != self._paths_allocated.as_ptr().cast() {
             // kfree_rcu_mightsleep() is kvfree_rcu_mightsleep()
             unsafe { crate::util::alloc::kfree_rcu_mightsleep(allocated.cast(), TableLayout::of(nr).size) };
@@ -493,7 +492,7 @@ impl Paths<'_> {
 
         unsafe {
             ptr::copy_nonoverlapping(old_allocated, allocated, bits_to_longs(old_nr));
-            (*table_header(paths)).nr_paths = nr as c_ulong;
+            (*table_header(paths)).nr_paths = nr as usize;
             ptr::copy_nonoverlapping(old_paths, paths, old_nr);
             ptr::copy_nonoverlapping(old_sorted, sorted, t.nr_sorted.get() as usize);
             ptr::copy_nonoverlapping(old_updates, updates, old_nr);
@@ -882,11 +881,11 @@ impl BtreeTrans<'_> {
     fn path_alloc(&self, paths: &mut Paths<'_>, pos: PathIdx) -> PathIdx {
         /* trans->nr_paths is always a multiple of BITS_PER_LONG, we can improve
          * over find_first_zero_bit */
-        let words = self.nr_paths.get() as usize / c_ulong::BITS as usize;
+        let words = self.nr_paths.get() as usize / usize::BITS as usize;
         for w in 0..words {
             let word = self.paths_allocated().0.words()[w];
             if !word != 0 {
-                let idx = (w * c_ulong::BITS as usize + (!word).trailing_zeros() as usize) as PathIdx;
+                let idx = (w * usize::BITS as usize + (!word).trailing_zeros() as usize) as PathIdx;
 
                 /*
                  * Do this before marking the new path as allocated, since it won't be
@@ -945,7 +944,7 @@ impl BtreeTrans<'_> {
         crate::bch_err!(self.fs(), "trans path overflow");
     }
 
-    fn path_clone(&self, paths: &mut Paths<'_>, src: PathIdx, intent: bool, ip: c_ulong) -> PathIdx {
+    fn path_clone(&self, paths: &mut Paths<'_>, src: PathIdx, intent: bool, ip: usize) -> PathIdx {
         let new = self.path_alloc(paths, src);
         paths.copy(new, src);
         paths.get_ll(new, intent);
@@ -958,7 +957,7 @@ impl BtreeTrans<'_> {
         new
     }
 
-    pub(crate) fn path_make_mut(&self, paths: &mut Paths<'_>, idx: PathIdx, intent: bool, ip: c_ulong) -> PathIdx {
+    pub(crate) fn path_make_mut(&self, paths: &mut Paths<'_>, idx: PathIdx, intent: bool, ip: usize) -> PathIdx {
         let idx = if paths[idx].ref_ > 1 || paths[idx].preserve() {
             self.path_make_mut_clone(paths, idx, intent, ip)
         } else {
@@ -968,7 +967,7 @@ impl BtreeTrans<'_> {
         idx
     }
 
-    pub(crate) fn path_make_mut_clone(&self, paths: &mut Paths<'_>, old: PathIdx, intent: bool, ip: c_ulong)
+    pub(crate) fn path_make_mut_clone(&self, paths: &mut Paths<'_>, old: PathIdx, intent: bool, ip: usize)
         -> PathIdx
     {
         paths.put_ll(old, intent);
@@ -985,7 +984,7 @@ impl BtreeTrans<'_> {
 
     #[inline]
     pub(crate) fn path_set_pos(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
-                               ip: c_ulong) -> PathIdx {
+                               ip: usize) -> PathIdx {
         if new_pos == paths[idx].pos {
             idx
         } else {
@@ -995,7 +994,7 @@ impl BtreeTrans<'_> {
 
     #[inline(never)]
     fn __path_set_pos(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
-                      ip: c_ulong) -> PathIdx {
+                      ip: usize) -> PathIdx {
         if !<events::btree_path_set_pos as TraceEvent>::trace_enabled() {
             return self.path_set_pos_notrace(paths, idx, new_pos, intent, ip);
         }
@@ -1018,7 +1017,7 @@ impl BtreeTrans<'_> {
     }
 
     fn path_set_pos_notrace(&self, paths: &mut Paths<'_>, idx: PathIdx, new_pos: Bpos, intent: bool,
-                            ip: c_ulong) -> PathIdx {
+                            ip: usize) -> PathIdx {
         let cmp = new_pos.cmp(&paths[idx].pos);
 
         self.verify_not_unlocked_or_in_restart();
@@ -1070,7 +1069,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn path_get(&self, paths: &mut Paths<'_>, btree: Btree, pos: Bpos, mut locks_want: u32, level: u32,
-                           flags: BtreeIterFlags, ip: c_ulong) -> PathIdx {
+                           flags: BtreeIterFlags, ip: usize) -> PathIdx {
         let cached = flags.contains(BtreeIterFlags::CACHED);
         let intent = flags.contains(BtreeIterFlags::INTENT);
 
@@ -1152,7 +1151,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn path_get_unlocked_mut(&self, paths: &mut Paths<'_>, btree: Btree, level: u32, pos: Bpos,
-                                        cached: bool, ip: c_ulong) -> PathIdx {
+                                        cached: bool, ip: usize) -> PathIdx {
         let flags = BtreeIterFlags::NOPRESERVE | BtreeIterFlags::INTENT |
             if cached { BtreeIterFlags::CACHED } else { BtreeIterFlags::empty() };
         let idx = self.path_get(paths, btree, pos, level + 1, level, flags, ip);
@@ -1226,7 +1225,7 @@ impl BtreePath {
     /// detector has to see that before the lock's taken - and left so if the
     /// lock wasn't had: node_lock_write_at()'s, which waits for it.
     #[inline(always)]
-    pub(crate) fn try_lock_write(&mut self, level: usize, ip: c_ulong) -> bool {
+    pub(crate) fn try_lock_write(&mut self, level: usize, ip: usize) -> bool {
         assert!(self.locked(level), "write locking a node the path doesn't hold");
         ebug_assert!(self.intent_locked(level));
         self.mark_locked_noreset(level, BTREE_NODE_WRITE_LOCKED);
@@ -1240,7 +1239,7 @@ impl BtreePath {
     /// The level, held for intent, write locked too if that's had without
     /// waiting: its node's Write view. Marked write locked after - nothing
     /// waits on it, for the cycle detector to see.
-    pub(crate) fn trylock_write<T: PathNode>(&mut self, level: usize, ip: c_ulong) -> Option<LockedNode<'_, T, Write>> {
+    pub(crate) fn trylock_write<T: PathNode>(&mut self, level: usize, ip: usize) -> Option<LockedNode<'_, T, Write>> {
         assert!(self.locked_type(level) == BTREE_NODE_INTENT_LOCKED,
                 "write locking a node the path doesn't hold for intent only");
         let node = self.downcast::<T>().expect("write locking a node as another type").locked_node(level)?.node();
@@ -1621,7 +1620,7 @@ fn path_verify_level_err(path: &BtreePath, level: usize, keys: &Keys<'_>, p: Opt
 pub fn trans_paths_init(trans: &BtreeTrans<'_>) {
     trans.nr_paths.set(BTREE_ITER_INITIAL as PathIdx);
     trans.paths.set(trans._paths.as_ptr().cast());
-    unsafe { (*trans.trans_paths.as_ptr()).nr_paths = BTREE_ITER_INITIAL.into() };
+    unsafe { (*trans.trans_paths.as_ptr()).nr_paths = BTREE_ITER_INITIAL as usize };
     let mut paths = trans.paths();
 
     /*
@@ -2157,7 +2156,7 @@ impl<T: PathNode> BtreePath<T> {
     }
 
     /// 0 where C has _THIS_IP_, which Rust can't name.
-    pub(crate) fn ip_allocated(&self) -> c_ulong {
+    pub(crate) fn ip_allocated(&self) -> usize {
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
         return self.ip_allocated;
         #[cfg(not(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG)))]

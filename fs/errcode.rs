@@ -21,7 +21,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
-use core::ffi::c_int;
 use core::{fmt, iter};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
@@ -967,7 +966,7 @@ fn errcode(err: u32) -> Option<(&'static str, u32)> {
 }
 
 fn errname(err: u32) -> Option<&'static str> {
-    crate::os::kernel::errname(err as c_int)?.to_str().ok()
+    crate::os::kernel::errname(err as i32)?.to_str().ok()
 }
 
 /// A bcachefs error code or errno, positive: errnos below Errcode::START (2048),
@@ -1002,7 +1001,7 @@ impl BchError {
     pub fn raw(&self) -> i32 { self.0 }
 
     /// The plain errno this is a case of, negated: for the VFS or userspace.
-    pub fn class(&self) -> c_int {
+    pub fn class(&self) -> i32 {
         -self.errno()
     }
 
@@ -1132,7 +1131,7 @@ impl Default for FirstErr {
     }
 }
 
-pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
+pub fn ret_to_result(ret: i32) -> Result<i32, BchError> {
     if ret < 0 && ret > -4096 {
         Err(BchError(-ret))
     } else {
@@ -1140,21 +1139,21 @@ pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
     }
 }
 
-pub fn ret_to_result_void(ret: c_int) -> Result<(), BchError> {
+pub fn ret_to_result_void(ret: i32) -> Result<(), BchError> {
     ret_to_result(ret).map(|_| ())
 }
 
 /// ret_to_result(), of a loff_t: a position, or a -errcode.
 pub fn loff_to_result(ret: i64) -> Result<u64, BchError> {
     if ret < 0 && ret > -4096 {
-        Err(BchError(-ret as c_int))
+        Err(BchError(-ret as i32))
     } else {
         Ok(ret as u64)
     }
 }
 
 /// The other way: a result as C's int, 0 or -errcode - for Rust that C calls.
-pub fn ret_to_c<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
+pub fn ret_to_c<E: Into<BchError>>(ret: Result<(), E>) -> i32 {
     match ret {
         Ok(())  => 0,
         Err(e)  => -e.into().raw(),
@@ -1162,7 +1161,7 @@ pub fn ret_to_c<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
 }
 
 /// ret_to_c(), for the VFS: 0, or the plain errno class.
-pub fn ret_to_class<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
+pub fn ret_to_class<E: Into<BchError>>(ret: Result<(), E>) -> i32 {
     ret.map_or_else(|e| e.into().class(), |()| 0)
 }
 

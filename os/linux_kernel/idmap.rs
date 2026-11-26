@@ -7,7 +7,6 @@
 //! vfsgid_t, an iattr's - and as the inode's filesystem has it, kuid_t and
 //! kgid_t. kuid() and kgid() take the first to the second.
 
-use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ptr::read_volatile;
@@ -69,7 +68,7 @@ impl<'f> MntIdmap<'f> {
     /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
     /// stack: ACLs and LSMs too.
     pub fn permission<S>(self, inode: &VfsInode<S>, mask: u32) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) })
+        ret_to_result(unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as i32) })
     }
 
     /// Whether the caller may make @attr's changes to @dentry's inode -

@@ -6,7 +6,8 @@
 
 #![allow(non_camel_case_types)]
 
-use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use core::ffi::{c_char, c_int, c_uint, c_void};
+use crate::util::ffi::c_ulong;
 
 pub type loff_t = i64;
 
@@ -37,9 +38,9 @@ pub struct inode {
     pub i_ino:     c_ulong,
     pub i_size:    loff_t,
     pub i_sb:      *mut super_block,
-    pub mode:      c_uint,
+    pub mode:      u32,
     pub i_private: *mut c_void,
-    pub i_state:   c_uint,
+    pub i_state:   u32,
 }
 
 #[repr(C)]

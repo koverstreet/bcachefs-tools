@@ -8,11 +8,11 @@
 
 use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_no_fs, LogLevel};
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 
-const INTERVAL: c_ulong = 5 * HZ;
-const INTERVAL_MAX: c_ulong = 5 * 60 * HZ;
+const INTERVAL: usize = 5 * HZ;
+const INTERVAL_MAX: usize = 5 * 60 * HZ;
 const BURST: i32 = 10;
 
 pub struct Ratelimit {
@@ -77,8 +77,8 @@ impl Ratelimit {
             }
 
             let now = jiffies();
-            let begin = self.begin.load(Relaxed) as c_ulong;
-            let interval = self.interval.load(Relaxed) as c_ulong;
+            let begin = self.begin.load(Relaxed) as usize;
+            let interval = self.interval.load(Relaxed) as usize;
             if time_after(now, begin.wrapping_add(interval)) {
                 /*
                  * Reset rs_n_left ASAP to reduce false positives

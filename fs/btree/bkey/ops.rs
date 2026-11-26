@@ -11,7 +11,6 @@ use crate::fs::{Fs, FsFlag};
 use crate::init::error::BkeyValidate;
 use crate::prt;
 use crate::util::{Printbuf, vstructs::Unvalidated};
-use core::ffi::c_uint;
 use core::fmt;
 use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
@@ -53,7 +52,7 @@ nest! {
             root:  bool,
             __pad: u7,
         },
-        pub journal_offset: c_uint,
+        pub journal_offset: u32,
         pub journal_seq: u64,
     }
 }

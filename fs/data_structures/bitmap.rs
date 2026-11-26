@@ -31,9 +31,6 @@ use crate::types::Le64;
 
 const BITS: usize = usize::BITS as usize;
 
-/// C's words are unsigned longs.
-const _: () = assert!(size_of::<core::ffi::c_ulong>() == size_of::<usize>());
-
 /// An AtomicBitmap's word, named as C sees it - unsigned long - for a struct
 /// C shares to declare its words with.
 pub type AtomicULong = AtomicUsize;

@@ -49,7 +49,6 @@ use crate::util::task::{waiter, Exclusive, Resume, Spawn, TaskList, TaskSlot};
 use crate::util::rcu::RcuDropMember;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
-use core::ffi::c_int;
 use core::future::Future;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
@@ -312,7 +311,7 @@ impl Body<'_> {
             let u = &mut **self;
             use crate::data::write::{write, WriteBio, WriteFor};
             write(&mut u.op, WriteBio::Update(&mut u.pages), WriteFor::Update(&u.index), resume).await;
-            ret_to_result_void(c_int::from(u.op.error))?;
+            ret_to_result_void(i32::from(u.op.error))?;
         }
         Ok(())
     }

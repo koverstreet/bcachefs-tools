@@ -291,7 +291,7 @@ struct Pcpu<'f, T: RcuRealloc, A: Alloc> {
     lock:   Locked<SpinLockIrq, PcpuState>,
     /* what's queued here: added under the lock, taken off as it's processed */
     nr:     AtomicUsize,
-    cpu:    c_uint,
+    cpu:    u32,
     cb:     Opaque<rcu_head>,
     work:   RawWork,
 }

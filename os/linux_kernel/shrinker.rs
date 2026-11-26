@@ -8,7 +8,7 @@
 //! PlacedDrop unregisters it, while what count() and scan() use is still
 //! there; the Shrinker's own drop checks that it did.
 
-use core::ffi::{c_int, CStr};
+use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicPtr, Ordering::{AcqRel, Acquire, Relaxed}};
 
@@ -18,7 +18,7 @@ use crate::util::place::{Contained, PlacedDrop};
 
 // struct shrinker's: the kernel crate's bindings', which have unsigned long
 // as usize
-use kernel::ffi::c_ulong;
+use crate::util::ffi::c_ulong;
 
 pub(crate) trait Shrink: Contained + PlacedDrop + Sync {
     fn shrinker(&self) -> &Shrinker<Self>;
@@ -45,7 +45,7 @@ impl<T: Shrink> Shrinker<T> {
     /// @owner's, named @name, registered: @seeks is what an object costs to
     /// recreate, DEFAULT_SEEKS 2; @batch how many a scan() is asked to free,
     /// 0 for the default.
-    pub(crate) fn register(owner: &T, name: &CStr, seeks: c_int, batch: usize) -> Result<(), AllocError> {
+    pub(crate) fn register(owner: &T, name: &CStr, seeks: i32, batch: usize) -> Result<(), AllocError> {
         let s = unsafe { c::shrinker_alloc(0, c"%s".as_ptr().cast(), name.as_ptr()) };
         if s.is_null() {
             return Err(AllocError);
@@ -67,7 +67,7 @@ impl<T: Shrink> Shrinker<T> {
     }
 
     /// What an object costs to recreate, changed: a no-op unregistered.
-    pub(crate) fn set_seeks(&self, seeks: c_int) {
+    pub(crate) fn set_seeks(&self, seeks: i32) {
         let s = self.raw.load(Acquire);
         if !s.is_null() {
             // registered, so live: unregister()'s caller says nothing's here

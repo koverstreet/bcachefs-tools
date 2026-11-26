@@ -20,7 +20,6 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated}, Printbuf};
-use core::ffi::{c_int, c_uint};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::Le8;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits,
@@ -57,7 +56,7 @@ pub struct BkeyDurability {
 
     pub nr_ptrs: u8, /* real device pointers */
     pub nr_overwritable: u8, /* uncompressed - an overwrite reclaims these */
-    pub sectors_compressed: c_uint,
+    pub sectors_compressed: u32,
 
     /*
      * Copies this key occupies, for disk space accounting.
@@ -357,19 +356,19 @@ fn shrink_val(mut k: BkeyS<'_>, val_u64s: usize) {
 }
 
 /// The change in @k's u64s, never above 0.
-pub fn cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> c_int {
-    let u64s = c_int::from(k.k.u64s);
+pub fn cut_front_s(c: &Fs, where_: Bpos, k: BkeyS<'_>) -> i32 {
+    let u64s = i32::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
     k.cut_front_in_place(c, where_);
-    c_int::from(k.k().u64s) - u64s
+    i32::from(k.k().u64s) - u64s
 }
 
 /// The change in @k's u64s, never above 0.
-pub fn cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
-    let u64s = c_int::from(k.k.u64s);
+pub fn cut_back_s(where_: Bpos, k: BkeyS<'_>) -> i32 {
+    let u64s = i32::from(k.k.u64s);
     let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
     k.cut_back_in_place(where_);
-    c_int::from(k.k().u64s) - u64s
+    i32::from(k.k().u64s) - u64s
 }
 
 // ── appending pointers ───────────────────────────────────────────────────

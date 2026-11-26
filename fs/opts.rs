@@ -43,7 +43,7 @@ use crate::util::names::{self, Names};
 use crate::util::{HumanReadable, Printbuf};
 use crate::util::printbuf::parse_human_u64;
 use crate::os::sysfs::parse_int;
-use core::ffi::{CStr, c_ulong};
+use core::ffi::CStr;
 use crate::posix::inode_format::InodeOptId_arms;
 use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt,
     WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR, Sb, SbHead, SbFieldExt,
@@ -109,7 +109,7 @@ pub const BCH_OPTS_MAX: u32 = 128;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct OptsMask {
-    pub d: [c_ulong; bits_to_longs(BCH_OPTS_MAX as usize)],
+    pub d: [usize; bits_to_longs(BCH_OPTS_MAX as usize)],
 }
 
 /// A OptsMask that changes while it's read: PublishedOpts', and
@@ -965,12 +965,12 @@ impl Opt {
 
 impl OptsMask {
     pub const fn test(&self, id: OptId) -> bool {
-        let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
+        let (i, bits) = (id.0 as usize, usize::BITS as usize);
         self.d[i / bits] >> (i % bits) & 1 != 0
     }
 
     pub const fn set(&mut self, id: OptId) {
-        let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
+        let (i, bits) = (id.0 as usize, usize::BITS as usize);
         self.d[i / bits] |= 1 << (i % bits);
     }
 

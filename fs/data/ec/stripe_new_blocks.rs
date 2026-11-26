@@ -27,7 +27,6 @@ use crate::fs::Fs;
 use crate::types::Align8U64;
 use crate::util::{backref::BackRef, rcu::read_lock, vstructs::Validated};
 use crate::data_structures::bitmap::Bitmap;
-use core::ffi::c_uint;
 use core::sync::atomic::Ordering;
 use crate::format::{Btree, DataType, BCH_BKEY_PTRS_MAX, BKEY_VAL_U64s_MAX, CsumType};
 
@@ -66,7 +65,7 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripe: &mut 
         // the caller's, saved: not ours to put
         req.ptrs.nr = 0;
         req.nr_replicas = (*have + 1) as u8;
-        req.nr_effective = *have as c_uint;
+        req.nr_effective = *have as u32;
         req.data_type = data_type;
         req.target_frac = blocks_centroid(fs, v, blocks);
 
@@ -349,7 +348,7 @@ struct ReqSaved {
     data_type:      DataType,
     ptrs:           OpenBuckets,
     nr_replicas:    u8,
-    nr_effective:   c_uint,
+    nr_effective:   u32,
     devs_may_alloc: DevsMask,
 }
 

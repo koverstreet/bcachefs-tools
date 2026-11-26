@@ -7,7 +7,6 @@
 
 #![allow(non_camel_case_types)]
 
-use core::ffi::{c_uint, c_ulong};
 use core::mem::{size_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
@@ -99,7 +98,7 @@ pub const BTREE_NODE_RESERVE: u32 = BTREE_RESERVE_MAX * 4;
  */
 #[repr(C)]
 pub struct BtreeReserveCache {
-    pub nr: c_uint,
+    pub nr: u32,
     pub data: [BtreeAlloc; BTREE_NODE_RESERVE as usize * 2],
 }
 
@@ -363,7 +362,7 @@ pub(super) type ParentKeys = Keylist<{ BKEY_BTREE_PTR_U64s_MAX * 3 }>;
 pub(crate) struct BtreeUpdate {
     fs:           BackRef<Fs>,
     start_time:   u64,
-    ip_started:   c_ulong,
+    ip_started:   usize,
     flags:        CommitOpts,
     btree:        Btree,
     level_start:  u8,
@@ -676,7 +675,7 @@ impl<'t> InteriorUpdate<'t> {
     #[inline(never)]
     fn start_in(t: &'t TransAttempt<'t, 't>, paths: &mut Paths<'_>, path: PathIdx, level_start: usize,
                 StartOpts { mut split, target: _, mut commit, write: _, new_key_u64s, range }: StartOpts,
-                ip_started: c_ulong) -> Result<(Self, [usize; 2]), BchError>
+                ip_started: usize) -> Result<(Self, [usize; 2]), BchError>
     {
         use crate::alloc::foreground::Watermark as wm;
 
@@ -1082,6 +1081,6 @@ pub fn btree_roots_to_journal_entries(fs: &Fs, w: &mut EntryWriter<'_>, skip: u6
 
 /// What every journal entry reserves for @nr btrees' roots, each at its
 /// largest: root_journal_res.
-pub(crate) fn roots_journal_u64s(nr: u32) -> c_uint {
-    nr * (JSET_KEYS_U64s + BKEY_BTREE_PTR_U64s_MAX) as c_uint
+pub(crate) fn roots_journal_u64s(nr: u32) -> u32 {
+    nr * (JSET_KEYS_U64s + BKEY_BTREE_PTR_U64s_MAX) as u32
 }

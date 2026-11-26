@@ -31,7 +31,6 @@ use crate::{prt, new_lock, published};
 use crate::util::hash::hash_64;
 use crate::os::{kernel::local_clock, workqueue::Queue};
 use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
-use core::ffi::{c_uint, c_ulong};
 use crate::format::DataType;
 use crate::types::CacheAligned;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
@@ -70,8 +69,8 @@ impl WritePointIdx {
 #[derive(MaybeZeroable)]
 pub struct WritePointLocked {
     /* calculated based on how many pointers we're actually going to use: */
-    pub sectors_free: c_uint,
-    pub prev_sectors_free: c_uint,
+    pub sectors_free: u32,
+    pub prev_sectors_free: u32,
 
     pub ptrs: OpenBuckets,
     pub stripe: DevStripeState,
@@ -86,7 +85,7 @@ published! {
     #[derive(MaybeZeroable)]
     pub struct WritePointId {
         pub last_used: Volatile<u64>,
-        pub write_point: Volatile<c_ulong>,
+        pub write_point: Volatile<usize>,
     }
 }
 
@@ -125,7 +124,7 @@ pub struct WritePoint {
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable)]
 pub struct WritePointSpecifier {
-    pub v: c_ulong,
+    pub v: usize,
 }
 
 published! {
@@ -134,7 +133,7 @@ published! {
     /// - write_point.rs.
     #[derive(MaybeZeroable)]
     pub struct WritePointsHash {
-        pub write_points_nr: Volatile<c_uint>,
+        pub write_points_nr: Volatile<u32>,
         pub write_points_hash: [Volatile<Option<WritePointIdx>>; WRITE_POINT_HASH_NR as usize],
     }
 }
@@ -150,7 +149,7 @@ pub(crate) type WritePointGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, Writ
 #[derive(Clone, Copy)]
 pub(crate) enum WritePointSpec<'a> {
     Named(&'a WritePoint),
-    Hashed(c_ulong),
+    Hashed(usize),
 }
 
 impl WritePointSpecifier {
@@ -162,7 +161,7 @@ impl WritePointSpecifier {
     /// One of write_points[] - the same for the same @v, while it's in use:
     /// bit 0 marks it hashed.
     pub const fn hashed(v: usize) -> Self {
-        Self { v: (v | 1) as c_ulong }
+        Self { v: (v | 1) as usize }
     }
 
     pub(crate) fn spec(self, fs: &Fs) -> WritePointSpec<'_> {
@@ -179,13 +178,13 @@ impl WritePointSpecifier {
 // ── The hash ─────────────────────────────────────────────────────────────
 
 impl FsAllocator {
-    fn wp_hash_slot(write_point: c_ulong) -> usize {
+    fn wp_hash_slot(write_point: usize) -> usize {
         hash_64(write_point as u64, WRITE_POINT_HASH_NR.ilog2()) as usize
     }
 
     /// The write point last used for @write_point, if a walk without the
     /// lock finds it: one may be missed, or moved since.
-    fn wp_hash_find(&self, write_point: c_ulong) -> Option<&WritePoint> {
+    fn wp_hash_find(&self, write_point: usize) -> Option<&WritePoint> {
         let mut i = self.write_points_hash_lock.write_points_hash[Self::wp_hash_slot(write_point)].get();
         // bounded: a link followed racing a move may lead anywhere
         for _ in 0..self.write_points.len() {
@@ -257,7 +256,7 @@ impl Fs {
     /// already dropped one since @old_nr: its buckets onto the partial list.
     /// Whether there are fewer: an allocation failed for space is worth
     /// retrying.
-    pub(crate) fn try_decrease_writepoints(&self, t: &TransAttempt<'_, '_>, old_nr: c_uint) -> bool {
+    pub(crate) fn try_decrease_writepoints(&self, t: &TransAttempt<'_, '_>, old_nr: u32) -> bool {
         let a = &self.allocator;
         let wp = {
             let mut g = a.write_points_hash_lock.lock();
@@ -401,13 +400,13 @@ impl Fs {
     /// for it.
     pub(crate) fn write_points_init(&self) {
         let a = &self.allocator;
-        a.write_points_hash_lock.lock().published().write_points_nr.set(a.write_points.len() as c_uint);
+        a.write_points_hash_lock.lock().published().write_points_nr.set(a.write_points.len() as u32);
 
         for (i, wp) in a.write_points.iter().enumerate() {
             let mut g = wp.alloc.lock.lock();
             let mut hg = a.write_points_hash_lock.lock();
             g.published().last_used.set(local_clock());
-            g.published().write_point.set(core::ptr::from_ref(wp) as c_ulong);
+            g.published().write_point.set(core::ptr::from_ref(wp) as usize);
             a.wp_hash_add(&mut hg, WritePointIdx::new(i));
         }
     }

@@ -26,7 +26,6 @@
 use crate::c;
 use crate::util::{futex::EventCount, hash::hash_64, projections::Volatile, sleep::Sleep};
 use crate::os::kernel::{current_id, random_u64};
-use core::ffi::c_ulong;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::{Acquire, Release}};
 use cstruct_macros::MaybeZeroable;
@@ -44,7 +43,7 @@ pub const FDM_HASH_SIZE: u32 = 1 << FDM_HASH_BITS;
 #[derive(MaybeZeroable)]
 pub struct FdmSlot {
     pub task: Volatile<usize>,
-    pub mapping: Volatile<c_ulong>, /* address_space * | dropped_locks bit */
+    pub mapping: Volatile<usize>, /* address_space * | dropped_locks bit */
 }
 
 #[repr(C)]

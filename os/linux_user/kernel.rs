@@ -22,7 +22,7 @@ pub fn is_vmalloc_addr<T>(_p: *const T) -> bool {
 
 /// Errno @err's name - "ENOENT" - as the kernel's errname() has it. Not
 /// EWOULDBLOCK or EDEADLOCK: they're EAGAIN and EDEADLK.
-pub fn errname(err: core::ffi::c_int) -> Option<&'static core::ffi::CStr> {
+pub fn errname(err: i32) -> Option<&'static core::ffi::CStr> {
     macro_rules! names {
         ($($e:ident)*) => {
             match u32::try_from(err).ok()? {
@@ -103,15 +103,15 @@ pub fn fatal_signal_pending() -> bool {
 
 /// The jiffies count: C's macro computed it from sched_clock(), which is
 /// local_clock() here.
-pub fn jiffies() -> core::ffi::c_ulong {
+pub fn jiffies() -> crate::util::ffi::c_ulong {
     nsecs_to_jiffies(local_clock())
 }
 
 /// Jiffies a second.
-pub const HZ: core::ffi::c_ulong = 1000;
+pub const HZ: crate::util::ffi::c_ulong = 1000;
 
-pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
-    (ns / (NSEC_PER_SEC / HZ as u64)) as core::ffi::c_ulong
+pub fn nsecs_to_jiffies(ns: u64) -> crate::util::ffi::c_ulong {
+    (ns / (NSEC_PER_SEC / HZ as u64)) as crate::util::ffi::c_ulong
 }
 
 fn nsecs(ts: Timespec) -> u64 {

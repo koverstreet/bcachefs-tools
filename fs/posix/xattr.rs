@@ -370,7 +370,7 @@ mod vfs {
 
     use crate::format::MetadataVersion;
     use crate::format::BkeyType;
-    use core::ffi::{c_int, CStr};
+    use core::ffi::CStr;
     use crate::btree::bkey::pos;
     use crate::btree::iter::{lockrestart_do, CommitFlags};
     use crate::errcode::Errcode;
@@ -469,7 +469,7 @@ mod vfs {
 
     /// Xattr @name of @ty on @v set to @value, or with None removed: the user,
     /// trusted and security handlers' set.
-    fn stored_set(v: &InodeInfo, ty: XattrType, name: &CStr, value: Option<&[u8]>, flags: c_int)
+    fn stored_set(v: &InodeInfo, ty: XattrType, name: &CStr, value: Option<&[u8]>, flags: i32)
         -> Result<(), BchError>
     {
         let name = OsStr::from_bytes(name.to_bytes());
@@ -648,7 +648,7 @@ mod vfs {
             stored_get(inode, XattrType(TY), name, buffer)
         }
 
-        fn set(_dentry: Dentry<'_>, inode: &InodeInfo, name: &CStr, value: Option<&[u8]>, flags: c_int)
+        fn set(_dentry: Dentry<'_>, inode: &InodeInfo, name: &CStr, value: Option<&[u8]>, flags: i32)
             -> Result<(), BchError>
         {
             stored_set(inode, XattrType(TY), name, value, flags)
@@ -668,7 +668,7 @@ mod vfs {
             bcachefs_get(inode, name, buffer, false)
         }
 
-        fn set(dentry: Dentry<'_>, inode: &InodeInfo, name: &CStr, value: Option<&[u8]>, _flags: c_int)
+        fn set(dentry: Dentry<'_>, inode: &InodeInfo, name: &CStr, value: Option<&[u8]>, _flags: i32)
             -> Result<(), BchError>
         {
             bcachefs_set(dentry, inode, name, value)
@@ -689,7 +689,7 @@ mod vfs {
         }
 
         /// Nothing: xattrs in this namespace are inherited.
-        fn set(_dentry: Dentry<'_>, _inode: &InodeInfo, _name: &CStr, _value: Option<&[u8]>, _flags: c_int)
+        fn set(_dentry: Dentry<'_>, _inode: &InodeInfo, _name: &CStr, _value: Option<&[u8]>, _flags: i32)
             -> Result<(), BchError>
         {
             Ok(())

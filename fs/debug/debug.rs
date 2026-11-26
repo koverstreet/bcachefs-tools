@@ -9,7 +9,7 @@
 //! the buffered write path takes before btree locks.
 
 use core::convert::Infallible;
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::CStr;
 use core::ops::ControlFlow;
 
 use crate::btree::bkey::prelude::*;
@@ -27,7 +27,7 @@ use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
 use cstruct_macros::{placed, Init, MaybeZeroable};
 use pin_init::pin_data;
 
-#[placed(Fs.btree_debug[], index = id: c_uint)]
+#[placed(Fs.btree_debug[], index = id: u32)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
@@ -489,7 +489,7 @@ pub fn debug_module_exit(m: &ModuleExit) {
     BCH_DEBUG.exit(m)
 }
 
-pub fn debug_module_init() -> c_int {
+pub fn debug_module_init() -> i32 {
     BCH_DEBUG.init(c"bcachefs");
     BCH_DEBUG.file::<Tasks>(c"tasks", &TASKS);
     0

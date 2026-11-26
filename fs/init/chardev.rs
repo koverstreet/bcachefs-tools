@@ -85,13 +85,12 @@ use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
 use core::ffi::CStr;
 use cstruct_macros::vtable;
-use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::{UserPtr, UserSlice};
 use crate::format::{Btree, DataType, MemberState, __uuid_t, BCH_REPLICAS_MAX, SbCompat};
 
 /* The dispatch */
 
-pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
+pub fn fs_ioctl(fs: &Fs, cmd: u32, user: UserPtr) -> Result<isize, BchError> {
     use crate::posix::check::ioctl::fsck_online;
     use crate::sb::counters::ioctl::query_counters;
 
@@ -168,7 +167,7 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
     }
 }
 
-fn global_ioctl(cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
+fn global_ioctl(cmd: u32, user: UserPtr) -> Result<isize, BchError> {
     use crate::posix::check::ioctl::fsck_offline;
 
     match cmd {
@@ -179,8 +178,8 @@ fn global_ioctl(cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
 }
 
 /// What the syscall returns: an error as its class.
-pub fn ioctl_ret(ret: Result<c_long, BchError>) -> c_long {
-    ret.unwrap_or_else(|e| e.class() as c_long)
+pub fn ioctl_ret(ret: Result<isize, BchError>) -> isize {
+    ret.unwrap_or_else(|e| e.class() as isize)
 }
 
 /* The queries */
@@ -386,7 +385,7 @@ fn huge_decode_dev(dev: u64) -> u32 {
     major << c::MINORBITS | minor
 }
 
-fn disk_get_idx(fs: &Fs, arg: IoctlDiskGetIdx) -> Result<c_int, BchError> {
+fn disk_get_idx(fs: &Fs, arg: IoctlDiskGetIdx) -> Result<i32, BchError> {
     let dev = huge_decode_dev(arg.dev);
     admin(fs)?;
     if dev == 0 {
@@ -756,7 +755,7 @@ impl FileOps for DataJob {
     }
 }
 
-fn data(fs: &Fs, arg: IoctlData) -> Result<c_int, BchError> {
+fn data(fs: &Fs, arg: IoctlData) -> Result<i32, BchError> {
     let write_ref = fs.require(fs.writes.tryget(), Errcode::erofs_no_writes_ioctl_data)?;
 
     if !capable(Capability::SysAdmin) {
@@ -854,7 +853,7 @@ impl FileOps for Ctl {
         Ok(KBox::pin(Ctl, GFP_KERNEL)?)
     }
 
-    fn unlocked_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, file: &File<Self>, cmd: u32, arg: usize) -> isize {
         let user = UserPtr::from_addr(arg as usize);
         let minor = chrdev::minor(file.rdev());
 

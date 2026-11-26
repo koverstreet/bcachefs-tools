@@ -899,7 +899,7 @@ impl Default for SnapshotsSeen {
 impl Fs {
     /// fsck(8)'s exit status for what the filesystem's errors came to - 1
     /// fixed, 4 left, 8 a fatal error, ORed - each said in @out.
-    pub fn fsck_errcode(&self, out: &mut Printbuf) -> core::ffi::c_int {
+    pub fn fsck_errcode(&self, out: &mut Printbuf) -> i32 {
         use crate::fs::FsFlag as Flag;
 
         let mut ret = 0;
@@ -939,7 +939,6 @@ pub mod ioctl {
     use crate::util::refcount::TryRefcount;
     use crate::os::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::os::ioctl::{UserStr, UserVstruct};
-    use kernel::ffi::c_int;
 
     /// The options at user address @addr, or none if it's 0.
     fn user_opts(addr: u64) -> Result<Opts, BchError> {
@@ -949,7 +948,7 @@ pub mod ioctl {
         }
     }
 
-    pub fn fsck_offline(user: UserVstruct<IoctlFsckOffline>) -> Result<c_int, BchError> {
+    pub fn fsck_offline(user: UserVstruct<IoctlFsckOffline>) -> Result<i32, BchError> {
         let arg = user.head()?;
 
         if arg.flags != 0 {
@@ -997,7 +996,7 @@ pub mod ioctl {
             .inspect_err(|e| kernel::pr_err!("ret {}\n", e.msg()))
     }
 
-    fn fsck_offline_thread(fs: Result<OpenFs, BchError>, stdio: &StdioRedirect) -> c_int {
+    fn fsck_offline_thread(fs: Result<OpenFs, BchError>, stdio: &StdioRedirect) -> i32 {
         let fs = match fs {
             Ok(fs) => fs,
             Err(e) => return -e.raw(),
@@ -1026,7 +1025,7 @@ pub mod ioctl {
         ret
     }
 
-    pub fn fsck_online(fs: &Fs, arg: IoctlFsckOnline) -> Result<c_int, BchError> {
+    pub fn fsck_online(fs: &Fs, arg: IoctlFsckOnline) -> Result<i32, BchError> {
         if arg.flags != 0 {
             return fs.throw(Errcode::EINVAL_fsck_online_bad_flags);
         }
@@ -1043,7 +1042,7 @@ pub mod ioctl {
         crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
-    fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &StdioRedirect) -> c_int {
+    fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &StdioRedirect) -> i32 {
         let fs: &Fs = &fs_ref;
         let mut buf = Printbuf::new();
 

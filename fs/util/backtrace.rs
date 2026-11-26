@@ -25,7 +25,6 @@ use crate::util::alloc::{AllocError, Vec};
 use crate::util::demangle::prt_demangled;
 use crate::os::sched;
 use crate::util::Printbuf;
-use core::ffi::c_ulong;
 
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name
 /// demangled - a Rust name, mangled; anything else as it is.
@@ -65,7 +64,7 @@ fn symbol_offset_inc(s: &mut [u8], len: usize) -> usize {
 
 /// @addr's symbol, demangled, to @out.
 #[cfg(kernel)]
-pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
+pub(crate) fn prt_symbol(out: &mut Printbuf, addr: usize) {
     let start = out.as_bytes().len();
 
     // %pB's lookup, sprint_backtrace(), isn't exported: sprint_symbol() of
@@ -88,7 +87,7 @@ pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
 
 /// @f's name: a function's address, not a return address - and no offset.
 #[cfg(kernel)]
-pub(crate) fn prt_fn_name(out: &mut Printbuf, f: c_ulong) {
+pub(crate) fn prt_fn_name(out: &mut Printbuf, f: usize) {
     let start = out.as_bytes().len();
 
     let written = unsafe {
@@ -128,19 +127,19 @@ fn demangle_in_place(out: &mut Printbuf, start: usize) {
 
 /// @addr's symbol, demangled, to @out.
 #[cfg(not(kernel))]
-pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
+pub(crate) fn prt_symbol(out: &mut Printbuf, addr: usize) {
     prt_symbol_demangled(out, &crate::os::stacktrace::symbolize(addr));
 }
 
 /// @f's name: a function's address, not a return address - and no offset.
 #[cfg(not(kernel))]
-pub(crate) fn prt_fn_name(out: &mut Printbuf, f: c_ulong) {
+pub(crate) fn prt_fn_name(out: &mut Printbuf, f: usize) {
     prt_symbol_demangled(out, &crate::os::stacktrace::fn_name(f));
 }
 
 /// @stack, a frame a line, as the kernel prints them: "[<0>] " and the
 /// frame's symbol.
-pub fn prt_backtrace(out: &mut Printbuf, stack: &[c_ulong]) {
+pub fn prt_backtrace(out: &mut Printbuf, stack: &[usize]) {
     for &addr in stack {
         prt!(out, "[<0>] ");
         prt_symbol(out, addr);
@@ -150,7 +149,7 @@ pub fn prt_backtrace(out: &mut Printbuf, stack: &[c_ulong]) {
 
 /// @task's stack, @skipnr frames in - and the frame saving it, for current -
 /// into @stack, grown till it fits: an error if it can't be, what fit kept.
-pub fn save_backtrace(stack: &mut Vec<c_ulong>, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
+pub fn save_backtrace(stack: &mut Vec<usize>, task: *mut c::task_struct, skipnr: u32) -> Result<(), AllocError> {
     #[cfg(CONFIG_STACKTRACE)]
     {
         stack.clear();

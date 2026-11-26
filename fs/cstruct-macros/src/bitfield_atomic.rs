@@ -79,7 +79,7 @@ pub(crate) fn atomic(item: &syn::ItemStruct, storage: &Ident) -> TokenStream {
         }
 
         /// wait_until(), given up after @timeout jiffies: whether @cond held.
-        #vis fn wait_until_timeout(&self, how: crate::util::sleep::Sleep, timeout: ::core::ffi::c_ulong,
+        #vis fn wait_until_timeout(&self, how: crate::util::sleep::Sleep, timeout: usize,
                                    mut cond: impl FnMut(#name) -> bool) -> bool {
             crate::locking::bitlock::wait_until_timeout(&self.0, how, timeout, |w| cond(#name::from_bits(w)))
         }

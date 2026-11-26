@@ -10,7 +10,7 @@
 
 use super::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
 use crate::os::lockdep::{LockClass, LockdepMap};
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
 
 /// A LockdepMap's initializer, its class the call site's, named @name:
 /// lockdep_init_map().
@@ -84,7 +84,7 @@ impl<R: RawTryLock> RawTryLock for Lockdep<R> {
 }
 
 impl<R: RawTimedLock> RawTimedLock for Lockdep<R> {
-    fn try_lock_timeout(&self, timeout: c_ulong) -> Option<R::GuardState> {
+    fn try_lock_timeout(&self, timeout: usize) -> Option<R::GuardState> {
         self.dep_map.acquire(false, false, 0);
         let g = self.raw.try_lock().or_else(|| {
             self.dep_map.contended(0);

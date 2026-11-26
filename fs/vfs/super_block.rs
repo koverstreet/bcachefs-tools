@@ -8,7 +8,6 @@
 //! Its operations, os::super_block's SuperOps, are Fs's: SUPER_OPS is the
 //! table mount (vfs/fs_type.rs) sets s_op to.
 
-use core::ffi::c_int;
 
 use crate::alloc::{accounting, capacity::avail_factor};
 use crate::c;
@@ -59,7 +58,7 @@ impl SuperOps for Fs {
         inode.evict()
     }
 
-    fn sync_fs(&self, _sb: &SuperBlock, wait: c_int) -> Result<(), BchError> {
+    fn sync_fs(&self, _sb: &SuperBlock, wait: i32) -> Result<(), BchError> {
         let start = ktime_get_ns();
         let disabled = self.opts().journal_flush_disabled.get() != 0;
 

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ffi::c_int;
 use core::ops::ControlFlow;
 use kernel::page::PAGE_SHIFT;
 
@@ -117,7 +116,7 @@ fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<u64, 
     Ok(seq)
 }
 
-pub(super) fn fsync(inode: &InodeInfo, file: &File, start: c::loff_t, end: c::loff_t, datasync: c_int)
+pub(super) fn fsync(inode: &InodeInfo, file: &File, start: c::loff_t, end: c::loff_t, datasync: i32)
     -> Result<(), BchError>
 {
     let fs = inode.fs();
@@ -625,7 +624,7 @@ impl InodeInfo {
     }
 }
 
-pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64, len: i64)
+pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: i32, offset: i64, len: i64)
     -> Result<(), BchError>
 {
     let fs = inode.fs();
@@ -732,7 +731,7 @@ fn seek_hole(inode: &InodeInfo, file: &File, mut offset: u64) -> Result<u64, Bch
     file.setpos(next_hole.min(isize), MAX_FILE_SIZE)
 }
 
-pub(super) fn llseek(inode: &InodeInfo, file: &File, offset: i64, whence: c_int) -> Result<u64, BchError> {
+pub(super) fn llseek(inode: &InodeInfo, file: &File, offset: i64, whence: i32) -> Result<u64, BchError> {
     match whence as u32 {
         c::SEEK_SET | c::SEEK_CUR | c::SEEK_END => file.generic_llseek(offset, whence),
         c::SEEK_DATA => seek_data(inode, file, offset as u64),

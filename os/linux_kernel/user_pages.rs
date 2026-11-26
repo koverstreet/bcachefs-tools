@@ -15,7 +15,7 @@ use crate::c;
 use crate::errcode::{BchError, Errcode};
 use crate::os::{file::Any, folio::Folio, bio::{Bio, Bvec, FolioHold, Holds}, workqueue::Queue};
 use crate::util::{rcu::{DropAnytime, DropAtomic}, task::requeue};
-use core::ffi::{c_int, c_uint, c_ulong};
+use crate::util::ffi::c_ulong;
 use core::ptr::NonNull;
 
 /// What a bio of an iov_iter's pages holds of their folios: Pinned, a
@@ -91,12 +91,12 @@ impl<const PINNED: bool> UserPage for UserFolio<PINNED> {
             let room = usize::from(bio.max_vecs() - bio.nr_vecs()).min(EXTRACT_BATCH);
             let max = (u32::MAX - bio.range().len()) as usize;
 
-            let got = unsafe { c::iov_iter_extract_pages(iter.as_ptr(), &mut p, max, room as c_uint, 0, &mut offset) };
+            let got = unsafe { c::iov_iter_extract_pages(iter.as_ptr(), &mut p, max, room as u32, 0, &mut offset) };
             if got <= 0 {
                 if bio.nr_vecs() != start {
                     break;
                 }
-                return Err(if got < 0 { BchError::from_raw(got as c_int) } else { Errcode::EFAULT_extract_pages.into() });
+                return Err(if got < 0 { BchError::from_raw(got as i32) } else { Errcode::EFAULT_extract_pages.into() });
             }
 
             let (mut left, mut i) = (got as usize, 0);

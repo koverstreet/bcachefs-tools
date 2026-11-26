@@ -3,7 +3,6 @@
 //! Journal reclaim: space accounting, discards, and flushing pins - by the
 //! reclaim thread, or directly.
 
-use core::ffi::c_int;
 use core::sync::atomic::Ordering::{Acquire, Relaxed};
 
 use crate::alloc::{discard::discard_opt_enabled, foreground::Watermark};
@@ -35,15 +34,14 @@ use crate::util::sleep::{sleep_until, Sleep, SleepError};
 use crate::util::{Nsecs, Printbuf};
 use crate::{bch_err, bch_err_msg, prt, published};
 use crate::util::projections::Volatile;
-use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bch_enum, MaybeZeroable};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct JournalSpace {
     /* Units of 512 bytes sectors: */
-    pub next_entry: c_uint, /* How big the next journal entry can be */
-    pub total: c_uint,
+    pub next_entry: u32, /* How big the next journal entry can be */
+    pub total: u32,
 }
 
 #[bch_enum(closed)]
@@ -60,7 +58,7 @@ published! {
     /// reclaim_lock's: written by reclaim, read by anyone.
     #[derive(MaybeZeroable)]
     pub struct ReclaimPublished {
-        pub last_flushed: Volatile<c_ulong>,
+        pub last_flushed: Volatile<usize>,
         pub nr_direct_reclaim: Volatile<u64>,
         pub nr_background_reclaim: Volatile<u64>,
     }
@@ -592,7 +590,7 @@ impl Journal {
 
             let btree_cache_live = bc.lock.nr_live();
             let btree_cache_dirty = bc.lock.nr_dirty();
-            let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get().into());
+            let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get());
 
             /*
              * If it's been longer than j->reclaim_delay_ms since we last flushed,
@@ -764,7 +762,7 @@ impl Journal {
         did_work
     }
 
-    pub fn flush_device_pins(&self, dev_idx: c_int) -> Result<(), BchError> {
+    pub fn flush_device_pins(&self, dev_idx: i32) -> Result<(), BchError> {
         let fs = self.fs();
 
         let seq = {
@@ -967,7 +965,7 @@ fn reclaim_thread(j: &Journal, me: &KthreadSelf<'_>) {
         ret = j.reclaim_pass(&mut j.reclaim_lock.lock(), false, kicked);
 
         let now = jiffies();
-        let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get().into());
+        let delay = msecs_to_jiffies(fs.opts().journal_reclaim_delay.get());
         let mut next = j.reclaim_lock.last_flushed.get().wrapping_add(delay);
 
         if !time_in_range(next, now, now.wrapping_add(delay)) {

@@ -20,11 +20,11 @@ pub fn schedule() {
     unsafe { c::schedule() }
 }
 
-pub fn schedule_timeout(timeout: core::ffi::c_long) -> core::ffi::c_long {
+pub fn schedule_timeout(timeout: crate::util::ffi::c_long) -> crate::util::ffi::c_long {
     unsafe { c::schedule_timeout(timeout as _) as _ }
 }
 
-pub fn io_schedule_timeout(timeout: core::ffi::c_long) -> core::ffi::c_long {
+pub fn io_schedule_timeout(timeout: crate::util::ffi::c_long) -> crate::util::ffi::c_long {
     unsafe { c::io_schedule_timeout(timeout as _) as _ }
 }
 
@@ -49,7 +49,7 @@ pub fn memalloc_flags() -> u32 {
 
 /// This task's state, @state, ordered before what it then checks:
 /// set_current_state().
-pub fn set_current_state(state: core::ffi::c_uint) {
+pub fn set_current_state(state: u32) {
     unsafe { c::bch2_set_current_state(state) }
 }
 
@@ -67,22 +67,22 @@ pub fn might_sleep() {
 
 /// # Safety
 /// @task is a task, live.
-pub unsafe fn task_pid(task: *mut c::task_struct) -> core::ffi::c_int {
+pub unsafe fn task_pid(task: *mut c::task_struct) -> i32 {
     unsafe { c::bch2_task_pid(task) }
 }
 
-pub fn current_pid() -> core::ffi::c_int {
+pub fn current_pid() -> i32 {
     unsafe { task_pid(current()) }
 }
 
 /// The CPU this task's to be woken on next, for the scheduler.
-pub fn set_current_wake_cpu(cpu: core::ffi::c_int) {
+pub fn set_current_wake_cpu(cpu: i32) {
     unsafe { c::bch2_set_current_wake_cpu(cpu) }
 }
 
 /// Whether a signal @state's sleep wakes for is pending: as
 /// signal_pending_state(state, current).
-pub fn signal_pending_state(state: core::ffi::c_uint) -> bool {
+pub fn signal_pending_state(state: u32) -> bool {
     unsafe { c::bch2_signal_pending_state(state) }
 }
 

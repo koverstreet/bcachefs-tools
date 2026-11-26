@@ -9,7 +9,7 @@
 //! Lookup writes nothing, unless a dirent and its inode disagree, which it
 //! repairs. The inodes it returns come from the inode cache.
 
-use core::ffi::{c_uint, CStr};
+use core::ffi::CStr;
 
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, passes};
@@ -61,7 +61,7 @@ impl InodeInfo {
         let name = (!tmpfile).then_some(dentry);
         let uid = dir.uid_of(idmap.fsuid(dir));
         let gid = dir.gid_of(idmap.fsgid(dir));
-        let is_posixacl = self.sb().flags() as u64 & c::SB_POSIXACL != 0;
+        let is_posixacl = self.sb().flags() & c::SB_POSIXACL != 0;
 
         // preallocate acls + vfs inode before btree transaction, so that
         // nothing can fail after the transaction succeeds:
@@ -289,7 +289,7 @@ impl InodeOps for DirOps {
     type Inode = InodeInfo;
 
     /// Any error is a negative dentry, as C had it.
-    fn lookup(dir: &InodeInfo, dentry: Dentry<'_>, _flags: c_uint) -> *mut c::dentry {
+    fn lookup(dir: &InodeInfo, dentry: Dentry<'_>, _flags: u32) -> *mut c::dentry {
         let fs = dir.fs();
 
         let Ok(hash) = crate::bch_err_fn!(fs, str_hash::hash_info_init(fs, &dir.inode())) else {
@@ -365,7 +365,7 @@ impl InodeOps for DirOps {
     }
 
     fn rename(_idmap: MntIdmap<'_>, src_dir: &InodeInfo, src_dentry: Dentry<'_>,
-              dst_dir: &InodeInfo, dst_dentry: Dentry<'_>, flags: c_uint) -> Result<(), BchError>
+              dst_dir: &InodeInfo, dst_dentry: Dentry<'_>, flags: u32) -> Result<(), BchError>
     {
         use crate::posix::dirent::RenameMode::*;
 

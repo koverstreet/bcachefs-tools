@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ffi::c_uint;
 use core::mem::{offset_of, size_of};
 
 use crate::alloc::{replicas::SbEntry, replicas_format::ReplicasEntryV1};
@@ -578,7 +577,7 @@ pub(crate) fn jset_validate_entries(fs: &Fs, j: &mut [u8], flags: ValidateFlags)
         let t = rest.get(offset_of!(Head<JsetEntry>, type_)).copied();
         let len = if rest.len() >= HEAD { HEAD + head(rest).u64s() * 8 } else { usize::MAX };
 
-        ctx.from.journal_offset = (off / 8) as c_uint;
+        ctx.from.journal_offset = (off / 8) as u32;
         ctx.entry = t.map(|type_| EntryPos { type_, offset: off / 8 });
 
         if journal_entry_err_on!(ctx, len > rest.len(), journal_entry_past_jset_end,

@@ -6,7 +6,8 @@
 
 use crate::c;
 use core::cell::Cell;
-use core::ffi::{c_int, c_ulong, c_void};
+use core::ffi::{c_int, c_void};
+use crate::util::ffi::c_ulong;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 use std::sync::{Mutex, Once};
@@ -24,7 +25,7 @@ struct Request {
     store:  *mut c_ulong,
     size:   usize,
     skipnr: u32,
-    target: c_int,
+    target: i32,
     nr:     AtomicUsize,
     done:   AtomicBool,
 }
@@ -33,7 +34,7 @@ static BT_LOCK: Mutex<()> = Mutex::new(());
 static BT_IN_FLIGHT: AtomicPtr<Request> = AtomicPtr::new(ptr::null_mut());
 static BT_HANDLER: Once = Once::new();
 
-fn gettid() -> c_int {
+fn gettid() -> i32 {
     rustix::thread::gettid().as_raw_nonzero().get()
 }
 

@@ -16,15 +16,16 @@ pub use super::sched::{get_task_struct, put_task_struct, task_struct, wake_up_pr
                        TASK_NOLOAD, TASK_RUNNING, TASK_UNINTERRUPTIBLE, TASK_WAKEKILL};
 pub use super::workqueue::{delayed_work, work_struct, workqueue_struct};
 pub use linux_raw_sys::general::{S_IFDIR, S_IFLNK, S_IFMT, S_IFREG, S_ISGID};
-use core::ffi::{c_int, c_long, c_uint, c_ulong, c_ushort, c_void};
+use core::ffi::c_void;
+use crate::util::ffi::{c_long, c_ulong};
 use core::sync::atomic::{fence, AtomicIsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 
 use super::blkdev::BlockDevice;
 
 pub use linux_raw_sys::errno::*;
 
-pub type umode_t = c_ushort;
-pub type gfp_t   = c_uint;
+pub type umode_t = u16;
+pub type gfp_t   = u32;
 pub type uid_t   = u32;
 pub type gid_t   = u32;
 pub type dev_t   = u64;
@@ -42,7 +43,7 @@ pub struct page {
 
 #[derive(::pin_init::Zeroable)]
 pub struct atomic_t {
-    pub counter: c_int,
+    pub counter: i32,
 }
 
 #[derive(Clone, Copy, ::pin_init::Zeroable)]
@@ -85,7 +86,7 @@ pub const PERCPU_REF_INIT_DEAD:   u32 = 1 << 1;
 /// # Safety
 /// @r is a percpu_ref's place, not live.
 pub unsafe fn percpu_ref_init(r: *mut percpu_ref, release: Option<percpu_ref_func_t>,
-                              flags: c_uint, _gfp: gfp_t) -> c_int {
+                              flags: u32, _gfp: gfp_t) -> i32 {
     let count = (flags & PERCPU_REF_INIT_DEAD == 0) as isize;
     unsafe { r.write(percpu_ref { count: AtomicIsize::new(count), release }) };
     0

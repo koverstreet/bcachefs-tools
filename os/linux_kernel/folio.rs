@@ -43,7 +43,7 @@ use crate::util::{alloc::KBox, ffi::Opaque};
 use core::borrow::Borrow;
 use core::cell::Cell;
 use core::cmp::Ordering;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::{ControlFlow, Deref};
@@ -496,7 +496,7 @@ impl<A> Mapping<A> {
 
     /// @errno - a negative one - recorded for whoever next checks for a
     /// writeback error: mapping_set_error().
-    pub fn set_error(self, errno: c_int) {
+    pub fn set_error(self, errno: i32) {
         unsafe { c::mapping_set_error(self.as_ptr(), errno) }
     }
 
@@ -657,7 +657,7 @@ impl<A: AddressSpaceOps> Readahead<'_, A> {
         let folio = folio.keep_locked();
         unsafe { c::folio_get(folio.as_ptr()) };
         self.0._nr_pages += n as u32;
-        self.0._index -= n as core::ffi::c_ulong;
+        self.0._index -= n as crate::util::ffi::c_ulong;
     }
 }
 
@@ -672,7 +672,7 @@ from_raw! {
 impl Wbc {
     /// The next folio to write back, locked - after the last, which writing
     /// returned @err: writeback_iter().
-    pub(crate) fn next<A>(&self, mapping: Mapping<A>, err: &mut c_int) -> Option<FolioGuard<'_, A>> {
+    pub(crate) fn next<A>(&self, mapping: Mapping<A>, err: &mut i32) -> Option<FolioGuard<'_, A>> {
         let folio = unsafe { c::writeback_iter(mapping.as_ptr(), self.0.as_ptr(), self.1.get(), err) };
         self.1.set(folio);
         NonNull::new(folio).map(|f| unsafe { FolioGuard::adopt(f) })
@@ -737,18 +737,18 @@ crate::vfs_ops! {
     /// @folio's data read in; its lock, the VFS's, given up either way.
     fn read_folio(_file: *mut c::file, folio: FolioGuard<'_, Self>) -> Result<(), BchError>;
     fn readahead(ra: Readahead<'_, Self>);
-    fn writepages(mapping: Mapping<Self>, wbc: Wbc) -> c_int;
+    fn writepages(mapping: Mapping<Self>, wbc: Wbc) -> i32;
     /// @folio marked dirty: whether it wasn't. It mustn't block: mm calls it
     /// under the PTE lock, unmapping.
     fn dirty_folio(mapping: Mapping<Self>, folio: &Folio<Self>) -> bool;
     /// The folio @len bytes at @pos are written into, locked, in *@foliop,
     /// and what write_end() has of the write, in *@fsdata.
-    fn write_begin(_w: VfsWriter, mapping: Mapping<Self>, pos: c::loff_t, len: c_uint,
+    fn write_begin(_w: VfsWriter, mapping: Mapping<Self>, pos: c::loff_t, len: u32,
                    foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError>;
     /// @copied of the @len bytes at @pos written into @folio, write_begin()'s:
     /// how many were.
-    fn write_end(_w: VfsWriter, mapping: Mapping<Self>, pos: c::loff_t, len: c_uint, copied: c_uint,
-                 folio: LockedFolio<Self>, begun: KBox<Self::FsData>) -> c_int;
+    fn write_end(_w: VfsWriter, mapping: Mapping<Self>, pos: c::loff_t, len: u32, copied: u32,
+                 folio: LockedFolio<Self>, begun: KBox<Self::FsData>) -> i32;
     fn invalidate_folio(folio: HeldFolio<'_, Self>, offset: usize, len: usize);
     /// Whether @folio's filesystem state was freed, for the folio to be.
     fn release_folio(folio: HeldFolio<'_, Self>, gfp: c::gfp_t) -> bool;

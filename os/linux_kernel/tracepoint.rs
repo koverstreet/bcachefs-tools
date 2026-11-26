@@ -233,14 +233,14 @@ mod on {
             - size_of::<u32>();
         let mut regs = ptr::null_mut();
         let mut rctx = 0;
-        let entry = unsafe { c::perf_trace_buf_alloc(size as c_int, &mut regs, &mut rctx) };
+        let entry = unsafe { c::perf_trace_buf_alloc(size as i32, &mut regs, &mut rctx) };
         if entry.is_null() {
             return;
         }
         unsafe {
             c::rust_perf_fetch_caller_regs(regs);
             C::assign(record(entry, rec_size), HEADER, a, b);
-            c::perf_trace_run_bpf_submit(entry, size as c_int, rctx, call, 1, regs, head,
+            c::perf_trace_run_bpf_submit(entry, size as i32, rctx, call, 1, regs, head,
                                          ptr::null_mut());
         }
     }
@@ -266,7 +266,7 @@ mod on {
         // an int, and print_line_t an enum, whose type is the bindings': signed
         // or unsigned, by kernel and bindgen
         let ret = unsafe { c::trace_raw_output_prep(iter, event) };
-        if ret != c::print_line_t_TRACE_TYPE_HANDLED as c_int {
+        if ret != c::print_line_t_TRACE_TYPE_HANDLED as i32 {
             return ret as c::print_line_t;
         }
         unsafe {
@@ -284,10 +284,10 @@ mod on {
         let mut out: c::trace_event_fields = ::pin_init::zeroed();
         out.type_ = f.ty.as_ptr().cast();
         out.__bindgen_anon_1.__bindgen_anon_1.name = f.name.as_ptr().cast();
-        out.__bindgen_anon_1.__bindgen_anon_1.size = f.size as c_int;
-        out.__bindgen_anon_1.__bindgen_anon_1.align = f.align as c_int;
-        out.__bindgen_anon_1.__bindgen_anon_1.filter_type = c::FILTER_OTHER as c_int;
-        out.__bindgen_anon_1.__bindgen_anon_1.len = f.len as c_int;
+        out.__bindgen_anon_1.__bindgen_anon_1.size = f.size as i32;
+        out.__bindgen_anon_1.__bindgen_anon_1.align = f.align as i32;
+        out.__bindgen_anon_1.__bindgen_anon_1.filter_type = c::FILTER_OTHER as i32;
+        out.__bindgen_anon_1.__bindgen_anon_1.len = f.len as i32;
         out
     }
 
@@ -366,7 +366,7 @@ mod on {
         call.__bindgen_anon_1.tp = tp.as_ptr();
         call.event.funcs = class.funcs.get();
         call.print_fmt = class.print_fmt.get().cast();
-        call.flags = c::TRACE_EVENT_FL_TRACEPOINT as c_int;
+        call.flags = c::TRACE_EVENT_FL_TRACEPOINT as i32;
         call
     }
 

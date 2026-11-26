@@ -60,10 +60,8 @@ use crate::os::mount::WriteAccess;
 use crate::os::path::{Creating, Removing, UserPath};
 use crate::os::super_block::IsInode;
 use crate::{bch_err, btree_trans, prt};
-use core::ffi::c_int;
 use core::mem::{offset_of, MaybeUninit};
 use pin_init::stack_try_pin_init;
-use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
 const FSLABEL_MAX: usize = c::FSLABEL_MAX as usize;
@@ -94,8 +92,8 @@ impl Ioctl for FS_IOC_SETFSLABEL {
 /* The dispatch */
 
 /// @file's - @inode's, and @regular if it's a regular file's.
-fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>, cmd: c_uint, user: UserPtr)
-    -> Result<c_long, BchError>
+fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>, cmd: u32, user: UserPtr)
+    -> Result<isize, BchError>
 {
     let fs = inode.fs();
     let subvol = inode.inum().subvol as u32;
@@ -173,7 +171,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
 }
 
 pub(crate) fn fs_file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
-                            cmd: c_uint, arg: c_ulong) -> c_long {
+                            cmd: u32, arg: usize) -> isize {
     ioctl_ret(file_ioctl(file, inode, regular, cmd, UserPtr::from_addr(arg as usize)))
 }
 
@@ -182,13 +180,13 @@ pub(crate) fn fs_file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&Fil
 /// ones, and the label's.
 #[cfg(CONFIG_COMPAT)]
 pub(crate) fn fs_file_compat_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
-                                   cmd: c_uint, arg: c_ulong) -> c_long {
+                                   cmd: u32, arg: usize) -> isize {
     let cmd = match cmd {
         c::FS_IOC32_GETFLAGS   => c::FS_IOC_GETFLAGS,
         c::FS_IOC32_SETFLAGS   => c::FS_IOC_SETFLAGS,
         c::FS_IOC32_GETVERSION => c::FS_IOC_GETVERSION,
         c::FS_IOC_GETFSLABEL | c::FS_IOC_SETFSLABEL => cmd,
-        _ => return -(c::ENOIOCTLCMD as c_long),
+        _ => return -(c::ENOIOCTLCMD as isize),
     };
     fs_file_ioctl(file, inode, regular, cmd, crate::os::ioctl::compat_ptr(arg as u32))
 }
@@ -197,7 +195,7 @@ pub(crate) fn fs_file_compat_ioctl(file: &File, inode: &InodeInfo, regular: Opti
 
 /// BCHFS_IOC_REINHERIT_ATTRS: the inode named @name in @dir takes on again the
 /// options it would inherit from @dir - and the project, quota and all.
-fn reinherit_attrs(file: &File, dir: &InodeInfo, name: &OsStr) -> Result<c_long, BchError> {
+fn reinherit_attrs(file: &File, dir: &InodeInfo, name: &OsStr) -> Result<isize, BchError> {
     let fs = dir.fs();
     let hash = str_hash::hash_info_init(fs, &dir.inode())?;
     let inum = dirent::lookup(fs, dir.inum(), &hash, name)?;
@@ -261,7 +259,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: IoctlSubvolume, err: &mut Print
     }
 
     // Held until the snapshot's made, as C held it
-    let src = (a.src_ptr != 0).then(|| UserPath::at(a.dirfd as c_int, a.src_ptr, c::LOOKUP_FOLLOW))
+    let src = (a.src_ptr != 0).then(|| UserPath::at(a.dirfd as i32, a.src_ptr, c::LOOKUP_FOLLOW))
         .transpose()?;
     let mut snapshot_src = SubvolInum::default();
     if let Some(src) = &src {
@@ -272,7 +270,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: IoctlSubvolume, err: &mut Print
         snapshot_src = inode.inum();
     }
 
-    let dst = Creating::start(a.dirfd as c_int, a.dst_ptr)?;
+    let dst = Creating::start(a.dirfd as i32, a.dst_ptr)?;
     let Some((dentry, dir)) = dst.on(fs) else {
         prt!(err, "dst_path not on dst filesystem");
         return fs.throw(Errcode::EXDEV_create_subvol_dst);
@@ -293,7 +291,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: IoctlSubvolume, err: &mut Print
     let idmap = MntIdmap::of(file);
     idmap.permission(dir.vfs(), c::MAY_WRITE | c::MAY_EXEC)?;
 
-    if sb.flags() as u64 & c::SB_POSIXACL == 0 {
+    if sb.flags() & c::SB_POSIXACL == 0 {
         a.mode &= !current_umask();
     }
     dst.may_mkdir(a.mode)?;
@@ -327,7 +325,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: IoctlSubvolume, err: ErrMsg)
             return fs.throw(Errcode::EINVAL_subvol_destroy_bad_flags);
         }
 
-        let r = Removing::start(a.dirfd as c_int, a.dst_ptr)?;
+        let r = Removing::start(a.dirfd as i32, a.dst_ptr)?;
         let Some((victim, dir)) = r.on(fs) else {
             return fs.throw(Errcode::EXDEV_destroy_subvol);
         };
@@ -346,7 +344,7 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: IoctlSubvolume, err: ErrMsg)
 /// checksum, I/O, decompression - rather than failing on them, and with
 /// BCH_PREAD_RAW_no_poison_check, reads poisoned extents. The bytes read.
 fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<IoctlPreadRaw>)
-    -> Result<c_long, BchError>
+    -> Result<isize, BchError>
 {
     let fs = inode.fs();
     let a = user.read()?;
@@ -380,7 +378,7 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<IoctlPread
     // The reads' completions add to it, under its lock
     stack_try_pin_init!(let report: ReadErrReport =? ReadErrReport::init());
 
-    let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&*report)).map(|n| n as c_long);
+    let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&*report)).map(|n| n as isize);
 
     let mut errs = report.errs.lock();
     if user.write_at(offset_of!(IoctlPreadRaw, errors), &errs.errors).is_err() {

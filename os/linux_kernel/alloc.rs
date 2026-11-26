@@ -16,7 +16,7 @@ use crate::c;
 use crate::util::alloc::{kv_layout, Alloc, AllocError, AllocGfp, Allocator, KVmalloc, Kmalloc, Vmalloc};
 use crate::util::rcu::{DropAnytime, DropAtomic, FreeAnytime, HasRcuHead, NothingToDetach};
 use core::alloc::Layout;
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::ptr::NonNull;
 use kernel::alloc::NumaNode;
 use kernel::bindings::{krealloc_node_align, kvrealloc_node_align};
@@ -205,7 +205,7 @@ allocs!(Kmalloc  => |p, _, size, align, gfp, nid| unsafe { krealloc_node_align(p
 /// even allow crazy sizes" - and vmalloc() doesn't. A kmalloc()'d @p, of @old
 /// bytes, is copied into a vmalloc()'d one, as kvrealloc() does when
 /// krealloc() fails.
-unsafe fn kvrealloc_unbounded(p: *const c_void, old: usize, size: usize, align: usize, gfp: c::gfp_t, nid: c_int)
+unsafe fn kvrealloc_unbounded(p: *const c_void, old: usize, size: usize, align: usize, gfp: c::gfp_t, nid: i32)
     -> *mut c_void
 {
     if size <= i32::MAX as usize || crate::os::kernel::is_vmalloc_addr(p) {
@@ -236,7 +236,7 @@ unsafe fn vfree_atomic(p: NonNull<u8>) {
 
 /// C's vrealloc(): @p, of @old bytes, as @size - freed if 0.
 #[cfg(linux_ge = "7.0")]
-unsafe fn vrealloc(p: *const c_void, _old: usize, size: usize, align: usize, gfp: c::gfp_t, nid: c_int)
+unsafe fn vrealloc(p: *const c_void, _old: usize, size: usize, align: usize, gfp: c::gfp_t, nid: i32)
     -> *mut c_void
 {
     unsafe { kernel::bindings::vrealloc_node_align(p, size, align, gfp, nid) }
@@ -246,7 +246,7 @@ unsafe fn vrealloc(p: *const c_void, _old: usize, size: usize, align: usize, gfp
 /// vmalloc test module - __vmalloc() is: page aligned, on any node, and a
 /// resize is a copy into a new allocation.
 #[cfg(not(linux_ge = "7.0"))]
-unsafe fn vrealloc(p: *const c_void, old: usize, size: usize, align: usize, gfp: c::gfp_t, _nid: c_int)
+unsafe fn vrealloc(p: *const c_void, old: usize, size: usize, align: usize, gfp: c::gfp_t, _nid: i32)
     -> *mut c_void
 {
     if align > super::kernel::PAGE_SIZE {

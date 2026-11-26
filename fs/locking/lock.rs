@@ -6,7 +6,7 @@ use crate::util::refcount::AtomicRef;
 use crate::util::projections::Publish;
 use crate::util::sharing::{self, Sharing};
 use core::cell::UnsafeCell;
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
@@ -56,7 +56,7 @@ pub trait RawTryLock: RawLock {
 
 /// A RawTryLock that can be waited for, for up to @timeout jiffies.
 pub trait RawTimedLock: RawTryLock {
-    fn try_lock_timeout(&self, timeout: c_ulong) -> Option<Self::GuardState>;
+    fn try_lock_timeout(&self, timeout: usize) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that can be taken as one of several of its lockdep class held
@@ -222,7 +222,7 @@ impl<R: RawLock, G, P> Locked<R, G, P> {
     }
 
     /// lock(), if it's free within @timeout jiffies.
-    pub fn try_lock_timeout(&self, timeout: c_ulong) -> Option<ExclusiveGuard<'_, R, G, P>>
+    pub fn try_lock_timeout(&self, timeout: usize) -> Option<ExclusiveGuard<'_, R, G, P>>
     where
         R: RawTimedLock,
     {

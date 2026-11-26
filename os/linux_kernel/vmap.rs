@@ -5,7 +5,6 @@
 use crate::c;
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::volatile::VolatileSlice;
-use core::ffi::c_uint;
 use core::ptr::NonNull;
 
 /// Unmapped on drop.
@@ -21,7 +20,7 @@ impl Vmap {
     /// @pages are pages, which outlive it, and whose memory only C and
     /// VolatileSlices touch.
     pub unsafe fn new(pages: &mut [*mut c::page]) -> Option<Self> {
-        let p = unsafe { c::rust_vmap(pages.as_mut_ptr(), pages.len() as c_uint) };
+        let p = unsafe { c::rust_vmap(pages.as_mut_ptr(), pages.len() as u32) };
         NonNull::new(p.cast()).map(|p| Vmap { p, pages: pages.len() })
     }
 

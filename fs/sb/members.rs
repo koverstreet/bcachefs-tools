@@ -27,7 +27,7 @@ use crate::alloc::disk_groups;
 use crate::util::ffi::c_char;
 use crate::data_structures::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, Unvalidated, Validated};
-use core::ffi::{c_int, c_ulong, CStr};
+use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo, VolatileValue};
@@ -675,7 +675,7 @@ impl Fs {
     /// The worst IO latency seen, reading or writing as @rw, of @devs, in
     /// jiffies: to scale timeouts and "held too long" warnings so slow storage
     /// doesn't trip them.
-    pub fn dev_latency_max(&self, devs: &DevsMask, rw: c_int) -> c_ulong {
+    pub fn dev_latency_max(&self, devs: &DevsMask, rw: i32) -> usize {
         let rcu = read_lock();
         let ns = self.devs_rcu_in(devs.iter(), &rcu)
             .map(|ca| ca.io_latency.get(rw as usize).stats().stats.lock.lock().max_duration)

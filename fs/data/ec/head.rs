@@ -32,7 +32,6 @@ use crate::data_structures::bitmap::BitArray;
 use crate::debug::trace::events;
 use crate::util::{alloc::kbox_pin_init, rcu::{read_lock, ReadGuard}, Printbuf};
 use crate::{bch_err, new_lock, prt};
-use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bch_enum, MaybeZeroable};
 use pin_init::{pin_data, pin_init};
 
@@ -46,7 +45,7 @@ pub struct EcDevStripeState {
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, DevStripes>,
 
-    pub disk_label: c_uint,
+    pub disk_label: u32,
 }
 
 /// What an EcDevStripeState's lock protects: how the buckets of new
@@ -97,9 +96,9 @@ pub struct EcStripeHead {
     #[pin]
     pub lock: Locked<Lockdep<ByteLock>, HeadState>,
 
-    pub disk_label: c_uint,
-    pub algo: c_uint,
-    pub redundancy: c_uint,
+    pub disk_label: u32,
+    pub algo: u32,
+    pub redundancy: u32,
     pub watermark: Watermark,
 }
 
@@ -111,10 +110,10 @@ pub struct EcStripeHead {
 #[derive(Default, MaybeZeroable)]
 pub struct HeadDevs {
     /// The allocator's rw_devs_change_count they're as of
-    pub change_count: c_ulong,
+    pub change_count: usize,
     pub mask:         DevsMask,
-    pub nr_active:    c_uint,
-    pub blocksize:    c_uint,
+    pub nr_active:    u32,
+    pub blocksize:    u32,
     /// Too few for the head's redundancy: it makes no stripes
     pub insufficient: bool,
 }
@@ -293,7 +292,7 @@ fn stripe_head_detach(fs: &Fs, g: &mut HeadGuard<'_>, err: Option<BchError>) {
 
 /// @h's devices, as of the allocator's RW device changes @change_count: a
 /// stripe not yet allocated that some have left is cancelled.
-fn stripe_head_devs_update(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, change_count: c_ulong) {
+fn stripe_head_devs_update(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, change_count: usize) {
     let (mask, blocksize) = fs.disk_label_ec_devs(h.disk_label, 0);
     let mut leaving = mask;
     leaving.not_and(&g.devs.mask);

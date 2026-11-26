@@ -11,7 +11,7 @@ use core::cmp::{max, min};
 use core::alloc::Layout;
 use core::mem::{align_of, size_of};
 use core::borrow::Borrow;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::c_void;
 use core::ops::{ControlFlow, Range};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32};
@@ -558,7 +558,7 @@ impl AddressSpaceOps for InodeInfo {
         buffered::readahead(ra)
     }
 
-    fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
+    fn writepages(mapping: Mapping, wbc: Wbc) -> i32 {
         writeback::writepages(mapping, wbc)
     }
 
@@ -591,7 +591,7 @@ impl AddressSpaceOps for InodeInfo {
         res.dirty(span)
     }
 
-    fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint,
+    fn write_begin(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: u32,
                    foliop: &mut *mut c::folio, fsdata: &mut *mut c_void) -> Result<(), BchError> {
         *fsdata = core::ptr::null_mut();
         // 'static for WriteBegun's guards: the VFS holds the inode from here
@@ -603,10 +603,10 @@ impl AddressSpaceOps for InodeInfo {
         Ok(())
     }
 
-    fn write_end(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: c_uint, copied: c_uint,
-                 folio: LockedFolio, begun: KBox<WriteBegun>) -> c_int {
+    fn write_end(_w: VfsWriter, mapping: Mapping, pos: c::loff_t, len: u32, copied: u32,
+                 folio: LockedFolio, begun: KBox<WriteBegun>) -> i32 {
         buffered_write::write_end(mapping.inode(), folio, begun, pos as u64, len as usize, copied as usize)
-            as c_int
+            as i32
     }
 
     fn invalidate_folio(folio: HeldFolio<'_>, offset: usize, len: usize) {

@@ -52,7 +52,7 @@ pub fn open_dir(path: &Path) -> Result<OwnedFd> {
 }
 
 /* Not in the libc crate yet; from linux/stat.h */
-const STATX_SUBVOL: core::ffi::c_uint = 0x8000;
+const STATX_SUBVOL: u32 = 0x8000;
 
 /// Which filesystem and subvolume @path is in, or None if it isn't on a
 /// filesystem that reports subvolumes.

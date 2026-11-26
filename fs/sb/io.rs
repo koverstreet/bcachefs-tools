@@ -173,7 +173,7 @@ use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut,
     read_past, ArmRef, Head, SelfSized, InPlace, InState, State, Unsized, Unvalidated,
     UnvalidatedEntries, Validated, ValidatedEntriesMut, VStructError};
-use core::ffi::{c_uint, CStr, c_ulong};
+use core::ffi::CStr;
 use crate::util::alloc::{Arc, Flags, Vec};
 use core::sync::atomic::AtomicPtr;
 use crate::util::gather::{Gather, Scope};
@@ -222,12 +222,12 @@ pub struct SbCpu {
 
     pub time_base_lo: Volatile<u64>,
     pub time_base_hi: Volatile<u32>,
-    pub time_units_per_sec: Volatile<c_uint>,
-    pub nsec_per_time_unit: Volatile<c_uint>,
+    pub time_units_per_sec: Volatile<u32>,
+    pub nsec_per_time_unit: Volatile<u32>,
     pub features: Volatile<SbFeatures>,
     pub compat: Volatile<SbCompats>,
     pub recovery_passes_required: Volatile<u64>,
-    pub errors_silent: [Volatile<c_ulong>; bits_to_longs(SbErrorId::NR as usize)],
+    pub errors_silent: [Volatile<usize>; bits_to_longs(SbErrorId::NR as usize)],
     pub btrees_lost_data: Volatile<u64>,
     pub btrees_clean: Volatile<u64>,
 
@@ -2775,10 +2775,10 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
                 crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get()));
 
             // the section's little-endian words as longs: le_bitvector_to_cpu()
-            const _: () = assert!(size_of::<[core::ffi::c_ulong; bits_to_longs(SbErrorId::NR as usize)]>()
+            const _: () = assert!(size_of::<[usize; bits_to_longs(SbErrorId::NR as usize)]>()
                                   <= size_of::<[Le64; 8]>());
             let silent = LeBitmap::from_words(&e.errors_silent);
-            let bits = core::ffi::c_ulong::BITS as usize;
+            let bits = usize::BITS as usize;
             for (i, w) in cpu.errors_silent.iter().enumerate() {
                 w.set((0..bits).filter(|&b| silent.test(i * bits + b)).fold(0, |w, b| w | 1 << b));
             }
@@ -2995,7 +2995,6 @@ mod tests {
     use crate::data_structures::dst_room::DstRoom;
     use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated, Validated, VStructError};
     use crate::util::Printbuf;
-    use core::ffi::c_int;
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
     /// - as a superblock's walk would give it: as many bytes as it says.
@@ -3142,7 +3141,7 @@ mod tests {
     /// A superblock with an errors_v2 section of two entries and a partial
     /// third - 8 bytes of one - then a counters section; and validate() of the
     /// errors_v2 section, as a read or a write would.
-    fn validate_partial(flags: ValidateFlags) -> (SbHandle, c_int, Printbuf) {
+    fn validate_partial(flags: ValidateFlags) -> (SbHandle, i32, Printbuf) {
         type E = SbFieldErrorsV2;
         type Ctrs = SbFieldCounters;
 

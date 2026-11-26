@@ -56,7 +56,6 @@ use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
 use crate::{bch_err_ratelimited, here_str, prt};
 use crate::debug::trace::events;
-use core::ffi::{c_int, c_uint};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
@@ -107,7 +106,7 @@ nest! {
             __pad:             u6,
         },
 
-        pub read_dev: c_uint,
+        pub read_dev: u32,
         pub read_flags: ReadFlags,
         pub write_flags: WriteFlags,
         pub commit_flags: TransCommitFlags,
@@ -711,7 +710,7 @@ impl DataUpdate {
             }
 
             match t.allocate_dropping_locks(|| {
-                fs.update_table.make_room().map_err(|_| BchError::from_raw(-(c::ENOMEM as c_int)))
+                fs.update_table.make_room().map_err(|_| BchError::from_raw(-(c::ENOMEM as i32)))
             }) {
                 Err(e) if !e.matches(c::ENOMEM) => return Err(e),
                 _ => {}

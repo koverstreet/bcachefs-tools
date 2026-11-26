@@ -15,7 +15,6 @@
 //! unless the backpointer is to another directory: a hardlink. Then the
 //! directory's dirents are searched for one that names the inode.
 
-use core::ffi::c_int;
 
 use crate::btree::{bkey::{pos, spos}, iter::{lockrestart_do, BtreeIter, BtreeIterFlags}};
 use crate::c;
@@ -134,7 +133,7 @@ impl ExportOps for Fs {
         Dentry::obtain_alias(InodeInfo::get(self, parent))
     }
 
-    fn encode_fh(&self, inode: &InodeInfo, fh: &mut HandleBuf<'_>, parent: Option<&InodeInfo>) -> c_int {
+    fn encode_fh(&self, inode: &InodeInfo, fh: &mut HandleBuf<'_>, parent: Option<&InodeInfo>) -> i32 {
         match parent.filter(|_| !inode.vfs().is_dir()) {
             Some(dir) => fh.put(WITH_PARENT, &FidWithParent { fid: inode.fid(), dir: dir.fid() }),
             None      => fh.put(WITHOUT_PARENT, &inode.fid()),

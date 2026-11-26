@@ -7,7 +7,8 @@
 use crate::c;
 use crate::locking::{Mutex, PercpuRwSem, RawSpinLock, RwSem, SpinLockIrq};
 use crate::util::ffi::c_char;
-use core::ffi::{c_ulong, c_void};
+use core::ffi::c_void;
+use crate::util::ffi::c_ulong;
 use core::pin::Pin;
 use core::ptr;
 
@@ -114,11 +115,11 @@ pub fn reclaim_lock_order(take: impl FnOnce()) {
 
 /// The contention tracepoints, for a lock whose state is ours: of @lock's
 /// address, which they print and never follow.
-pub fn trace_contention_begin<L>(lock: &L, flags: core::ffi::c_uint) {
+pub fn trace_contention_begin<L>(lock: &L, flags: u32) {
     unsafe { c::rust_trace_contention_begin(ptr::from_ref(lock).cast(), flags) }
 }
 
-pub fn trace_contention_end<L>(lock: &L, ret: core::ffi::c_int) {
+pub fn trace_contention_end<L>(lock: &L, ret: i32) {
     unsafe { c::rust_trace_contention_end(ptr::from_ref(lock).cast(), ret) }
 }
 

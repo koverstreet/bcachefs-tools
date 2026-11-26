@@ -16,12 +16,12 @@ use core::ffi::c_int;
 
 crate::init_fn! {
     /// A failed init is exited, and is ENOMEM, as C's.
-    fn init() -> c_int {
+    fn init() -> i32 {
         match bcachefs_init(&ThisModule::new()) {
             Ok(()) => 0,
             Err(_) => {
                 bcachefs_exit(&ModuleExit::new());
-                -(crate::c::ENOMEM as c_int)
+                -(crate::c::ENOMEM as i32)
             }
         }
     }

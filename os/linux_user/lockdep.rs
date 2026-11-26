@@ -3,7 +3,8 @@
 //! Lockdep, for userspace: there's none, so every hook does nothing.
 
 use crate::util::ffi::c_char;
-use core::ffi::{c_ulong, c_void};
+use core::ffi::c_void;
+use crate::util::ffi::c_ulong;
 use core::pin::Pin;
 
 /// No lockdep, no classes: every lock's key is this one.
@@ -36,5 +37,5 @@ pub fn debug_check_no_locks_freed(_p: *const c_void, _len: usize) {}
 /// No lockdep to tell of a lock order: @take isn't run.
 pub fn reclaim_lock_order(_take: impl FnOnce()) {}
 
-pub fn trace_contention_begin<L>(_lock: &L, _flags: core::ffi::c_uint) {}
-pub fn trace_contention_end<L>(_lock: &L, _ret: core::ffi::c_int) {}
+pub fn trace_contention_begin<L>(_lock: &L, _flags: u32) {}
+pub fn trace_contention_end<L>(_lock: &L, _ret: i32) {}

@@ -13,7 +13,6 @@
 use crate::util::futex::{futex_wait, futex_wake, FutexWord};
 use crate::os::kernel::jiffies;
 use crate::util::sleep::{Sleep, SleepEnd};
-use core::ffi::{c_long, c_ulong};
 use core::sync::atomic::Ordering;
 
 /// Sleep, as @how says, until @cond of @word holds - read with acquire, as
@@ -31,7 +30,7 @@ pub fn wait_until<W: FutexWord, E: SleepEnd>(word: &W, how: Sleep<E>, mut cond: 
 }
 
 /// wait_until(), given up after @timeout jiffies: whether @cond held.
-pub fn wait_until_timeout<W: FutexWord>(word: &W, how: Sleep, timeout: c_ulong, mut cond: impl FnMut(W::Val) -> bool)
+pub fn wait_until_timeout<W: FutexWord>(word: &W, how: Sleep, timeout: usize, mut cond: impl FnMut(W::Val) -> bool)
     -> bool
 {
     let end = jiffies().wrapping_add(timeout);
@@ -40,11 +39,11 @@ pub fn wait_until_timeout<W: FutexWord>(word: &W, how: Sleep, timeout: c_ulong, 
         if cond(v) {
             return true;
         }
-        let left = end.wrapping_sub(jiffies()) as c_long;
+        let left = end.wrapping_sub(jiffies()) as isize;
         if left <= 0 {
             return false;
         }
-        let _ = futex_wait(word, v, how.timeout(left as c_ulong));
+        let _ = futex_wait(word, v, how.timeout(left as usize));
     }
 }
 

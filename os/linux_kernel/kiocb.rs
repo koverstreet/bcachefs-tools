@@ -8,7 +8,6 @@ use crate::errcode::BchError;
 use crate::os::file::{Any, File, FsFile};
 use crate::os::iov_iter::IovIter;
 use crate::os::ops::IntoRaw;
-use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
@@ -51,7 +50,7 @@ impl<'a, D> Kiocb<'a, D> {
     }
 
     pub fn direct(&self) -> bool {
-        self.0.ki_flags & c::IOCB_DIRECT as c_int != 0
+        self.0.ki_flags & c::IOCB_DIRECT as i32 != 0
     }
 
     /// filemap_read(): a buffered read, through the page cache.

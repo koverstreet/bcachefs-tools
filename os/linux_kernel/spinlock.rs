@@ -12,7 +12,8 @@ use crate::os::lockdep::{self, LockClass};
 use crate::os::percpu::{local_irq_restore, local_irq_save, preempt_enable};
 use crate::util::ffi::Opaque;
 use core::convert::Infallible;
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
+use crate::util::ffi::c_ulong;
 use kernel::bindings as b;
 
 pub type SpinLockIrq = Opaque<b::spinlock_t>;

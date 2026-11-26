@@ -36,7 +36,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::data_structures::{array_vec::ArrayVec, bitmap::AtomicBitflags};
-use core::ffi::{c_long, c_uint, c_ulong, CStr};
+use core::ffi::CStr;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};
@@ -89,12 +89,12 @@ pub struct InodeInfo<St = Live> {
     #[pin]
     pub ei_reserved: Locked<SpinLockIrq, InodeReserved, InodeReservedRange>,
 
-    pub ei_inodes_idx: c_uint,
+    pub ei_inodes_idx: u32,
     pub ei_flags: AtomicBitflags<InodeInfoFlag>,
 
     #[pin]
     pub ei_update_lock: Locked<Mutex>,
-    pub ei_last_dirtied: Volatile<c_ulong>,
+    pub ei_last_dirtied: Volatile<usize>,
     #[pin]
     pub ei_pagecache_lock: TwoStateLock,
 
@@ -414,7 +414,7 @@ impl InodeInfo {
         let timeout = fs.opts.writeback_timeout.get();
 
         if timeout != 0 {
-            unsafe { self.ei_writeback_timer.queue(&fs.vfs.writeback_wq, c_ulong::from(timeout) * HZ) };
+            unsafe { self.ei_writeback_timer.queue(&fs.vfs.writeback_wq, usize::from(timeout) * HZ) };
         }
     }
 
@@ -489,7 +489,7 @@ pub fn evict_subvolume_inodes(fs: &Fs, subvols: &[u32]) {
             VfsInode::wait_new_bit(inode, || {
                 let g = read_lock();
                 vfs_inodes_from(fs, i, &g).next().is_some_and(|(j, still)| j == i && NonNull::from(still.vfs()) == inode)
-            }, c_long::MAX); // MAX_SCHEDULE_TIMEOUT
+            }, isize::MAX); // MAX_SCHEDULE_TIMEOUT
             pos = i + 1;
         }
         if !found {

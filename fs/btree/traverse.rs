@@ -4,7 +4,6 @@
 //! nodes on the way locked, and back up to where it's still good.
 
 use core::cmp::Ordering;
-use core::ffi::{c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 
 
@@ -160,7 +159,7 @@ impl BtreeTrans<'_> {
 
 // ── Traversal ───────────────────────────────────────────────────────────────
 
-fn root_unpack(packed: c_ulong) -> (Option<NonNull<BtreeNode>>, usize) {
+fn root_unpack(packed: usize) -> (Option<NonNull<BtreeNode>>, usize) {
     let mask = (1 << BTREE_ROOT_LEVEL_BITS) - 1;
     let level = (packed & mask) as usize;
     // journal_entry_btree_root_validate() rejects a root any deeper
@@ -168,7 +167,7 @@ fn root_unpack(packed: c_ulong) -> (Option<NonNull<BtreeNode>>, usize) {
     (NonNull::new((packed & !mask) as *mut BtreeNode), level)
 }
 
-fn root_packed(fs: &Fs, btree: crate::format::Btree) -> c_ulong {
+fn root_packed(fs: &Fs, btree: crate::format::Btree) -> usize {
     fs.btree.cache.roots.roots_b.get(btree.0 as usize).map_or(0, |r| r.get())
 }
 
@@ -413,7 +412,7 @@ impl BtreeTrans<'_> {
         });
 
         prt!(&mut *msg, "lookup found topology error:\n");
-        btree_id_level_to_text(&mut msg, path.btree_id(), level as c_uint);
+        btree_id_level_to_text(&mut msg, path.btree_id(), level as u32);
         prt!(&mut *msg, " lookup at {}\n", path.pos);
 
         {

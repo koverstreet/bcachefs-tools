@@ -55,7 +55,6 @@ use core::sync::atomic::{AtomicBool, Ordering, AtomicU64};
 use pin_init::{pinned_drop, pin_data};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::projections::Volatile;
-use core::ffi::c_uint;
 use cstruct_macros::{Fieldwise, Init, MaybeZeroable, TypeInfo};
 
 /* capacity.pcpu's counters: each CPU's a delta, summed over them */
@@ -94,7 +93,7 @@ pub struct FsCapacity {
      * and forces them to be revalidated
      */
     pub capacity_gen: u32,
-    pub bucket_size_max: crate::util::projections::Volatile<c_uint>,
+    pub bucket_size_max: crate::util::projections::Volatile<u32>,
 
     pub sectors_available: [AtomicU64; BCH_REPLICAS_MAX as usize],
 

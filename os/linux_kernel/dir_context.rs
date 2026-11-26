@@ -3,7 +3,6 @@
 //! A dir_context: readdir's output - getdents', or nfsd's - and the position
 //! it's up to.
 
-use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
@@ -34,7 +33,7 @@ impl DirContext<'_> {
         let ctx = self.0.as_ptr();
         unsafe {
             let actor = (*ctx).actor.expect("a dir_context's actor");
-            actor(ctx, name.as_ptr().cast(), name.len() as c_int, pos as c::loff_t, ino, d_type)
+            actor(ctx, name.as_ptr().cast(), name.len() as i32, pos as c::loff_t, ino, d_type)
         }
     }
 }

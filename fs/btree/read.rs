@@ -70,7 +70,6 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes
 use crate::util::{backref::BackRef, printbuf::Msg};
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, log_msg_ratelimited, prt};
-use core::ffi::c_uint;
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Deref, Range};
 use core::pin::Pin;
@@ -442,7 +441,7 @@ fn node_header(buf: &[u8]) -> Head<btree_node> {
 }
 
 fn node_header_to_text(out: &mut Printbuf, bn: &Head<btree_node>) {
-    btree_id_level_to_text(out, bn.btree_id(), bn.level() as c_uint);
+    btree_id_level_to_text(out, bn.btree_id(), bn.level() as u32);
     prt!(out, " seq {:x} {}\n", bn.keys.seq.get(), bn.seq());
     prt!(out, "min: {}\n", bn.min_key);
     prt!(out, "max: {}", bn.max_key);

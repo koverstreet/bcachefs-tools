@@ -60,7 +60,7 @@ pub fn is_vmalloc_addr<T>(p: *const T) -> bool {
 }
 
 /// Errno @err's name: "ENOENT".
-pub fn errname(err: core::ffi::c_int) -> Option<&'static core::ffi::CStr> {
+pub fn errname(err: i32) -> Option<&'static core::ffi::CStr> {
     let p = unsafe { c::errname(err) };
     (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p.cast()) })
 }
@@ -90,18 +90,18 @@ pub fn fatal_signal_pending() -> bool {
 
 /// The jiffies count: a variable the timer interrupt writes, read as
 /// READ_ONCE() would.
-pub fn jiffies() -> core::ffi::c_ulong {
+pub fn jiffies() -> crate::util::ffi::c_ulong {
     // SAFETY: a word, written whole, so a volatile read can't tear
-    unsafe { core::ptr::read_volatile(&raw const ::kernel::bindings::jiffies) as core::ffi::c_ulong }
+    unsafe { core::ptr::read_volatile(&raw const ::kernel::bindings::jiffies) as crate::util::ffi::c_ulong }
 }
 
 /// Jiffies a second.
-pub const HZ: core::ffi::c_ulong = c::HZ as core::ffi::c_ulong;
+pub const HZ: crate::util::ffi::c_ulong = c::HZ as crate::util::ffi::c_ulong;
 
 /// The kernel's binding returns its own c_ulong, usize; the same width as
 /// core's.
-pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
-    unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
+pub fn nsecs_to_jiffies(ns: u64) -> crate::util::ffi::c_ulong {
+    unsafe { c::nsecs_to_jiffies(ns) as crate::util::ffi::c_ulong }
 }
 
 // local_clock() is a static inline, with no symbol for Rust: the bindings'

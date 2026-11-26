@@ -64,7 +64,7 @@ use std::{
 
 use rustix::mount::{self, MountAttrFlags, MountFlags};
 
-const FSCONFIG_SET_FLAG: core::ffi::c_uint = 0;
+const FSCONFIG_SET_FLAG: u32 = 0;
 
 /// The most a single fsconfig(2) parameter value can carry.
 ///

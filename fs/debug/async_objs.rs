@@ -24,7 +24,6 @@ use crate::data_structures::fast_list::FastList;
 use crate::errcode::Errcode;
 use crate::fs::Fs;
 use crate::util::{task::TaskList, Printbuf};
-use core::ffi::c_uint;
 use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init};
 use pin_init::pin_data;
 
@@ -37,7 +36,7 @@ pub enum AsyncObjKind {
     task,
 }
 
-#[placed(Fs.async_objs[], index = idx: c_uint)]
+#[placed(Fs.async_objs[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
@@ -64,7 +63,7 @@ pub unsafe trait AsyncObj {
 /// An object's place on its list.
 pub struct AsyncObjSlot {
     list: Option<NonNull<FastList>>,
-    idx:  core::ffi::c_uint,
+    idx:  u32,
 }
 
 // SAFETY: a list and a slot in it; the list's operations are lockless and
@@ -111,7 +110,7 @@ impl Drop for AsyncObjSlot {
 ///
 /// # Safety
 /// @idx is the object's, from async_object_list_add() on that list.
-pub unsafe fn list_del(fs: &Fs, list: AsyncObjKind, idx: &mut core::ffi::c_uint) {
+pub unsafe fn list_del(fs: &Fs, list: AsyncObjKind, idx: &mut u32) {
     fs.async_objs[list as usize].list.remove(*idx);
     *idx = 0;
 }

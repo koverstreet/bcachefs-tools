@@ -29,9 +29,7 @@
 //! Dir's FileOps are the directory file_operations, DIR_FILE_OPS;
 //! fsync is still C's.
 
-use core::ffi::{c_int, c_uint};
 use core::pin::Pin;
-use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
 use crate::format::StrHashKind;
@@ -189,7 +187,7 @@ impl FileOps for Dir {
     }
 
     /// A 32-bit reader's positions are cookies, up to READDIR_32_EOF.
-    fn llseek(&self, file: &File<Self>, fpos: &mut PosLocked<'_, Self>, offset: i64, whence: c_int)
+    fn llseek(&self, file: &File<Self>, fpos: &mut PosLocked<'_, Self>, offset: i64, whence: i32)
         -> Result<u64, BchError>
     {
         let max = if dirents_32bit(file) { READDIR_32_EOF as u64 } else { u64::MAX };
@@ -236,16 +234,16 @@ impl FileOps for Dir {
         crate::bch_err_fn!(fs, ret)
     }
 
-    fn fsync(&self, file: &File<Self>, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
+    fn fsync(&self, file: &File<Self>, start: i64, end: i64, datasync: i32) -> Result<(), BchError> {
         fsync(file.inode(), file, start, end, datasync)
     }
 
-    fn unlocked_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, file: &File<Self>, cmd: u32, arg: usize) -> isize {
         fs_file_ioctl(file, file.inode(), None, cmd, arg)
     }
 
     #[cfg(CONFIG_COMPAT)]
-    fn compat_ioctl(&self, file: &File<Self>, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn compat_ioctl(&self, file: &File<Self>, cmd: u32, arg: usize) -> isize {
         super::ioctl::fs_file_compat_ioctl(file, file.inode(), None, cmd, arg)
     }
 }

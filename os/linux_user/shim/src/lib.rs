@@ -52,6 +52,17 @@ pub mod types {
     }
 }
 
+/// C's types, as the kernel crate's ffi maps them: long is isize, as intptr_t
+/// is on every Linux target. char is the platform's here, as userspace's
+/// libraries are compiled with it; the kernel's is u8, for -funsigned-char.
+#[allow(non_camel_case_types)]
+pub mod ffi {
+    pub use core::ffi::{c_char, c_int, c_longlong, c_schar, c_short, c_uchar, c_uint,
+                        c_ulonglong, c_ushort, c_void, CStr};
+    pub type c_long = isize;
+    pub type c_ulong = usize;
+}
+
 /// The kernel crate's, as far as the vendored aref.rs uses it
 pub mod prelude {
     pub use core::ffi::c_void;

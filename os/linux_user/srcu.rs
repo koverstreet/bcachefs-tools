@@ -11,7 +11,7 @@
 //! sides: srcu_readers_active_idx_check()'s X. The reader is in RCU's section
 //! only for its count: holding the domain, it sleeps as it likes.
 
-use core::ffi::{c_int, CStr};
+use core::ffi::CStr;
 use core::mem::offset_of;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicU64, Ordering::{Acquire, Relaxed, Release, SeqCst}};
@@ -117,11 +117,11 @@ impl Srcu {
         let idx = (self.ctr.load(Relaxed) & 1) as usize;
         self.bump(LOCKS + idx, &rcu);
         // SAFETY: the index just locked, of this domain
-        unsafe { SrcuReadGuard::from_raw(self, idx as c_int) }
+        unsafe { SrcuReadGuard::from_raw(self, idx as i32) }
     }
 
     /// The guard's: on any thread, as the kernel's - the counts are summed.
-    pub(super) fn read_unlock(&self, idx: c_int) {
+    pub(super) fn read_unlock(&self, idx: i32) {
         self.bump(UNLOCKS + idx as usize, &rcu::read_lock());
     }
 

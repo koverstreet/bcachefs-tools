@@ -26,7 +26,6 @@ use crate::debug::trace::events;
 use crate::os::kernel::likely;
 use crate::util::{projections::Volatile, rcu::read_lock};
 use crate::published;
-use core::ffi::c_ulong;
 use cstruct_macros::MaybeZeroable;
 
 /*
@@ -57,7 +56,7 @@ published! {
     #[derive(MaybeZeroable)]
     pub struct Placement {
         /* bit n - 1: placement decides how much fits at n replicas */
-        pub placement_constrained: Volatile<c_ulong>,
+        pub placement_constrained: Volatile<usize>,
         /* at n replicas, the devices every such allocation has to use */
         pub placement_required: [Volatile<DevsMask>; BCH_REPLICAS_MAX as usize],
     }

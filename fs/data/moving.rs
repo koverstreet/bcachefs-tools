@@ -44,7 +44,6 @@ use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
 use crate::util::gather::{Gather, GatherRef};
 use core::cell::{Cell, UnsafeCell};
-use core::ffi::c_uint;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicI64};
@@ -67,7 +66,7 @@ nest! {
         pub at: pub struct MoveStatsAt {
             pub data_type: Volatile<DataType>,
             pub pos: Volatile<Bbpos>,
-            pub dev: Volatile<c_uint>,
+            pub dev: Volatile<u32>,
             pub offset: Volatile<u64>,
         },
 
@@ -85,7 +84,7 @@ nest! {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable)]
 pub struct MoveBucketKey {
     pub bucket: Bpos,
-    pub generation: c_uint,
+    pub generation: u32,
 }
 
 impl MoveStats {

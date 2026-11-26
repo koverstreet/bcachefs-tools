@@ -25,7 +25,7 @@
 //! MAX_ERRNO, so it's still an error to anyone who doesn't know ours. So are
 //! reconfigure's, as C's were; a parameter's are classed.
 
-use core::ffi::{c_int, CStr};
+use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use crate::c;
@@ -271,14 +271,14 @@ crate::module_info!("alias" = "fs-bcachefs");
 
 impl FsType for Bcachefs {
     const NAME: &'static CStr = c"bcachefs";
-    const FLAGS: c_int = (c::FS_REQUIRES_DEV | c::FS_ALLOW_IDMAP | c::FS_LBS) as c_int;
+    const FLAGS: i32 = (c::FS_REQUIRES_DEV | c::FS_ALLOW_IDMAP | c::FS_LBS) as i32;
 
     type Data = OpenFs;
     type Context = MountParams;
     type Error = BchError;
 
     /// Raw, not classed: see the file comment.
-    fn errno(e: &BchError) -> c_int {
+    fn errno(e: &BchError) -> i32 {
         -e.raw()
     }
 
@@ -292,7 +292,7 @@ impl FsType for Bcachefs {
         }? BchError)
     }
 
-    fn parse_param(fc: &mut FsContext<Self>, param: &mut FsParam) -> Result<c_int, BchError> {
+    fn parse_param(fc: &mut FsContext<Self>, param: &mut FsParam) -> Result<i32, BchError> {
         let (key, val) = param.key_value();
         let key_str = key.to_str().unwrap_or("?");
 
@@ -510,7 +510,7 @@ fn hex2bin(dst: &mut [u8], hex: &[u8]) -> bool {
 
 static BCACHEFS_TYPE: FsTypeTable<Bcachefs> = FsTypeTable::new();
 
-pub fn fs_type_register() -> c_int {
+pub fn fs_type_register() -> i32 {
     BCACHEFS_TYPE.register().map_or_else(|e| e.to_errno(), |()| 0)
 }
 

@@ -95,7 +95,8 @@
 //! preempt count from current's thread_info; its irq flags are C's, out of
 //! line. The walk over the possible CPUs reads the possible mask, everywhere.
 
-use core::ffi::{c_uint, c_ulong};
+use core::ffi::c_uint;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, ManuallyDrop, MaybeUninit};
 use core::ptr::NonNull;
@@ -129,7 +130,7 @@ pub fn migrate_enable() {
 
 /// The CPU the task's on: unless it's kept there, it may not be by the time
 /// this is used.
-pub fn raw_smp_processor_id() -> c_uint {
+pub fn raw_smp_processor_id() -> u32 {
     arch::raw_smp_processor_id()
 }
 
@@ -187,7 +188,7 @@ pub(crate) fn preempt_enable() {
 #[cfg(target_arch = "x86_64")]
 mod arch {
     use super::{PerCpuWord, Pinned};
-    use core::ffi::{c_uint, c_ulong};
+    use crate::util::ffi::c_ulong;
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
@@ -229,7 +230,7 @@ mod arch {
             }
         )* };
     }
-    per_cpu_word!(u32, ":e"; u64, "");
+    per_cpu_word!(u32, ":e"; u64, ""; usize, "");
 
     #[inline(always)]
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
@@ -242,7 +243,7 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: c_uint) -> *mut T {
+    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: u32) -> *mut T {
         let off: usize;
         unsafe {
             core::arch::asm!(per_cpu_offset_asm!(), cpu = in(reg) cpu as usize, off = out(reg) off,
@@ -263,8 +264,8 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) fn raw_smp_processor_id() -> c_uint {
-        let cpu: c_uint;
+    pub(super) fn raw_smp_processor_id() -> u32 {
+        let cpu: u32;
         unsafe {
             core::arch::asm!(cpu_number_asm!(), val = out(reg) cpu,
                              options(att_syntax, nostack, readonly, preserves_flags));
@@ -290,7 +291,7 @@ mod arch {
     /* none nomem: compiler barriers, as C's */
     #[cfg(not(CONFIG_PARAVIRT_XXL))]
     mod irq {
-        use core::ffi::c_ulong;
+        use crate::util::ffi::c_ulong;
 
         #[inline(always)]
         pub(super) fn save_fl() -> c_ulong {
@@ -317,7 +318,7 @@ mod arch {
      */
     #[cfg(CONFIG_PARAVIRT_XXL)]
     mod irq {
-        use core::ffi::c_ulong;
+        use crate::util::ffi::c_ulong;
 
         macro_rules! pv_irq_op {
             ($asm:ident, $off:expr) => {{
@@ -387,8 +388,8 @@ mod arch {
 #[cfg(target_arch = "aarch64")]
 mod arch {
     use super::{CpuGuard, PerCpuWord, Pinned};
-    use core::ffi::{c_uint, c_ulong};
-    use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use crate::util::ffi::c_ulong;
+    use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
@@ -431,7 +432,7 @@ mod arch {
             }
         )* };
     }
-    per_cpu_word!(u32, AtomicU32, ":w"; u64, AtomicU64, "");
+    per_cpu_word!(u32, AtomicU32, ":w"; u64, AtomicU64, ""; usize, AtomicUsize, "");
 
     #[inline(always)]
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
@@ -455,13 +456,13 @@ mod arch {
     }
 
     #[inline(always)]
-    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: c_uint) -> *mut T {
+    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: u32) -> *mut T {
         let off = unsafe { *(&raw const crate::c::__per_cpu_offset).cast::<c_ulong>().add(cpu as usize) };
         pcp.wrapping_byte_add(off as usize)
     }
 
     #[inline(always)]
-    pub(super) fn raw_smp_processor_id() -> c_uint {
+    pub(super) fn raw_smp_processor_id() -> u32 {
         unsafe { (*thread_info()).cpu }
     }
 
@@ -494,29 +495,28 @@ mod arch {
 /// What's C's, out of line, on an arch that doesn't have its own.
 #[cfg(not(target_arch = "x86_64"))]
 mod c_arch {
-    use core::ffi::c_uint;
 
-    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: c_uint) -> *mut T {
+    pub(super) unsafe fn per_cpu_ptr<T>(pcp: *mut T, cpu: u32) -> *mut T {
         unsafe { super::bch2_per_cpu_ptr(pcp.cast(), cpu).cast() }
     }
 
-    pub(super) fn raw_smp_processor_id() -> c_uint {
+    pub(super) fn raw_smp_processor_id() -> u32 {
         unsafe { crate::c::bch2_raw_smp_processor_id() }
     }
 
-    pub(crate) fn local_irq_save() -> core::ffi::c_ulong {
+    pub(crate) fn local_irq_save() -> crate::util::ffi::c_ulong {
         unsafe { crate::c::rust_local_irq_save() }
     }
 
-    pub(crate) fn local_irq_restore(flags: core::ffi::c_ulong) {
+    pub(crate) fn local_irq_restore(flags: crate::util::ffi::c_ulong) {
         unsafe { crate::c::rust_local_irq_restore(flags) }
     }
 
-    pub(super) unsafe fn local_lock_irqsave(pcp: *mut crate::c::local_lock_t) -> core::ffi::c_ulong {
+    pub(super) unsafe fn local_lock_irqsave(pcp: *mut crate::c::local_lock_t) -> crate::util::ffi::c_ulong {
         unsafe { crate::c::rust_local_lock_irqsave(pcp) }
     }
 
-    pub(super) unsafe fn local_unlock_irqrestore(pcp: *mut crate::c::local_lock_t, flags: core::ffi::c_ulong) {
+    pub(super) unsafe fn local_unlock_irqrestore(pcp: *mut crate::c::local_lock_t, flags: crate::util::ffi::c_ulong) {
         unsafe { crate::c::rust_local_unlock_irqrestore(pcp, flags) }
     }
 }
@@ -534,17 +534,21 @@ mod arch {
                 }
 
                 unsafe fn this_cpu_add(pcp: *mut $t, val: $t) {
-                    unsafe { $add(pcp, val) }
+                    unsafe { $add(pcp.cast(), val as _) }
                 }
 
                 unsafe fn this_cpu_cmpxchg(pcp: *mut $t, old: $t, new: $t) -> $t {
-                    unsafe { $cmpxchg(pcp, old, new) }
+                    unsafe { $cmpxchg(pcp.cast(), old as _, new as _) as $t }
                 }
             }
         )* };
     }
     per_cpu_word!(u32, bch2_this_cpu_add_u32, bch2_this_cpu_cmpxchg_u32;
                   u64, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u64);
+    #[cfg(target_pointer_width = "64")]
+    per_cpu_word!(usize, bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u64);
+    #[cfg(target_pointer_width = "32")]
+    per_cpu_word!(usize, bch2_this_cpu_add_u32, bch2_this_cpu_cmpxchg_u32);
 
     pub(super) unsafe fn this_cpu_ptr<T>(pcp: *mut T, _g: &impl Pinned) -> *mut T {
         unsafe { bch2_this_cpu_ptr(pcp.cast()).cast() }
@@ -646,7 +650,7 @@ impl Drop for LocalLockGuard<'_> {
 /// for_each_possible_cpu(): the possible mask's bits below nr_cpu_ids. The
 /// mask is set at boot.
 #[cfg(CONFIG_SMP)]
-fn possible_cpus() -> impl Iterator<Item = c_uint> {
+fn possible_cpus() -> impl Iterator<Item = u32> {
     const BITS: usize = c_ulong::BITS as usize;
     let nr = crate::os::kernel::nr_cpu_ids() as usize;
     let words = unsafe { &(*(&raw const c::__cpu_possible_mask)).bits };
@@ -663,11 +667,11 @@ fn possible_cpus() -> impl Iterator<Item = c_uint> {
             })
         })
         .take_while(move |&cpu| cpu < nr)
-        .map(|cpu| cpu as c_uint)
+        .map(|cpu| cpu as u32)
 }
 
 #[cfg(not(CONFIG_SMP))]
-fn possible_cpus() -> impl Iterator<Item = c_uint> {
+fn possible_cpus() -> impl Iterator<Item = u32> {
     0..1
 }
 

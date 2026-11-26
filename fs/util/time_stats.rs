@@ -47,7 +47,6 @@ use crate::errcode::BchError;
 use crate::types::CacheAligned;
 use crate::util::ffi::Opaque;
 use crate::util::projections::Volatile;
-use core::ffi::c_uint;
 use core::sync::atomic::AtomicUsize;
 
 #[bch_enum(closed)]
@@ -198,7 +197,7 @@ pub struct TimeStatBuffer {
      * lock, which its lockers change, Opaque.
      */
     pub lock: Opaque<c::local_lock_t>,
-    pub nr: Volatile<c_uint>,
+    pub nr: Volatile<u32>,
     pub entries: [TimeStatBufferEntry; 31],
 }
 

@@ -26,7 +26,7 @@ use crate::os::sched::{set_current_wake_cpu, task_pid};
 use crate::util::log::{print_str, LogLevel};
 use crate::util::rcu::{self, ReadGuard};
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint, c_ulong, c_void};
+use core::ffi::{c_uint, c_void};
 use core::mem::offset_of;
 use core::ptr::{self, null_mut};
 use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
@@ -91,7 +91,7 @@ impl Trans {
     }
 
     fn restart_foreign_task(self, err: Errcode) -> BchError {
-        let ip = Self::restart_foreign_task as *const () as c_ulong;
+        let ip = Self::restart_foreign_task as *const () as usize;
         self.own().restart_foreign_task(err, ip)
     }
 
@@ -693,7 +693,7 @@ fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
 
 /// The six lock's should_sleep_fn, for btree node locks: before @trans sleeps
 /// on @b's lock.
-pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCachedCommon) -> c_int {
+pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCachedCommon) -> i32 {
     /*
      * Store->load fence: orders publishing ourselves as a waiter (done by
      * six's WaitListLocked::insert() before should_sleep_fn ran) before the two
@@ -761,7 +761,7 @@ pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCached
      * so the hint has to survive from the schedule() that follows.
      */
     let shard_cpu = trans.shard_cpu.get();
-    if shard_cpu >= 0 && shard_cpu as c_uint != raw_smp_processor_id() {
+    if shard_cpu >= 0 && shard_cpu as u32 != raw_smp_processor_id() {
         set_current_wake_cpu(shard_cpu.into());
     }
 

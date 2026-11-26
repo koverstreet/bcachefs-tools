@@ -107,7 +107,6 @@ use crate::util::rcu::read_lock;
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
-use core::ffi::c_uint;
 use core::sync::atomic::{AtomicBool, AtomicI16, Ordering::Relaxed};
 use core::ops::ControlFlow;
 use core::alloc::Layout;
@@ -1903,7 +1902,7 @@ pub(crate) fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: imp
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn update_fragment<'r>(fs: &'r Fs, rbio: &'r Rbio, k: &BkeyI, btree: Btree, buf: BioRange<'r>, flags: F,
-                       dev: c_uint, f: &mut Option<Fragment<'r>>) -> Result<(), BchError>
+                       dev: u32, f: &mut Option<Fragment<'r>>) -> Result<(), BchError>
 {
     let e = Extent { read_pos: k.k.start_pos(), btree, k: BkeySC::from(k), offset: 0, sectors: buf.len() >> 9 };
     let trans = btree_trans!(fs);
@@ -1925,7 +1924,7 @@ fn update_end<'r>(k: &'r BkeyI, btree: Btree, buf: BioRange<'r>, f: &mut Option<
 }
 
 #[args_stored_once]
-pub async fn read_update(fs: &Fs, rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev: c_uint,
+pub async fn read_update(fs: &Fs, rbio: &mut Rbio, k: &BkeyI, btree: Btree, flags: F, dev: u32,
                          at: Resume<'_>) -> ReadDone
 {
     let buf = rbio.bio().range();

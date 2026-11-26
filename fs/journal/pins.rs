@@ -10,7 +10,7 @@
 //! entry's lists are its own lock's, two taken the older first; its devs are
 //! the write path's.
 
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::c_void;
 use core::mem::offset_of;
 use core::ptr;
 use core::sync::atomic::{AtomicI32, Ordering::{Relaxed, Release, SeqCst}};
@@ -171,7 +171,7 @@ struct Symbol(*const c_void);
 impl core::fmt::Display for Symbol {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = Printbuf::new();
-        crate::util::backtrace::prt_fn_name(&mut out, self.0 as usize as core::ffi::c_ulong);
+        crate::util::backtrace::prt_fn_name(&mut out, self.0 as usize);
         f.write_str(out.as_str())
     }
 }
@@ -352,7 +352,7 @@ impl Journal {
 
     /// @seq's pins to @out, @seq first moved up to last_seq: true once it's
     /// past the last entry.
-    pub fn seq_pins_to_text(&self, out: &mut Printbuf, seq: &mut u64, nr: Option<&mut c_uint>) -> bool {
+    pub fn seq_pins_to_text(&self, out: &mut Printbuf, seq: &mut u64, nr: Option<&mut u32>) -> bool {
         if !self.flags.get(JournalFlag::running) {
             return true;
         }
@@ -780,7 +780,7 @@ impl<'a> PinsRead<'a> {
     }
 
     /* The last entry written to @dev - or, @dev < 0, written to fewer than @replicas */
-    pub(crate) fn last_dev_seq(&self, dev: c_int, replicas: c_uint) -> u64 {
+    pub(crate) fn last_dev_seq(&self, dev: i32, replicas: u32) -> u64 {
         (self.front()..self.back()).rev()
             .find(|&seq| {
                 let devs = self.slot(seq).devs.get();
@@ -789,7 +789,7 @@ impl<'a> PinsRead<'a> {
             .unwrap_or(0)
     }
 
-    fn to_text(&self, out: &mut Printbuf, seq: u64, mut nr: Option<&mut c_uint>) {
+    fn to_text(&self, out: &mut Printbuf, seq: u64, mut nr: Option<&mut u32>) {
         let l = self.slot(seq);
         let g = l.lists.lock();
         let _f = MemallocFlags::noreclaim();

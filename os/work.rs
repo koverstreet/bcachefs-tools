@@ -10,7 +10,7 @@ use crate::util::late::{Late, LateLock};
 use crate::util::place::{Contained, Enclosing, OnePath, Path, Place, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use cstruct_macros::Fields;
-use core::ffi::c_ulong;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomData;
 use pin_init::{pin_data, pin_init, pinned_drop};
 

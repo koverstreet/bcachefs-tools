@@ -1907,7 +1907,7 @@ fn start_transient_scope(pid: libc::pid_t, device: &str, mountpoint: &str) -> Re
     struct SdBusError {
         name:       *const c_char,
         message:    *const c_char,
-        need_free:  c_int,
+        need_free:  i32,
     }
 
     type BusNew         = unsafe extern "C" fn(*mut *mut c_void) -> c_int;
@@ -1944,7 +1944,7 @@ fn start_transient_scope(pid: libc::pid_t, device: &str, mountpoint: &str) -> Re
     let bus_error_free   = sym!(c"sd_bus_error_free", BusErrorFree);
     let bus_call_method  = sym!(c"sd_bus_call_method", BusCallMethod);
 
-    let errno = |what: &str, ret: c_int| format!("{what}: {}", std::io::Error::from_raw_os_error(-ret));
+    let errno = |what: &str, ret: i32| format!("{what}: {}", std::io::Error::from_raw_os_error(-ret));
 
     // As root, talk to systemd directly, as systemctl and systemd-run do:
     // there may be no D-Bus daemon (minimal systems, test VMs).
@@ -1988,11 +1988,11 @@ fn start_transient_scope(pid: libc::pid_t, device: &str, mountpoint: &str) -> Re
             &mut error, std::ptr::null_mut(),
             c"ssa(sv)a(sa(sv))".as_ptr(),
             unit.as_ptr(), c"fail".as_ptr(),
-            3 as c_int,
-            c"PIDs".as_ptr(), c"au".as_ptr(), 1 as c_int, pid as u32,
+            3 as i32,
+            c"PIDs".as_ptr(), c"au".as_ptr(), 1 as i32, pid as u32,
             c"Description".as_ptr(), c"s".as_ptr(), description.as_ptr(),
             c"CollectMode".as_ptr(), c"s".as_ptr(), c"inactive-or-failed".as_ptr(),
-            0 as c_int)
+            0 as i32)
     };
 
     let result = if ret >= 0 {

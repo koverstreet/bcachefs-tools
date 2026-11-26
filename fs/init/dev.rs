@@ -251,7 +251,7 @@ use crate::util::printbuf::{DateTime, Msg};
 use crate::util::rcu::{read_lock, RcuHead};
 use crate::util::{Nsecs, Printbuf, ToText};
 use crate::{bch_err_fn, prt};
-use core::ffi::{c_uint, CStr};
+use core::ffi::CStr;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
 use core::sync::atomic::Ordering::Relaxed;
@@ -412,10 +412,10 @@ pub struct Dev {
     pub copygc_in_flight: AtomicI32,
 
     /* open buckets still free: under freelist_lock, read without it */
-    pub nr_open_buckets: crate::util::projections::Volatile<c_uint>,
+    pub nr_open_buckets: crate::util::projections::Volatile<u32>,
     /* on the partial list: written under freelist_lock */
-    pub nr_partial_buckets: crate::util::projections::Volatile<c_uint>,
-    pub nr_btree_reserve: c_uint,
+    pub nr_partial_buckets: crate::util::projections::Volatile<u32>,
+    pub nr_btree_reserve: u32,
 
     /* this device's share of c->capacity.reserved, which is their sum:
      * recalc_capacity()'s, under state_lock, read without it */

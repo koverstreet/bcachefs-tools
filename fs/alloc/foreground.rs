@@ -88,7 +88,6 @@ use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefBorrow, RefGuard, Refcount, RefSlot};
 use crate::util::task::Resume;
 use crate::util::{Printbuf, ToText};
-use core::ffi::{c_long, c_uint, c_ulong};
 use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
@@ -278,7 +277,7 @@ pub struct FsAllocator {
     pub rw_devs: [AtomicDevsMask; DataType::NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
      * read without it */
-    pub rw_devs_change_count: crate::util::projections::Volatile<c_ulong>,
+    pub rw_devs_change_count: crate::util::projections::Volatile<usize>,
 
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
     pub wake_all_counter: AtomicI32,
@@ -335,7 +334,7 @@ published! {
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct DevAllocList {
-    pub nr: c_uint,
+    pub nr: u32,
     pub data: [u8; BCH_SB_MEMBERS_MAX as usize],
 }
 
@@ -413,7 +412,7 @@ impl Blocked {
     /// blocks again: the request is its. Or an error, if the filesystem's
     /// gone emergency read-only and won't allocate again.
     pub async fn wait_async(self, fs: &Fs, seen: u32, at: Resume<'_>) -> Result<bool, BchError> {
-        let timeout = c_ulong::from(fs.opts.allocator_stuck_timeout.get()) * HZ;
+        let timeout = usize::from(fs.opts.allocator_stuck_timeout.get()) * HZ;
         let stuck = match timeout {
             0 => {
                 self.events(fs).wait_async(seen, at).await;
@@ -435,7 +434,7 @@ nest! {
         pub nr_replicas: u8,
         pub ec_replicas: u8,
         pub ec_max_data_blocks: u8, /* 0 = no cap */
-        pub target: c_uint,
+        pub target: u32,
         #>[bitfield(u8)]
         pub bits: pub struct AllocRequestBits {
             ec:                        bool,
@@ -456,7 +455,7 @@ nest! {
 
         /* These fields are used primarily by open_bucket_add_buckets */
         pub ptrs: OpenBuckets,
-        pub nr_effective: c_uint, /* sum of @ptrs durability */
+        pub nr_effective: u32, /* sum of @ptrs durability */
         pub devs_may_alloc: DevsMask,
 
         /*
@@ -1411,7 +1410,7 @@ impl TransAttempt<'_, '_> {
 
         self.unlock();
 
-        let timeout = c_long::from(fs.opts.allocator_stuck_timeout.get()) * HZ as c_long;
+        let timeout = fs.opts.allocator_stuck_timeout.get() as isize * HZ as isize;
         if timeout > 0 {
             if self.wait_until_timeout(ev, || retry(req), timeout).is_some() {
                 return;
@@ -1435,7 +1434,7 @@ impl Fs {
 
         let last = &self.allocator.last_stuck;
         let old = last.load(Relaxed);
-        if (old == 0 || time_after(jiffies(), (old as c_ulong).wrapping_add(HZ * 60 * 2))) &&
+        if (old == 0 || time_after(jiffies(), (old as usize).wrapping_add(HZ * 60 * 2))) &&
            last.compare_exchange(old, jiffies() as usize, Relaxed, Relaxed).is_ok() {
             self.print_allocator_stuck(req, err);
         }
@@ -1607,6 +1606,6 @@ impl OpenBuckets {
 }
 
 /// @dev's @bucket's slot in the open buckets' hash.
-fn open_bucket_hash(dev: c_uint, bucket: u64) -> usize {
+fn open_bucket_hash(dev: u32, bucket: u64) -> usize {
     hash_64(Fold::of(&(dev, bucket)), OPEN_BUCKETS_COUNT.ilog2()) as usize
 }

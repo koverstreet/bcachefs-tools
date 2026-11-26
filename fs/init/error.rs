@@ -45,7 +45,7 @@ use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
 use crate::util::{Printbuf, ToText};
 use crate::util::vstructs::Unvalidated;
-use core::ffi::{c_ulong, CStr};
+use core::ffi::CStr;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags, Mutex};
@@ -326,7 +326,7 @@ fn flags_extra(err: SbErrorId) -> FsckFlags {
 
 /// Whether the superblock says to keep quiet about @err.
 fn error_silent(fs: &Fs, err: SbErrorId) -> bool {
-    let (bits, id) = (c_ulong::BITS as usize, err.0 as usize);
+    let (bits, id) = (usize::BITS as usize, err.0 as usize);
     fs.sb.errors_silent.get(id / bits).is_some_and(|w| w.get() & (1 << (id % bits)) != 0)
 }
 
@@ -1029,8 +1029,8 @@ pub(crate) fn io_error_work(ca: &Dev) {
     let fs = ca.fs();
 
     // XXX: if it's reads or checksums that are failing, set it to failed
-    let start = ca.write_errors_start.load(Relaxed) as c_ulong;
-    let timeout = c_ulong::from(fs.opts.write_error_timeout.get());
+    let start = ca.write_errors_start.load(Relaxed) as usize;
+    let timeout = usize::from(fs.opts.write_error_timeout.get());
     if start == 0 || !time_after(jiffies(), start.wrapping_add(timeout * HZ)) {
         return;
     }

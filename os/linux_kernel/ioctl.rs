@@ -21,7 +21,7 @@ use crate::util::{alloc::Vec, ioctl::{dir, Ioctl}, vstructs::{CountedHead, DstHe
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::mem::size_of;
-use kernel::ffi::{c_int, c_long};
+use crate::util::ffi::c_long;
 use kernel::transmute::{AsBytes, FromBytes};
 use kernel::uaccess::{UserPtr, UserSlice};
 
@@ -35,7 +35,7 @@ impl IoctlRet for () {
     }
 }
 
-impl IoctlRet for c_int {
+impl IoctlRet for i32 {
     fn ret(self) -> c_long {
         self as c_long
     }
@@ -49,8 +49,8 @@ impl IoctlRet for c_long {
 
 /// A 32-bit task's pointer argument, as a native one: compat_ptr().
 #[cfg(CONFIG_COMPAT)]
-pub fn compat_ptr(arg: u32) -> kernel::ffi::c_ulong {
-    unsafe { c::rust_compat_ptr(arg) as kernel::ffi::c_ulong }
+pub fn compat_ptr(arg: u32) -> crate::util::ffi::c_ulong {
+    unsafe { c::rust_compat_ptr(arg) as crate::util::ffi::c_ulong }
 }
 
 pub fn input<I, R>(user: UserPtr, f: impl FnOnce(I::Arg) -> Result<R, BchError>)

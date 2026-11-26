@@ -19,7 +19,6 @@ use crate::util::{alloc::{flags, Vec}, log::LogMsg, rcu::read_lock};
 use crate::{fs_fatal_error, prt};
 use crate::journal::pins::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
 use crate::locking::six::SixLockType::SIX_LOCK_intent;
-use core::ffi::c_int;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -261,7 +260,7 @@ impl Fs {
          * walk again to find the rest.
          */
         keys.reserve(bc.nr_dirty.load(Relaxed) as usize + 64)
-            .map_err(|_| BchError::from_raw(-(c::ENOMEM as c_int)))?;
+            .map_err(|_| BchError::from_raw(-(c::ENOMEM as i32)))?;
 
         loop {
             let mut full = false;

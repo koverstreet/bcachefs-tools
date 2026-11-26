@@ -118,7 +118,6 @@
 #![allow(non_camel_case_types)]
 
 use core::cell::Cell;
-use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::mem;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{fence, AtomicPtr};
@@ -214,10 +213,10 @@ pub struct JournalBuf {
 
     pub last_seq: BufLocked<u64>, /* copy of data->last_seq */
 
-    pub sectors: BufLocked<c_uint>, /* maximum size for current entry */
-    pub disk_sectors: BufLocked<c_uint>, /* maximum size entry could have been, if
+    pub sectors: BufLocked<u32>, /* maximum size for current entry */
+    pub disk_sectors: BufLocked<u32>, /* maximum size entry could have been, if
                                             buf_size was bigger */
-    pub u64s_reserved: BufLocked<c_uint>,
+    pub u64s_reserved: BufLocked<u32>,
 
     pub bits: BufLocked<JournalBufBits>,
 
@@ -398,9 +397,9 @@ pub struct JournalRewindRange {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct JournalLocked {
-    pub cur_entry_sectors: c_uint,
-    pub cur_entry_offset_if_blocked: c_uint,
-    pub flushes_outstanding: c_uint,
+    pub cur_entry_sectors: u32,
+    pub cur_entry_offset_if_blocked: u32,
+    pub flushes_outstanding: u32,
 
     pub seq_write_started: u64,
     pub last_empty_seq: u64,
@@ -411,7 +410,7 @@ pub struct JournalLocked {
 
     pub dirty_entry_bytes: usize,
     pub space: [JournalSpace; JournalSpaceFrom::journal_space_nr as usize],
-    pub last_flush_write: c_ulong,
+    pub last_flush_write: usize,
     pub nr_flush_writes: u64,
     pub nr_noflush_writes: u64,
     pub entry_bytes_written: u64,
@@ -436,7 +435,7 @@ published! {
          */
         pub res_seq: AtomicI64,
         /* Max size of current journal entry */
-        pub cur_entry_u64s: Volatile<c_uint>,
+        pub cur_entry_u64s: Volatile<u32>,
         pub watermark: Volatile<u32>,
         /*
          * Each open reservation's ring slot, indexed by seq &
@@ -462,9 +461,9 @@ published! {
          * 0, or -ENOSPC if waiting on journal reclaim, or -EROFS if
          * insufficient devices:
          */
-        pub cur_entry_error: Volatile<c_int>,
+        pub cur_entry_error: Volatile<i32>,
         /* if nonzero, we may not open a new journal entry: */
-        pub blocked: Volatile<c_uint>,
+        pub blocked: Volatile<u32>,
         pub can_discard: Volatile<bool>,
 
         /*
@@ -475,7 +474,7 @@ published! {
         pub watermark_open_buckets: Volatile<u8>,
 
         /* Reserved space in journal entry to be used just prior to write */
-        pub entry_u64s_reserved: Volatile<c_uint>,
+        pub entry_u64s_reserved: Volatile<u32>,
 
         /* seq, last_seq from the most recent journal entry successfully written */
         pub seq_ondisk: Volatile<u64>,
@@ -489,7 +488,7 @@ published! {
          * freed at >= this seq have not yet been issued */
         pub rewind_seq: Volatile<u64>,
         pub rewind_seq_ondisk: Volatile<u64>,
-        pub buf_size_want: Volatile<c_uint>,
+        pub buf_size_want: Volatile<u32>,
     }
 }
 
@@ -636,7 +635,7 @@ nest! {
         #[pin]
         #[init(Daemon::new())]
         pub reclaim_thread: ReclaimThread,
-        pub next_reclaim: Volatile<c_ulong>,
+        pub next_reclaim: Volatile<usize>,
 
         pub flush_in_progress: AtomicPtr<JournalEntryPin>,
         pub flush_in_progress_dropped: Volatile<bool>,
@@ -669,7 +668,7 @@ impl Journal {
 #[derive(MaybeZeroable)]
 pub struct JournalEntryRes {
     /* written by entry_res_resize(), under j->lock */
-    pub u64s: Volatile<c_uint>,
+    pub u64s: Volatile<u32>,
 }
 
 
@@ -834,7 +833,7 @@ impl Fs {
     }
 
     /// What every journal entry reserves for @res, made @u64s.
-    pub fn journal_entry_res_resize(&self, res: &JournalEntryRes, u64s: c_uint) {
+    pub fn journal_entry_res_resize(&self, res: &JournalEntryRes, u64s: u32) {
         self.journal.entry_res_resize(res, u64s)
     }
 
@@ -1145,7 +1144,7 @@ impl Journal {
     {
         self.res_get_waiting(res, u64s, flags, |ev, cond, timeout| match trans {
             Some(trans) => trans.wait_until_timeout(ev, || cond().then_some(()), timeout).is_some(),
-            None => ev.wait_until(Sleep::UNINTERRUPTIBLE.timeout(timeout as c_ulong), || cond().then_some(())).is_ok(),
+            None => ev.wait_until(Sleep::UNINTERRUPTIBLE.timeout(timeout as usize), || cond().then_some(())).is_ok(),
         })
     }
 
@@ -1153,7 +1152,7 @@ impl Journal {
     /// transaction does it.
     #[inline(always)]
     pub fn res_get_waiting(&self, res: &mut JournalRes, u64s: u32, flags: u32,
-                           mut wait: impl FnMut(&EventCount, &mut dyn FnMut() -> bool, c_long) -> bool)
+                           mut wait: impl FnMut(&EventCount, &mut dyn FnMut() -> bool, isize) -> bool)
         -> Result<(), BchError>
     {
         ebug_assert!(!res.ref_, "journal reservation taken while holding one");
@@ -1502,7 +1501,7 @@ impl Journal {
 
         drop(early);
 
-        self.write_work.queue(Own, msecs_to_jiffies(fs.opts().journal_flush_delay.get().into()));
+        self.write_work.queue(Own, msecs_to_jiffies(fs.opts().journal_flush_delay.get()));
 
         Ok(())
     }
@@ -1827,7 +1826,7 @@ impl Journal {
      */
     #[inline(never)]
     fn res_get_slowpath(&self, res: &mut JournalRes, flags: u32,
-                        wait_on: &mut dyn FnMut(&EventCount, &mut dyn FnMut() -> bool, c_long) -> bool)
+                        wait_on: &mut dyn FnMut(&EventCount, &mut dyn FnMut() -> bool, isize) -> bool)
         -> Result<(), BchError>
     {
         if flags & JOURNAL_RES_GET_NONBLOCK != 0 {
@@ -1843,7 +1842,7 @@ impl Journal {
          * slowest member is not a journal member.
          */
         let online = fs.devs_online.load();
-        let total_wait = (fs.dev_latency_max(&online, WRITE as c_int) * 2).max(HZ * 10) as c_long;
+        let total_wait = (fs.dev_latency_max(&online, WRITE as i32) * 2).max(HZ * 10) as isize;
 
         let ret = Cell::new(Ok(()));
         let mut got = || {
@@ -1860,11 +1859,11 @@ impl Journal {
         if !self.flags.swap(JournalFlag::stuck_reported, true) {
             let mut msg = LogMsg::new(fs);
             prt!(&mut *msg, "Journal stuck? Waited for {}s, err {}\n",
-                 total_wait / HZ as c_long, ret.get().err().map_or("", |e| e.msg()));
+                 total_wait / HZ as isize, ret.get().err().map_or("", |e| e.msg()));
             self.to_text(&mut msg);
         }
 
-        wait(c_long::MAX);
+        wait(isize::MAX);
         self.flags.set(JournalFlag::stuck_reported, false);
         ret.get()
     }
@@ -2024,7 +2023,7 @@ impl Journal {
         Ok(false)
     }
 
-    pub fn flush_seq(&self, seq: u64, _task_state: c_uint) -> Result<(), BchError> {
+    pub fn flush_seq(&self, seq: u64, _task_state: u32) -> Result<(), BchError> {
         let fs = self.fs();
         let start_time = local_clock();
 
@@ -2050,7 +2049,7 @@ impl Journal {
          * bounds this even when it holds no journal.
          */
         let online = fs.devs_online.load();
-        let total_wait = (fs.dev_latency_max(&online, WRITE as c_int) * 5).max(HZ * 10);
+        let total_wait = (fs.dev_latency_max(&online, WRITE as i32) * 5).max(HZ * 10);
 
         if slot.as_ref().as_pin_ref().expect("just made").armed() {
             pin_init::stack_pin_init!(let _timer = Timer::new(timed_out, total_wait));

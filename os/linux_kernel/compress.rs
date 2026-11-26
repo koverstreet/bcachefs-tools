@@ -2,7 +2,7 @@
 
 //! The kernel's lz4, zlib and zstd, each in a workspace the caller has.
 
-fn int(n: usize) -> core::ffi::c_int {
+fn int(n: usize) -> i32 {
     n.try_into().unwrap_or_else(|_| panic!("a codec's length of {n}: past a c_int"))
 }
 
@@ -59,12 +59,11 @@ pub mod zlib {
     use super::int;
     use crate::c;
     use crate::util::volatile::{Out, VolatileSlice};
-    use core::ffi::c_int;
     use core::mem::MaybeUninit;
 
-    pub const DEF_MEM_LEVEL: c_int = c::DEF_MEM_LEVEL as c_int;
+    pub const DEF_MEM_LEVEL: i32 = c::DEF_MEM_LEVEL as i32;
 
-    pub fn deflate_workspace_size(window_bits: c_int, mem_level: c_int) -> usize {
+    pub fn deflate_workspace_size(window_bits: i32, mem_level: i32) -> usize {
         unsafe { c::zlib_deflate_workspacesize(window_bits, mem_level) as usize }
     }
 
@@ -84,35 +83,35 @@ pub mod zlib {
     }
 
     /// @src deflated in @dst, all of it - or None if it didn't fit.
-    pub fn deflate<'a>(src: &[u8], dst: Out<'a>, ws: &mut [MaybeUninit<u8>], level: c_int,
-                       window_bits: c_int, mem_level: c_int, strategy: c_int) -> Option<VolatileSlice<'a>> {
+    pub fn deflate<'a>(src: &[u8], dst: Out<'a>, ws: &mut [MaybeUninit<u8>], level: i32,
+                       window_bits: i32, mem_level: i32, strategy: i32) -> Option<VolatileSlice<'a>> {
         assert!(ws.len() >= deflate_workspace_size(window_bits, mem_level),
                 "zlib deflate workspace of {} bytes, not {}", ws.len(), deflate_workspace_size(window_bits, mem_level));
         let mut strm = stream(src.as_ptr(), src.len(), dst, ws);
         unsafe {
-            if c::zlib_deflateInit2(&mut strm, level, c::Z_DEFLATED as c_int, window_bits, mem_level, strategy)
-                != c::Z_OK as c_int {
+            if c::zlib_deflateInit2(&mut strm, level, c::Z_DEFLATED as i32, window_bits, mem_level, strategy)
+                != c::Z_OK as i32 {
                 return None;
             }
-            let done = c::zlib_deflate(&mut strm, c::Z_FINISH as c_int) == c::Z_STREAM_END as c_int;
-            (c::zlib_deflateEnd(&mut strm) == c::Z_OK as c_int && done)
+            let done = c::zlib_deflate(&mut strm, c::Z_FINISH as i32) == c::Z_STREAM_END as i32;
+            (c::zlib_deflateEnd(&mut strm) == c::Z_OK as i32 && done)
                 .then(|| dst.sub(0..strm.total_out as usize).assume_init())
         }
     }
 
     /// @src inflated in @dst - or None if @src is malformed or didn't end.
     pub fn inflate<'a>(src: VolatileSlice<'_>, dst: Out<'a>, ws: &mut [MaybeUninit<u8>],
-                       window_bits: c_int) -> Option<VolatileSlice<'a>> {
+                       window_bits: i32) -> Option<VolatileSlice<'a>> {
         assert!(ws.len() >= inflate_workspace_size(),
                 "zlib inflate workspace of {} bytes, not {}", ws.len(), inflate_workspace_size());
         let mut strm = stream(src.as_ptr(), src.len(), dst, ws);
         unsafe {
-            if c::zlib_inflateInit2(&mut strm, window_bits) != c::Z_OK as c_int {
+            if c::zlib_inflateInit2(&mut strm, window_bits) != c::Z_OK as i32 {
                 return None;
             }
-            let ret = c::zlib_inflate(&mut strm, c::Z_FINISH as c_int);
+            let ret = c::zlib_inflate(&mut strm, c::Z_FINISH as i32);
             c::zlib_inflateEnd(&mut strm);
-            (ret == c::Z_STREAM_END as c_int).then(|| dst.sub(0..dst.len() - strm.avail_out as usize).assume_init())
+            (ret == c::Z_STREAM_END as i32).then(|| dst.sub(0..dst.len() - strm.avail_out as usize).assume_init())
         }
     }
 }
@@ -120,18 +119,17 @@ pub mod zlib {
 pub mod zstd {
     use crate::c;
     use crate::util::volatile::{Out, VolatileSlice};
-    use core::ffi::c_int;
     use core::marker::PhantomData;
     use core::mem::MaybeUninit;
     use core::ptr::NonNull;
 
     pub type Params = c::zstd_parameters;
 
-    pub fn max_clevel() -> c_int {
+    pub fn max_clevel() -> i32 {
         unsafe { c::zstd_max_clevel() }
     }
 
-    pub fn get_params(level: c_int, estimated_src_size: u64) -> Params {
+    pub fn get_params(level: i32, estimated_src_size: u64) -> Params {
         unsafe { c::zstd_get_params(level, estimated_src_size) }
     }
 

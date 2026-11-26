@@ -18,7 +18,6 @@
 
 use crate::c;
 use core::convert::Infallible;
-use core::ffi::{c_long, c_uint, c_ulong};
 use core::marker::PhantomData;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,22 +31,22 @@ pub enum SleepError {
 /// E is what ending without the condition true is: Infallible when it can't.
 #[derive(Clone, Copy)]
 pub struct Sleep<E = Infallible> {
-    state:   c_uint,
+    state:   u32,
     io:      bool,
-    timeout: c_long,
+    timeout: isize,
     _e:      PhantomData<E>,
 }
 
 /// MAX_SCHEDULE_TIMEOUT: no timeout
-const FOREVER: c_long = c_long::MAX;
+const FOREVER: isize = isize::MAX;
 
 impl<E> Sleep<E> {
     const fn state(state: u32) -> Self {
-        Sleep { state: state as c_uint, io: false, timeout: FOREVER, _e: PhantomData }
+        Sleep { state: state as u32, io: false, timeout: FOREVER, _e: PhantomData }
     }
 
     pub const fn freezable(self) -> Self {
-        Sleep { state: self.state | c::TASK_FREEZABLE as c_uint, ..self }
+        Sleep { state: self.state | c::TASK_FREEZABLE as u32, ..self }
     }
 
     /// io_schedule(): counted as iowait, as wait_on_bit_io() is.
@@ -55,18 +54,18 @@ impl<E> Sleep<E> {
         Sleep { io: true, ..self }
     }
 
-    pub const fn timeout(self, jiffies: c_ulong) -> Sleep<SleepError> {
-        let timeout = if jiffies >= FOREVER as c_ulong { FOREVER - 1 } else { jiffies as c_long };
+    pub const fn timeout(self, jiffies: usize) -> Sleep<SleepError> {
+        let timeout = if jiffies >= FOREVER as usize { FOREVER - 1 } else { jiffies as isize };
         Sleep { state: self.state, io: self.io, timeout, _e: PhantomData }
     }
 
     /// What's left of this sleep's timeout, started at @start: for a wait
     /// that sleeps more than once.
-    pub fn since(self, start: c_ulong) -> Self {
+    pub fn since(self, start: usize) -> Self {
         if self.timeout == FOREVER {
             return self;
         }
-        let left = self.timeout - crate::os::kernel::jiffies().wrapping_sub(start) as c_long;
+        let left = self.timeout - crate::os::kernel::jiffies().wrapping_sub(start) as isize;
         Sleep { timeout: left.max(0), ..self }
     }
 }

@@ -48,7 +48,7 @@ pub trait SuperData: Sized + 'static {
 pub trait FsType: Sized + 'static {
     const NAME: &'static CStr;
     /// fs_flags: FS_REQUIRES_DEV and the rest.
-    const FLAGS: c_int;
+    const FLAGS: i32;
 
     type Data: SuperData;
     /// A mount's or reconfigure's parameters, as parsed: fc->fs_private.
@@ -60,7 +60,7 @@ pub trait FsType: Sized + 'static {
 
     /// What the VFS gets for @e: a negative errno, or what this filesystem
     /// returns its callers in place of one.
-    fn errno(e: &Self::Error) -> c_int;
+    fn errno(e: &Self::Error) -> i32;
 
     /// A Context before any parameter: an initializer, which init_fs_context
     /// runs in the Context's own allocation - a mount's parameters needn't
@@ -69,7 +69,7 @@ pub trait FsType: Sized + 'static {
 
     /// Ok's value is returned as is: 0, or what the parameter makes - a file
     /// descriptor, say, which fsconfig(2) returns.
-    fn parse_param(fc: &mut FsContext<Self>, param: &mut FsParam) -> Result<c_int, Self::Error>;
+    fn parse_param(fc: &mut FsContext<Self>, param: &mut FsParam) -> Result<i32, Self::Error>;
 
     /// The mount: its root, found or made - see FsContext's find_super() and
     /// create_super().
@@ -131,11 +131,11 @@ impl<T: FsType> Ops<T> {
 }
 
 /// To C's int: 0, or T::errno().
-fn ret<T: FsType>(r: Result<(), T::Error>) -> c_int {
+fn ret<T: FsType>(r: Result<(), T::Error>) -> i32 {
     r.err().map_or(0, |e| T::errno(&e))
 }
 
-fn ret_val<T: FsType>(r: Result<c_int, T::Error>) -> c_int {
+fn ret_val<T: FsType>(r: Result<i32, T::Error>) -> i32 {
     r.unwrap_or_else(|e| T::errno(&e))
 }
 

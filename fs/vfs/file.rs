@@ -66,8 +66,6 @@
  * old one, fsyncing the new file first if the new contents must be durable.
  */
 
-use core::ffi::{c_int, c_uint};
-use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
 use crate::fs::FsFlag;
@@ -255,31 +253,31 @@ impl FileOps for InodeInfo {
         mmap(vma)
     }
 
-    fn llseek(&self, file: &File<InodeFile>, _fpos: &mut PosLocked<'_, Self>, offset: i64, whence: c_int)
+    fn llseek(&self, file: &File<InodeFile>, _fpos: &mut PosLocked<'_, Self>, offset: i64, whence: i32)
         -> Result<u64, BchError>
     {
         io::llseek(self, file, offset, whence)
     }
 
-    fn fsync(&self, file: &File<InodeFile>, start: i64, end: i64, datasync: c_int) -> Result<(), BchError> {
+    fn fsync(&self, file: &File<InodeFile>, start: i64, end: i64, datasync: i32) -> Result<(), BchError> {
         io::fsync(self, file, start, end, datasync)
     }
 
-    fn fallocate(&self, file: &File<InodeFile>, mode: c_int, offset: i64, len: i64) -> Result<(), BchError> {
+    fn fallocate(&self, file: &File<InodeFile>, mode: i32, offset: i64, len: i64) -> Result<(), BchError> {
         io::fallocate(self, file, mode, offset, len)
     }
 
     fn remap_file_range(&self, file_in: &File<InodeFile>, pos_in: i64, file_out: &File<InodeFile>,
-                        pos_out: i64, len: i64, remap_flags: c_uint) -> Result<u64, BchError> {
+                        pos_out: i64, len: i64, remap_flags: u32) -> Result<u64, BchError> {
         io::remap_file_range(self, file_in, pos_in, file_out, pos_out, len, remap_flags)
     }
 
-    fn unlocked_ioctl(&self, file: &File<InodeFile>, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, file: &File<InodeFile>, cmd: u32, arg: usize) -> isize {
         fs_file_ioctl(file, self, Some(file), cmd, arg)
     }
 
     #[cfg(CONFIG_COMPAT)]
-    fn compat_ioctl(&self, file: &File<InodeFile>, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn compat_ioctl(&self, file: &File<InodeFile>, cmd: u32, arg: usize) -> isize {
         super::ioctl::fs_file_compat_ioctl(file, self, Some(file), cmd, arg)
     }
 }

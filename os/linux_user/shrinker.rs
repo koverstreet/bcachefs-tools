@@ -69,7 +69,7 @@ impl<T: Shrink> Shrinker<T> {
     /// @owner's, registered: @seeks is what an object costs to recreate,
     /// DEFAULT_SEEKS 2; @batch how many a scan() is asked to free, 0 for the
     /// default. Neither is kept, nor its name: nothing here reads them.
-    pub(crate) fn register(owner: &T, name: &CStr, _seeks: c_int, _batch: usize) -> Result<(), AllocError> {
+    pub(crate) fn register(owner: &T, name: &CStr, _seeks: i32, _batch: usize) -> Result<(), AllocError> {
         let s = Box::into_raw(Box::new(Registered {
             owner: core::ptr::from_ref(owner).cast(),
             count: count::<T>,
@@ -86,7 +86,7 @@ impl<T: Shrink> Shrinker<T> {
     }
 
     /// What an object costs to recreate, changed: nothing here reads it.
-    pub(crate) fn set_seeks(&self, _seeks: c_int) {}
+    pub(crate) fn set_seeks(&self, _seeks: i32) {}
 
     /// Unregistered, any count() or scan() still running waited out: they
     /// run under the lock this takes.

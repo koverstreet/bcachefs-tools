@@ -244,7 +244,6 @@ mod vfs {
     use crate::posix::inode;
     use crate::snapshots::snapshot;
     use crate::vfs::super_block::SuperBlock;
-    use core::ffi::c_int;
     use core::fmt;
     use cstruct_macros::vtable;
     use core::sync::atomic::Ordering;
@@ -851,7 +850,7 @@ mod vfs {
     }
 
     /// A type's time and warning limits, in the superblock.
-    fn set_info(fs: &Fs, rdonly: bool, ty: c_int, info: &c::qc_info) -> Result<(), BchError> {
+    fn set_info(fs: &Fs, rdonly: bool, ty: i32, info: &c::qc_info) -> Result<(), BchError> {
         if false {
             bch_info!(fs, "setting:\n{}", QcInfo(info));
         }

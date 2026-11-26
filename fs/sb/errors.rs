@@ -17,7 +17,6 @@
 #![allow(non_camel_case_types)]
 
 use core::cmp::{Ordering, Reverse};
-use core::ffi::c_int;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use crate::btree::bkey::ValidateFlags;
 use crate::format::{Sb, SbFieldType};
@@ -277,7 +276,7 @@ impl SbFieldOps for SbFieldErrorsV2<Validated> {
  */
 /// @err a BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
 /// status's error.
-pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
+pub fn blk_sts_sb_err(err: i32) -> SbErrorId {
     match Errcode(err.unsigned_abs()) {
         Errcode::BLK_STS_NOTSUPP => SbErrorId::blk_sts_notsupp,
         Errcode::BLK_STS_TIMEOUT => SbErrorId::blk_sts_timeout,
@@ -322,7 +321,7 @@ pub fn blk_sts_sb_err(err: c_int) -> SbErrorId {
  */
 /// @err a decompress errcode, as buf_uncompress() throws: what it's
 /// counted as.
-pub fn decompress_sb_err(err: c_int) -> SbErrorId {
+pub fn decompress_sb_err(err: i32) -> SbErrorId {
     match Errcode(err.unsigned_abs()) {
         Errcode::decompress_exceeded_max_encoded_extent => SbErrorId::data_decompress_err_exceeded_max_encoded_extent,
         Errcode::decompress_lz4_old => SbErrorId::data_decompress_err_lz4_old,

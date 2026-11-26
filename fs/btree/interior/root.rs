@@ -4,7 +4,6 @@
 //! when one's missing - and each written as a journal entry propagated back
 //! to the in-memory roots; and the reserve cache, as text.
 
-use core::ffi::{c_ulong, c_int};
 use core::ptr;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::BtreeNode;
@@ -99,7 +98,7 @@ crate::published! {
     /// BTREE_ID_NR_MAX, so nothing here moves when roots_extra grows.
     #[derive(MaybeZeroable)]
     pub struct BtreeRootsLive {
-        pub roots_b: [Volatile<c_ulong>; BTREE_ID_NR_MAX as usize],
+        pub roots_b: [Volatile<usize>; BTREE_ID_NR_MAX as usize],
         pub roots_error: [Volatile<i16>; BTREE_ID_NR_MAX as usize],
         pub roots_nr_extra: Volatile<u32>,
     }
@@ -114,19 +113,19 @@ impl BtreeRootsLive {
     }
 
     /// The error reading btree @id's root left.
-    pub fn error(&self, id: u32) -> c_int {
+    pub fn error(&self, id: u32) -> i32 {
         self.roots_error.get(id as usize).map_or(0, |e| e.get().into())
     }
 }
 
 
-fn root_pack(b: &BtreeNode) -> c_ulong {
+fn root_pack(b: &BtreeNode) -> usize {
     let mask = (1 << BTREE_ROOT_LEVEL_BITS) - 1;
-    let p = ptr::from_ref(b) as c_ulong;
+    let p = ptr::from_ref(b) as usize;
 
     assert!(p & mask == 0, "a btree node not aligned for its level packed with it");
-    assert!(c_ulong::from(b.c.level.get()) & !mask == 0, "a root at level {}", b.c.level.get());
-    p | c_ulong::from(b.c.level.get())
+    assert!(usize::from(b.c.level.get()) & !mask == 0, "a root at level {}", b.c.level.get());
+    p | usize::from(b.c.level.get())
 }
 
 fn set_root_inmem(fs: &Fs, b: &BtreeNode) {

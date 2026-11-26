@@ -9,7 +9,7 @@
 //! the ACLs, fileattr - are the inode's own, InodeAttrs: provided, their
 //! HAS_* true unless an impl says otherwise; the rest are each table's.
 
-use core::ffi::{c_uint, CStr};
+use core::ffi::CStr;
 use core::mem::ManuallyDrop;
 
 use crate::c;
@@ -42,7 +42,7 @@ crate::vfs_ops! {
     type Inode: InodeAttrs;
 
     /// What d_splice_alias() makes of the inode @dentry names.
-    fn lookup(dir: &Self::Inode, dentry: Dentry<'_, Self::Inode>, flags: c_uint) -> *mut c::dentry;
+    fn lookup(dir: &Self::Inode, dentry: Dentry<'_, Self::Inode>, flags: u32) -> *mut c::dentry;
     #[cfg(not(linux_ge = "7.3"))]
     fn create(idmap: MntIdmap<'_>, dir: &Self::Inode, dentry: Dentry<'_, Self::Inode>, mode: c::umode_t,
                   excl: bool) -> Result<(), BchError>;
@@ -61,12 +61,12 @@ crate::vfs_ops! {
     fn mknod(idmap: MntIdmap<'_>, dir: &Self::Inode, dentry: Dentry<'_, Self::Inode>, mode: c::umode_t,
                  rdev: c::dev_t) -> Result<(), BchError>;
     fn rename(idmap: MntIdmap<'_>, src_dir: &Self::Inode, src: Dentry<'_, Self::Inode>,
-                  dst_dir: &Self::Inode, dst: Dentry<'_, Self::Inode>, flags: c_uint) -> Result<(), BchError>;
+                  dst_dir: &Self::Inode, dst: Dentry<'_, Self::Inode>, flags: u32) -> Result<(), BchError>;
     fn tmpfile(idmap: MntIdmap<'_>, dir: &Self::Inode, file: OpeningTmpfile<'_, Self::Inode>, mode: c::umode_t)
         -> Result<(), BchError>;
 
     fn getattr(idmap: MntIdmap<'_>, path: &Path<Self::Inode>, stat: &mut c::kstat, request_mask: u32,
-                   _query_flags: c_uint) -> Result<(), BchError>
+                   _query_flags: u32) -> Result<(), BchError>
     {
         path.dentry().inode().getattr(idmap, stat, request_mask);
         Ok(())

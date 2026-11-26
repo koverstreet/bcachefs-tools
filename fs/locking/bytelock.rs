@@ -35,7 +35,7 @@ use crate::os::kernel::jiffies;
 use crate::os::lockdep::LockClass;
 use crate::util::sleep::Sleep;
 use core::convert::Infallible;
-use core::ffi::{c_long, c_ulong, CStr};
+use core::ffi::CStr;
 use pin_init::Zeroable;
 
 const UNLOCKED:  u8 = 0;
@@ -82,13 +82,13 @@ impl ByteLock {
     }
 
     #[cold]
-    fn take_contended_until(&self, end: c_ulong) -> bool {
+    fn take_contended_until(&self, end: usize) -> bool {
         while self.0.swap(CONTENDED, Ordering::Acquire) != UNLOCKED {
-            let left = end.wrapping_sub(jiffies()) as c_long;
+            let left = end.wrapping_sub(jiffies()) as isize;
             if left <= 0 {
                 return false;
             }
-            let _ = futex_wait(&self.0, CONTENDED, Sleep::UNINTERRUPTIBLE.timeout(left as c_ulong));
+            let _ = futex_wait(&self.0, CONTENDED, Sleep::UNINTERRUPTIBLE.timeout(left as usize));
         }
         true
     }
@@ -131,7 +131,7 @@ impl RawTryLock for ByteLock {
 }
 
 impl RawTimedLock for ByteLock {
-    fn try_lock_timeout(&self, timeout: c_ulong) -> Option<()> {
+    fn try_lock_timeout(&self, timeout: usize) -> Option<()> {
         crate::os::sched::might_sleep();
 
         (self.try_take() || self.take_contended_until(jiffies().wrapping_add(timeout))).then_some(())

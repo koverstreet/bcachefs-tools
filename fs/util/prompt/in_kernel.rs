@@ -7,7 +7,6 @@ use crate::util::alloc::Vec;
 use crate::os::kernel::{jiffies, HZ};
 use crate::os::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
-use kernel::ffi::{c_long, c_ulong};
 
 pub struct Prompt<'a>(&'a StdioRedirect);
 
@@ -28,7 +27,7 @@ impl<'a> Prompt<'a> {
         q.record(&mut rec);
 
         let mut slow = slow.map(|s| {
-            (jiffies().wrapping_add(s.after.as_millis() as core::ffi::c_ulong * HZ / 1000), s.then)
+            (jiffies().wrapping_add(s.after.as_millis() as usize * HZ / 1000), s.then)
         });
         let mut line = Vec::new();
 
@@ -39,8 +38,8 @@ impl<'a> Prompt<'a> {
 
             loop {
                 let timeout = match &slow {
-                    Some((at, _)) => (at.wrapping_sub(jiffies()) as c_long).max(0) as c_ulong,
-                    None          => c_long::MAX as c_ulong,
+                    Some((at, _)) => (at.wrapping_sub(jiffies()) as isize).max(0) as usize,
+                    None          => isize::MAX as usize,
                 };
                 match self.0.readline_timeout(&mut line, timeout) {
                     Ok(()) => break,

@@ -15,7 +15,6 @@ use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::locking::{six::SixHold, MemallocFlags, six::SixLockType::SIX_LOCK_read};
 use crate::prt;
-use core::ffi::c_int;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -110,7 +109,7 @@ impl BtreeTrans<'_> {
                 Ok(Ok(())) => Ok(true),
                 /* raced with another fill? */
                 Ok(Err(_)) => Ok(false),
-                Err(_)     => Err(BchError::from_raw(-(c::ENOMEM as c_int))),
+                Err(_)     => Err(BchError::from_raw(-(c::ENOMEM as i32))),
             }
         })();
 

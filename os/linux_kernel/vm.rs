@@ -65,7 +65,7 @@ impl<'a, D> VmArea<'a, D> {
     }
 
     /// VM_*.
-    pub fn flags(&self) -> kernel::ffi::c_ulong {
+    pub fn flags(&self) -> crate::util::ffi::c_ulong {
         #[cfg(linux_ge = "7.0")]
         let flags = self.0.vma_flags.__vma_flags[0];
         // vm_flags and vma_flags are the one word

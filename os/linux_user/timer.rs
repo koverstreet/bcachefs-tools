@@ -6,7 +6,7 @@
 //! struct is Rust's.
 
 use crate::os::kernel::{jiffies, jiffies_to_msecs, time_after_eq};
-use core::ffi::c_ulong;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomPinned;
 use core::ptr::NonNull;
 use std::sync::{Condvar, Mutex, MutexGuard};

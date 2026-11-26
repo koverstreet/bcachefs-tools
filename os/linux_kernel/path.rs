@@ -14,7 +14,6 @@
 //! user_path_at(), then start_removing_dentry() to lock the parent and
 //! revalidate the victim under the lock.
 
-use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
@@ -52,7 +51,7 @@ impl<I> Path<I> {
 pub struct UserPath(c::path);
 
 impl UserPath {
-    pub fn at(dirfd: c_int, name: u64, flags: c_uint) -> Result<Self, BchError> {
+    pub fn at(dirfd: i32, name: u64, flags: u32) -> Result<Self, BchError> {
         let mut p = MaybeUninit::uninit();
         ret_to_result_void(unsafe { c::user_path_at(dirfd, user_ptr(name), flags, p.as_mut_ptr()) })?;
         // SAFETY: user_path_at() filled it in
@@ -78,7 +77,7 @@ pub struct Creating {
 }
 
 impl Creating {
-    pub fn start(dirfd: c_int, name: u64) -> Result<Self, BchError> {
+    pub fn start(dirfd: i32, name: u64) -> Result<Self, BchError> {
         let mut path = MaybeUninit::uninit();
         // SAFETY: the VFS's, filling in @path if it succeeds
         let dentry = unsafe {
@@ -130,7 +129,7 @@ pub struct Removing {
 }
 
 impl Removing {
-    pub fn start(dirfd: c_int, name: u64) -> Result<Self, BchError> {
+    pub fn start(dirfd: i32, name: u64) -> Result<Self, BchError> {
         let mut path = MaybeUninit::<c::path>::uninit();
         let victim = unsafe { start_removing(dirfd, user_ptr(name), path.as_mut_ptr()) };
         let victim = errptr_to_result(NonNull::new(victim).expect("a dentry, or an error"))?.as_ptr();
@@ -165,12 +164,12 @@ impl Drop for Removing {
 /// # Safety
 /// @name a user pointer, @path for the parent: filled in, held, if it succeeds.
 #[cfg(all(linux_ge = "6.18", not(linux_ge = "7.2")))]
-unsafe fn start_removing(dirfd: c_int, name: *const c_char, path: *mut c::path) -> *mut c::dentry {
+unsafe fn start_removing(dirfd: i32, name: *const c_char, path: *mut c::path) -> *mut c::dentry {
     unsafe { c::start_removing_user_path_at(dirfd, name, path) }
 }
 
 #[cfg(linux_ge = "7.2")]
-unsafe fn start_removing(dirfd: c_int, name: *const c_char, path: *mut c::path) -> *mut c::dentry {
+unsafe fn start_removing(dirfd: i32, name: *const c_char, path: *mut c::path) -> *mut c::dentry {
     unsafe {
         let mut victim = MaybeUninit::<c::path>::uninit();
         let ret = c::user_path_at(dirfd, name, 0, victim.as_mut_ptr());
@@ -202,7 +201,7 @@ unsafe fn start_removing(dirfd: c_int, name: *const c_char, path: *mut c::path) 
 }
 
 #[cfg(not(linux_ge = "6.18"))]
-unsafe fn start_removing(dirfd: c_int, name: *const c_char, path: *mut c::path) -> *mut c::dentry {
+unsafe fn start_removing(dirfd: i32, name: *const c_char, path: *mut c::path) -> *mut c::dentry {
     unsafe {
         let victim = c::user_path_locked_at(dirfd, name, path);
         if errptr_to_result(NonNull::new(victim).expect("a dentry, or an error")).is_err() {
@@ -217,7 +216,7 @@ unsafe fn start_removing(dirfd: c_int, name: *const c_char, path: *mut c::path) 
         // A NULL pprev: unhashed, d_unhashed()
         if ret == 0 && ((*victim).d_hash.pprev.is_null() || (*victim).d_parent != (*path).dentry) {
             c::mnt_drop_write((*path).mnt);
-            ret = -(c::ENOENT as c_int);
+            ret = -(c::ENOENT as i32);
         }
         if ret != 0 {
             c::inode_unlock(dir);

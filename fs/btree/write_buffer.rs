@@ -704,7 +704,7 @@ impl Fs {
 #[cfg(all(kernel, CONFIG_PROVE_LOCKING))]
 unsafe extern "C" fn wb_keys_lock_cmp_fn(a: *const kernel::bindings::lockdep_map,
                                          b: *const kernel::bindings::lockdep_map) -> core::ffi::c_int {
-    (a as usize).cmp(&(b as usize)) as core::ffi::c_int
+    (a as usize).cmp(&(b as usize)) as i32
 }
 
 impl Fs {

@@ -34,7 +34,6 @@ use crate::util::{log::LogMsg, rcu::{read_lock, RcuArrayWriter, ReadGuard}, Prin
 use crate::data_structures::bitmap::AtomicBitmap;
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::convert::Infallible;
-use core::ffi::c_uint;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_enum, BitfieldMembers};
@@ -188,7 +187,7 @@ pub struct DiskReservation<'f> {
     pub c: &'f Fs,
     pub sectors: Cell<u64>,
     pub generation: Cell<u32>,
-    pub nr_replicas: Cell<c_uint>,
+    pub nr_replicas: Cell<u32>,
 }
 
 // ── Bucket addressing ────────────────────────────────────────────────────

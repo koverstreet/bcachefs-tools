@@ -21,7 +21,6 @@
 //! them checks the flags against the inode as the btree has it, not i_flags:
 //! the btree's locks are what keep two setters apart.
 
-use core::ffi::c_int;
 
 use crate::posix::{acl, inode};
 use crate::os::{inode_ops::InodeAttrs, posix_acl::{AclType, PosixAcl}};

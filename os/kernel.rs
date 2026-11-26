@@ -89,13 +89,13 @@ pub fn random_u64_below(ceil: u64) -> u64 {
 #[cfg(bch_return_address)]
 #[macro_export]
 macro_rules! ret_ip {
-    () => { core::intrinsics::return_address() as core::ffi::c_ulong };
+    () => { core::intrinsics::return_address() as crate::util::ffi::c_ulong };
 }
 
 #[cfg(not(bch_return_address))]
 #[macro_export]
 macro_rules! ret_ip {
-    () => { 0 as core::ffi::c_ulong };
+    () => { 0 as crate::util::ffi::c_ulong };
 }
 
 /// race_fault(): dynamic_fault("bcachefs:race"), which no kernel we build
@@ -141,17 +141,17 @@ pub fn sort_nonatomic<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> core::cmp::
 }
 
 /// Whether jiffies @a is after @b, across a wrap: time_after().
-pub fn time_after(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
-    (b.wrapping_sub(a) as core::ffi::c_long) < 0
+pub fn time_after(a: crate::util::ffi::c_ulong, b: crate::util::ffi::c_ulong) -> bool {
+    (b.wrapping_sub(a) as crate::util::ffi::c_long) < 0
 }
 
 /// Whether jiffies @a is @b or after it, across a wrap: time_after_eq().
-pub fn time_after_eq(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
-    (a.wrapping_sub(b) as core::ffi::c_long) >= 0
+pub fn time_after_eq(a: crate::util::ffi::c_ulong, b: crate::util::ffi::c_ulong) -> bool {
+    (a.wrapping_sub(b) as crate::util::ffi::c_long) >= 0
 }
 
 /// Whether jiffies @a is in [@b, @c], across a wrap: time_in_range().
-pub fn time_in_range(a: core::ffi::c_ulong, b: core::ffi::c_ulong, c: core::ffi::c_ulong) -> bool {
+pub fn time_in_range(a: crate::util::ffi::c_ulong, b: crate::util::ffi::c_ulong, c: crate::util::ffi::c_ulong) -> bool {
     !time_after(b, a) && !time_after(a, c)
 }
 
@@ -161,17 +161,17 @@ pub fn time_after64(a: u64, b: u64) -> bool {
 }
 
 /// Jiffies in @ms milliseconds, rounded up: msecs_to_jiffies().
-pub const fn msecs_to_jiffies(ms: core::ffi::c_ulong) -> core::ffi::c_ulong {
-    (ms * HZ).div_ceil(1000)
+pub const fn msecs_to_jiffies(ms: u32) -> crate::util::ffi::c_ulong {
+    (ms as crate::util::ffi::c_ulong * HZ).div_ceil(1000)
 }
 
 /// Milliseconds in @j jiffies: jiffies_to_msecs(), wrapping as its unsigned
 /// int does - @j is often a difference of jiffies, racing.
-pub const fn jiffies_to_msecs(j: core::ffi::c_ulong) -> core::ffi::c_uint {
+pub const fn jiffies_to_msecs(j: crate::util::ffi::c_ulong) -> u32 {
     if 1000 % HZ == 0 {
-        (1000 / HZ).wrapping_mul(j) as core::ffi::c_uint
+        (1000 / HZ).wrapping_mul(j) as u32
     } else {
-        (j.wrapping_mul(1000) / HZ) as core::ffi::c_uint
+        (j.wrapping_mul(1000) / HZ) as u32
     }
 }
 

@@ -34,7 +34,6 @@
 // the converting is used there
 #![cfg_attr(not(kernel), allow(dead_code, unused_imports))]
 
-use core::ffi::c_int;
 
 use crate::errcode::{ret_to_class, BchError};
 
@@ -104,7 +103,7 @@ from_raw! {
 }
 
 into_raw! {
-    Result<(), BchError> => c_int: |r| ret_to_class(r);
+    Result<(), BchError> => i32: |r| ret_to_class(r);
     /// A position: llseek's.
     Result<u64, BchError> => i64: |r| r.map_or_else(|e| e.class().into(), |pos| pos as i64);
 }
@@ -112,7 +111,7 @@ into_raw! {
 // The kernel's long, isize: fallocate's
 #[cfg(kernel)]
 into_raw! {
-    Result<(), BchError> => kernel::ffi::c_long: |r| ret_to_class(r) as kernel::ffi::c_long;
+    Result<(), BchError> => crate::util::ffi::c_long: |r| ret_to_class(r) as crate::util::ffi::c_long;
 }
 
 #[cfg(kernel)]

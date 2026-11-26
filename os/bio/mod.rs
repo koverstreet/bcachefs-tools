@@ -46,7 +46,7 @@
 //! it's over c::bio here, in both builds - the shim's bio_vec laid out as the
 //! kernel's.
 
-use core::ffi::c_ulong;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;

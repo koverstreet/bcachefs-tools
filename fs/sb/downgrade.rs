@@ -7,7 +7,6 @@
 //! an older one to read - sb_set_downgrade(), when an older version
 //! mounts a newer filesystem.
 
-use core::ffi::c_ulong;
 use core::mem::size_of;
 
 
@@ -307,7 +306,7 @@ pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_min
         passes[1] |= e.recovery_passes[1].get();
         for id in e.errors.iter().map(|id| usize::from(id.get())) {
             if id < SbErrorId::NR as usize {
-                let bits = c_ulong::BITS as usize;
+                let bits = usize::BITS as usize;
                 *cpu.errors_silent[id / bits].place() |= 1 << (id % bits);
             }
             if id < silent.len() * 64 {

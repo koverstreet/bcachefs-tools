@@ -69,7 +69,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use cstruct_macros::vtable;
-use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
+use crate::util::ffi::{c_long, c_ulong};
 use kernel::sync::aref::ARef;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
@@ -117,7 +117,7 @@ impl<T: ThreadFile> ThreadWithFile<T> {
     }
 
     /// The kthread's named for the caller.
-    pub fn run(mut self, f: impl FnOnce(&T) + Send + FreeAnytime + NothingToDetach + 'static) -> Result<c_int, BchError> {
+    pub fn run(mut self, f: impl FnOnce(&T) + Send + FreeAnytime + NothingToDetach + 'static) -> Result<i32, BchError> {
         // SAFETY: the thread runs only while the file lives - release()
         // stops it before the data's dropped - or not at all: if there's no
         // file, it's stopped unrun, as the data is dropped
@@ -392,7 +392,7 @@ impl StdioRedirect {
 /* Stdio: a ThreadWithFile on a StdioRedirect */
 
 pub trait StdioFile: Send + Sync + FreeAnytime + 'static {
-    fn ioctl(&self, _cmd: c_uint, _arg: c_ulong) -> c_long {
+    fn ioctl(&self, _cmd: u32, _arg: c_ulong) -> c_long {
         -(c::ENOTTY as c_long)
     }
 }
@@ -425,11 +425,11 @@ impl<T: StdioFile> FileOps for Stdio<T> {
         self.redirect.poll(file, &pt)
     }
 
-    fn flush(&self, _file: &File<Self::Data>) -> c_int {
+    fn flush(&self, _file: &File<Self::Data>) -> i32 {
         self.ret.load(Ordering::Relaxed)
     }
 
-    fn unlocked_ioctl(&self, _file: &File<Self::Data>, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, _file: &File<Self::Data>, cmd: u32, arg: c_ulong) -> c_long {
         self.data.ioctl(cmd, arg)
     }
 }
@@ -453,8 +453,8 @@ impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
         &self.data().redirect
     }
 
-    pub fn run_stdio(self, f: impl FnOnce(&T, &StdioRedirect) -> c_int + Send + FreeAnytime + NothingToDetach + 'static)
-        -> Result<c_int, BchError>
+    pub fn run_stdio(self, f: impl FnOnce(&T, &StdioRedirect) -> i32 + Send + FreeAnytime + NothingToDetach + 'static)
+        -> Result<i32, BchError>
     {
         self.run(move |s: &Stdio<T>| {
             s.ret.store(f(&s.data, &s.redirect), Ordering::Relaxed);
@@ -464,7 +464,7 @@ impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
 
     /// No thread: the caller prints, and calls stdio().set_done() when it's
     /// finished. The fd, and the file ref to hold while it may print.
-    pub fn get_fd(self) -> Result<(c_int, ARef<File<Inner<Stdio<T>>>>), BchError> {
+    pub fn get_fd(self) -> Result<(i32, ARef<File<Inner<Stdio<T>>>>), BchError> {
         let file = NewFile::new(self.0)?;
         let r = file.get_file();
         Ok((file.install(), r))

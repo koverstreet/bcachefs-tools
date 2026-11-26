@@ -59,7 +59,6 @@ use crate::util::rcu::{self, ReadGuard, RcuArray};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
 use crate::{bch_err, field, prt, new_lock, published};
 use core::cmp::Ordering;
-use core::ffi::c_uint;
 use core::mem::{size_of, ManuallyDrop};
 use core::pin::Pin;
 use core::ptr::NonNull;
@@ -704,7 +703,7 @@ pub(crate) fn delete(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, pos: Bpos
 #[derive(Default, Clone, Copy, MaybeZeroable)]
 pub struct JournalIter {
     pub btree_id: Btree,
-    pub level: c_uint,
+    pub level: u32,
     pub idx: usize,
     pub seq: u64,
     pub pos: Bpos,

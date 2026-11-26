@@ -2,7 +2,6 @@
 
 //! The kernel's struct posix_acl.
 
-use core::ffi::c_int;
 use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
@@ -18,10 +17,10 @@ pub use common::*;
 
 impl AclType {
     /// Anything else is a bug.
-    pub(crate) fn from_vfs(type_: c_int) -> Self {
+    pub(crate) fn from_vfs(type_: i32) -> Self {
         match type_ {
-            t if t == Self::Access as c_int  => Self::Access,
-            t if t == Self::Default as c_int => Self::Default,
+            t if t == Self::Access as i32  => Self::Access,
+            t if t == Self::Default as i32 => Self::Default,
             _ => panic!("acl type {type_}"),
         }
     }
@@ -162,7 +161,7 @@ impl Drop for PosixAcl {
 }
 
 from_raw! {
-    AclType = c_int => |r| AclType::from_vfs(r);
+    AclType = i32 => |r| AclType::from_vfs(r);
     /// The VFS's reference, None for no ACL.
     Option<ManuallyDrop<PosixAcl>> = *mut c::posix_acl => |r| PosixAcl::borrow_raw(r);
 }

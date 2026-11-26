@@ -31,7 +31,8 @@ use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_ulong, CStr};
+use core::ffi::CStr;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomPinned;
 use core::ptr::NonNull;
 
@@ -87,7 +88,7 @@ impl Workqueue {
     /// Workqueue @name, running @max_active of its work at once (0: the
     /// default): alloc_workqueue(). Its failure is the caller's to name, as
     /// C's are.
-    pub fn new(name: &CStr, flags: WqFlags, max_active: c_int) -> Result<Self, AllocError> {
+    pub fn new(name: &CStr, flags: WqFlags, max_active: i32) -> Result<Self, AllocError> {
         // SAFETY: plain; the name is copied
         let wq = unsafe { c::bch2_alloc_workqueue(name.as_ptr().cast(), flags.bits(), max_active) };
         NonNull::new(wq).map(|wq| Workqueue(Some(wq))).ok_or(AllocError)
@@ -280,7 +281,7 @@ impl RawWork {
     /// # Safety
     /// As queue()'s.
     pub unsafe fn queue_on(&self, wq: &Queue, cpu: u32) -> bool {
-        unsafe { kernel::bindings::queue_work_on(cpu as c_int, wq.as_ptr().cast(), self.as_ptr().cast()) }
+        unsafe { kernel::bindings::queue_work_on(cpu as i32, wq.as_ptr().cast(), self.as_ptr().cast()) }
     }
 
     /// Its last queueing run: flush_work().
@@ -354,7 +355,7 @@ impl RawDelayedWork {
     /// As RawWork::queue()'s.
     pub unsafe fn modify(&self, wq: &Queue, delay: c_ulong) -> bool {
         unsafe {
-            kernel::bindings::mod_delayed_work_on(kernel::bindings::wq_misc_consts_WORK_CPU_UNBOUND as c_int,
+            kernel::bindings::mod_delayed_work_on(kernel::bindings::wq_misc_consts_WORK_CPU_UNBOUND as i32,
                                                   wq.as_ptr().cast(), self.as_ptr().cast(), delay as usize)
         }
     }

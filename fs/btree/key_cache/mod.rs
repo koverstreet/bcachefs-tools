@@ -43,9 +43,6 @@ use crate::os::shrinker::{Shrink, Shrinker};
 use crate::os::workqueue::{Queue, ReffedWork};
 use crate::util::{Printbuf, ToText};
 use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
-#[cfg(kernel)]
-use core::ffi::c_int;
-use core::ffi::{c_uint, c_ulong};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
@@ -417,7 +414,7 @@ pub(crate) fn key_buf(u64s: usize) -> Option<KeyBuf> {
 /// held.
 #[derive(Default, MaybeZeroable)]
 pub struct EntryContents {
-    pub(crate) keys_idx: c_uint,
+    pub(crate) keys_idx: u32,
     /* its newest update's journal seq, which its pin is moved up to */
     pub(crate) seq: u64,
     /* its key, in a buffer of its own: none once it's freed */
@@ -645,7 +642,7 @@ impl FsBtreeKeyCache {
     }
 
     /// Ask the shrinker to free @nr keys, as memory pressure would.
-    pub fn shrink(&self, nr: c_ulong) {
+    pub fn shrink(&self, nr: usize) {
         let _ = self.scan(nr as usize);
     }
 
@@ -736,6 +733,6 @@ pub fn btree_key_cache_module_exit(_q: &Quiesced<'_>) {
 pub fn btree_key_cache_module_init() -> Result<(), BchError> {
     #[cfg(kernel)]
     KEY_CACHE.create(c"bkey_cached", c::SLAB_RECLAIM_ACCOUNT | c::SLAB_ACCOUNT)
-        .map_err(|_| BchError::from_raw(-(c::ENOMEM as c_int)))?;
+        .map_err(|_| BchError::from_raw(-(c::ENOMEM as i32)))?;
     Ok(())
 }

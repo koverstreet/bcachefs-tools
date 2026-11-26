@@ -59,9 +59,10 @@ fn main() {
         .derive_default(true)
         .parse_callbacks(Box::new(MaybeZeroable))
         .layout_tests(true)
-        // Emit `::core::ffi` rather than `::std::os::raw`, so the bindings are
-        // valid in both std (userspace) and no_std.
+        // `::core` rather than `::std`, so the bindings are valid in both std
+        // (userspace) and no_std; C's types are ffi's, as the kernel's bindings'.
         .use_core()
+        .ctypes_prefix("crate::ffi")
         .default_enum_style(bindgen::EnumVariation::Rust {
             non_exhaustive: true,
         })

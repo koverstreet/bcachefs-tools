@@ -36,7 +36,8 @@ use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_ulong, CStr};
+use core::ffi::CStr;
+use crate::util::ffi::c_ulong;
 use core::marker::PhantomPinned;
 use core::ptr::NonNull;
 
@@ -85,7 +86,7 @@ impl Workqueue {
     /// Workqueue @name, running @max_active of its work at once (0: the
     /// default): alloc_workqueue(). Its failure is the caller's to name, as
     /// C's are.
-    pub fn new(name: &CStr, flags: WqFlags, max_active: c_int) -> Result<Self, AllocError> {
+    pub fn new(name: &CStr, flags: WqFlags, max_active: i32) -> Result<Self, AllocError> {
         // SAFETY: plain; the name is copied
         let wq = unsafe { queues::alloc_workqueue_name(name.as_ptr(), flags.bits(), max_active) };
         NonNull::new(wq).map(|wq| Workqueue(Some(wq))).ok_or(AllocError)

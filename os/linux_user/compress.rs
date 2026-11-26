@@ -4,7 +4,7 @@
 //! zlib allocate their own workspaces - theirs are 0 bytes, and the caller's go
 //! unused; zstd's contexts are made in the caller's, as the kernel's are.
 
-fn int(n: usize) -> core::ffi::c_int {
+fn int(n: usize) -> i32 {
     n.try_into().unwrap_or_else(|_| panic!("a codec's length of {n}: past a c_int"))
 }
 
@@ -12,7 +12,6 @@ pub mod lz4 {
     use super::int;
     use crate::c;
     use crate::util::volatile::{Out, VolatileSlice};
-    use core::ffi::c_int;
     use core::mem::MaybeUninit;
 
     pub const MEM_COMPRESS: usize = 0;
@@ -39,7 +38,7 @@ pub mod lz4 {
     {
         unsafe {
             let ret = c::LZ4_compress_HC(src.as_ptr().cast(), dst.as_ptr().cast(), int(src.len()), int(dst.len()),
-                                         level as c_int);
+                                         level as i32);
             (ret > 0).then(|| dst.sub(0..ret as usize).assume_init())
         }
     }
@@ -61,16 +60,15 @@ pub mod zlib {
     use super::int;
     use crate::c::{self, z_stream};
     use crate::util::volatile::{Out, VolatileSlice};
-    use core::ffi::c_int;
     use core::mem::MaybeUninit;
 
     /// zlib's default, which it keeps to itself: zutil.h's
-    pub const DEF_MEM_LEVEL: c_int = 8;
+    pub const DEF_MEM_LEVEL: i32 = 8;
 
     const VERSION: *const core::ffi::c_char = c::ZLIB_VERSION.as_ptr().cast();
-    const STREAM_SIZE: c_int = size_of::<z_stream>() as c_int;
+    const STREAM_SIZE: i32 = size_of::<z_stream>() as i32;
 
-    pub fn deflate_workspace_size(_window_bits: c_int, _mem_level: c_int) -> usize {
+    pub fn deflate_workspace_size(_window_bits: i32, _mem_level: i32) -> usize {
         0
     }
 
@@ -89,31 +87,31 @@ pub mod zlib {
     }
 
     /// @src deflated in @dst, all of it - or None if it didn't fit.
-    pub fn deflate<'a>(src: &[u8], dst: Out<'a>, _ws: &mut [MaybeUninit<u8>], level: c_int,
-                       window_bits: c_int, mem_level: c_int, strategy: c_int) -> Option<VolatileSlice<'a>> {
+    pub fn deflate<'a>(src: &[u8], dst: Out<'a>, _ws: &mut [MaybeUninit<u8>], level: i32,
+                       window_bits: i32, mem_level: i32, strategy: i32) -> Option<VolatileSlice<'a>> {
         let mut strm = stream(src.as_ptr(), src.len(), dst);
         unsafe {
-            if c::deflateInit2_(&mut strm, level, c::Z_DEFLATED as c_int, window_bits, mem_level, strategy,
-                                VERSION, STREAM_SIZE) != c::Z_OK as c_int {
+            if c::deflateInit2_(&mut strm, level, c::Z_DEFLATED as i32, window_bits, mem_level, strategy,
+                                VERSION, STREAM_SIZE) != c::Z_OK as i32 {
                 return None;
             }
-            let done = c::deflate(&mut strm, c::Z_FINISH as c_int) == c::Z_STREAM_END as c_int;
-            (c::deflateEnd(&mut strm) == c::Z_OK as c_int && done)
+            let done = c::deflate(&mut strm, c::Z_FINISH as i32) == c::Z_STREAM_END as i32;
+            (c::deflateEnd(&mut strm) == c::Z_OK as i32 && done)
                 .then(|| dst.sub(0..strm.total_out as usize).assume_init())
         }
     }
 
     /// @src inflated in @dst - or None if @src is malformed or didn't end.
     pub fn inflate<'a>(src: VolatileSlice<'_>, dst: Out<'a>, _ws: &mut [MaybeUninit<u8>],
-                       window_bits: c_int) -> Option<VolatileSlice<'a>> {
+                       window_bits: i32) -> Option<VolatileSlice<'a>> {
         let mut strm = stream(src.as_ptr(), src.len(), dst);
         unsafe {
-            if c::inflateInit2_(&mut strm, window_bits, VERSION, STREAM_SIZE) != c::Z_OK as c_int {
+            if c::inflateInit2_(&mut strm, window_bits, VERSION, STREAM_SIZE) != c::Z_OK as i32 {
                 return None;
             }
-            let ret = c::inflate(&mut strm, c::Z_FINISH as c_int);
+            let ret = c::inflate(&mut strm, c::Z_FINISH as i32);
             c::inflateEnd(&mut strm);
-            (ret == c::Z_STREAM_END as c_int).then(|| dst.sub(0..dst.len() - strm.avail_out as usize).assume_init())
+            (ret == c::Z_STREAM_END as i32).then(|| dst.sub(0..dst.len() - strm.avail_out as usize).assume_init())
         }
     }
 }
@@ -121,18 +119,17 @@ pub mod zlib {
 pub mod zstd {
     use crate::c;
     use crate::util::volatile::{Out, VolatileSlice};
-    use core::ffi::c_int;
     use core::marker::PhantomData;
     use core::mem::MaybeUninit;
     use core::ptr::NonNull;
 
     pub type Params = c::ZSTD_parameters;
 
-    pub fn max_clevel() -> c_int {
+    pub fn max_clevel() -> i32 {
         unsafe { c::ZSTD_maxCLevel() }
     }
 
-    pub fn get_params(level: c_int, estimated_src_size: u64) -> Params {
+    pub fn get_params(level: i32, estimated_src_size: u64) -> Params {
         unsafe { c::ZSTD_getParams(level, estimated_src_size, 0) }
     }
 
@@ -167,16 +164,16 @@ pub mod zstd {
         pub fn compress<'a>(&mut self, dst: Out<'a>, src: &[u8], params: &Params) -> Result<VolatileSlice<'a>, u32> {
             let (cctx, cp, fp) = (self.0.as_ptr(), &params.cParams, &params.fParams);
             let set = [
-                (c::ZSTD_cParameter_ZSTD_c_windowLog,       cp.windowLog as c_int),
-                (c::ZSTD_cParameter_ZSTD_c_hashLog,         cp.hashLog as c_int),
-                (c::ZSTD_cParameter_ZSTD_c_chainLog,        cp.chainLog as c_int),
-                (c::ZSTD_cParameter_ZSTD_c_searchLog,       cp.searchLog as c_int),
-                (c::ZSTD_cParameter_ZSTD_c_minMatch,        cp.minMatch as c_int),
-                (c::ZSTD_cParameter_ZSTD_c_targetLength,    cp.targetLength as c_int),
-                (c::ZSTD_cParameter_ZSTD_c_strategy,        cp.strategy as c_int),
+                (c::ZSTD_cParameter_ZSTD_c_windowLog,       cp.windowLog as i32),
+                (c::ZSTD_cParameter_ZSTD_c_hashLog,         cp.hashLog as i32),
+                (c::ZSTD_cParameter_ZSTD_c_chainLog,        cp.chainLog as i32),
+                (c::ZSTD_cParameter_ZSTD_c_searchLog,       cp.searchLog as i32),
+                (c::ZSTD_cParameter_ZSTD_c_minMatch,        cp.minMatch as i32),
+                (c::ZSTD_cParameter_ZSTD_c_targetLength,    cp.targetLength as i32),
+                (c::ZSTD_cParameter_ZSTD_c_strategy,        cp.strategy as i32),
                 (c::ZSTD_cParameter_ZSTD_c_contentSizeFlag, fp.contentSizeFlag),
                 (c::ZSTD_cParameter_ZSTD_c_checksumFlag,    fp.checksumFlag),
-                (c::ZSTD_cParameter_ZSTD_c_dictIDFlag,      (fp.noDictIDFlag == 0) as c_int),
+                (c::ZSTD_cParameter_ZSTD_c_dictIDFlag,      (fp.noDictIDFlag == 0) as i32),
             ];
             unsafe {
                 result(c::ZSTD_CCtx_reset(cctx, c::ZSTD_ResetDirective_ZSTD_reset_session_and_parameters))?;

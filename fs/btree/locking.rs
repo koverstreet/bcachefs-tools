@@ -53,7 +53,6 @@ use crate::os::kernel::local_clock;
 use crate::util::time_stats::{TimeStatsArray, TimeStatsRef};
 use crate::util::Printbuf;
 use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
-use core::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ptr::{self, NonNull};
 use cstruct_macros::bch_enum;
 
@@ -201,7 +200,7 @@ impl BtreeTrans<'_> {
         let shard_cpu = self.shard_cpu.get();
         if !self.migrate_disabled() &&
            shard_cpu >= 0 &&
-           shard_cpu as c_uint == raw_smp_processor_id() {
+           shard_cpu as u32 == raw_smp_processor_id() {
             self.set_migrate_disabled(true);
             migrate_disable();
         }
@@ -234,7 +233,7 @@ impl BtreeTrans<'_> {
 
     /// @ret_ip is C's _RET_IP_ - ret_ip!() in the entry point - for
     /// bch2_trans_unlocked_or_in_restart_error().
-    pub(crate) fn mark_unlocked(&self, ret_ip: c_ulong) {
+    pub(crate) fn mark_unlocked(&self, ret_ip: usize) {
         if !self.locked() {
             return;
         }
@@ -386,7 +385,7 @@ impl BtreeTrans<'_> {
     /// @b's lock, by @lock: given the transaction's waiter, which the cycle
     /// detector reads, and the cycle detector to call.
     fn node_lock_nopath<H>(&self, b: &BtreeBkeyCachedCommon, lock_may_not_fail: bool,
-                           lock: impl FnOnce(&SixLockWaiter, &mut dyn FnMut() -> c_int) -> Result<H, c_int>)
+                           lock: impl FnOnce(&SixLockWaiter, &mut dyn FnMut() -> i32) -> Result<H, i32>)
                            -> Result<H, BchError> {
         self.set_lock_may_not_fail(lock_may_not_fail);
         self.lock_must_abort.store(0, Relaxed);
@@ -400,7 +399,7 @@ impl BtreeTrans<'_> {
 
         let ret = lock(&self.locking_wait, &mut || six_check_for_deadlock(self, b)).map_err(|e| {
             assert!(!lock_may_not_fail, "a lock that may not fail failed: {}", BchError::from_raw(e).msg());
-            if e == -(c::ENOMEM as c_int) {
+            if e == -(c::ENOMEM as i32) {
                 self.restart(Errcode::transaction_restart_lock_waitlist_alloc)
             } else {
                 BchError::from_raw(e)
@@ -443,7 +442,7 @@ impl BtreeTrans<'_> {
 
     /// @ip is lockdep's: the path's ip_allocated().
     fn node_lock_contended<'b>(&self, b: &'b BtreeBkeyCachedCommon, ty: SixLockType,
-                               ip: c_ulong) -> Result<SixHold<'b>, BchError> {
+                               ip: usize) -> Result<SixHold<'b>, BchError> {
         #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
         let contended_start = local_clock();
         let ret = self.node_lock_nopath(b, false, |wait, should_sleep_fn| {
@@ -482,7 +481,7 @@ impl BtreeTrans<'_> {
     /// when it is, or it's marked intent again on failure - and only here.
     #[inline(always)]
     pub(in crate::btree) fn node_lock_write_at(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
-                                               lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
+                                               lock_may_not_fail: bool, ip: usize) -> Result<(), BchError> {
         /*
          * six locks are unfair, and read locks block while a thread wants a
          * write lock: thus, we need to tell the cycle detector we have a write
@@ -498,7 +497,7 @@ impl BtreeTrans<'_> {
     /// The wait for a write lock BtreePath::try_lock_write() didn't get.
     #[inline(never)]
     fn node_lock_write_wait(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize,
-                            lock_may_not_fail: bool, ip: c_ulong) -> Result<(), BchError> {
+                            lock_may_not_fail: bool, ip: usize) -> Result<(), BchError> {
         self.locking_hash_val.set(0);
         self.locking_root_id.set(Btree(u32::MAX));
 
@@ -837,7 +836,7 @@ impl BtreeTrans<'_> {
     /// @ip is C's _RET_IP_, for the trace.
     #[inline]
     pub(crate) fn path_upgrade(&self, paths: &mut Paths<'_>, idx: PathIdx, new_locks_want: usize,
-                               ip: c_ulong) -> Result<(), BchError> {
+                               ip: usize) -> Result<(), BchError> {
         let new_locks_want = new_locks_want.min(BTREE_MAX_DEPTH as usize);
         let path = &paths[idx];
 
@@ -850,7 +849,7 @@ impl BtreeTrans<'_> {
 
     #[inline(never)]
     pub(crate) fn __path_upgrade(&self, paths: &mut Paths<'_>, idx: PathIdx, new_locks_want: usize,
-                                 ip: c_ulong) -> Result<(), BchError> {
+                                 ip: usize) -> Result<(), BchError> {
         let path           = &mut paths[idx];
         let old_locks      = path.nodes_locked;
         let old_locks_want = path.locks_want() as usize;
@@ -1002,7 +1001,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    pub(crate) fn relock_traced(&self, paths: &mut Paths<'_>, trace: bool, ret_ip: c_ulong) -> Result<(), BchError> {
+    pub(crate) fn relock_traced(&self, paths: &mut Paths<'_>, trace: bool, ret_ip: usize) -> Result<(), BchError> {
         self.verify_locks(paths);
 
         let restarted = self.restarted();
@@ -1073,7 +1072,7 @@ impl BtreeTrans<'_> {
         self.unlock_from(&mut self.paths(), crate::ret_ip!());
     }
 
-    pub(crate) fn unlock_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn unlock_from(&self, paths: &mut Paths<'_>, ret_ip: usize) {
         self.unlock_keep_cannibalize(paths, ret_ip);
 
         /*
@@ -1094,7 +1093,7 @@ impl BtreeTrans<'_> {
     /// allocation alone, whose sleeps are memory allocation's - reclaim never
     /// takes the cannibalize lock - and whose caller, reserving an interior
     /// update's nodes low on memory, holds it across the whole reserve.
-    pub(crate) fn unlock_keep_cannibalize(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn unlock_keep_cannibalize(&self, paths: &mut Paths<'_>, ret_ip: usize) {
         self.mark_unlocked(ret_ip);
 
         self.unlock_paths(paths);
@@ -1104,7 +1103,7 @@ impl BtreeTrans<'_> {
         self.unlock_long_from(&mut self.paths(), crate::ret_ip!());
     }
 
-    pub(crate) fn unlock_long_from(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn unlock_long_from(&self, paths: &mut Paths<'_>, ret_ip: usize) {
         self.unlock_from(paths, ret_ip);
         self.enable_migrate();
 
@@ -1149,7 +1148,7 @@ impl BtreeTrans<'_> {
 
     /// An attempt's start, for the SRCU lock: dropped if it's been held for
     /// 10ms. @ret_ip is unlock_long's, C's _RET_IP_.
-    pub(crate) fn srcu_begin(&self, paths: &mut Paths<'_>, ret_ip: c_ulong) {
+    pub(crate) fn srcu_begin(&self, paths: &mut Paths<'_>, ret_ip: usize) {
         if self.srcu_held() && time_after(jiffies(), self.srcu_lock_time.get().wrapping_add(msecs_to_jiffies(10))) {
             self.unlock_long_from(paths, ret_ip);
         }
@@ -1173,7 +1172,7 @@ impl BtreeTrans<'_> {
      * elapsed >= HZ branch and drop SRCU here.
      */
     /// None for no cap: SRCU isn't held, or it's just been dropped.
-    fn srcu_wait_budget(&self, paths: &mut Paths<'_>) -> Option<c_ulong> {
+    fn srcu_wait_budget(&self, paths: &mut Paths<'_>) -> Option<usize> {
         if !self.srcu_held() {
             return None;
         }
@@ -1192,13 +1191,13 @@ impl BtreeTrans<'_> {
     /// caller must have dropped its btree locks. @cond is called once per
     /// wake, so it may be a trylock.
     pub fn wait_until<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>) -> T {
-        self.wait_until_by(ev, cond, c_long::MAX, || self.srcu_wait_budget(&mut self.paths()))
+        self.wait_until_by(ev, cond, isize::MAX, || self.srcu_wait_budget(&mut self.paths()))
             .expect("an untimed wait timed out")
     }
 
     /// wait_until(), for up to @timeout jiffies - c_long::MAX for no limit:
     /// None if it timed out.
-    pub fn wait_until_timeout<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>, timeout: c_long)
+    pub fn wait_until_timeout<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>, timeout: isize)
         -> Option<T>
     {
         self.wait_until_by(ev, cond, timeout, || self.srcu_wait_budget(&mut self.paths()))
@@ -1208,31 +1207,31 @@ impl BtreeTrans<'_> {
     /// mustn't take one.
     pub(in crate::btree) fn wait_until_in<T>(&self, paths: &mut Paths<'_>, ev: &EventCount,
                                              cond: impl FnMut() -> Option<T>) -> T {
-        self.wait_until_timeout_in(paths, ev, cond, c_long::MAX).expect("an untimed wait timed out")
+        self.wait_until_timeout_in(paths, ev, cond, isize::MAX).expect("an untimed wait timed out")
     }
 
     pub(in crate::btree) fn wait_until_timeout_in<T>(&self, paths: &mut Paths<'_>, ev: &EventCount,
-                                                     cond: impl FnMut() -> Option<T>, timeout: c_long)
+                                                     cond: impl FnMut() -> Option<T>, timeout: isize)
         -> Option<T>
     {
         self.wait_until_by(ev, cond, timeout, || self.srcu_wait_budget(paths))
     }
 
-    fn wait_until_by<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>, timeout: c_long,
-                        mut srcu_budget: impl FnMut() -> Option<c_ulong>) -> Option<T> {
+    fn wait_until_by<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>, timeout: isize,
+                        mut srcu_budget: impl FnMut() -> Option<usize>) -> Option<T> {
         let start = jiffies();
         loop {
             let seen = ev.snapshot();
             if let Some(v) = cond() {
                 return Some(v);
             }
-            let left = timeout - jiffies().wrapping_sub(start) as c_long;
+            let left = timeout - jiffies().wrapping_sub(start) as isize;
             if left <= 0 {
                 return None;
             }
-            let left = srcu_budget().map_or(left, |b| left.min(b as c_long));
+            let left = srcu_budget().map_or(left, |b| left.min(b as isize));
             // timing out is the budget or @timeout running out: both rechecked above
-            let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left as c_ulong));
+            let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left as usize));
         }
     }
 
@@ -1348,9 +1347,9 @@ impl BtreeTrans<'_> {
  * slow storage. The lock is held over btree node reads on any online device,
  * so that's the latency we key off.
  */
-fn srcu_hold_warn_thresh(fs: &Fs) -> c_ulong {
+fn srcu_hold_warn_thresh(fs: &Fs) -> usize {
     let online = fs.devs_online.load();
-    (fs.dev_latency_max(&online, READ as c_int) * 2).max(HZ * 10)
+    (fs.dev_latency_max(&online, READ as i32) * 2).max(HZ * 10)
 }
 
 impl BtreeBkeyCachedCommon {

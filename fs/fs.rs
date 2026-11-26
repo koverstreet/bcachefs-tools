@@ -66,7 +66,6 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 pub use crate::sb::members::DevRef;
-use core::ffi::{c_int, c_uint, c_ushort};
 use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU16, AtomicU32};
 use cstruct_macros::{bch_enum, Init, Late, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
@@ -305,8 +304,8 @@ pub struct Fs {
     #[init(SetOnce::new())]
     pub cf_encoding: SetOnce<UnicodeMap>,
 
-    #[init((options.block_size >> 9).ilog2() as c_ushort)]
-    pub block_bits: c_ushort, /* ilog2(block_size) */
+    #[init((options.block_size >> 9).ilog2() as u16)]
+    pub block_bits: u16, /* ilog2(block_size) */
 
     /*
      * shard → preferred CPU mapping for wake_cpu hinting from
@@ -647,7 +646,7 @@ impl Fs {
     }
 
     /// Btree @id's root error, published as the root is.
-    pub fn btree_id_root_set_error(&self, id: u32, err: c_int) {
+    pub fn btree_id_root_set_error(&self, id: u32, err: i32) {
         self.btree.cache.roots.lock().published().roots_error[id as usize].set(err as i16);
     }
 
@@ -802,7 +801,7 @@ fn alloc(sbs: &mut Vec<SbHandle>, opts: &Opts, holder: Arc<Holder>,
 /// The default encoding, utf8 12.1.0: UNICODE_AGE()'s major, minor and rev
 /// bytes
 #[cfg(CONFIG_UNICODE)]
-const BCH_FS_DEFAULT_UTF8_ENCODING: c_uint = (12 << 16) | (1 << 8);
+const BCH_FS_DEFAULT_UTF8_ENCODING: u32 = (12 << 16) | (1 << 8);
 
 impl Fs {
     /// What's set while nothing else can reach it: its @holder, its superblock,
@@ -881,9 +880,9 @@ impl Fs {
         self.journal_entry_res_resize(&self.btree.root_journal_res,
             crate::btree::interior::roots_journal_u64s(Btree::NR));
         self.journal_entry_res_resize(&self.super_entries_journal_res,
-            crate::journal::write::PREP_ENTRIES_U64S as c_uint);
+            crate::journal::write::PREP_ENTRIES_U64S as u32);
         self.journal_entry_res_resize(&self.rewind_limit_res,
-            crate::journal::entries::entry_u64s::<JsetEntryRewindLimit>() as c_uint);
+            crate::journal::entries::entry_u64s::<JsetEntryRewindLimit>() as u32);
 
         {
             let state = self.state_lock_write();

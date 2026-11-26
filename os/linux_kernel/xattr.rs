@@ -3,7 +3,7 @@
 //! The VFS's xattr handlers: sb->s_xattr, a NULL-terminated table of them,
 //! each a namespace's ops - an XattrHandler, dispatched by its prefix.
 
-use core::ffi::{c_int, c_void, CStr};
+use core::ffi::{c_void, CStr};
 use core::marker::PhantomData;
 
 use crate::c;
@@ -22,9 +22,9 @@ pub(crate) trait XattrPrefix {
 }
 
 /// A getxattr result as C's int: the length, or the error's class.
-fn len_to_c(r: Result<usize, BchError>) -> c_int {
+fn len_to_c(r: Result<usize, BchError>) -> i32 {
     match r {
-        Ok(len) => len as c_int,
+        Ok(len) => len as i32,
         Err(e)  => e.class(),
     }
 }
@@ -40,17 +40,17 @@ crate::vfs_ops! {
     /// Xattr @name's value into @buffer, or with None, how long it is.
     fn get(inode: &Self::Inode, name: &CStr, buffer: Option<&mut [u8]>) -> Result<usize, BchError>
         => extern (_handler: *const c::xattr_handler, _dentry: *mut c::dentry, inode: *mut c::inode,
-                   name: *const c_char, buffer: *mut c_void, size: usize) -> c_int
+                   name: *const c_char, buffer: *mut c_void, size: usize) -> i32
     {
         len_to_c(unsafe { T::get(FromRaw::from_raw(inode), FromRaw::from_raw(name), opt_bytes_mut(buffer, size)) })
     };
     /// Xattr @name set to @value - with None, removed - as setxattr(2)'s
     /// @flags say.
     fn set(dentry: Dentry<'_, Self::Inode>, inode: &Self::Inode, name: &CStr, value: Option<&[u8]>,
-           flags: c_int) -> Result<(), BchError>
+           flags: i32) -> Result<(), BchError>
         => extern (_handler: *const c::xattr_handler, _idmap: RawIdmap, dentry: *mut c::dentry,
                    inode: *mut c::inode, name: *const c_char, value: *const c_void, size: usize,
-                   flags: c_int) -> c_int
+                   flags: i32) -> i32
     {
         ret_to_class(unsafe {
             T::set(FromRaw::from_raw(dentry), FromRaw::from_raw(inode), FromRaw::from_raw(name),

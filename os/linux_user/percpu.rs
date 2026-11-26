@@ -70,7 +70,7 @@ use core::ffi::{c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, ManuallyDrop, MaybeUninit};
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::c;
@@ -89,7 +89,7 @@ pub fn migrate_disable() {}
 pub fn migrate_enable() {}
 
 /// 0, as the shim's cpumask.h had it.
-pub fn raw_smp_processor_id() -> c_uint {
+pub fn raw_smp_processor_id() -> u32 {
     0
 }
 
@@ -217,11 +217,11 @@ fn lock() -> MutexGuard<'static, State> {
     STATE.lock().expect("percpu lock poisoned")
 }
 
-fn possible_cpus() -> impl Iterator<Item = c_uint> {
-    0..bch_percpu_nr_cpus.load(Ordering::Acquire) as c_uint
+fn possible_cpus() -> impl Iterator<Item = u32> {
+    0..bch_percpu_nr_cpus.load(Ordering::Acquire) as u32
 }
 
-fn per_cpu_ptr<T>(pcp: *const T, cpu: c_uint) -> *mut T {
+fn per_cpu_ptr<T>(pcp: *const T, cpu: u32) -> *mut T {
     CHUNKS[cpu as usize].load(Ordering::Relaxed).wrapping_add(pcp.addr()).cast()
 }
 
@@ -321,7 +321,7 @@ pub(crate) fn thread_init() {
     claim_slot(id, chunk);
 
     for di in &s.dynamic_inits {
-        unsafe { (di.init)(chunk.wrapping_add(di.pcv).cast(), di.ctx, id as c_uint) };
+        unsafe { (di.init)(chunk.wrapping_add(di.pcv).cast(), di.ctx, id as u32) };
     }
 
     /*
@@ -461,7 +461,7 @@ macro_rules! per_cpu_word {
         }
     )* };
 }
-per_cpu_word!(u32, AtomicU32; u64, AtomicU64);
+per_cpu_word!(u32, AtomicU32; u64, AtomicU64; usize, AtomicUsize);
 
 /// The task held to this CPU while it lives: for this CPU's copy, which
 /// is the copy of whatever CPU the task is on.

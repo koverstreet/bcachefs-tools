@@ -25,7 +25,6 @@ use crate::util::vstructs::{plain_bytes, Container, DstHead, EntryWalk, Head, Pl
                             Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
 use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
-use core::ffi::{c_ulong, c_uint};
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::Range;
@@ -40,7 +39,7 @@ nest! {
     #[repr(C)]
     #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
     pub struct BtreeInsertEntry {
-        pub flags: c_uint,
+        pub flags: u32,
         pub sort_order: u8,
         pub bkey_type: u8,
         #[members]
@@ -66,7 +65,7 @@ nest! {
         /* key being overwritten: */
         pub old_k: Bkey,
         pub old_v: *const Val,
-        pub ip_allocated: c_ulong,
+        pub ip_allocated: usize,
     }
 }
 
@@ -117,7 +116,7 @@ impl<V: ?Sized> From<&mut TransBkey<'_, '_, V>> for QueuedKey {
 impl BtreeInsertEntry {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(key: QueuedKey, path: PathIdx, btree: Btree, level: u32, cached: bool,
-                      flags: c_uint, ip: c_ulong) -> Self {
+                      flags: u32, ip: usize) -> Self {
         let mut bits = BtreeInsertEntryBits::default();
         bits.set_btree_id(btree);
         bits.set_level(level as u8);
@@ -942,7 +941,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     fn update_ip(&self, iter: &BtreeIter<'a>, key: TransBkey<'a, 't>,
-                 flags: UpdateTriggerFlags, ip: c_ulong) -> Result<(), BchError> {
+                 flags: UpdateTriggerFlags, ip: usize) -> Result<(), BchError> {
         if iter.is_extents() {
             return self.update_extent(iter, key, flags);
         }
@@ -950,7 +949,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     fn update_nonextent_ip<V: ?Sized>(&self, iter: &BtreeIter<'a>, mut key: TransBkey<'a, 't, V>,
-                                      flags: UpdateTriggerFlags, ip: c_ulong)
+                                      flags: UpdateTriggerFlags, ip: usize)
         -> Result<TransBkey<'a, 't, V>, BchError>
     {
         if key.k().key_type().is_deleted() &&
@@ -1011,7 +1010,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The update queued: its index in the transaction's updates.
     fn update_by_path(&self, paths: &mut Paths<'_>, path_idx: PathIdx, key: QueuedKey, flags: UpdateTriggerFlags,
-                      ip: c_ulong) -> usize
+                      ip: usize) -> usize
     {
         let fs = self.fs();
         let t = self.trans();
@@ -1092,7 +1091,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         i
     }
 
-    fn flush_new_cached_update(&self, i: usize, flags: UpdateTriggerFlags, ip: c_ulong) -> Result<(), BchError> {
+    fn flush_new_cached_update(&self, i: usize, flags: UpdateTriggerFlags, ip: usize) -> Result<(), BchError> {
         let t = self.trans();
         let (btree, pos) = {
             let paths = t.paths();

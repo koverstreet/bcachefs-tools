@@ -158,7 +158,6 @@ use crate::snapshots::snapshot::is_ancestor;
 use crate::util::{max_of, Printbuf};
 use bitflags::bitflags;
 use core::cell::Cell;
-use core::ffi::{c_ulong, c_uint};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use cstruct_macros::{MaybeZeroable, bch_enum, bitfield, BitfieldMembers};
@@ -258,7 +257,7 @@ nest! {
         pub(in crate::btree) flags: u32,
 
         /* When we're filtering by snapshot, the snapshot ID we're looking for: */
-        pub(in crate::btree) snapshot: c_uint,
+        pub(in crate::btree) snapshot: u32,
 
         pub(in crate::btree) pos: Bpos,
         /*
@@ -271,7 +270,7 @@ nest! {
         pub(in crate::btree) journal_idx: usize,
         /* C's TRACK_PATH_ALLOCATED: see btree_path */
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-        pub(in crate::btree) ip_allocated: c_ulong,
+        pub(in crate::btree) ip_allocated: usize,
     }
 }
 
@@ -556,7 +555,7 @@ impl<'t> BtreeIter<'t> {
         self.iter_flags().contains(BtreeIterFlags::TRIM | BtreeIterFlags::IS_EXTENTS)
     }
 
-    fn ip_allocated(&self) -> c_ulong {
+    fn ip_allocated(&self) -> usize {
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
         return self.ip_allocated;
         #[cfg(not(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG)))]
@@ -1604,7 +1603,7 @@ impl<'t> BtreeIter<'t> {
         self.peek_prev_min_in(t, paths, POS_MIN)
     }
 
-    fn __peek_slot(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, end: Bpos, ip: c_ulong) -> Peeked {
+    fn __peek_slot(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, end: Bpos, ip: usize) -> Peeked {
         let trans = self.trans;
         let flags = self.iter_flags();
         let mut k: Peeked;
@@ -1848,7 +1847,7 @@ impl<'t> BtreeIter<'t> {
 
     #[allow(clippy::too_many_arguments)]
     fn init_common(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
-                   locks_want: u32, depth: u32, flags: BtreeIterFlags, ip: c_ulong) -> Self {
+                   locks_want: u32, depth: u32, flags: BtreeIterFlags, ip: usize) -> Self {
         let mut iter = BtreeIter::uninit(trans);
 
         iter.set_btree(btree);
@@ -1865,13 +1864,13 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub(super) fn init_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
-                          flags: BtreeIterFlags, ip: c_ulong) -> Self {
+                          flags: BtreeIterFlags, ip: usize) -> Self {
         Self::init_common(trans, paths, btree, pos, 0, 0, btree_iter_flags(trans, btree, 0, flags), ip)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn init_ll_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
-                  locks_want: u32, depth: u32, flags: BtreeIterFlags, ip: c_ulong) -> Self {
+                  locks_want: u32, depth: u32, flags: BtreeIterFlags, ip: usize) -> Self {
         let mut iter = Self::init_common(trans, paths, btree, pos, locks_want, depth,
                                          btree_iter_flags(trans, btree, depth, flags), ip);
 
@@ -1888,7 +1887,7 @@ impl<'t> BtreeIter<'t> {
 
     #[allow(clippy::too_many_arguments)]
     fn node_iter_init_in(trans: &'t BtreeTrans<'t>, paths: &mut Paths<'_>, btree: Btree, pos: Bpos,
-                         locks_want: u32, depth: u32, mut flags: BtreeIterFlags, ip: c_ulong) -> Self {
+                         locks_want: u32, depth: u32, mut flags: BtreeIterFlags, ip: usize) -> Self {
         flags |= BtreeIterFlags::NOT_EXTENTS;
         flags |= BtreeIterFlags::SNAPSHOT_FIELD;
         flags |= BtreeIterFlags::ALL_SNAPSHOTS;

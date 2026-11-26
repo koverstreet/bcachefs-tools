@@ -11,7 +11,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::locking::MemallocFlags;
 use crate::os::lockdep::LockClass;
-use core::ffi::{c_int, CStr};
+use core::ffi::CStr;
 use core::marker::PhantomData;
 use pin_init::PinInit;
 
@@ -62,7 +62,7 @@ impl Srcu {
         unsafe { SrcuReadGuard::from_raw(self, idx) }
     }
 
-    fn read_unlock(&self, idx: c_int) {
+    fn read_unlock(&self, idx: i32) {
         unsafe { c::srcu_read_unlock(self.as_ptr(), idx) };
     }
 

@@ -121,7 +121,6 @@ use crate::fs::Fs;
 use crate::util::vstructs::Head;
 use core::mem::offset_of;
 use crate::util::{HumanReadable, Printbuf, ToText};
-use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicU64, AtomicBool, AtomicIsize};
 use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
 use crate::format::{Btree, BkeyType, btree_node};
@@ -440,7 +439,7 @@ impl FsBtreeCache {
 
     /// Ask the shrinker to free @nr nodes, as memory pressure would. Not
     /// under bc->lock: the scan takes it.
-    pub fn shrink(&self, nr: core::ffi::c_ulong) {
+    pub fn shrink(&self, nr: usize) {
         let _ = self.shrinkers[0].scan(nr as usize);
     }
 }
@@ -542,7 +541,7 @@ impl BtreeTrans<'_> {
 // ── The shrinkers ────────────────────────────────────────────────────────
 
 /// What a node costs to recreate, by live list: a pinned one, 4x.
-const SEEKS_MULT: [c_int; 2] = [1, 4];
+const SEEKS_MULT: [i32; 2] = [1, 4];
 
 impl Shrink for BtreeCacheShrinker {
     fn shrinker(&self) -> &Shrinker<Self> {
@@ -566,7 +565,7 @@ impl PlacedDrop for BtreeCacheShrinker {
 
 impl FsBtreeCache {
     pub fn shrinkers_register(&self, fs: &Fs) -> Result<(), BchError> {
-        let seeks = c_int::from(fs.opts.btree_cache_shrinker_seeks.get());
+        let seeks = i32::from(fs.opts.btree_cache_shrinker_seeks.get());
         let lists = ["btree_cache", "btree_cache-pinned"].into_iter().zip(SEEKS_MULT);
         for (s, (list, mult)) in self.shrinkers.iter().zip(lists) {
             let mut name = Printbuf::new();
@@ -577,7 +576,7 @@ impl FsBtreeCache {
         Ok(())
     }
 
-    pub fn set_shrinker_seeks(&self, seeks: c_int) {
+    pub fn set_shrinker_seeks(&self, seeks: i32) {
         for (s, mult) in self.shrinkers.iter().zip(SEEKS_MULT) {
             s.shrink.set_seeks(seeks * mult);
         }
@@ -604,11 +603,11 @@ impl Fs {
 
 // ── Text ─────────────────────────────────────────────────────────────────
 
-pub fn btree_id_level_to_text(out: &mut Printbuf, btree: Btree, level: c_uint) {
+pub fn btree_id_level_to_text(out: &mut Printbuf, btree: Btree, level: u32) {
     prt!(out, "btree={btree} level={level}");
 }
 
-pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uint, k: BkeySC<'_>) {
+pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>) {
     prt!(out, "{btree} level {level}/");
     let root = fs.btree.cache.roots.roots_b.get(btree.0 as usize).map_or(0, |r| r.get());
     if root != 0 {

@@ -8,7 +8,7 @@
 #[repr(C)]
 #[derive(::pin_init::MaybeZeroable)]
 pub struct static_key {
-    pub v: core::ffi::c_int,
+    pub v: i32,
 }
 
 #[repr(C)]

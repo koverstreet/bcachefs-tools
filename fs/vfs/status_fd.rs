@@ -20,7 +20,6 @@ use crate::util::{loan::Loan, vstructs::plain_bytes, ioctl::Ioctl};
 use crate::os::{file::File, thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile}};
 use kernel::sync::aref::ARef;
 use core::sync::atomic::Ordering::{Relaxed, Release};
-use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use core::ops::ControlFlow;
 use kernel::uaccess::{UserPtr, UserSlice};
 use pin_init::{pin_data, pin_init};
@@ -41,10 +40,10 @@ struct StatusFd {
 }
 
 impl StdioFile for StatusFd {
-    fn ioctl(&self, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn ioctl(&self, cmd: u32, arg: usize) -> isize {
         let status = self.fs.with(|fs| {
             let Some(fs) = fs else {
-                return ControlFlow::Break(-(c::ENODEV as c_long));
+                return ControlFlow::Break(-(c::ENODEV as isize));
             };
             let mut status = IoctlRecoveryStatus::default();
 
@@ -87,7 +86,7 @@ impl StdioFile for StatusFd {
         match UserSlice::new(UserPtr::from_addr(arg as usize), size_of_val(&status)).writer()
             .write_slice(plain_bytes(&status)) {
             Ok(()) => 0,
-            Err(_) => -(c::EFAULT as c_long),
+            Err(_) => -(c::EFAULT as isize),
         }
     }
 }
@@ -100,7 +99,7 @@ pub(crate) struct StatusFile(ARef<File<Inner<Stdio<StatusFd>>>>);
 
 impl StatusFile {
     /// A new status channel: its fd, for userspace, and the mount's ref.
-    pub(crate) fn open() -> Result<(c_int, StatusFile), BchError> {
+    pub(crate) fn open() -> Result<(i32, StatusFile), BchError> {
         let status = ThreadWithFile::new_stdio(pin_init!(StatusFd {
             fs <- Loan::new(),
         }? BchError))?;

@@ -19,7 +19,6 @@ use crate::util::Printbuf;
 use crate::sb::{errors::blk_sts_sb_err, members_format::BCH_SB_MEMBER_INVALID};
 use crate::os::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::c_int;
 use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -88,7 +87,7 @@ impl<const N: usize> IoFailures<N> {
         self.dev(dev).filter(|f| f.errcode != 0).map(|f| BchError::from_raw(-i32::from(f.errcode)))
     }
 
-    pub fn set_errcode(&mut self, dev: u32, err: c_int) {
+    pub fn set_errcode(&mut self, dev: u32, err: i32) {
         self.dev_mut(dev).errcode = err as i16;
     }
 

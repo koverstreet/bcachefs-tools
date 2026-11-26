@@ -146,14 +146,14 @@ impl<T: FsType> FsContext<T> {
     pub fn find_super(&mut self, key: *const Data<T>) -> Result<Option<LockedSuper<T>>> {
         /// sget_fc()'s test: fc->s_fs_info is the key.
         unsafe extern "C" fn is_key(sb: *mut c::super_block, fc: *mut kernel::bindings::fs_context) -> c_int {
-            unsafe { ((*sb).s_fs_info == (*fc.cast::<c::fs_context>()).s_fs_info) as c_int }
+            unsafe { ((*sb).s_fs_info == (*fc.cast::<c::fs_context>()).s_fs_info) as i32 }
         }
 
         /// sget_fc()'s set: a mount that finds no superblock doesn't make one
         /// here. ENOKEY is ours alone to mean that: sget_fc() itself fails with
         /// ENOMEM, EBUSY or EPERM.
         unsafe extern "C" fn no_new(_sb: *mut c::super_block, _fc: *mut kernel::bindings::fs_context) -> c_int {
-            -(c::ENOKEY as c_int)
+            -(c::ENOKEY as i32)
         }
 
         self.raw_mut().s_fs_info = key.cast_mut().cast();
@@ -167,7 +167,7 @@ impl<T: FsType> FsContext<T> {
             Ok(sb) => Ok(Some(unsafe {
                 LockedSuper::from_raw(NonNull::new(sb).expect("sget_fc(): a superblock or an error").cast())
             })),
-            Err(e) if e == Error::from_errno(-(c::ENOKEY as c_int)) => Ok(None),
+            Err(e) if e == Error::from_errno(-(c::ENOKEY as i32)) => Ok(None),
             Err(e) => Err(e),
         }
     }
