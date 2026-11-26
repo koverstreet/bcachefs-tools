@@ -228,7 +228,8 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
     ret.change_cookie = fs.opt_change_cookie.get();
 
     if metadata {
-        ret.background_target = if o.metadata_target.get() != 0 { o.metadata_target.get() } else { o.foreground_target.get() };
+        ret.background_target = [o.metadata_target.get(), o.background_target.get(), o.foreground_target.get()]
+            .into_iter().find(|&t| t != 0).unwrap_or(0);
         ret.data_replicas = o.metadata_replicas.get();
         ret.data_checksum = o.metadata_checksum.get();
         ret.compression = 0;
