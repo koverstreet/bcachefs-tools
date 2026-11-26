@@ -1151,7 +1151,7 @@ mod tests {
                             (c"16E", -34, 0), (c"15.9E", 0, 18331451923248866918), (c"1x", -22, 0),
                             (c"1 ", -22, 0), (c"18446744073709551615", 0, u64::MAX),
                             (c"18446744073709551616", -34, 0)] {
-            let r = parse_human_u64(s.to_str().unwrap()).map_err(|e| -e.raw());
+            let r = parse_human_u64(s.to_str().unwrap()).map_err(|e| e.class());
             assert_eq!(r, if ret == 0 { Ok(v) } else { Err(ret) }, "{s:?}");
         }
     }
