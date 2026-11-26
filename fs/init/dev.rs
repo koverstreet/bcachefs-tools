@@ -415,9 +415,16 @@ impl Dev {
     /// What reads it without either only tests it, and sees it unpublished
     /// before it's closed.
     fn sb_close(&self) {
-        let mut sb = self.fs().sb_lock();
-        sb.writer_of(&self.disk_sb).bdev.set(core::ptr::null_mut());
-        sb.get_mut_of(&self.disk_sb).free();
+        let io = {
+            let mut sb = self.fs().sb_lock();
+            sb.writer_of(&self.disk_sb).bdev.set(core::ptr::null_mut());
+            core::mem::take(sb.get_mut_of(&self.disk_sb))
+        };
+        // closed outside sb_lock: closing takes the disk's open_mutex, a loop
+        // device's open takes lo_mutex under it, losetup holds lo_mutex across
+        // fsync of a file here, fsync takes pin_resize_lock, and a journal
+        // write holds that across taking sb_lock
+        drop(io);
     }
 
     pub fn io_ref_stop(&self, rw: usize) {

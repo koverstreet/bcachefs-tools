@@ -1113,11 +1113,6 @@ impl c::bch_sb_io {
         bio_fit(&mut self.bio, plain_bytes(&buf[..]))?;
         Ok(buf)
     }
-
-    /// The buffer and bio freed and the device closed: it zeroed.
-    pub(crate) fn free(&mut self) {
-        *self = Self::default();
-    }
 }
 
 impl bch_sb_handle {
