@@ -4,8 +4,7 @@
 //! under them: a stripe's data folded into its parity as it's written, and
 //! its blocks rebuilt, every way a stripe can lose them. In the kernel, as
 //! perf_test's test_raid_bench; in userspace,
-//!
-//!     cargo bench -p bcachefs-kernel --bench raid
+//! `cargo bench -p bcachefs-kernel --bench raid`.
 
 use super::TestRet;
 use crate::c;
