@@ -199,15 +199,11 @@ TAGS:
 tags:
 	ctags -R .
 
-# Whole crate dirs, not just their src/: a build script is a source file too,
-# and the shim's generates the bindings. Leaving one out meant editing it
-# changed nothing until something else happened to make cargo run - a stale
-# binary that looks like a rebuilt one.
-RUST_SRCS:=$(shell find src fs os -path os/linux_kernel -prune -o -type f -iname '*.rs' -print) build.rs
-
-# The Rust include_str!s version.h. (Order-only: the binary is rebuilt by
-# cargo when it changes.)
-bcachefs: $(RUST_SRCS) | version.h
+# Always cargo's to decide: it tracks every source, build scripts and the
+# include_str!'d version.h. make's mtimes can't - a binary newer than its
+# sources (crane's deps-only build, sources at mtime 1 in the nix store)
+# was taken as built, and the dummy installed.
+bcachefs: force version.h
 	$(Q)$(CARGO_BUILD)
 
 # The cargo test suite, as the nix check runs it (crane-build.nix).
