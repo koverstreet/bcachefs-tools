@@ -22,8 +22,10 @@ use crate::btree::path::{DownKey, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::drop_keys_outside_node;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
+use crate::btree::cache::BtreeNodeCacheState;
+use crate::data::extents_format::BtreePtrV2;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Bpos, Btree};
+use crate::format::{BkeyType, Bpos, Btree, bkey, BTREE_MAX_DEPTH};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::error::id;
 use crate::init::recovery::btree_lost_data;
@@ -47,11 +49,11 @@ enum Repair {
 
 /// @b's key as a btree_ptr_v2 - a v1's converted - with its header and
 /// value's head as @f leaves them.
-fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut c::bkey, &mut c::BtreePtrV2)) -> DownKey {
+fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut bkey, &mut BtreePtrV2)) -> DownKey {
     let contents = b.contents();
     let src = BkeySC::from(b.key());
     let val = src.val_bytes();
-    let mut v = c::BtreePtrV2::default();
+    let mut v = BtreePtrV2::default();
 
     let ptrs = match src.k.key_type() {
         BkeyType::btree_ptr => {
@@ -60,23 +62,23 @@ fn btree_ptr_to_v2(b: Node<'_>, f: impl FnOnce(&mut c::bkey, &mut c::BtreePtrV2)
             val
         }
         BkeyType::btree_ptr_v2 => {
-            let (head, ptrs) = val.split_at(size_of::<c::BtreePtrV2>());
+            let (head, ptrs) = val.split_at(size_of::<BtreePtrV2>());
             plain_bytes_mut(&mut v).copy_from_slice(head);
             ptrs
         }
         _ => unreachable!("a btree node's key is a btree pointer"),
     };
 
-    let mut k = c::bkey::new();
+    let mut k = bkey::new();
     k.set_key_type(BkeyType::btree_ptr_v2);
     k.p = src.k.p;
-    k.set_val_bytes(size_of::<c::BtreePtrV2>() + ptrs.len());
+    k.set_val_bytes(size_of::<BtreePtrV2>() + ptrs.len());
 
     f(&mut k, &mut v);
 
     let mut dst = DownKey::default();
-    let (hdr, val) = plain_bytes_mut(dst.elems_mut()).split_at_mut(size_of::<c::bkey>());
-    let (head, rest) = val.split_at_mut(size_of::<c::BtreePtrV2>());
+    let (hdr, val) = plain_bytes_mut(dst.elems_mut()).split_at_mut(size_of::<bkey>());
+    let (head, rest) = val.split_at_mut(size_of::<BtreePtrV2>());
     hdr.copy_from_slice(plain_bytes(&k));
     head.copy_from_slice(plain_bytes(&v));
     rest[..ptrs.len()].copy_from_slice(ptrs);
@@ -151,7 +153,7 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
         }
 
         /* unhash, rehash */
-        fs.btree_node_transition_state(b.node(), c::BtreeNodeCacheState::FREEABLE)
+        fs.btree_node_transition_state(b.node(), BtreeNodeCacheState::FREEABLE)
             .expect("a node leaving the hash table, write locked");
         b.set_key(&*new);
         fs.btree_node_transition_state(b.node(), b.live_state()).expect("a node back into the hash table, write locked");
@@ -224,7 +226,7 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, b
     };
     let mut buf = Printbuf::new();
 
-    assert!(BkeySC::from(&*b.key).arm::<c::BtreePtrV2>()
+    assert!(BkeySC::from(&*b.key).arm::<BtreePtrV2>()
             .is_none_or(|p| p.v().min_key == b.min_key),
             "a btree_ptr_v2's min_key not its node's");
 
@@ -563,7 +565,7 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
         fake_root(0);
     } else {
         fake_root(1);
-        shoot_down_journal_keys(fs, btree, 1, c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
+        shoot_down_journal_keys(fs, btree, 1, BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
 
         let mut nodes_found = 0;
         get_scanned_nodes(fs, btree, 0, POS_MIN, SPOS_MAX, &mut msg, &mut nodes_found)?;
@@ -595,7 +597,7 @@ fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usiz
         bounds(&paths, &iter)
     };
 
-    assert!(BkeySC::from(&*b.key).arm::<c::BtreePtrV2>()
+    assert!(BkeySC::from(&*b.key).arm::<BtreePtrV2>()
             .is_none_or(|p| p.v().min_key == b.min_key),
             "a btree_ptr_v2's min_key not its node's");
 
@@ -646,7 +648,7 @@ fn drop_root(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, k: &BkeyI) ->
         b.flags.set_permanent(false);
     }
 
-    let _ = fs.btree_node_transition_state(b.node(), c::BtreeNodeCacheState::FREEABLE);
+    let _ = fs.btree_node_transition_state(b.node(), BtreeNodeCacheState::FREEABLE);
     let b: *const BtreeNode = b.node();
 
     trans.node_unlock_write(&mut paths, idx, level);

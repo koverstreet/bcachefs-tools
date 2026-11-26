@@ -31,20 +31,27 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_val_to_text, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN, SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
-use crate::btree::cache::{bch2_btree_id_level_to_text, Bounce};
+use crate::btree::cache::{bch2_btree_id_level_to_text, Bounce, BtreeNodeCacheState};
 use crate::btree::node::sort::{build_aux_trees, SortRuns};
-use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::node::{BtreeNode, NodeContents, BtreeNodeFlags};
 use crate::btree::path::Paths;
 use crate::btree::scrub::ReplicaRead;
 use crate::btree::trans::BtreeTrans;
 use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, validate_bset,
                              validate_bset_keys, ErrAt, NodeIo, NodeValidate};
 use crate::c;
+use crate::data::extents::{bch_io_failures, extent_ptr_decoded, ReadFlags};
+use crate::data::extents_format::BtreePtrV2;
+use crate::errcode::status::BLK_STS_REMOVED;
+use crate::sb::members::DevReadRefKind;
+use crate::sb::members_format::MemberErrorType;
+use crate::util::time_stats::TimeStat;
 use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::data::ptrs::BkeyVRead;
 use crate::debug::trace::events;
-use crate::errcode::{blk_status_to_bch_err, BchError};
-use crate::format::{BkeyType, Btree, BtreeFlags, DataType, Nonce};
+use crate::errcode::{blk_status_to_bch_err, BchError, Errcode};
+use crate::format::{BkeyType, Btree, BtreeFlags, DataType, Nonce, bch_csum, bkey, bset, btree_node,
+    btree_node_entry, Bversion, bset_head};
 use crate::fs::{Dev, Fs};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
@@ -165,9 +172,9 @@ fn maybe_corrupt(buf: &mut [u8], dev: i32) {
 struct NodeRead<'r> {
     fs:         &'r Fs,
     io:         Pin<&'r mut NodeReadBio>,
-    ca:         Option<DevIoRef<c::DevReadRefKind>>,
-    pick:       c::extent_ptr_decoded,
-    failed:     c::bch_io_failures,
+    ca:         Option<DevIoRef<DevReadRefKind>>,
+    pick:       extent_ptr_decoded,
+    failed:     bch_io_failures,
     start_time: u64,
     /* dropped last: that's the wake, after which the filesystem may go */
     node:       ReadInFlightNode,
@@ -176,7 +183,7 @@ struct NodeRead<'r> {
 impl NodeRead<'_> {
     async fn attempt(&mut self, waiter: waiter::Async) -> Result<(), BchError> {
         let fs = self.fs;
-        let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(c::BLK_STS_REMOVED))) };
+        let Some(ca) = &self.ca else { return Err(fs.err(blk_status_to_bch_err(BLK_STS_REMOVED))) };
 
         self.io.reset(c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META);
         /* read_done() may have swapped the node's buffer for its sort's */
@@ -188,18 +195,18 @@ impl NodeRead<'_> {
         if status.is_ok() {
             maybe_corrupt(buf, self.pick.ptr.dev() as i32);
         }
-        ca.account_io_completion(c::MemberErrorType::read, self.start_time, status.is_ok());
+        ca.account_io_completion(MemberErrorType::read, self.start_time, status.is_ok());
         status.map_err(|e| fs.err(e))
     }
 
     fn next_replica(&mut self) -> bool {
         let fs = self.fs;
         let k = BkeySC::from(self.node.key());
-        let Ok(Some(pick)) = k.pick_read_device(fs, Some(&self.failed), 0, c::ReadFlags::empty()) else {
+        let Ok(Some(pick)) = k.pick_read_device(fs, Some(&self.failed), 0, ReadFlags::empty()) else {
             return false;
         };
         self.pick = pick;
-        self.ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
+        self.ca = fs.dev_get_ioref::<DevReadRefKind>(pick.ptr.dev().into());
         true
     }
 
@@ -257,7 +264,7 @@ impl NodeRead<'_> {
 
             if !used {
                 prt!(&mut msg, "retry success");
-            } else if used_err(c::Errcode::btree_node_validate_err_csum) {
+            } else if used_err(Errcode::btree_node_validate_err_csum) {
                 prt!(&mut msg, "checksum error, no good replica: read as is, contents unverified");
             } else {
                 prt!(&mut msg, "repair success");
@@ -272,7 +279,7 @@ impl NodeRead<'_> {
             msg.newline();
 
             /* the replica we're using lost keys: the btree lost data */
-            if used && used_err(c::Errcode::btree_node_validate_err_keys_lost) {
+            if used && used_err(Errcode::btree_node_validate_err_keys_lost) {
                 let _ = btree_lost_data(fs, &mut msg, btree);
             }
         } else {
@@ -308,7 +315,7 @@ pub(super) struct NodePtr {
 
 impl NodePtr {
     pub(super) fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
-        let v2 = k.arm::<c::BtreePtrV2>();
+        let v2 = k.arm::<BtreePtrV2>();
         let v2 = v2.as_ref().map(|v2| v2.v());
         let written = v2.map_or(0, |v2| v2.sectors_written.get() as usize);
         Self {
@@ -326,10 +333,10 @@ enum BsetRead {
     Keys { at: Range<usize>, journal_seq: u64 },
 }
 
-const NODE_BYTES: usize = size_of::<Head<c::btree_node>>();
+const NODE_BYTES: usize = size_of::<Head<btree_node>>();
 const FITS: &str = "a bset inside the node, checked against its end";
 
-impl c::bset_head {
+impl bset_head {
     pub fn nonce(&self, offset: u32) -> Nonce {
         let seq = self.seq.get();
         Nonce {
@@ -345,40 +352,40 @@ impl c::bset_head {
 
 pub trait BsetHolder: Unsized + VStruct {
     const BSET: usize;
-    const KEYS: usize = Self::BSET + size_of::<Head<c::bset>>();
+    const KEYS: usize = Self::BSET + size_of::<Head<bset>>();
 
-    fn node(&mut self) -> Option<&mut c::btree_node<Unvalidated>> {
+    fn node(&mut self) -> Option<&mut btree_node<Unvalidated>> {
         None
     }
 
     fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError>;
 
-    fn bset(&self) -> &Head<c::bset> {
+    fn bset(&self) -> &Head<bset> {
         Self::head(self.as_bytes())
     }
 
-    fn bset_mut(&mut self) -> &mut c::bset<Unvalidated> {
+    fn bset_mut(&mut self) -> &mut bset<Unvalidated> {
         from_bytes_mut(&mut bytes_of_mut(self)[Self::BSET..]).expect("a bset, its holder's tail")
     }
 
-    fn csum(&self) -> c::bch_csum {
+    fn csum(&self) -> bch_csum {
         *cast_plain(self.as_bytes()).expect("a csum, at the start of what holds a bset")
     }
 
-    fn set_csum(&mut self, csum: c::bch_csum) {
+    fn set_csum(&mut self, csum: bch_csum) {
         *cast_plain_mut(bytes_of_mut(self)).expect("a csum, at the start of what holds a bset") = csum;
     }
 
-    fn checksum(&self, fs: &Fs, offset: u32) -> c::bch_csum {
+    fn checksum(&self, fs: &Fs, offset: u32) -> bch_csum {
         let i = self.bset();
         csum_vstruct(Some(fs), i.csum_type(), i.nonce(offset), self)
     }
 
-    fn head(bytes: &[u8]) -> &Head<c::bset> {
+    fn head(bytes: &[u8]) -> &Head<bset> {
         cast_plain(&bytes[Self::BSET..]).expect("a bset header, in its node's buffer")
     }
 
-    fn head_mut(bytes: &mut [u8]) -> &mut Head<c::bset> {
+    fn head_mut(bytes: &mut [u8]) -> &mut Head<bset> {
         cast_plain_mut(&mut bytes[Self::BSET..]).expect("a bset header, in its node's buffer")
     }
 
@@ -397,16 +404,16 @@ pub trait BsetHolder: Unsized + VStruct {
     }
 }
 
-impl BsetHolder for c::btree_node<Unvalidated> {
-    const BSET: usize = offset_of!(Head<c::btree_node>, keys);
+impl BsetHolder for btree_node<Unvalidated> {
+    const BSET: usize = offset_of!(Head<btree_node>, keys);
 
-    fn node(&mut self) -> Option<&mut c::btree_node<Unvalidated>> {
+    fn node(&mut self) -> Option<&mut btree_node<Unvalidated>> {
         Some(self)
     }
 
     fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
         let (ty, nonce) = (self.keys.csum_type(), self.keys.nonce(offset));
-        let (flags, keys) = (offset_of!(Head<c::btree_node>, flags), Self::BSET);
+        let (flags, keys) = (offset_of!(Head<btree_node>, flags), Self::BSET);
         let bytes = self.as_bytes_mut();
 
         fs.encrypt(ty, nonce, &mut bytes[flags..keys])?;
@@ -415,8 +422,8 @@ impl BsetHolder for c::btree_node<Unvalidated> {
     }
 }
 
-impl BsetHolder for c::btree_node_entry<Unvalidated> {
-    const BSET: usize = offset_of!(Head<c::btree_node_entry>, keys);
+impl BsetHolder for btree_node_entry<Unvalidated> {
+    const BSET: usize = offset_of!(Head<btree_node_entry>, keys);
 
     fn crypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
         let (ty, nonce) = (self.keys.csum_type(), self.keys.nonce(offset));
@@ -430,11 +437,11 @@ unsafe fn node_buf<'a>(b: &BtreeNode, contents: &NodeContents) -> &'a mut [u8] {
     unsafe { core::slice::from_raw_parts_mut(contents.bufs.data.cast::<u8>(), b.buf_bytes()) }
 }
 
-fn node_header(buf: &[u8]) -> Head<c::btree_node> {
+fn node_header(buf: &[u8]) -> Head<btree_node> {
     *cast_plain(buf).expect(FITS)
 }
 
-fn node_header_to_text(out: &mut Printbuf, bn: &Head<c::btree_node>) {
+fn node_header_to_text(out: &mut Printbuf, bn: &Head<btree_node>) {
     bch2_btree_id_level_to_text(out, bn.btree_id(), bn.level() as c_uint);
     prt!(out, " seq {:x} {}\n", bn.keys.seq.get(), bn.seq());
     prt!(out, "min: {}\n", bn.min_key);
@@ -474,7 +481,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
             break;
         }
 
-        let mut u = c::bkey::default();
+        let mut u = bkey::default();
         bkey_val_to_text(&mut out, Some(fs), k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut u));
         out.newline();
         at += k.u64s() * size_of::<u64>();
@@ -487,7 +494,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
 pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents: &NodeContents) {
     let k = BkeySC::from(b.key(contents));
 
-    let dev = match k.pick_read_device(fs, None, 0, c::ReadFlags::empty()) {
+    let dev = match k.pick_read_device(fs, None, 0, ReadFlags::empty()) {
         Ok(Some(pick)) => pick.ptr.dev().into(),
         _ => {
             prt!(out, "error getting device to read from: invalid device\n");
@@ -511,11 +518,11 @@ pub fn node_ondisk_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents:
     while offset < fs.btree_sectors() as usize {
         let bytes = &mut buf[offset << 9..];
         let sectors = if offset == 0 {
-            bset_ondisk_to_text::<c::btree_node<Unvalidated>>(out, fs, contents, bytes, offset)
-        } else if c::btree_node_entry::<Unvalidated>::head(bytes).seq != node_seq {
+            bset_ondisk_to_text::<btree_node<Unvalidated>>(out, fs, contents, bytes, offset)
+        } else if btree_node_entry::<Unvalidated>::head(bytes).seq != node_seq {
             break;
         } else {
-            bset_ondisk_to_text::<c::btree_node_entry<Unvalidated>>(out, fs, contents, bytes, offset)
+            bset_ondisk_to_text::<btree_node_entry<Unvalidated>>(out, fs, contents, bytes, offset)
         };
         let Some(sectors) = sectors else { return };
 
@@ -704,7 +711,7 @@ fn read_done_end(v: &mut NodeValidate<'_>, p: &NodePtr, buf: &[u8]) -> Result<()
         let mut bne = (b.written.get() as usize) << 9;
 
         while bne < b.buf_bytes() {
-            let e = *cast_plain::<Head<c::btree_node_entry>>(&buf[bne..]).expect(FITS);
+            let e = *cast_plain::<Head<btree_node_entry>>(&buf[bne..]).expect(FITS);
 
             if btree_err_on!(v, e.keys.seq == data_seq &&
                                 !fs.journal_seq_is_blacklisted(e.keys.journal_seq.get(), true),
@@ -729,7 +736,7 @@ fn sort_bsets(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, runs: &mut So
     contents.nr = nr;
     sorted.u64s()[NODE_BYTES / 8 + nr.live_u64s as usize..].fill(0);
 
-    cast_plain_mut::<Head<c::btree_node>>(&mut *buf).expect(FITS).keys.set_u64s(u64s);
+    cast_plain_mut::<Head<btree_node>>(&mut *buf).expect(FITS).keys.set_u64s(u64s);
     sorted.as_bytes_mut()[..NODE_BYTES].copy_from_slice(&buf[..NODE_BYTES]);
 
     if !mem_alloc_profiling_enabled() {
@@ -740,9 +747,9 @@ fn sort_bsets(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, runs: &mut So
 
     contents.nsets = 1;
     b.flags.set_nr_written_bsets(1);
-    b.keys_mut(contents).set_bset(0, (offset_of!(Head<c::btree_node>, keys) / 8) as u16);
+    b.keys_mut(contents).set_bset(0, (offset_of!(Head<btree_node>, keys) / 8) as u16);
 
-    let n = c::btree_node::<Unvalidated>::from_bytes_mut(unsafe { node_buf(b, contents) }).expect(FITS);
+    let n = btree_node::<Unvalidated>::from_bytes_mut(unsafe { node_buf(b, contents) }).expect(FITS);
     n.bset_mut().journal_seq = Le64::new(journal_seq);
 
     assert!(contents.nr.live_u64s as usize == n.keys.u64s(),
@@ -751,7 +758,7 @@ fn sort_bsets(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, runs: &mut So
 
 fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Result<(), BchError> {
     let (fs, b) = (v.fs, v.b);
-    let n = c::btree_node::<Unvalidated>::from_bytes_mut(unsafe { node_buf(b, contents) }).expect(FITS);
+    let n = btree_node::<Unvalidated>::from_bytes_mut(unsafe { node_buf(b, contents) }).expect(FITS);
     let mut i = n.bset_mut();
     let mut at = 0;
 
@@ -759,12 +766,12 @@ fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resul
         let k = k.cast_mut::<FamilyVal<AllTypes>>();
 
         let drop_key = {
-            let mut tmp = c::bkey::default();
+            let mut tmp = bkey::default();
             let u = k.disassemble(contents, &mut tmp);
 
             match btree_node_bkey_val_validate(fs, b, u, ValidateFlags::empty()) {
-                Err(err) if err == BchError::from(c::Errcode::fsck_delete_bkey) => true,
-                _ if crate::debug::params::inject_invalid_keys() && u.k.bversion == c::Bversion::MAX => true,
+                Err(err) if err == BchError::from(Errcode::fsck_delete_bkey) => true,
+                _ if crate::debug::params::inject_invalid_keys() && u.k.bversion == Bversion::MAX => true,
                 Err(err) => {
                     v.replica_failed();
                     return Err(err);
@@ -816,9 +823,9 @@ fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resu
     let mut max_journal_seq = 0;
     while (b.written.get() as usize) < p.end {
         let read = if b.written.get() == 0 {
-            read_bset::<c::btree_node<Unvalidated>>(v, contents, &p, buf)?
+            read_bset::<btree_node<Unvalidated>>(v, contents, &p, buf)?
         } else {
-            read_bset::<c::btree_node_entry<Unvalidated>>(v, contents, &p, buf)?
+            read_bset::<btree_node_entry<Unvalidated>>(v, contents, &p, buf)?
         };
         match read {
             BsetRead::End                      => break,
@@ -850,16 +857,16 @@ fn node_read_done(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resu
     Ok(())
 }
 
-pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode, failed: Option<&mut c::bch_io_failures>,
+pub fn read_done(fs: &Fs, ca: &Dev, node: &mut ReadInFlightNode, failed: Option<&mut bch_io_failures>,
                  err_msg: &mut Printbuf) -> Result<(), BchError> {
     let (b, contents) = node.parts();
-    fs.times.get(c::TimeStat::btree_node_read_done as usize)
+    fs.times.get(TimeStat::btree_node_read_done as usize)
         .time(|| node_read_done(&mut NodeValidate { fs, b, io: NodeIo::Read { ca, failed, err_msg } }, contents))
 }
 
 #[in_place(NodeReadFut)]
 async fn read_task<'h>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, node: ReadInFlightNode,
-                       pick: c::extent_ptr_decoded, ca: Option<DevIoRef<c::DevReadRefKind>>) {
+                       pick: extent_ptr_decoded, ca: Option<DevIoRef<DevReadRefKind>>) {
     let fs = &*fs;
     let mut r = NodeRead {
         fs,
@@ -875,7 +882,7 @@ async fn read_task<'h>(home: Pin<&'h mut NodeReadBio>, fs: BackRef<Fs>, node: Re
     let ret = r.read(&mut err).await;
     r.report(ret, &err);
 
-    fs.times.get(c::TimeStat::btree_node_read as usize).update(r.start_time);
+    fs.times.get(TimeStat::btree_node_read as usize).update(r.start_time);
     if ret.is_ok() {
         r.maybe_merge();
     }
@@ -890,7 +897,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
 
     fs.event_inc_trace(events::btree_node_read, |out| prt!(out, "{}", b.pos_to_text(fs)));
 
-    let Ok(Some(pick)) = key.pick_read_device(fs, None, 0, c::ReadFlags::empty()) else {
+    let Ok(Some(pick)) = key.pick_read_device(fs, None, 0, ReadFlags::empty()) else {
         let mut msg = log_msg_ratelimited!(fs);
 
         prt!(&mut msg, "btree node read error: no device to read from\n at {}\n", b.pos_to_text(fs));
@@ -906,7 +913,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
         return;
     };
 
-    let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into());
+    let ca = fs.dev_get_ioref::<DevReadRefKind>(pick.ptr.dev().into());
     let bytes = b.buf_bytes();
 
     if let Some(ca) = &ca {
@@ -940,7 +947,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
     unsafe { slot.start_unchecked(at, tasks, move |home| read_task(home, fs_ref, node, pick, ca)) };
 
     if sync {
-        b.wait_on_flag(c::BtreeNodeFlags::read_in_flight);
+        b.wait_on_flag(BtreeNodeFlags::read_in_flight);
     }
 }
 
@@ -956,7 +963,7 @@ impl Fs {
         let mut n = b.unwrap_or_else(|e| panic!("allocating a btree root's node: {e}"));
         n.locked().set_key(k);
         n.set_id(id, level as usize);
-        let (b, held) = n.hash(self, c::BtreeNodeCacheState::CLEAN)
+        let (b, held) = n.hash(self, BtreeNodeCacheState::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}")).into_held(self);
 
         let read = unsafe { ReadInFlightNode::new(b) };
@@ -966,8 +973,8 @@ impl Fs {
         node_read(&trans, read, true);
 
         let ret = if b.flags.read_error() {
-            let _ = self.btree_node_transition_state(b, c::BtreeNodeCacheState::FREEABLE);
-            Err(self.err(c::Errcode::btree_node_read_error))
+            let _ = self.btree_node_transition_state(b, BtreeNodeCacheState::FREEABLE);
+            Err(self.err(Errcode::btree_node_read_error))
         } else {
             self.btree_set_root_for_read(b);
             Ok(())
@@ -979,9 +986,9 @@ impl Fs {
 }
 
 pub fn bch2_btree_node_wait_on_read(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::read_in_flight);
+    trans.wait_on_node_flag(paths, b, BtreeNodeFlags::read_in_flight);
 }
 
 pub fn bch2_btree_node_wait_on_write(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, b: &BtreeNode) {
-    trans.wait_on_node_flag(paths, b, c::BtreeNodeFlags::write_in_flight);
+    trans.wait_on_node_flag(paths, b, BtreeNodeFlags::write_in_flight);
 }

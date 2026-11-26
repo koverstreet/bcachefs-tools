@@ -45,7 +45,7 @@ use core::ops::Deref;
 use core::sync::atomic::{fence, AtomicPtr, Ordering};
 use zerocopy::{FromBytes, FromZeros};
 
-use crate::c;
+use crate::c::rcu_head;
 use crate::data_structures::dst_array::DstArray;
 use crate::util::alloc::AllocError;
 use crate::util::vstructs::NonZeroWord;
@@ -248,7 +248,7 @@ impl Flavor<'_> {
     }
 }
 
-unsafe extern "C" fn callback<P: RcuOwned, F: Fn(P) + Copy>(head: *mut c::rcu_head) {
+unsafe extern "C" fn callback<P: RcuOwned, F: Fn(P) + Copy>(head: *mut rcu_head) {
     let p = unsafe { P::from_head(NonNull::new_unchecked(head.cast())) };
     // F is zero-sized, so this is its one value
     let f = unsafe { NonNull::<F>::dangling().read() };

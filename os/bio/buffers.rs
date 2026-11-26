@@ -12,7 +12,7 @@ use yoke::Yoke;
 use super::pages::{self, BouncePool};
 use super::{buf_nr_bvecs, Bio, BioBox, BioInPlace, BioOwns, BioVecs, HasBio, Mapped};
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::alloc::{flags, AlignedBox, AllocError, Flags};
 
@@ -140,7 +140,7 @@ impl MappedPages {
         })?;
 
         let m = Yoke::<Mapped<'static>, _>::try_attach_to_cart(bio, |b: &Bio<AllocPages>| {
-            HasBio::bio(b).range().map().ok_or(BchError::from(c::Errcode::ENOMEM_bio_buffers_map))
+            HasBio::bio(b).range().map().ok_or(BchError::from(Errcode::ENOMEM_bio_buffers_map))
         })?;
         #[cfg(kernel)]
         if let Mapped::Vmap { offset, .. } = m.get() {

@@ -12,6 +12,7 @@
 //! print there, and the file frees the channel when both are gone.
 
 use crate::c;
+use crate::bcachefs_ioctl::{bch_ioctl_recovery_status, BCH_IOCTL_RECOVERY_STATUS};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
@@ -48,7 +49,7 @@ impl StdioFile for StatusFd {
             let Some(fs) = fs else {
                 return ControlFlow::Break(-(c::ENODEV as c_long));
             };
-            let mut status = c::bch_ioctl_recovery_status::default();
+            let mut status = bch_ioctl_recovery_status::default();
 
             // Everything else this filesystem answers, it answers here: the
             // chardev's ioctl exists to turn a minor back into a bch_fs, and
@@ -60,7 +61,7 @@ impl StdioFile for StatusFd {
             // Safe to pass everything through: the dispatch answers the
             // read-only queries and then refuses anything else until
             // BCH_FS_started, which isn't set until recovery is done.
-            if cmd != <c::BCH_IOCTL_RECOVERY_STATUS as Ioctl>::OPCODE {
+            if cmd != <BCH_IOCTL_RECOVERY_STATUS as Ioctl>::OPCODE {
                 return ControlFlow::Break(ioctl_ret(fs_ioctl(fs, cmd, UserPtr::from_addr(arg as usize))));
             }
 

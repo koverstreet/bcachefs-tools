@@ -5,9 +5,8 @@
 use super::bset::{AuxTreeType, BsetTree, BSET_CACHELINE, BSET_NO_AUX_TREE_VAL, BSET_RW_AUX_TREE_VAL};
 use super::keys::{bkey_p_next, key_at, keys_between, set_keys, Keys, KeysMut};
 use super::{check_lookups, NodeContents};
-use crate::btree::bkey::{BkeyP, HIGH_BIT_OFFSET};
-use crate::c;
-use crate::format::Bpos;
+use crate::btree::bkey::{BkeyP, HIGH_BIT_OFFSET, bkey_packed_padded};
+use crate::format::{Bpos, bkey, bkey_packed, KEY_PACKED_BITS_START};
 use crate::types::{L1_CACHE_BYTES, SMP_CACHE_BYTES};
 use crate::data_structures::eytzinger::Eytzinger1;
 use crate::os::kernel::{likely, prefetch, unlikely};
@@ -309,20 +308,20 @@ fn bkey_mantissa(buf: &[u64], k: u16, f: &BkeyFloat) -> u16 {
 
 /// The 8 bytes from a u8 exponent's byte are within a bkey_packed, so the
 /// search key's mantissa is read without a bounds check.
-const _: () = assert!((u8::MAX >> 3) as usize + size_of::<u64>() <= size_of::<c::bkey_packed>());
+const _: () = assert!((u8::MAX >> 3) as usize + size_of::<u64>() <= size_of::<bkey_packed>());
 
 /// Of the search key, packed onto the stack.
-fn bkey_mantissa_search(k: &c::bkey_packed, f: &BkeyFloat) -> u16 {
+fn bkey_mantissa_search(k: &bkey_packed, f: &BkeyFloat) -> u16 {
     bkey_mantissa_shift(read_u64(plain_bytes(k), (f.exponent >> 3) as usize), f)
 }
 
 /// @pos packed, if it packs, or unpacked: a bound for make_bfloat().
-pub(super) fn pack_pos_or_unpacked(contents: &NodeContents, pos: Bpos) -> c::bkey_packed_padded {
-    let mut k = ::pin_init::zeroed::<c::bkey_packed_padded>();
+pub(super) fn pack_pos_or_unpacked(contents: &NodeContents, pos: Bpos) -> bkey_packed_padded {
+    let mut k = ::pin_init::zeroed::<bkey_packed_padded>();
     let (buf, at) = k.as_buf_mut();
 
     if !contents.pack_pos(buf, at, pos) {
-        let u = c::bkey { p: pos, ..c::bkey::new() };
+        let u = bkey { p: pos, ..bkey::new() };
         plain_bytes_mut(&mut k.k).copy_from_slice(plain_bytes(&u));
     }
     k
@@ -386,7 +385,7 @@ impl KeysMut<'_> {
         } else {
             let shift = HIGH_BIT_OFFSET as i32 + nr_key_bits - exponent - BKEY_MANTISSA_BITS as i32;
 
-            ebug_assert!(shift >= c::KEY_PACKED_BITS_START as i32);
+            ebug_assert!(shift >= KEY_PACKED_BITS_START as i32);
             shift
         };
         ebug_assert!(shift >= 0 && shift < BFLOAT_FAILED as i32);
@@ -654,7 +653,7 @@ fn bkey_mantissa_bits_dropped(b: &NodeContents, f: &BkeyFloat) -> bool {
 }
 
 pub(super) fn bset_search_tree(keys: &Keys<'_>, t: &BsetTree, ro: RoAuxTree<'_>,
-                               search: &Bpos, packed_search: &c::bkey_packed) -> u16 {
+                               search: &Bpos, packed_search: &bkey_packed) -> u16 {
     let b = keys.contents();
     let packed: &BkeyP = BkeyP::from_packed(packed_search).expect("a packed search key").cast();
     /* t.size bounds it, so n * 2 can't overflow: the optimizer sees that */

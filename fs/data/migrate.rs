@@ -45,21 +45,27 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeLevels, BtreeNodeIter, BtreeNodeRef, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
-use crate::c;
-use crate::c::Errcode;
+use crate::data::ec::format::Stripe;
+use crate::bcachefs_ioctl::{BCH_FORCE_IF_DATA_DEGRADED, BCH_FORCE_IF_DATA_LOST,
+    BCH_FORCE_IF_METADATA_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
+use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BKEY_EXTENT_U64s_MAX};
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::errcode::Errcode;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
-use crate::init::progress::Progress;
+use crate::init::progress::{Progress, progress_indicator};
 use crate::posix::inode_opts::{self, get_io_opts};
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::prt;
 use core::mem::size_of;
-use crate::format::{Btree, DataType, MemberState, ErrorKeyReason, BkeyType};
+use crate::format::{Btree, DataType, MemberState, ErrorKeyReason, BkeyType, Backpointer,
+    BTREE_MAX_DEPTH};
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
 /// yet, and has backpointers of its own for the next scan.
@@ -83,11 +89,11 @@ impl DevDrop<'_> {
         let fs = t.fs();
         let metadata = k.k.is_btree_ptr();
         let (replicas, lost, degraded, room) = if metadata {
-            (fs.opts.metadata_replicas.get(), c::BCH_FORCE_IF_METADATA_LOST, c::BCH_FORCE_IF_METADATA_DEGRADED,
-             c::BKEY_BTREE_PTR_U64s_MAX)
+            (fs.opts.metadata_replicas.get(), BCH_FORCE_IF_METADATA_LOST, BCH_FORCE_IF_METADATA_DEGRADED,
+             BKEY_BTREE_PTR_U64s_MAX)
         } else {
-            (fs.opts.data_replicas.get(), c::BCH_FORCE_IF_DATA_LOST, c::BCH_FORCE_IF_DATA_DEGRADED,
-             c::BKEY_EXTENT_U64s_MAX)
+            (fs.opts.data_replicas.get(), BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DATA_DEGRADED,
+             BKEY_EXTENT_U64s_MAX)
         };
 
         if k.has_device(fs, self.dev).is_none() {
@@ -106,7 +112,7 @@ impl DevDrop<'_> {
 
         if n.as_sc().can_read(fs) {
             let opts = get_io_opts(t, None, k.into())?;
-            n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+            n.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
         } else if !metadata {
             n.set_error(fs, ErrorKeyReason::device_removed);
         }
@@ -153,7 +159,7 @@ impl DevDrop<'_> {
     fn stripe<'a>(&mut self, t: &TransAttempt<'a, '_>, iter: &BtreeIter<'a>, k: BkeySC<'_>, had_open: &mut bool,
                   recorded: &mut u64) -> Result<(), BchError> {
         let fs = t.fs();
-        let Some(old) = k.arm::<c::Stripe>() else { return Ok(()) };
+        let Some(old) = k.arm::<Stripe>() else { return Ok(()) };
         let idx = k.k.p.offset;
 
         // With @k intent locked, as the stripe deleter's check: a create
@@ -176,7 +182,7 @@ impl DevDrop<'_> {
             for (i, p) in v.block_ptrs().iter().enumerate() {
                 let mut dev = u32::from(p.dev());
                 if dev == self.dev {
-                    dev = c::BCH_SB_MEMBER_INVALID;
+                    dev = BCH_SB_MEMBER_INVALID;
                     newly_lost |= 1 << i;
                 }
                 let ca = fs.dev_rcu(dev, &rcu);
@@ -189,11 +195,11 @@ impl DevDrop<'_> {
             }
         }
 
-        if nr_good < u32::from(v.nr_blocks) && self.flags & c::BCH_FORCE_IF_DATA_DEGRADED == 0 {
+        if nr_good < u32::from(v.nr_blocks) && self.flags & BCH_FORCE_IF_DATA_DEGRADED == 0 {
             prt!(self.err, "cannot drop device without degrading\n  {}\n", k.to_text(fs));
             return fs.throw(Errcode::remove_would_lose_data);
         }
-        if nr_good < v.nr_data() && self.flags & c::BCH_FORCE_IF_DATA_LOST == 0 {
+        if nr_good < v.nr_data() && self.flags & BCH_FORCE_IF_DATA_LOST == 0 {
             prt!(self.err, "cannot drop device without losing data\n  {}\n", k.to_text(fs));
             return fs.throw(Errcode::remove_would_lose_data);
         }
@@ -218,13 +224,13 @@ impl DevDrop<'_> {
             // re-keyed
             let mut n = BkeyBuf::from_key(k);
             let mut nk: &mut BkeyI = n.as_mut();
-            let mut s = nk.as_s().arm::<c::Stripe>().expect("a copy of a stripe");
+            let mut s = nk.as_s().arm::<Stripe>().expect("a copy of a stripe");
             for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
-                p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+                p.set_dev(BCH_SB_MEMBER_INVALID as u8);
             }
 
             *recorded = idx;
-            let n = BkeySC::from(&n).arm::<c::Stripe>().expect("a copy of a stripe");
+            let n = BkeySC::from(&n).arm::<Stripe>().expect("a copy of a stripe");
             // committed, and @k stale: the restart has the scan look again
             return Err(t.close(CommitFlags::empty(), |trans| {
                 record_lost_blocks(trans, n, record, id::data_lost_device_removed, true, None);
@@ -239,13 +245,13 @@ impl DevDrop<'_> {
 
         t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty(), |s| {
             s.set_needs_reconcile(t, None, &inode_opts::get_fs(fs, false),
-                                  c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+                                  SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
             let user = DataType::user;
             accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
 
             for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
-                p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+                p.set_dev(BCH_SB_MEMBER_INVALID as u8);
             }
             // degraded, so it needs rebuilding, whatever set_needs_reconcile()
             // made of the device
@@ -277,14 +283,14 @@ impl DevDrop<'_> {
     }
 
     fn metadata(&mut self, fs: &Fs, progress: &Progress<'_>) -> Result<(), BchError> {
-        if self.flags & c::BCH_FORCE_IF_METADATA_LOST != 0 {
+        if self.flags & BCH_FORCE_IF_METADATA_LOST != 0 {
             return fs.throw(Errcode::remove_with_metadata_missing_unimplemented);
         }
 
         let trans = crate::btree_trans!(fs);
 
         for btree in (0..fs.btree_id_nr_alive()).map(Btree) {
-            BtreeLevels { btree, levels: 1..c::BTREE_MAX_DEPTH + 1, start: POS_MIN, end: SPOS_MAX }
+            BtreeLevels { btree, levels: 1..BTREE_MAX_DEPTH + 1, start: POS_MIN, end: SPOS_MAX }
                 .for_each_btree_ptr_commit(&trans, None, CommitFlags::empty(), |t, iter, level, k| {
                     progress.update(t, iter)?;
 
@@ -299,7 +305,7 @@ impl DevDrop<'_> {
         Ok(())
     }
 
-    fn bp(&mut self, t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>, mut last_flushed: WbFlush<'_>,
+    fn bp(&mut self, t: &TransAttempt<'_, '_>, bp: BkeySC<'_, Backpointer>, mut last_flushed: WbFlush<'_>,
           had_open_stripe: &mut bool, recorded_stripe: &mut u64) -> Result<(), BchError>
     {
         let fs = t.fs();
@@ -327,7 +333,7 @@ impl DevDrop<'_> {
 }
 
 pub(crate) fn dev_data_drop(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
-    let p = c::progress_indicator::default();
+    let p = progress_indicator::default();
 
     let user = crate::BTREE_HAS_DATA_PTRS_MASK & !(1 << Btree::stripes.0);
     d.usrdata(fs, &Progress::new(&p, fs, c"dropping user data", user, 0))?;
@@ -351,7 +357,7 @@ pub(crate) fn dev_data_drop_by_backpointers(fs: &Fs, ca: &Dev, mut d: DevDrop<'_
 
     let trans = crate::btree_trans!(fs);
     let mut last_flushed = WbMaybeFlush::new();
-    let p = c::progress_indicator::default();
+    let p = progress_indicator::default();
     let progress = Progress::new(&p, fs, c"dropping device data", 1 << Btree::backpointers.0, 0);
 
     let mut min_data_buckets = u64::MAX;

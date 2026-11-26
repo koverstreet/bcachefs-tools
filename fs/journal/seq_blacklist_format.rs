@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
 use crate::types::Le64;
 use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
 
@@ -13,9 +12,9 @@ pub struct journal_seq_blacklist_entry {
     pub end: Le64,
 }
 
-#[whole(tail = start: [c::journal_seq_blacklist_entry])]
+#[whole(tail = start: [journal_seq_blacklist_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_seq_blacklist {
-    pub start: [c::journal_seq_blacklist_entry; 0],
+    pub start: [journal_seq_blacklist_entry; 0],
 }

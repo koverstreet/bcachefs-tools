@@ -11,4 +11,4 @@ pub mod members;
 pub mod members_format;
 pub mod version;
 
-pub use crate::c::SbFieldType;
+pub use crate::format::SbFieldType;

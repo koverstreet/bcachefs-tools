@@ -210,6 +210,16 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
+#[cfg(kernel)]
+use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
+use crate::alloc::buckets::{bch_dev_usage_full, bucket, BucketGensArray};
+use crate::alloc::check_backpointers::{bucket_bitmap, BucketBitmapWords};
+use crate::btree::interior::BTREE_NODE_RESERVE;
+use crate::data::reconcile::work::ReconcileScan;
+use crate::journal::buckets::journal_device;
+use crate::opts::bch_opts;
+use crate::sb::members_format::{bch_member, BCH_MEMBER_NBUCKETS_MAX, bch_sb_field_members_v2,
+    BCH_SB_MEMBERS_MAX, MemberErrorType};
 use crate::alloc::accounting::{self, dev_usage_init};
 use crate::btree::iter::{trans_commit_do, CommitFlags};
 use crate::sb::io::SbFieldOps;
@@ -217,19 +227,21 @@ use crate::alloc::capacity::recalc_capacity;
 use crate::alloc::check::{dev_freespace_init, fs_freespace_init};
 use crate::alloc::background::dev_remove_alloc;
 use crate::alloc::disk_groups::{dev_group_set, disk_path_to_text_sb};
-use crate::alloc::replicas::can_write_with_devs;
+use crate::alloc::replicas::{can_write_with_devs, WriteCheck};
 use crate::btree::iter::UpdateTriggerFlags;
 use crate::data::migrate::{dev_data_drop, dev_data_drop_by_backpointers, dev_remove_stripes, DevDrop};
 use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, StateLockWrite};
-use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures};
+use crate::fs::{Fs, StateLockWrite, FsFlag};
+use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures, __uuid_t,
+    BCH_BKEY_PTRS_MAX, bch_sb, bch_sb_layout, SbCompat};
 use crate::locking::{Guard as _, Locked, LockedBy, MemallocFlags, Mutex};
 use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
-use crate::sb::io::{read_super, SbReadScratch};
+use crate::sb::io::{read_super, SbReadScratch, SbWriteFlags};
 use crate::sb::members::{member_exists, mi_field_upgrades, sb_member,
-                         sb_member_alloc, DevIoRef, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID};
+                         sb_member_alloc, DevIoRef, DevKobjRef, DevName, DevOuterRef, DevRef, MEMBER_DELETED_UUID,
+                         bch_dev_identity, bch_member_cpu, DevReadRefKind};
 use crate::util::alloc::kbox_pin_init;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
@@ -264,14 +276,14 @@ use crate::new_lock;
 use crate::util::alloc::Vec;
 use crate::util::late::Late;
 use crate::util::place::Placed;
-use crate::util::time_stats::TimeStatsArray;
+use crate::util::time_stats::{TimeStatsArray, bch2_time_stats_quantiles};
 use crate::os::workqueue::ReffedWork;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct io_count {
-    pub sectors: [[u64; c::DataType::NR as usize]; 2],
+    pub sectors: [[u64; DataType::NR as usize]; 2],
 }
 
 #[bch_enum(closed)]
@@ -336,15 +348,15 @@ pub struct Dev {
      * Committed by bch2_write_super() -> bch_fs_mi_update(): written under
      * sb_lock, read without it
      */
-    pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
+    pub mi: crate::util::projections::Volatile<bch_member_cpu>,
     pub btree_allocated_bitmap_gc: crate::util::projections::Volatile<u64>,
-    pub errors: [AtomicI64; c::MemberErrorType::NR as usize],
+    pub errors: [AtomicI64; MemberErrorType::NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.
     pub write_errors_start: crate::data_structures::bitmap::AtomicULong,
-    pub flags: AtomicBitflags<c::DevFlag>,
+    pub flags: AtomicBitflags<DevFlag>,
 
-    pub uuid: c::__uuid_t,
+    pub uuid: __uuid_t,
     pub name: crate::util::projections::Volatile<crate::sb::members::DevName>,
     #[pin]
     #[init(unsafe { Kobject::new::<Dev>() })]
@@ -353,37 +365,37 @@ pub struct Dev {
     /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
     /// device it's on, fixed while it's attached.
     #[init(LockedBy::new(Default::default(), ::pin_init::zeroed()))]
-    pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev, crate::at!(Fs.sb)>,
+    pub disk_sb: LockedBy<bch_sb_io, bch_sb_bdev, crate::at!(Fs.sb)>,
     /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
     /// whose buffer write_super can reallocate: the allocator, steering clear
     /// of superblock buckets. Copied as it's attached, and as it's edited -
     /// DevSbMut::edit_layout(), under sb_lock.
-    pub sb_layout: crate::util::projections::Volatile<c::bch_sb_layout>,
+    pub sb_layout: crate::util::projections::Volatile<bch_sb_layout>,
     #[pin]
     #[init(None)]
     pub(crate) sb_read_scratch: Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>,
     pub dev: crate::util::projections::Volatile<c::dev_t>,
 
-    pub self_mask: c::bch_devs_mask,
+    pub self_mask: bch_devs_mask,
 
     /*
      * Buckets:
      * Per-bucket arrays are protected by either rcu_read_lock or
      * state_lock, for device resize.
      */
-    pub buckets_gc: SharedGenRadix<c::bucket>,
-    pub bucket_gens: LockedBy<(), c::BucketGensArray, crate::at!(Fs.state_lock)>,
+    pub buckets_gc: SharedGenRadix<bucket>,
+    pub bucket_gens: LockedBy<(), BucketGensArray, crate::at!(Fs.state_lock)>,
     /* allocated once, by migrate, and read without a lock */
-    pub buckets_nouse: LockedBy<(), c::BucketBitmapWords, crate::at!(Fs.state_lock)>,
+    pub buckets_nouse: LockedBy<(), BucketBitmapWords, crate::at!(Fs.state_lock)>,
 
     #[pin]
-    #[init(c::bucket_bitmap::init())]
-    pub bucket_backpointer_mismatch: c::bucket_bitmap,
+    #[init(bucket_bitmap::init())]
+    pub bucket_backpointer_mismatch: bucket_bitmap,
     #[pin]
-    #[init(c::bucket_bitmap::init())]
-    pub bucket_backpointer_empty: c::bucket_bitmap,
+    #[init(bucket_bitmap::init())]
+    pub bucket_backpointer_empty: bucket_bitmap,
 
-    pub usage: PerCpu<c::bch_dev_usage_full>,
+    pub usage: PerCpu<bch_dev_usage_full>,
 
     /* Allocator: */
     /* where each btree_bitmap kind of allocation scans from: racy, as in C */
@@ -439,7 +451,7 @@ pub struct Dev {
     pub rebalance_work: AtomicI64,
 
     #[pin]
-    pub journal: c::journal_device,
+    pub journal: journal_device,
     pub prev_journal_sector: Volatile<u64>,
 
     /// The bios of writes' replicas on it: write_replicas.rs's
@@ -452,20 +464,20 @@ pub struct Dev {
     pub cur_latency: [AtomicI64; 2],
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub io_latency: TimeStatsArray<c::bch2_time_stats_quantiles, 2>,
+    pub io_latency: TimeStatsArray<bch2_time_stats_quantiles, 2>,
 
     pub congested: AtomicI32,
     /* written racily, by bch2_latency_acct() */
     pub congested_last: AtomicU64,
 
-    pub io_done: PerCpu<c::io_count>,
+    pub io_done: PerCpu<io_count>,
 }
 
 
 /// What a superblock's read into, and kept in: IO-aligned, as it's read and
 /// written in place.
 pub(crate) type SbStorage = AlignedBox<[u64], IO_ALIGN>;
-pub(crate) type SbRoom = DstRoom<c::bch_sb, SbStorage>;
+pub(crate) type SbRoom = DstRoom<bch_sb, SbStorage>;
 
 /// A superblock in memory, in a buffer that grows: a power of two, zeroes past
 /// the superblock, page aligned - it's read and written in place, O_DIRECT in
@@ -486,19 +498,19 @@ pub struct bch_sb_buf {
 #[repr(C)]
 #[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_fs_sb {
-    buf: c::bch_sb_buf,
+    buf: bch_sb_buf,
 }
 
 impl core::ops::Deref for bch_fs_sb {
-    type Target = c::bch_sb_buf;
+    type Target = bch_sb_buf;
 
-    fn deref(&self) -> &c::bch_sb_buf {
+    fn deref(&self) -> &bch_sb_buf {
         &self.buf
     }
 }
 
 impl core::ops::DerefMut for bch_fs_sb {
-    fn deref_mut(&mut self) -> &mut c::bch_sb_buf {
+    fn deref_mut(&mut self) -> &mut bch_sb_buf {
         &mut self.buf
     }
 }
@@ -513,7 +525,7 @@ pub type SbBio = Option<BioBox<'static, Bio>>;
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_sb_io {
     /// Read and validated, or made: never what a read hasn't checked
-    pub buf: c::bch_sb_buf,
+    pub buf: bch_sb_buf,
     /// Its bio, as big as the buffer, while its device is open: Rust's alone
     pub bio: SbBio,
     /// The last seq written
@@ -580,11 +592,11 @@ impl bch_sb_handle {
 }
 
 /// A set of devices, by index.
-pub type DevsMask = BitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
+pub type DevsMask = BitArray<{ bits_to_longs(BCH_SB_MEMBERS_MAX as usize) }>;
 
 /// One changed under readers - c->devs_online, the allocator's rw_devs[] -
 /// declared as such where it's a field: still a struct bch_devs_mask to C.
-pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
+pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(BCH_SB_MEMBERS_MAX as usize) }>;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, zerocopy_derive::FromZeros)]
@@ -596,10 +608,10 @@ pub struct bch_devs_mask {
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_devs_list {
     pub nr: u8,
-    pub data: [u8; c::BCH_BKEY_PTRS_MAX as usize],
+    pub data: [u8; BCH_BKEY_PTRS_MAX as usize],
 }
 
-fn may_add(fs: &Fs, sb: &c::bch_sb) -> Result<(), BchError> {
+fn may_add(fs: &Fs, sb: &bch_sb) -> Result<(), BchError> {
     let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
 
     if u64::from(sb.block_size.get()) != fs.block_bytes() >> 9 {
@@ -793,7 +805,7 @@ impl Drop for NewDev {
     }
 }
 
-fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
+fn dev_alloc(fs: &Fs, member: &bch_member) -> Option<NewDev> {
     let mut ca = NewDev(Some(MaybeRcuAlloc::new(Dev::init(fs)).ok()?));
 
     ca.mi.set(member.to_cpu());
@@ -807,7 +819,7 @@ fn dev_alloc(fs: &Fs, member: &c::bch_member) -> Option<NewDev> {
         let mut this = ca.as_pin_mut().project();
         *this.uuid = member.uuid;
         *this.nr_btree_reserve =
-            c::BTREE_NODE_RESERVE.div_ceil(u32::from(this.mi.get().bucket_size) / fs.btree_sectors());
+            BTREE_NODE_RESERVE.div_ceil(u32::from(this.mi.get().bucket_size) / fs.btree_sectors());
         this.sb_read_scratch.set(Some(Pin::into_inner(kbox_pin_init(SbReadScratch::new()).ok()?)));
     }
     ca.as_pin_mut().buckets_alloc().ok()?;
@@ -887,7 +899,7 @@ fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [c_char]) -> bool {
     false
 }
 
-pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut c::bch_dev_identity) {
+pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut bch_dev_identity) {
     let mut bdevname = Printbuf::new();
     bdev.to_text(&mut bdevname);
     strscpy(&mut id.name, bdevname.as_bytes());
@@ -901,8 +913,8 @@ pub fn read_identity(bdev: &crate::os::blkdev::BlockDevice, id: &mut c::bch_dev_
 
 /// Whether @sb can be opened as a member of the filesystem whose superblock is
 /// @fs. A device that diverged from @fs - split brain - is reported.
-pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: &c::bch_sb_handle,
-                 opts: &c::bch_opts) -> Result<(), BchError> {
+pub fn dev_in_fs(fs: &bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: &bch_sb_handle,
+                 opts: &bch_opts) -> Result<(), BchError> {
     let dev = sb.sb();
     if core::ptr::eq(fs, dev) {
         return Ok(());
@@ -950,7 +962,7 @@ pub fn dev_in_fs(fs: &c::bch_sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice
     Ok(())
 }
 
-fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, err: &mut Printbuf)
+fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut bch_sb_handle, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let fs = ca.fs();
@@ -999,7 +1011,7 @@ fn attach_bdev(state: &StateLockWrite<'_>, ca: &Dev, sb: &mut c::bch_sb_handle, 
 }
 
 impl StateLockWrite<'_> {
-    pub fn dev_attach_bdev(&self, sb: &mut c::bch_sb_handle, err: &mut Printbuf) -> Result<(), BchError> {
+    pub fn dev_attach_bdev(&self, sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<(), BchError> {
         let fs = self.fs();
 
         {
@@ -1105,10 +1117,10 @@ impl StateLockWrite<'_> {
         let rw = MemberState::rw;
 
         if ca.mi.get().state == rw && new_state != rw {
-            let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
+            let mut new_rw_devs = bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
             new_rw_devs.d.clear(ca.dev_idx.into());
 
-            return can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
+            return can_write_with_devs(fs, &new_rw_devs, WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
                                        flags, err);
         }
 
@@ -1125,9 +1137,9 @@ impl StateLockWrite<'_> {
         let do_reconcile_scan = new_state == MemberState::rw || new_state == MemberState::evacuating;
 
         let s = if new_state == MemberState::rw {
-            c::ReconcileScan::pending
+            ReconcileScan::pending
         } else {
-            c::ReconcileScan::device(u32::from(ca.dev_idx))
+            ReconcileScan::device(u32::from(ca.dev_idx))
         };
 
         /* empty stripes hold their buckets until deleted: */
@@ -1178,7 +1190,7 @@ impl StateLockWrite<'_> {
          * still need the scan to converge.
          */
         if new_state == MemberState::rw || was_rw {
-            fs.request_scan(c::ReconcileScan::stripes, false)?;
+            fs.request_scan(ReconcileScan::stripes, false)?;
         }
 
         if do_reconcile_scan {
@@ -1191,15 +1203,15 @@ impl StateLockWrite<'_> {
     pub fn dev_may_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let fs = self.fs();
 
-        let mut new_devs = c::bch_devs_mask { d: fs.devs_online.load() };
+        let mut new_devs = bch_devs_mask { d: fs.devs_online.load() };
         new_devs.d.clear(ca.dev_idx.into());
 
-        let mut new_rw_devs = c::bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
+        let mut new_rw_devs = bch_devs_mask { d: fs.allocator.rw_devs[0].load() };
         new_rw_devs.d.clear(ca.dev_idx.into());
 
         if !fs.can_read_fs_with_devs(&new_devs, flags, Some(err)) ||
            (fs.opts().read_only.get() == 0 &&
-            !can_write_with_devs(fs, &new_rw_devs, c::WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
+            !can_write_with_devs(fs, &new_rw_devs, WriteCheck::BCH_WRITE_CHECK_dev_leaving_rw,
                                  flags, err)) {
             prt!(err, "Cannot offline required disk\n");
             return fs.throw(Errcode::device_state_not_allowed);
@@ -1245,7 +1257,7 @@ impl StateLockWrite<'_> {
             /* Check if device still has data before blowing away alloc info */
             let usage = ca.usage_read_fast();
             let mut ret = Ok(());
-            for i in 0..c::DataType::NR {
+            for i in 0..DataType::NR {
                 let t = DataType(i);
                 if !t.is_empty() && !t.is_hidden() && usage.buckets[i as usize] != 0 {
                     if ret.is_ok() {
@@ -1316,7 +1328,7 @@ impl StateLockWrite<'_> {
             /* The device is staying; allow new references to it again: */
             ca.removing.set(false);
 
-            if fs.flags.get(c::FsFlag::rw) &&
+            if fs.flags.get(FsFlag::rw) &&
                ca.mi.get().state == MemberState::rw &&
                !ca.io_ref_read.is_zero() {
                 self.dev_read_write(ca);
@@ -1363,7 +1375,7 @@ impl Fs {
 
     pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
         let dev_idx = ca.dev_idx;
-        let fast_device_removal = self.compat(c::SbCompat::no_stale_ptrs) &&
+        let fast_device_removal = self.compat(SbCompat::no_stale_ptrs) &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
 
         let slot = {
@@ -1400,9 +1412,9 @@ impl Fs {
         let m = sb.fs_member_mut(dev_idx.into());
 
         if fast_device_removal {
-            m.uuid = c::__uuid_t { b: MEMBER_DELETED_UUID };
+            m.uuid = __uuid_t { b: MEMBER_DELETED_UUID };
         } else {
-            m.uuid = c::__uuid_t { b: [0; 16] };
+            m.uuid = __uuid_t { b: [0; 16] };
         }
 
         self.write_super(&mut sb);
@@ -1412,7 +1424,7 @@ impl Fs {
     fn dev_set_initialized(&self, ca: &Dev, state: MemberInitialized) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
         sb.fs_member_mut(ca.dev_idx.into()).set_initialized(state);
-        self.write_super_flags(&mut sb, c::SbWriteFlags::empty())
+        self.write_super_flags(&mut sb, SbWriteFlags::empty())
     }
 
     pub fn dev_add_initialize(&self, ca: &Dev) -> Result<(), BchError> {
@@ -1444,7 +1456,7 @@ impl Fs {
 
     /* Add new device to running filesystem: */
     pub fn dev_add(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut opts = c::bch_opts::default();
+        let mut opts = bch_opts::default();
         let mut sb = read_super(path, &mut opts, Some(self.holder()))
             .inspect_err(|e| prt!(err, "error reading superblock: {}\n", e.msg()))?;
 
@@ -1461,8 +1473,8 @@ impl Fs {
         may_add(self, sb.sb())?;
 
         let ca = self.require(dev_alloc(self, &dev_mi), Errcode::ENOMEM_dev_add_alloc)?;
-        let started = self.flags.get(c::FsFlag::started);
-        let s = c::ReconcileScan::pending;
+        let started = self.flags.get(FsFlag::started);
+        let s = ReconcileScan::pending;
 
         bch_err_fn!(self, (|| -> Result<(), BchError> {
             let state = self.state_lock_write();
@@ -1515,7 +1527,7 @@ impl Fs {
                  * member copy above; re-intern so the new device gets
                  * its failure_domain id.
                  */
-                let _ = c::bch_sb_field_members_v2::<crate::util::vstructs::Validated>::to_cpu(self, &mut w);
+                let _ = bch_sb_field_members_v2::<crate::util::vstructs::Validated>::to_cpu(self, &mut w);
 
                 if mi_field_upgrades(&mut w, dev_idx, &identity) {
                     w.dirty();
@@ -1570,7 +1582,7 @@ impl Fs {
 
     /* Hot add existing device to running filesystem: */
     pub fn dev_bring_online(&self, path: &CStr, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut opts = c::bch_opts::default();
+        let mut opts = bch_opts::default();
 
         let state = self.state_lock_write();
 
@@ -1579,7 +1591,7 @@ impl Fs {
          * would find its device offline - stop() has put the io refs - and
          * restart them:
          */
-        if self.flags.get(c::FsFlag::stopping) {
+        if self.flags.get(FsFlag::stopping) {
             prt!(err, "filesystem is shutting down\n");
             return self.throw(Errcode::ioctl_fs_stopping);
         }
@@ -1663,7 +1675,7 @@ impl Fs {
          * that right we need to at least note somewhere /which/ targets have
          * extents on the pending list:
          */
-        self.request_scan(c::ReconcileScan::pending, true)?;
+        self.request_scan(ReconcileScan::pending, true)?;
         self.unpark_marks_clear();
         Ok(())
     }
@@ -1701,13 +1713,13 @@ impl Fs {
         }
 
         let wakeup_reconcile_pending = nbuckets > old_nbuckets;
-        let s = c::ReconcileScan::pending;
+        let s = ReconcileScan::pending;
         if wakeup_reconcile_pending {
             self.request_scan(s, false)?;
         }
 
-        if nbuckets > u64::from(c::BCH_MEMBER_NBUCKETS_MAX) {
-            prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, c::BCH_MEMBER_NBUCKETS_MAX);
+        if nbuckets > u64::from(BCH_MEMBER_NBUCKETS_MAX) {
+            prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, BCH_MEMBER_NBUCKETS_MAX);
             return self.throw(Errcode::device_size_too_big);
         }
 
@@ -1775,7 +1787,7 @@ impl Fs {
 
     /// @devs by name, space separated; one there isn't, by its number.
     #[cold]
-    pub fn devs_list_to_text(&self, out: &mut Printbuf, devs: &c::bch_devs_list) {
+    pub fn devs_list_to_text(&self, out: &mut Printbuf, devs: &bch_devs_list) {
         // room first: under RCU it can only allocate atomically
         out.make_room(1024);
         let rcu = read_lock();
@@ -1821,7 +1833,7 @@ impl Dev {
         if crate::os::kernel::time_after64(now, last) {
             congested -= (now.wrapping_sub(last) >> 12) as i64;
         }
-        congested.clamp(0, c::CONGESTED_MAX.into()) as u32
+        congested.clamp(0, CONGESTED_MAX.into()) as u32
     }
 
     fn congested_acct(&self, io_latency: u64, now: u64, rw: usize) {
@@ -1831,7 +1843,7 @@ impl Dev {
         let latency_over = io_latency.wrapping_sub(latency_threshold) as i64;
 
         if latency_threshold != 0 && latency_over > 0 {
-            if self.congested.load(Relaxed) < c::CONGESTED_MAX as i32 {
+            if self.congested.load(Relaxed) < CONGESTED_MAX as i32 {
                 self.congested.fetch_add((io_latency.wrapping_mul(2).min(u32::MAX.into()) as u32 /
                                           latency_threshold.min(u32::MAX.into()) as u32) as i32, Relaxed);
             }
@@ -1896,8 +1908,8 @@ impl Dev {
         use crate::os::kernel::{local_clock, READ, WRITE};
         let now = local_clock();
         out.tabstop_push(32);
-        write!(out, "current:\t{}%\n", self.congested_read(now) * 100 / c::CONGESTED_MAX);
-        write!(out, "raw:\t{}/{}\n", self.congested.load(Relaxed), c::CONGESTED_MAX);
+        write!(out, "current:\t{}%\n", self.congested_read(now) * 100 / CONGESTED_MAX);
+        write!(out, "raw:\t{}/{}\n", self.congested.load(Relaxed), CONGESTED_MAX);
         prt!(out, "last io over threshold:\t{}\n", Nsecs(now.wrapping_sub(self.congested_last.load(Relaxed))));
 
         // the thresholds are bch2_latency_acct()'s
@@ -1919,9 +1931,9 @@ pub(crate) static HOLDER_OPS: c::blk_holder_ops = crate::os::blkdev::holder_ops:
 #[cfg(kernel)]
 fn holder_started(r: RoRef) -> Option<RoRef> {
     let fs: &Fs = &r;
-    let started = |fs: &Fs| fs.flags.get(c::FsFlag::started);
+    let started = |fs: &Fs| fs.flags.get(FsFlag::started);
     let Ok(()) = fs.ro_ref_events.wait_until(Sleep::UNINTERRUPTIBLE, || {
-        (started(fs) || fs.flags.get(c::FsFlag::stopping)).then_some(())
+        (started(fs) || fs.flags.get(FsFlag::stopping)).then_some(())
     });
     started(fs).then_some(r)
 }
@@ -1950,7 +1962,7 @@ impl crate::os::blkdev::HolderOps for Holder {
         log_msg_start(&mut msg, ca.name().as_cstr());
         prt!(&mut msg, "offline from block layer\n");
 
-        let dev = state.dev_may_offline(&ca, c::BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();
+        let dev = state.dev_may_offline(&ca, BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();
         if !dev {
             if let Some((sb, umount)) = &umount {
                 if !surprise {
@@ -1983,7 +1995,7 @@ impl crate::os::blkdev::HolderOps for Holder {
 
 // ── Resizing on mount ────────────────────────────────────────────────────
 
-impl DevIoRef<c::DevReadRefKind> {
+impl DevIoRef<DevReadRefKind> {
     /// The disk it's on, in sectors: get_capacity()
     fn disk_sectors(&self) -> u64 {
         crate::os::blkdev::capacity(self.bdev())

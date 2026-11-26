@@ -13,7 +13,9 @@
 
 use core::mem::size_of;
 
-use crate::c::{self, AclEntry, BCH_ACL_VERSION};
+use crate::posix::inode_format::InodeFlags;
+use crate::posix::acl_format::AclEntry;
+use crate::posix::acl_format::{BCH_ACL_VERSION, bch_acl_entry, bch_acl_header};
 use crate::init::error::id;
 use crate::os::posix_acl::AclType;
 use crate::sb::errors::SbErrorId;
@@ -26,7 +28,7 @@ impl AclEntry {
     /// Err(the tag) for a tag ACLs don't have. Read as a long entry, whose
     /// start a short one is.
     pub fn new(tag: u16, perm: u16, id: u32) -> Result<Self, u16> {
-        let e = c::bch_acl_entry { e_tag: tag.into(), e_perm: perm.into(), e_id: id.into() };
+        let e = bch_acl_entry { e_tag: tag.into(), e_perm: perm.into(), e_id: id.into() };
         Self::read(plain_bytes(&e)).map_err(|_| tag)
     }
 
@@ -59,11 +61,11 @@ impl core::fmt::Display for AclError {
     }
 }
 
-const HEADER_BYTES: usize = size_of::<c::bch_acl_header>();
+const HEADER_BYTES: usize = size_of::<bch_acl_header>();
 
 /// Past the header: an error if the header isn't one.
 fn entry_bytes(value: &[u8]) -> Result<&[u8], AclError> {
-    let h = cast_plain::<c::bch_acl_header>(value).ok_or(AclError::Short(value.len()))?;
+    let h = cast_plain::<bch_acl_header>(value).ok_or(AclError::Short(value.len()))?;
     if h.a_version.get() != BCH_ACL_VERSION {
         return Err(AclError::Version(h.a_version.get()));
     }
@@ -92,7 +94,7 @@ pub fn encoded_len(entries: impl Iterator<Item = AclEntry>) -> usize {
 
 /// @out must be encoded_len() long.
 pub fn encode(entries: impl Iterator<Item = AclEntry>, out: &mut [u8]) {
-    let h = c::bch_acl_header { a_version: BCH_ACL_VERSION.into() };
+    let h = bch_acl_header { a_version: BCH_ACL_VERSION.into() };
     out[..HEADER_BYTES].copy_from_slice(plain_bytes(&h));
 
     let mut rest = &mut out[HEADER_BYTES..];
@@ -139,10 +141,10 @@ impl AclType {
         Self::ALL.into_iter().find(|acl| acl.xattr_type() == ty)
     }
 
-    pub fn inode_flag(self) -> c::InodeFlags {
+    pub fn inode_flag(self) -> InodeFlags {
         match self {
-            Self::Access  => c::InodeFlags::has_access_acl,
-            Self::Default => c::InodeFlags::has_default_acl,
+            Self::Access  => InodeFlags::has_access_acl,
+            Self::Default => InodeFlags::has_default_acl,
         }
     }
 
@@ -169,6 +171,9 @@ pub use vfs::*;
 #[cfg(kernel)]
 mod vfs {
     use super::*;
+    use crate::posix::inode::bch_inode_unpacked;
+    use crate::posix::xattr_format::Xattr;
+    use crate::snapshots::subvolume::subvol_inum;
     use crate::bch_err;
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -193,7 +198,7 @@ mod vfs {
         fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<Self>, BchError> {
             let entries = entries(value).map_err(|err| {
                 bch_err!(t.fs(), "invalid acl: {err}");
-                t.fs().err(c::Errcode::EINVAL_acl_from_disk)
+                t.fs().err(Errcode::EINVAL_acl_from_disk)
             })?;
             let nr = entries.clone().count();
             if nr == 0 {
@@ -212,7 +217,7 @@ mod vfs {
         /// Inode @inode's (@inum's) ACL of @ty, @iter pointed at its xattr -
         /// None if it has none, or one with no entries.
         fn lookup<'a>(t: &TransAttempt<'a, '_>, iter: &mut BtreeIter<'a>,
-                      inode: &c::bch_inode_unpacked, inum: c::subvol_inum, ty: AclType,
+                      inode: &bch_inode_unpacked, inum: subvol_inum, ty: AclType,
                       flags: BtreeIterFlags) -> Result<Option<Self>, BchError> {
             match xattr::lookup(t, iter, inode, inum, ty.xattr_type(), OsStr::from_bytes(b""), flags) {
                 Ok(k)                          => Self::from_disk(t, xattr::value(k)),
@@ -223,13 +228,13 @@ mod vfs {
 
         /// The xattr key storing it: E2BIG if it doesn't fit in a key.
         fn to_xattr<'a, 't>(&self, t: &TransAttempt<'a, 't>, ty: AclType)
-            -> Result<TransBkey<'a, 't, c::Xattr<Validated>>, BchError>
+            -> Result<TransBkey<'a, 't, Xattr<Validated>>, BchError>
         {
             let entries = || self.entries().map(|(tag, perm, id)| AclEntry::new(tag, perm, id));
 
             // A tag ACLs don't have: EINVAL
             if entries().any(|e| e.is_err()) {
-                return t.fs().throw(c::Errcode::EINVAL_acl_bad_tag);
+                return t.fs().throw(Errcode::EINVAL_acl_bad_tag);
             }
             let entries = || entries().map(|e| e.expect("checked above"));
 
@@ -269,15 +274,15 @@ mod vfs {
     /// only for directories.
     pub fn set_acl_trans(
         t:     &TransAttempt<'_, '_>,
-        inum:  c::subvol_inum,
-        inode: &mut c::bch_inode_unpacked,
+        inum:  subvol_inum,
+        inode: &mut bch_inode_unpacked,
         acl:   Option<&PosixAcl>,
         ty:    AclType,
     ) -> Result<(), BchError> {
         let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
 
         if ty == AclType::Default && inode.bi_mode as u32 & c::S_IFMT != c::S_IFDIR {
-            return if acl.is_none() { Ok(()) } else { t.fs().throw(c::Errcode::EACCES_default_acl_not_dir) };
+            return if acl.is_none() { Ok(()) } else { t.fs().throw(Errcode::EACCES_default_acl_not_dir) };
         }
 
         if let Some(acl) = acl {
@@ -339,8 +344,8 @@ mod vfs {
     /// ACL, which the caller caches once this has committed.
     pub fn acl_chmod(
         t:     &TransAttempt<'_, '_>,
-        inum:  c::subvol_inum,
-        inode: &c::bch_inode_unpacked,
+        inum:  subvol_inum,
+        inode: &bch_inode_unpacked,
         mode:  c::umode_t,
     ) -> Result<Option<PosixAcl>, BchError> {
         // None, or one with no entries: nothing to change.

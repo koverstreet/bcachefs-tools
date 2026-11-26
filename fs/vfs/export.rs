@@ -20,6 +20,7 @@ use core::ffi::c_int;
 use crate::btree::bkey::{pos, spos};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::posix::dirent::{self, Dirent};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -70,7 +71,7 @@ impl InodeInfo {
 
 impl Fs {
     fn nfs_get_inode(&self, fid: Fid) -> Result<InodeRef, BchError> {
-        let inode = InodeInfo::get(self, c::subvol_inum { subvol: fid.subvol as u64, inum: fid.inum })?;
+        let inode = InodeInfo::get(self, subvol_inum { subvol: fid.subvol as u64, inum: fid.inum })?;
         if inode.vfs().generation() != fid.generation {
             return Err(Errcode::ESTALE_nfs_get_inode_generation.into());
         }
@@ -130,7 +131,7 @@ impl ExportOps for Fs {
     fn get_parent(&self, child: Dentry<'_>) -> *mut c::dentry {
         let inode = child.inode();
         let parent_subvol = inode.ei_inode.bi_parent_subvol.get();
-        let parent = c::subvol_inum {
+        let parent = subvol_inum {
             subvol: if parent_subvol != 0 { parent_subvol as u64 } else { inode.inum().subvol },
             inum:   inode.ei_inode.bi_dir.get(),
         };

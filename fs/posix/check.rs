@@ -8,6 +8,8 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -20,7 +22,7 @@ use crate::util::alloc::Vec;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, Whiteout};
 
 /// The snapshots of the keys seen so far at one position, while walking a
 /// btree in key order with all snapshots: a key in an ancestor is hidden from
@@ -148,7 +150,7 @@ pub struct InodeWalker {
 /// deleted in that snapshot - and what the pass has counted against it.
 #[derive(Clone, Copy)]
 pub struct WalkerEntry {
-    pub inode:    c::bch_inode_unpacked,
+    pub inode:    bch_inode_unpacked,
     pub whiteout: bool,
     pub count:    u64,
 }
@@ -157,7 +159,7 @@ impl WalkerEntry {
     fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
         let (inode, whiteout) = match k.arm::<inode::Inodes>() {
             Some(i) => (inode::unpack(fs, i), false),
-            None    => (c::bch_inode_unpacked {
+            None    => (bch_inode_unpacked {
                 bi_inum:     k.k.p.offset,
                 bi_snapshot: k.k.p.snapshot,
                 ..Default::default()
@@ -169,7 +171,7 @@ impl WalkerEntry {
 
 /// The live inode version a key belongs to, from InodeWalker::walk().
 pub struct Walked<'w> {
-    pub inode:            &'w mut c::bch_inode_unpacked,
+    pub inode:            &'w mut bch_inode_unpacked,
     /// The first key walked in this inode: per-inode state such as the
     /// bch_hash_info is set up here. Reading it clears it.
     pub first_this_inode: bool,
@@ -299,7 +301,7 @@ impl InodeWalker {
             new.bi_snapshot = snapshot;
             inode::fsck_write(t, &mut new)?;
         } else {
-            let whiteout = t.bkey_alloc_init::<c::Whiteout>(0,
+            let whiteout = t.bkey_alloc_init::<Whiteout>(0,
                                              spos(0, e.inode.bi_inum, snapshot))?;
             t.insert_with(Btree::inodes, whiteout, BtreeIterFlags::CACHED,
                           UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
@@ -722,8 +724,8 @@ pub fn repoint_subvol(
     let master = snapshot::tree_lookup(t, fs.snapshots.tree(snapshot))?.master_subvol.get();
 
     bch_err_msg!(fs,
-        t.bkey_get_mut::<c::Subvolume, _>(Btree::subvolumes, pos(0, subvol as u64),
-                                           BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(), |s| {
+        t.bkey_get_mut::<Subvolume, _>(Btree::subvolumes, pos(0, subvol as u64),
+                                        BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(), |s| {
             let v = s.v_mut();
             v.snapshot       = snapshot.into();
             v.inode          = root.into();
@@ -751,18 +753,18 @@ pub fn reconstruct_subvol(
     let fs_path_parent = root_fs_path_parent(t, snapshot, root)?;
 
     let tree = bch_err_msg!(fs,
-        t.bkey_get_mut::<c::Snapshot, _>(Btree::snapshots, pos(0, snapshot as u64),
-                                          BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |s| {
+        t.bkey_get_mut::<Snapshot, _>(Btree::snapshots, pos(0, snapshot as u64),
+                                       BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |s| {
             let s = s.v_mut();
             s.subvol = subvol.into();
-            s.set_state(c::SnapshotState::live);
+            s.set_state(SnapshotState::live);
             Ok(s.tree())
         }),
         "getting snapshot {snapshot}")?;
 
     let had_master = bch_err_msg!(fs,
-        t.bkey_get_mut::<c::SnapshotTree, _>(Btree::snapshot_trees, pos(0, tree as u64),
-                                              BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |st| {
+        t.bkey_get_mut::<SnapshotTree, _>(Btree::snapshot_trees, pos(0, tree as u64),
+                                           BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |st| {
             let st = st.v_mut();
             let had_master = st.master_subvol != 0;
             if !had_master {
@@ -772,14 +774,14 @@ pub fn reconstruct_subvol(
         }),
         "getting snapshot tree {tree}")?;
 
-    let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
+    let mut k = t.bkey_alloc_typed::<Subvolume>()?;
     k.k_mut().p = pos(0, subvol as u64);
     let v = k.v_mut();
     v.snapshot       = snapshot.into();
     v.inode          = root.into();
     v.fs_path_parent = fs_path_parent.into();
     v.set_snap(had_master);
-    v.set_state(c::SubvolumeState::live);
+    v.set_state(SubvolumeState::live);
     t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())
 }
 
@@ -834,7 +836,7 @@ fn count_inode_keys(
 /// with the ancestor's other descendants, and the repair goes in @snapshot
 /// instead, as a version of its own. Written in place, it would change what
 /// every other view of the ancestor sees.
-pub fn own_version(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked, snapshot: u32) {
+pub fn own_version(t: &TransAttempt<'_, '_>, inode: &mut bch_inode_unpacked, snapshot: u32) {
     if inode.bi_snapshot != snapshot && snapshot::is_ancestor(t, snapshot, inode.bi_snapshot) {
         inode.bi_snapshot = snapshot;
     }
@@ -850,7 +852,7 @@ pub fn fsck_update_backpointers(
 ) -> Result<(), BchError> {
     let Some(d) = Dirent::new(BkeySC::from(new)) else { return Ok(()) };
     let (dir, offset) = (new.k.p.inode, new.k.p.offset);
-    let points_here = |i: &c::bch_inode_unpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
+    let points_here = |i: &bch_inode_unpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
 
     match d.target() {
         // A subvolume dirent's backpointer lives on the child subvolume's root
@@ -902,7 +904,7 @@ impl Fs {
     /// fsck(8)'s exit status for what the filesystem's errors came to - 1
     /// fixed, 4 left, 8 a fatal error, ORed - each said in @out.
     pub fn fsck_errcode(&self, out: &mut Printbuf) -> core::ffi::c_int {
-        use c::FsFlag as Flag;
+        use crate::fs::FsFlag as Flag;
 
         let mut ret = 0;
         for (flag, bit, what) in [
@@ -928,6 +930,10 @@ impl Fs {
 #[cfg(kernel)]
 pub mod ioctl {
     use super::*;
+    use crate::bcachefs_ioctl::{bch_ioctl_fsck_offline, bch_ioctl_fsck_online};
+    use crate::format::ErrorAction;
+    use crate::fs::FsFlag;
+    use crate::opts::{bch_opts, FsckErrOpt, OptId};
     use core::sync::atomic::Ordering::{Relaxed, Release};
     use crate::fs::{OpenFs, RoRef};
     use crate::init::registry::{self, Claim, FsHandle, Opener};
@@ -940,14 +946,14 @@ pub mod ioctl {
     use kernel::ffi::c_int;
 
     /// The options at user address @addr, or none if it's 0.
-    fn user_opts(addr: u64) -> Result<c::bch_opts, BchError> {
+    fn user_opts(addr: u64) -> Result<bch_opts, BchError> {
         match addr {
-            0 => Ok(c::bch_opts::default()),
+            0 => Ok(bch_opts::default()),
             _ => parse_mount_opts_cstr(None, UserStr::read(addr, 1 << 16)?.as_cstr(), false),
         }
     }
 
-    pub fn fsck_offline(user: UserVstruct<c::bch_ioctl_fsck_offline>) -> Result<c_int, BchError> {
+    pub fn fsck_offline(user: UserVstruct<bch_ioctl_fsck_offline>) -> Result<c_int, BchError> {
         let arg = user.head()?;
 
         if arg.flags != 0 {
@@ -986,8 +992,8 @@ pub mod ioctl {
             });
 
         if let Ok(fs) = &fs {
-            if fs.opts.errors() == c::ErrorAction::panic {
-                fs.opts_writer(&mut fs.sb_lock()).set_errors(c::ErrorAction::ro);
+            if fs.opts.errors() == ErrorAction::panic {
+                fs.opts_writer(&mut fs.sb_lock()).set_errors(ErrorAction::ro);
             }
         }
 
@@ -1024,7 +1030,7 @@ pub mod ioctl {
         ret
     }
 
-    pub fn fsck_online(fs: &Fs, arg: c::bch_ioctl_fsck_online) -> Result<c_int, BchError> {
+    pub fn fsck_online(fs: &Fs, arg: bch_ioctl_fsck_online) -> Result<c_int, BchError> {
         if arg.flags != 0 {
             return fs.throw(Errcode::EINVAL_fsck_online_bad_flags);
         }
@@ -1041,14 +1047,14 @@ pub mod ioctl {
         crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
-    fn fsck_online_thread(fs_ref: RoRef, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
+    fn fsck_online_thread(fs_ref: RoRef, opts: bch_opts, stdio: &StdioRedirect) -> c_int {
         let fs: &Fs = &fs_ref;
         let mut buf = Printbuf::new();
 
         let online = passes_match(PassFlags::ONLINE);
         let mut passes = passes_match(PassFlags::FSCK) & online;
 
-        if opts.defined(c::OptId::recovery_passes) {
+        if opts.defined(OptId::recovery_passes) {
             passes = opts.recovery_passes;
 
             if passes & online != passes {
@@ -1070,19 +1076,19 @@ pub mod ioctl {
             {
                 let mut sb = fs.sb_lock();
                 let w = fs.opts_writer(&mut sb);
-                w.fix_errors.set(if opts.defined(c::OptId::fix_errors) {
+                w.fix_errors.set(if opts.defined(OptId::fix_errors) {
                     opts.fix_errors
                 } else {
-                    c::FsckErrOpt::ask as u8
+                    FsckErrOpt::ask as u8
                 });
                 w.fsck.set(1);
             }
-            fs.flags.set(c::FsFlag::in_fsck, true);
+            fs.flags.set(FsFlag::in_fsck, true);
 
             ret = run_passes(&fs, passes, true)
                 .map(|()| fs.fsck_errcode(&mut buf));
 
-            fs.flags.set(c::FsFlag::in_fsck, false);
+            fs.flags.set(FsFlag::in_fsck, false);
 
             fs.stdio.store(core::ptr::null_mut(), Release);
             fs.stdio_filter.store(core::ptr::null_mut(), Relaxed);

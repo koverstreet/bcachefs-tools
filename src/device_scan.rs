@@ -26,12 +26,12 @@ use anyhow::{bail, Result};
 use crate::wrappers::sysfs::DevInfo;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::c;
-use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::format::bch_sb;
+use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::{filter_dead, Fs, OpenFs};
 use bcachefs_kernel::util::alloc;
-use c::bch_sb_handle;
-use c::bch_opts;
+use bcachefs_kernel::init::dev::bch_sb_handle;
+use bcachefs_kernel::opts::{bch_opts, OptId};
 use uuid::Uuid;
 use log::{debug, info, warn};
 
@@ -163,7 +163,7 @@ fn read_sbs_matching_uuid(
 	filter_current_sbs(sbs, opts)
 }
 
-fn sb_label_matches(sb: &c::bch_sb, label: &str) -> bool {
+fn sb_label_matches(sb: &bch_sb, label: &str) -> bool {
     let label_len = sb.label.iter()
         .position(|&b| b == 0)
         .unwrap_or(sb.label.len());
@@ -221,7 +221,7 @@ pub fn filter_current_sbs(
 			// warn! per line stamps file:line on every one of them -
 			// including the blanks.
 			warn!("{}", crate::splitbrain::report(&sbs, &divergent).trim_end());
-			return Err(c::Errcode::device_splitbrain.into());
+			return Err(Errcode::device_splitbrain.into());
 		}
 	}
 
@@ -364,7 +364,7 @@ fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
 /// since every filesystem written before the option existed reads back zero, so
 /// it falls through to the same built-in as having found nothing at all.
 fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> Duration {
-    if cli_opts.defined(c::OptId::missing_dev_timeout) {
+    if cli_opts.defined(OptId::missing_dev_timeout) {
         return Duration::from_secs(cli_opts.missing_dev_timeout() as u64);
     }
 

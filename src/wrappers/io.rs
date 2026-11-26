@@ -6,6 +6,12 @@
 // for it.
 
 use bcachefs_kernel::c;
+use bcachefs_kernel::alloc::buckets::ReservationFlags;
+use bcachefs_kernel::alloc::write_point::write_point_specifier;
+use bcachefs_kernel::data::extents::ReadFlags;
+use bcachefs_kernel::data::write::bch_write_op;
+use bcachefs_kernel::posix::inode::bch_inode_unpacked;
+use bcachefs_kernel::snapshots::subvolume::subvol_inum;
 use bcachefs_kernel::btree::bkey::spos;
 use bcachefs_kernel::data::read::{self, Rbio};
 use bcachefs_kernel::data::write;
@@ -28,7 +34,7 @@ pub struct WriteResult {
 
 // A write's op and its bio, which maps @data: on the heap, made in place.
 struct WriteState<'a> {
-    op:   c::bch_write_op,
+    op:   bch_write_op,
     wbio: Bio<Buffer<&'a [u8]>>,
 }
 
@@ -52,17 +58,17 @@ pub fn write(
         let bio = &raw mut (*p).wbio;
         init_at(BioInPlace::own(Buffer::nr_vecs(&data), c::req_op_REQ_OP_WRITE,
                                 |at| at.init_from(|b| Ok::<_, BchError>(Buffer::fill(b, data)))), bio)?;
-        c::bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
+        bch_write_op::init_at(&raw mut (*p).op, fs, inode_opts::get_fs(fs, false));
         state.assume_init()
     };
     let op = &mut state.op;
-    op.write_point = c::write_point_specifier::hashed(0);
+    op.write_point = write_point_specifier::hashed(0);
     op.bits.set_nr_replicas(replicas as u8);
     op.subvol      = subvol;
     op.pos         = spos(inum, offset >> 9, u32::MAX);
     op.new_i_size  = new_i_size;
 
-    op.res.add((data.len() >> 9) as u64, replicas, c::ReservationFlags::empty())?;
+    op.res.add((data.len() >> 9) as u64, replicas, ReservationFlags::empty())?;
 
     let mut join = Join::new();
     let wait = join.spawn(Queue::system_dfl(), fs.tasks(), move || async move {
@@ -81,12 +87,12 @@ pub fn write(
 /// holes and what's past the data as zeroes.
 pub fn read(
     fs: &Fs,
-    inum: c::subvol_inum,
+    inum: subvol_inum,
     offset: u64,
-    inode: &c::bch_inode_unpacked,
+    inode: &bch_inode_unpacked,
     buf: &mut [u8],
 ) -> Result<(), BchError> {
-    type F = c::ReadFlags;
+    type F = ReadFlags;
     let opts = bcachefs_kernel::posix::inode_opts::get_inode(fs, inode);
 
     let mut b = BioBox::new(Buffer::nr_vecs(&&mut *buf), c::req_op_REQ_OP_READ, |b| {

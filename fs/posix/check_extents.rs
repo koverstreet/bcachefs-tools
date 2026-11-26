@@ -36,7 +36,7 @@ use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
 };
-use crate::c;
+use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
 use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
 use crate::data::ptrs::{self, Ptrs};
 use crate::data::io_misc;
@@ -50,7 +50,7 @@ use crate::util::alloc::Vec;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::posix::namei;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, bkey};
 
 /// Where the last extent seen in a snapshot ended.
 struct ExtentEnd {
@@ -139,7 +139,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
         }
         i.count = count2;
 
-        if fsck_err_on!(t, !i.inode.flag(c::InodeFlags::i_sectors_dirty) &&
+        if fsck_err_on!(t, !i.inode.flag(InodeFlags::i_sectors_dirty) &&
                         i.inode.bi_sectors != i.count,
                         id::inode_i_sectors_wrong,
                         "incorrect i_sectors: got {}, should be {}\n{}",
@@ -193,7 +193,7 @@ fn overlapping_extents_found(
     res:  &DiskReservation<'_>,
     e1:   &mut ExtentEnd,
     inum: u64,
-    pos2: c::bkey,
+    pos2: bkey,
 ) -> Result<bool, BchError> {
     let fs = t.fs();
     let pos1 = spos(inum, e1.offset, e1.snapshot);
@@ -437,7 +437,7 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
     };
 
     let mut iter = BtreeIter::new(&trans, Btree::extents,
-                                  pos(c::BCACHEFS_ROOT_INO as u64, 0),
+                                  pos(BCACHEFS_ROOT_INO as u64, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_attempt(&trans, |t, iter, k| {

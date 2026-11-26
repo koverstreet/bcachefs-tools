@@ -28,7 +28,7 @@ macro_rules! lock_class_key {
 /// CONFIG_DEBUG_LOCK_ALLOC, which the hooks are under.)
 #[repr(C)]
 pub struct LockdepMap(
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)] crate::util::ffi::Opaque<crate::cstructs::c::lockdep_map>,
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)] crate::util::ffi::Opaque<crate::c::lockdep_map>,
     // C's empty struct: improper_ctypes won't have a struct with no fields
     #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))] [u8; 0],
 );

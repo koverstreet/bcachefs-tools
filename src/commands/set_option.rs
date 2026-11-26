@@ -1,6 +1,6 @@
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::c;
+use bcachefs_kernel::opts::{bch_opts, OptFlags};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::rcu;
@@ -12,7 +12,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs;
 
 fn opt_flags() -> u32 {
-    c::OptFlags::fs.bits() | c::OptFlags::device.bits()
+    OptFlags::fs.bits() | OptFlags::device.bits()
 }
 
 fn set_option_cmd() -> Command {
@@ -51,7 +51,7 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
 
     let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
 
-    let mut fs_opts = c::bch_opts::default();
+    let mut fs_opts = bch_opts::default();
     fs_opts.set_nostart(true);
     fs_opts.set_will_not_start(true);
 
@@ -98,15 +98,15 @@ fn set_option_online(
         // and testing fs|device above lets it through to fail.
         // Many such options *can* be set with the filesystem unmounted, so
         // say that rather than just refusing.
-        if flags & c::OptFlags::runtime.bits() == 0 {
+        if flags & OptFlags::runtime.bits() == 0 {
             eprintln!("{name} cannot be set while the filesystem is mounted \
                        (unmount and set it offline)");
             failed.insert(name.as_str());
             continue;
         }
 
-        let is_fs_opt = flags & c::OptFlags::fs.bits() != 0;
-        let is_device_opt = flags & c::OptFlags::device.bits() != 0;
+        let is_fs_opt = flags & OptFlags::fs.bits() != 0;
+        let is_device_opt = flags & OptFlags::device.bits() != 0;
 
         if is_fs_opt && !is_device_opt {
             if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value) {
@@ -188,7 +188,7 @@ fn set_option_offline(
             continue;
         };
 
-        if flags & c::OptFlags::fs.bits() != 0 {
+        if flags & OptFlags::fs.bits() != 0 {
             if let Err(e) = fs.opt_hook_pre_set(None, opt_id, val) {
                 eprintln!("Error setting {name}: {e}");
                 failed.insert(name.as_str());
@@ -202,7 +202,7 @@ fn set_option_offline(
             modified = true;
         }
 
-        if flags & c::OptFlags::device.bits() != 0 {
+        if flags & OptFlags::device.bits() != 0 {
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {

@@ -3,22 +3,27 @@
 use core::cmp::{Ordering, Reverse};
 use core::mem::{offset_of, replace, size_of};
 
-use crate::init::passes::RecoveryPass;
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::data_structures::array_vec::ArrayVec;
 
-use crate::btree::bkey::{BkeyV, BkeyVMut, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{BkeyV, BkeyVMut, POS_MIN, SPOS_MAX, bkey_validate_context,
+    BkeyValidateFrom};
 use crate::init::error::BkeyValidate;
 use crate::btree::cache::{node_mem_alloc, OwnedNode};
 use crate::btree::journal_overlay;
 use crate::btree::node::{BtreeNode, NodeKey};
 use crate::btree::path::LockedNode;
 use crate::btree::read::{read_done, ReadInFlightNode};
-use crate::c::{self, Errcode, BtreePtrV2};
+use crate::c;
+use crate::sb::members_format::MemberErrorType;
+use crate::errcode::Errcode;
+use crate::data::extents_format::{BtreePtrV2, bch_extent_ptr};
 use crate::data::ptrs::extent_ptr_to_text;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
+use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion, BCH_REPLICAS_MAX,
+    BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, btree_node};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
-use crate::sb::members::DevIoRef;
+use crate::sb::members::{DevIoRef, DevReadRefKind};
 use crate::init::passes;
 use crate::locking::{Locked, Mutex};
 use crate::types::{Le16, Le64};
@@ -48,7 +53,7 @@ pub(crate) struct FoundBtreeNode {
     cookie:          u64,
     min_key:         Bpos,
     max_key:         Bpos,
-    ptrs:            ArrayVec<c::bch_extent_ptr, { c::BCH_REPLICAS_MAX as usize }>,
+    ptrs:            ArrayVec<bch_extent_ptr, { BCH_REPLICAS_MAX as usize }>,
 }
 
 impl FoundBtreeNode {
@@ -164,13 +169,13 @@ impl Drop for NodeBuf<'_> {
 
 struct DevScan<'f> {
     fs:  &'f Fs,
-    ca:  &'f DevIoRef<c::DevReadRefKind>,
+    ca:  &'f DevIoRef<DevReadRefKind>,
     buf: NodeBuf<'f>,
     bio: BioBox<'static, Bio>,
 }
 
 impl<'f> DevScan<'f> {
-    fn new(fs: &'f Fs, ca: &'f DevIoRef<c::DevReadRefKind>) -> Result<Self, BchError> {
+    fn new(fs: &'f Fs, ca: &'f DevIoRef<DevReadRefKind>) -> Result<Self, BchError> {
         let Some(buf) = NodeBuf::alloc(fs) else {
             bch_err!(fs, "read_btree_nodes_worker: error allocating buf");
             return fs.throw(Errcode::ENOMEM_node_scan_buf);
@@ -197,7 +202,7 @@ impl<'f> DevScan<'f> {
         // remapped each read: read_done swaps the node's buffer
         let ret = bio.remap_read(buf.bytes(bytes))
             .expect("a node's buffer, into a bio with a bvec for each of its pages").submit_wait(ca.bdev(), offset);
-        ca.account_io_completion(c::MemberErrorType::read, submit_time, ret.is_ok());
+        ca.account_io_completion(MemberErrorType::read, submit_time, ret.is_ok());
         ret
     }
 
@@ -221,19 +226,19 @@ impl<'f> DevScan<'f> {
             }
 
             let nonce = bn.keys.nonce(0);
-            let (flags, keys) = (offset_of!(Head<c::btree_node>, flags), offset_of!(Head<c::btree_node>, keys));
+            let (flags, keys) = (offset_of!(Head<btree_node>, flags), offset_of!(Head<btree_node>, keys));
             let _ = fs.encrypt(csum_type, nonce, &mut self.buf.bytes(keys)[flags..]);
         }
 
         let bn = self.buf.node().held().contents().data();
         let id = bn.btree_id();
         if btree_id_can_reconstruct(id.0) ||
-           u32::from(bn.level()) >= c::BTREE_MAX_DEPTH ||
-           id.0 >= c::BTREE_ID_NR_MAX {
+           u32::from(bn.level()) >= BTREE_MAX_DEPTH ||
+           id.0 >= BTREE_ID_NR_MAX {
             return Ok(());
         }
 
-        let ptr = c::bch_extent_ptr::new()
+        let ptr = bch_extent_ptr::new()
             .with_offset(offset)
             .with_dev(ca.dev_idx)
             .with_generation(ca.bucket_gen(ca.sector_to_bucket(offset), &read_lock()).unwrap_or(u8::MAX));
@@ -461,7 +466,7 @@ pub(crate) fn btree_node_is_stale(fs: &Fs, b: LockedNode<'_, BtreeNode>) -> bool
 
 fn run_scan(fs: &Fs, out: &mut Printbuf) -> Result<(), BchError> {
     passes::run_explicit(fs, out, RecoveryPass::scan_for_btree_nodes,
-                         c::RunRecoveryPassFlags::empty())
+                         RunRecoveryPassFlags::empty())
 }
 
 pub(crate) fn btree_has_scanned_nodes(fs: &Fs, btree: Btree, out: &mut Printbuf) -> Result<bool, BchError> {
@@ -491,8 +496,8 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
         };
         let k = n.to_key();
 
-        let mut from = c::bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
-        from.bits.set_from(c::BkeyValidateFrom::btree_node);
+        let mut from = bkey_validate_context { level: (level + 1) as u8, btree, ..Default::default() };
+        from.bits.set_from(BkeyValidateFrom::btree_node);
         assert!(crate::btree::bkey::bkey_validate(
             &BkeyValidate::new(fs, (&*k).as_sc(), &from)).is_ok());
 

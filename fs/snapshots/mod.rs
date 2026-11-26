@@ -8,7 +8,7 @@ pub mod format;
 pub mod snapshot;
 pub mod subvolume;
 
-use crate::cstructs::c;
+use crate::snapshots::snapshot::SnapshotTable;
 use crate::fs::Fs;
 use crate::locking::{Locked, Mutex, PercpuRwSem};
 use crate::new_lock;
@@ -40,7 +40,7 @@ use subvolume::delete_unlinked;
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_snapshots {
-    pub table: c::SnapshotTable,
+    pub table: SnapshotTable,
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]
     #[init(new_lock!(()))]

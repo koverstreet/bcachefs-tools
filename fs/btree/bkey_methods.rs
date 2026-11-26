@@ -31,9 +31,10 @@
 use crate::btree::bkey::{BkeyP, BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransBkey};
-use crate::c;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::snapshots::format::{SnapshotState, SubvolumeState};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion};
+use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion, bkey, Error};
 use crate::fs::Fs;
 use crate::posix::{dirent, inode};
 use crate::typeinfo::{self, AccessError, FieldRef, ResolveError, TypeInfo};
@@ -92,8 +93,8 @@ impl From<NoRoom> for SetError<'_> {
 /// when the format has a real schema.
 fn field_enum(type_: u8, field: &str) -> Option<EnumValues> {
     match (type_ as u32, field) {
-        (ty, "state") if ty == BkeyType::snapshot.0  => Some(<c::SnapshotState as Names>::ENTRIES),
-        (ty, "state") if ty == BkeyType::subvolume.0 => Some(<c::SubvolumeState as Names>::ENTRIES),
+        (ty, "state") if ty == BkeyType::snapshot.0  => Some(<SnapshotState as Names>::ENTRIES),
+        (ty, "state") if ty == BkeyType::subvolume.0 => Some(<SubvolumeState as Names>::ENTRIES),
         _ => None,
     }
 }
@@ -130,16 +131,16 @@ impl TransBkey<'_, '_> {
     /// Made an error key, saying @err if the filesystem's version allows it:
     /// bch2_set_bkey_error().
     pub fn set_error(&mut self, fs: &Fs, err: ErrorKeyReason) {
-        assert!(self.as_u64s().len() * 8 >= size_of::<c::bkey>() + size_of::<c::Error>(),
+        assert!(self.as_u64s().len() * 8 >= size_of::<bkey>() + size_of::<Error>(),
                 "no room in the key's buffer for an error key");
         self.k_mut().set_key_type(BkeyType::error);
 
         if fs.request_incompat_feature(
             MetadataVersion::extented_key_type_error).is_ok() {
-            self.k_mut().set_val_bytes(size_of::<c::Error>());
+            self.k_mut().set_val_bytes(size_of::<Error>());
             let v = self.val_bytes_mut();
             v.fill(0);
-            v[core::mem::offset_of!(c::Error, repr.err)] = err.0 as u8;
+            v[core::mem::offset_of!(Error, repr.err)] = err.0 as u8;
         } else {
             self.k_mut().set_val_bytes(0);
         }
@@ -205,16 +206,16 @@ impl TransBkey<'_, '_> {
     }
 
     /// Set @field of inode @u, unpacked from this key, and pack it back.
-    fn set_inode<'p>(&mut self, mut u: c::bch_inode_unpacked, field: &'p str, val: &'p str)
+    fn set_inode<'p>(&mut self, mut u: bch_inode_unpacked, field: &'p str, val: &'p str)
         -> Result<(), SetError<'p>>
     {
         let target = typeinfo::resolve_with_bits(
-            <c::bch_inode_unpacked as TypeInfo>::INFO, field)?;
+            <bch_inode_unpacked as TypeInfo>::INFO, field)?;
         let v = parse_val(self.k().type_, field, val)?;
 
         let u_bytes = unsafe {
             core::slice::from_raw_parts_mut(&mut u as *mut _ as *mut u8,
-                                            size_of::<c::bch_inode_unpacked>())
+                                            size_of::<bch_inode_unpacked>())
         };
         write(u_bytes, field, &target, v)?;
 

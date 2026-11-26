@@ -56,12 +56,21 @@ use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
+use crate::data::compress::bch_compression_opt;
+use crate::data::extents::bkey_durability;
+use crate::data::extents_format::{BKEY_EXTENT_U64s_MAX, BtreePtrV2};
+use crate::data::reconcile::format::{bch_extent_reconcile, ReconcileWorkId};
+use crate::data::reconcile::work::ReconcileScan;
+use crate::data::update::{data_update_opts, DataUpdateType};
+use crate::init::dev::bch_devs_mask;
+use crate::opts::bch_inode_opts;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::BchError;
-use crate::format::BkeyType;
+use crate::format::{BkeyType, CsumOpt};
 use crate::fs::Fs;
 use crate::{log_msg_ratelimited, warn_on_once};
 use crate::debug::trace::events;
@@ -78,24 +87,24 @@ pub enum ParkReason<'a> {
     Replicas(u32),
     /// Its move, with @opts and @data_opts, failed to start with @err, which
     /// move_err_parks(): the trace says why, as can_do_data_update() does.
-    MoveFailed { err: BchError, opts: &'a c::bch_inode_opts, data_opts: &'a c::data_update_opts },
+    MoveFailed { err: BchError, opts: &'a bch_inode_opts, data_opts: &'a data_update_opts },
     /// Its data update, with @opts and @data_opts, ran and failed with @err.
-    UpdateFailed { err: BchError, opts: &'a c::bch_inode_opts, data_opts: &'a c::data_update_opts },
+    UpdateFailed { err: BchError, opts: &'a bch_inode_opts, data_opts: &'a data_update_opts },
     /// It can't be read until a device in the mask, offline, is back:
     /// park_for_devs().
-    DevsOffline(c::bch_devs_mask),
+    DevsOffline(bch_devs_mask),
 }
 
 pub enum Plan {
-    Move(c::data_update_opts),
+    Move(data_update_opts),
     Park(ParkReason<'static>),
     Nothing,
 }
 
 /// The plan for @k, its io options @opts: reconcile_set_data_opts().
-pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<Plan, BchError> {
-    use c::ReconcileOpt as o;
-    use c::WriteFlags as w;
+pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &bch_inode_opts) -> Result<Plan, BchError> {
+    use crate::data::reconcile::format::ReconcileOpt as o;
+    use crate::data::write::WriteFlags as w;
     let fs = t.fs();
 
     let Some(kp) = k.arm::<Ptrs>() else { return Ok(Plan::Nothing) };
@@ -104,8 +113,8 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     let need = |opt| r.need_rb() & rb_bit(opt) != 0;
     let only = |opt| r.need_rb() == rb_bit(opt);
 
-    let mut d = c::data_update_opts {
-        type_: c::DataUpdateType::reconcile,
+    let mut d = data_update_opts {
+        type_: DataUpdateType::reconcile,
         target: r.background_target(),
         // Never wait on the allocator mid-write: a blocked data update holds
         // a read-time snapshot of the extent while other movers rewrite it,
@@ -126,14 +135,14 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     // versioning was wrong - and getting it wrong would otherwise panic
     // converting it. The io options have had the same fallback: safe to take.
     let mut rb = r;
-    if u32::from(rb.data_checksum()) >= c::CsumOpt::NR {
+    if u32::from(rb.data_checksum()) >= CsumOpt::NR {
         rb.set_data_checksum(opts.data_checksum);
     }
-    if !c::bch_compression_opt::valid(rb.background_compression()) {
+    if !bch_compression_opt::valid(rb.background_compression()) {
         rb.set_background_compression(opts.background_compression);
     }
     let csum_type = fs.data_checksum_type_rb(&rb);
-    let compression_type = c::bch_compression_opt::to_type(rb.background_compression(), fs);
+    let compression_type = bch_compression_opt::to_type(rb.background_compression(), fs);
 
     // Before the parking below, which doesn't need them: they're only read
     let (kill, kill_ec) = brand(kp, |kb| -> Result<_, BchError> {
@@ -218,7 +227,7 @@ fn ec_pending(fs: &Fs, k: &impl BkeyVPtrs) -> bool {
 /// @k's pointers to drop for data_replicas @r: kill and kill_ec, as masks.
 /// At or under: those on bad or evacuating devices. Over: the drop
 /// simulation, at the top of the file.
-fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>>, r: &c::bch_extent_reconcile)
+fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>>, r: &bch_extent_reconcile)
     -> Result<(PtrMask<'id>, PtrMask<'id>), BchError>
 {
     let fs = t.fs();
@@ -230,7 +239,7 @@ fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>
         return Ok((k.where_(fs, |p| fs.dev_bad_or_evacuating(p.ptr.dev().into(), &rcu)), k.none()));
     }
 
-    let offline = |dev: u32| dev == c::BCH_SB_MEMBER_INVALID || !fs.devs_online.test(dev as usize);
+    let offline = |dev: u32| dev == BCH_SB_MEMBER_INVALID || !fs.devs_online.test(dev as usize);
 
     let mut sim = Sim::new(k.key().untyped());
     let mut n = k.adopt(fs, sim.key_mut());
@@ -242,7 +251,7 @@ fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>
         if !online_floor && cur.total == cur.online {
             continue;
         }
-        let floor = |d: &c::bkey_durability| u32::from(if online_floor { d.online } else { d.total });
+        let floor = |d: &bkey_durability| u32::from(if online_floor { d.online } else { d.total });
 
         for (i, bit) in n.all(fs).iter() {
             let ptr = *n.key().ptrs(fs).nth(i).expect("a pointer of the copy's");
@@ -340,11 +349,11 @@ pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeyS
 }
 
 /// The devices @k has pointers on that are offline.
-pub fn offline_devs(fs: &Fs, k: BkeySC<'_>) -> c::bch_devs_mask {
-    let mut devs = c::bch_devs_mask::default();
+pub fn offline_devs(fs: &Fs, k: BkeySC<'_>) -> bch_devs_mask {
+    let mut devs = bch_devs_mask::default();
     if let Some(kp) = k.arm::<Ptrs>() {
         for d in kp.ptrs(fs).map(|p| u32::from(p.dev())) {
-            if d != c::BCH_SB_MEMBER_INVALID && !fs.devs_online.test(d as usize) {
+            if d != BCH_SB_MEMBER_INVALID && !fs.devs_online.test(d as usize) {
                 devs.d.set(d as usize);
             }
         }
@@ -360,17 +369,17 @@ impl Fs {
     /// says whether it parked anything. Then, if one's back already, the
     /// pending scan its coming online requested may have run before the park
     /// committed: it's requested again.
-    pub fn park_for_devs(&self, devs: &c::bch_devs_mask, park: impl FnOnce() -> Result<bool, BchError>)
+    pub fn park_for_devs(&self, devs: &bch_devs_mask, park: impl FnOnce() -> Result<bool, BchError>)
         -> Result<(), BchError>
     {
         self.unpark_mark(devs);
         if park()? && devs.d.iter().any(|d| self.devs_online.test(d)) {
-            self.request_scan(c::ReconcileScan::pending, true)?;
+            self.request_scan(ReconcileScan::pending, true)?;
         }
         Ok(())
     }
 
-    fn unpark_mark(&self, devs: &c::bch_devs_mask) {
+    fn unpark_mark(&self, devs: &bch_devs_mask) {
         let mut sb = self.sb_lock();
         let mut marked = false;
         for d in devs.d.iter() {
@@ -417,7 +426,7 @@ impl Fs {
 /// but it says "not right now", and nothing retries the pending list.
 /// check_reconcile_pending_err().
 pub fn move_err_parks(e: BchError) -> bool {
-    use c::Errcode as err;
+    use crate::errcode::Errcode as err;
 
     !e.matches(err::ec_alloc_failed_transient) &&
         (e.matches(err::data_update_fail_no_rw_devs) ||
@@ -434,7 +443,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
 {
     let fs = t.fs();
     let Some(r) = k.arm::<Ptrs>().and_then(|kp| kp.reconcile_opts(fs).copied()) else { return Ok(()) };
-    if r.need_rb() == 0 || (rb_work_id(Some(&r)) == c::ReconcileWorkId::pending) == set {
+    if r.need_rb() == 0 || (rb_work_id(Some(&r)) == ReconcileWorkId::pending) == set {
         return Ok(());
     }
 
@@ -450,7 +459,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
     };
 
     if level == 0 {
-        let mut n = t.bkey_reassemble_room(k, c::BKEY_EXTENT_U64s_MAX as usize * size_of::<u64>())?;
+        let mut n = t.bkey_reassemble_room(k, BKEY_EXTENT_U64s_MAX as usize * size_of::<u64>())?;
         set_pending(&mut n);
         t.update(iter, n, UpdateTriggerFlags::empty())?;
         return t.commit(Some(&DiskReservation::new(fs)), CommitFlags::NO_ENOSPC);
@@ -472,7 +481,7 @@ pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k
 fn node_key_eq(l: BkeySC<'_>, r: BkeySC<'_>) -> bool {
     let (a, b) = (l.k, r.k);
     let skip = if a.key_type() == BkeyType::btree_ptr_v2 {
-        core::mem::offset_of!(c::BtreePtrV2, repr.seq)
+        core::mem::offset_of!(BtreePtrV2, repr.seq)
     } else {
         0
     };

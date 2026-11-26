@@ -18,6 +18,8 @@ use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use crate::c;
+use crate::format::__uuid_t;
+use crate::opts::bch_opts;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::{ByteLock, Locked};
@@ -83,7 +85,7 @@ impl ToText for Key<'_> {
                          dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1));
                 }
             }
-            Key::Uuid(b) => c::__uuid_t { b }.to_text(out),
+            Key::Uuid(b) => __uuid_t { b }.to_text(out),
         }
     }
 }
@@ -219,7 +221,7 @@ pub enum Claim {
 impl Opening {
     /// Its devices claimed and read: a multi-device filesystem is then found
     /// by its UUID too
-    pub fn claim<'a>(self, devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut c::bch_opts)
+    pub fn claim<'a>(self, devs: impl ExactSizeIterator<Item = &'a CStr>, opts: &mut bch_opts)
         -> Result<Claim, BchError>
     {
         let claimed = OpenFs::claim(devs, opts, &self.holder)?;

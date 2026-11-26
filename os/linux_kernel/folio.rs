@@ -32,7 +32,7 @@
 //! where nothing of the filesystem's is touched.
 
 use crate::c;
-use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
+use crate::errcode::{errptr_to_result, ret_to_result_void, BchError, Errcode};
 use crate::os::file::Any;
 use crate::os::iov_iter::IovIter;
 use crate::os::kernel::{cond_resched, loff};
@@ -318,7 +318,7 @@ impl<A> FolioRef<'_, A> {
 
     /// Locked: EAGAIN if @nonblock and that would wait.
     pub fn lock_or_eagain(&self, nonblock: bool) -> Result<FolioGuard<'_, A>, BchError> {
-        if nonblock { self.try_lock().ok_or_else(|| c::Errcode::EAGAIN_folio_lock_nonblock.into()) } else { Ok(self.lock()) }
+        if nonblock { self.try_lock().ok_or_else(|| Errcode::EAGAIN_folio_lock_nonblock.into()) } else { Ok(self.lock()) }
     }
 }
 

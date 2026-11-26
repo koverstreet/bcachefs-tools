@@ -23,6 +23,19 @@
 
 use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
+use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
+use crate::bcachefs_ioctl::{bch_ioctl_pread_raw, bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
+    FSOP_GOING_FLAGS_DEFAULT, FSOP_GOING_FLAGS_LOGFLUSH, FSOP_GOING_FLAGS_NOLOGFLUSH,
+    BCH_PREAD_RAW_no_poison_check, BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
+    BCH_IOCTL_SUBVOLUME_CREATE, BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_DESTROY,
+    BCH_IOCTL_SUBVOLUME_DESTROY_v2, BCH_IOCTL_SUBVOLUME_LIST, BCH_IOCTL_SUBVOLUME_TO_PATH,
+    BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_PREAD_RAW,
+    BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, BCHFS_IOC_READDIR_FLAGS, BCHFS_IOC_REINHERIT_ATTRS,
+    BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, BCHFS_IOC_UNPOISON, FS_IOC_GOINGDOWN};
+use crate::data::extents::ReadFlags;
+use crate::posix::dirent_format::BCH_NAME_MAX;
+use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::data::read::ReadErrReport;
 use crate::posix::dirent;
 use crate::errcode::{Errcode, BchError};
@@ -60,7 +73,7 @@ use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
 const FSLABEL_MAX: usize = c::FSLABEL_MAX as usize;
-const LABEL_SIZE: usize = c::BCH_SB_LABEL_SIZE as usize;
+const LABEL_SIZE: usize = BCH_SB_LABEL_SIZE as usize;
 
 pub struct FS_IOC_GETVERSION;
 impl Ioctl for FS_IOC_GETVERSION {
@@ -100,64 +113,64 @@ fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
             arg::<FS_IOC_GETFSLABEL, _>(user, |a| get_label(fs, a)),
         <FS_IOC_SETFSLABEL as Ioctl>::OPCODE =>
             arg::<FS_IOC_SETFSLABEL, _>(user, |a| set_label(fs, file, a)),
-        <c::FS_IOC_GOINGDOWN as Ioctl>::OPCODE =>
-            arg::<c::FS_IOC_GOINGDOWN, _>(user, |a| goingdown(inode.sb(), a)),
-        <c::BCHFS_IOC_GET_DAMAGE as Ioctl>::OPCODE =>
-            vstruct::<c::BCHFS_IOC_GET_DAMAGE, _, _>(user, |a| get_damage(fs, inode.inum(), a)),
-        <c::BCHFS_IOC_CLEAR_DAMAGE as Ioctl>::OPCODE =>
-            no_arg::<c::BCHFS_IOC_CLEAR_DAMAGE, _>(|| clear_damage(file, inode)),
-        <c::BCHFS_IOC_READDIR_FLAGS as Ioctl>::OPCODE => {
+        <FS_IOC_GOINGDOWN as Ioctl>::OPCODE =>
+            arg::<FS_IOC_GOINGDOWN, _>(user, |a| goingdown(inode.sb(), a)),
+        <BCHFS_IOC_GET_DAMAGE as Ioctl>::OPCODE =>
+            vstruct::<BCHFS_IOC_GET_DAMAGE, _, _>(user, |a| get_damage(fs, inode.inum(), a)),
+        <BCHFS_IOC_CLEAR_DAMAGE as Ioctl>::OPCODE =>
+            no_arg::<BCHFS_IOC_CLEAR_DAMAGE, _>(|| clear_damage(file, inode)),
+        <BCHFS_IOC_READDIR_FLAGS as Ioctl>::OPCODE => {
             let (dir, idmap) = (inode.inum(), MntIdmap::of(file));
             let is_dir = inode.vfs().is_dir();
-            arg::<c::BCHFS_IOC_READDIR_FLAGS, _>(user, |a| readdir_flags(fs, dir, is_dir,
+            arg::<BCHFS_IOC_READDIR_FLAGS, _>(user, |a| readdir_flags(fs, dir, is_dir,
                 |t, n| path_accessible(t, idmap, n, dir), a))
         }
-        <c::BCH_IOCTL_SUBVOLUME_LIST as Ioctl>::OPCODE => {
+        <BCH_IOCTL_SUBVOLUME_LIST as Ioctl>::OPCODE => {
             let idmap = MntIdmap::of(file);
-            arg::<c::BCH_IOCTL_SUBVOLUME_LIST, _>(user, |a| subvolume_list(fs, subvol,
+            arg::<BCH_IOCTL_SUBVOLUME_LIST, _>(user, |a| subvolume_list(fs, subvol,
                 |t, root, parent| subvol_accessible(t, idmap, root, parent), a))
         }
-        <c::BCH_IOCTL_SUBVOLUME_TO_PATH as Ioctl>::OPCODE =>
-            arg::<c::BCH_IOCTL_SUBVOLUME_TO_PATH, _>(user, |a| subvolume_to_path(fs, a)),
-        <c::BCH_IOCTL_SNAPSHOT_TREE as Ioctl>::OPCODE =>
-            arg::<c::BCH_IOCTL_SNAPSHOT_TREE, _>(user, |a| snapshot_tree_v1(fs, subvol, a)),
-        <c::BCH_IOCTL_SNAPSHOT_TREE_v2 as Ioctl>::OPCODE =>
-            arg::<c::BCH_IOCTL_SNAPSHOT_TREE_v2, _>(user, |a| snapshot_tree_v2(fs, subvol, a)),
-        <c::BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS as Ioctl>::OPCODE =>
-            no_arg::<c::BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, _>(||
+        <BCH_IOCTL_SUBVOLUME_TO_PATH as Ioctl>::OPCODE =>
+            arg::<BCH_IOCTL_SUBVOLUME_TO_PATH, _>(user, |a| subvolume_to_path(fs, a)),
+        <BCH_IOCTL_SNAPSHOT_TREE as Ioctl>::OPCODE =>
+            arg::<BCH_IOCTL_SNAPSHOT_TREE, _>(user, |a| snapshot_tree_v1(fs, subvol, a)),
+        <BCH_IOCTL_SNAPSHOT_TREE_v2 as Ioctl>::OPCODE =>
+            arg::<BCH_IOCTL_SNAPSHOT_TREE_v2, _>(user, |a| snapshot_tree_v2(fs, subvol, a)),
+        <BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS as Ioctl>::OPCODE =>
+            no_arg::<BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, _>(||
                 reflink_p_set_may_update_opts(fs, inode.inum())),
-        <c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS as Ioctl>::OPCODE =>
-            no_arg::<c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, _>(|| {
+        <BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS as Ioctl>::OPCODE =>
+            no_arg::<BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, _>(|| {
                 if !MntIdmap::of(file).owner_or_capable(inode.vfs()) && !capable(Capability::SysAdmin) {
                     return fs.throw(Errcode::EPERM_non_admin_or_owner);
                 }
                 reflink_p_propagate_opts(fs, inode.inum())
             }),
-        <c::BCHFS_IOC_UNPOISON as Ioctl>::OPCODE =>
-            input::<c::BCHFS_IOC_UNPOISON, _>(user, |a| unpoison(fs, inode.inum(),
+        <BCHFS_IOC_UNPOISON as Ioctl>::OPCODE =>
+            input::<BCHFS_IOC_UNPOISON, _>(user, |a| unpoison(fs, inode.inum(),
                 || MntIdmap::of(file).owner_or_capable(inode.vfs()), a)),
         // The argument is the name's address
-        <c::BCHFS_IOC_REINHERIT_ATTRS as Ioctl>::OPCODE => {
-            let name = UserStr::read(user.as_mut_ptr() as u64, c::BCH_NAME_MAX as usize + 1)?;
+        <BCHFS_IOC_REINHERIT_ATTRS as Ioctl>::OPCODE => {
+            let name = UserStr::read(user.as_mut_ptr() as u64, BCH_NAME_MAX as usize + 1)?;
             reinherit_attrs(file, inode, OsStr::from_bytes(name.as_cstr().to_bytes()))
         }
         c::FS_IOC_SETVERSION => Err(Errcode::ENOTTY_setversion.into()),
-        <c::BCH_IOCTL_SUBVOLUME_CREATE as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_SUBVOLUME_CREATE, _>(user, |a| subvolume_create(fs, file, a, ErrMsg::Log)),
-        <c::BCH_IOCTL_SUBVOLUME_CREATE_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_SUBVOLUME_CREATE_v2, _>(user, |a| {
+        <BCH_IOCTL_SUBVOLUME_CREATE as Ioctl>::OPCODE =>
+            input::<BCH_IOCTL_SUBVOLUME_CREATE, _>(user, |a| subvolume_create(fs, file, a, ErrMsg::Log)),
+        <BCH_IOCTL_SUBVOLUME_CREATE_v2 as Ioctl>::OPCODE =>
+            input::<BCH_IOCTL_SUBVOLUME_CREATE_v2, _>(user, |a| {
                 let (a, err) = a.split();
                 subvolume_create(fs, file, a, err)
             }),
-        <c::BCH_IOCTL_SUBVOLUME_DESTROY as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_SUBVOLUME_DESTROY, _>(user, |a| subvolume_destroy(fs, file, a, ErrMsg::Log)),
-        <c::BCH_IOCTL_SUBVOLUME_DESTROY_v2 as Ioctl>::OPCODE =>
-            input::<c::BCH_IOCTL_SUBVOLUME_DESTROY_v2, _>(user, |a| {
+        <BCH_IOCTL_SUBVOLUME_DESTROY as Ioctl>::OPCODE =>
+            input::<BCH_IOCTL_SUBVOLUME_DESTROY, _>(user, |a| subvolume_destroy(fs, file, a, ErrMsg::Log)),
+        <BCH_IOCTL_SUBVOLUME_DESTROY_v2 as Ioctl>::OPCODE =>
+            input::<BCH_IOCTL_SUBVOLUME_DESTROY_v2, _>(user, |a| {
                 let (a, err) = a.split();
                 subvolume_destroy(fs, file, a, err)
             }),
-        <c::BCHFS_IOC_PREAD_RAW as Ioctl>::OPCODE =>
-            arg::<c::BCHFS_IOC_PREAD_RAW, _>(user, |a| match regular {
+        <BCHFS_IOC_PREAD_RAW as Ioctl>::OPCODE =>
+            arg::<BCHFS_IOC_PREAD_RAW, _>(user, |a| match regular {
                 Some(file) => pread_raw(file, inode, a),
                 None       => Err(Errcode::EINVAL_pread_raw_not_regular.into()),
             }),
@@ -210,16 +223,16 @@ fn reinherit_attrs(file: &File, dir: &InodeInfo, name: &OsStr) -> Result<c_long,
     Ok(1)
 }
 
-impl V2 for c::bch_ioctl_subvolume_v2 {
-    type V1 = c::bch_ioctl_subvolume;
-    fn split(self) -> (c::bch_ioctl_subvolume, ErrMsg) {
-        (c::bch_ioctl_subvolume { flags: self.flags, dirfd: self.dirfd, mode: self.mode, pad: self.pad,
-                                  dst_ptr: self.dst_ptr, src_ptr: self.src_ptr },
+impl V2 for bch_ioctl_subvolume_v2 {
+    type V1 = bch_ioctl_subvolume;
+    fn split(self) -> (bch_ioctl_subvolume, ErrMsg) {
+        (bch_ioctl_subvolume { flags: self.flags, dirfd: self.dirfd, mode: self.mode, pad: self.pad,
+                               dst_ptr: self.dst_ptr, src_ptr: self.src_ptr },
          ErrMsg::User(self.err))
     }
 }
 
-fn subvolume_create(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMsg)
+fn subvolume_create(fs: &Fs, file: &File, a: bch_ioctl_subvolume, err: ErrMsg)
     -> Result<(), BchError>
 {
     let mut msg = Printbuf::new();
@@ -230,11 +243,11 @@ fn subvolume_create(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMsg
 /// BCH_IOCTL_SUBVOLUME_CREATE: a subvolume at @a.dst_ptr - with
 /// BCH_SUBVOL_SNAPSHOT_CREATE a snapshot, of the subvolume @a.src_ptr is in,
 /// or else the one the new directory's in.
-fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &mut Printbuf)
+fn create_subvolume(fs: &Fs, file: &File, mut a: bch_ioctl_subvolume, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     use Errcode as E;
-    use c::{BCH_SUBVOL_SNAPSHOT_CREATE as SNAPSHOT, BCH_SUBVOL_SNAPSHOT_RO as RO};
+    use crate::bcachefs_ioctl::{BCH_SUBVOL_SNAPSHOT_CREATE as SNAPSHOT, BCH_SUBVOL_SNAPSHOT_RO as RO};
 
     if a.flags & !(SNAPSHOT | RO) != 0 {
         prt!(err, "invalid flags");
@@ -245,18 +258,18 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
         return fs.throw(E::EINVAL_subvol_create_flags_mismatch);
     }
 
-    let mut create_flags = c::BCH_CREATE_SUBVOL;
+    let mut create_flags = BCH_CREATE_SUBVOL;
     if a.flags & SNAPSHOT != 0 {
-        create_flags |= c::BCH_CREATE_SNAPSHOT;
+        create_flags |= BCH_CREATE_SNAPSHOT;
     }
     if a.flags & RO != 0 {
-        create_flags |= c::BCH_CREATE_SNAPSHOT_RO;
+        create_flags |= BCH_CREATE_SNAPSHOT_RO;
     }
 
     // Held until the snapshot's made, as C held it
     let src = (a.src_ptr != 0).then(|| UserPath::at(a.dirfd as c_int, a.src_ptr, c::LOOKUP_FOLLOW))
         .transpose()?;
-    let mut snapshot_src = c::subvol_inum::default();
+    let mut snapshot_src = subvol_inum::default();
     if let Some(src) = &src {
         let Some(inode) = src.on(fs) else {
             prt!(err, "src_path not on dst filesystem");
@@ -312,7 +325,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &m
 
 /// BCH_IOCTL_SUBVOLUME_DESTROY: the subvolume whose root is @a.dst_ptr,
 /// unlinked, and deleted.
-fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMsg)
+fn subvolume_destroy(fs: &Fs, file: &File, a: bch_ioctl_subvolume, err: ErrMsg)
     -> Result<(), BchError>
 {
     let ret = (|| {
@@ -338,12 +351,12 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMs
 /// BCHFS_IOC_PREAD_RAW: an O_DIRECT read that reports the errors it hit -
 /// checksum, I/O, decompression - rather than failing on them, and with
 /// BCH_PREAD_RAW_no_poison_check, reads poisoned extents. The bytes read.
-fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_raw>)
+fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<bch_ioctl_pread_raw>)
     -> Result<c_long, BchError>
 {
     let fs = inode.fs();
     let a = user.read()?;
-    if a.flags & !c::BCH_PREAD_RAW_no_poison_check != 0 || a.err.pad != 0 {
+    if a.flags & !BCH_PREAD_RAW_no_poison_check != 0 || a.err.pad != 0 {
         return fs.throw(Errcode::EINVAL_pread_raw_args);
     }
     if a.len == 0 {
@@ -364,10 +377,10 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<c::bch_ioc
     let mut kiocb = MaybeUninit::uninit();
     let mut kiocb = Kiocb::sync(&mut kiocb, file, pos);
 
-    let flags = if a.flags & c::BCH_PREAD_RAW_no_poison_check != 0 {
-        c::ReadFlags::no_poison_check
+    let flags = if a.flags & BCH_PREAD_RAW_no_poison_check != 0 {
+        ReadFlags::no_poison_check
     } else {
-        c::ReadFlags::empty()
+        ReadFlags::empty()
     };
 
     // The reads' completions add to it, under its lock
@@ -376,7 +389,7 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<c::bch_ioc
     let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&*report)).map(|n| n as c_long);
 
     let mut errs = report.errs.lock();
-    if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &errs.errors).is_err() {
+    if user.write_at(offset_of!(bch_ioctl_pread_raw, errors), &errs.errors).is_err() {
         ret = Err(Errcode::EFAULT_pread_raw_errors.into());
     }
     let msg = &mut errs.msg;
@@ -422,19 +435,19 @@ fn goingdown(sb: &SuperBlock, user: UserArg<u32>) -> Result<(), BchError> {
     match flags {
         // frozen, everything written is on disk; thawed, it stays read-only:
         // unfreeze_fs() sees the shutdown
-        c::FSOP_GOING_FLAGS_DEFAULT => {
+        FSOP_GOING_FLAGS_DEFAULT => {
             let who = c::freeze_holder_FREEZE_HOLDER_KERNEL;
             sb.freeze(who)?;
             fs.emergency_read_only(&mut msg);
             let _ = sb.thaw(who);
             Ok(())
         }
-        c::FSOP_GOING_FLAGS_LOGFLUSH => {
+        FSOP_GOING_FLAGS_LOGFLUSH => {
             let _ = fs.journal_flush();
             fs.emergency_read_only(&mut msg);
             Ok(())
         }
-        c::FSOP_GOING_FLAGS_NOLOGFLUSH => {
+        FSOP_GOING_FLAGS_NOLOGFLUSH => {
             fs.emergency_read_only(&mut msg);
             Ok(())
         }
@@ -461,7 +474,7 @@ fn clear_damage(file: &File, inode: &InodeInfo) -> Result<(), BchError> {
 /// whole VFS stack. Not if the walk up doesn't get to @dir: a rename raced
 /// it, or an inode's gone.
 fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
-                   n: c::subvol_inum, dir: c::subvol_inum) -> Result<bool, BchError> {
+                   n: subvol_inum, dir: subvol_inum) -> Result<bool, BchError> {
     let get = |inum| match InodeInfo::get_trans(t, inum) {
         Err(e) if e.matches(c::ENOENT) => Ok(None),
         r => r.map(Some),
@@ -490,7 +503,7 @@ fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
 /// parent, @parent: MAY_EXEC on each directory of @parent's on the way. Not
 /// if the walk up from @root doesn't get there.
 fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
-                     root: c::subvol_inum, parent: u32) -> Result<bool, BchError> {
+                     root: subvol_inum, parent: u32) -> Result<bool, BchError> {
     let up = |i: &InodeRef| {
         let bi = i.inode();
         (bi.bi_subvol, bi.bi_parent_subvol, bi.bi_dir)
@@ -509,7 +522,7 @@ fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
      */
     let mut dirs: Vec<InodeRef> = Vec::new();
     while dir != 0 {
-        let i = InodeInfo::get_trans(t, c::subvol_inum { subvol: parent_sv.into(), inum: dir })?;
+        let i = InodeInfo::get_trans(t, subvol_inum { subvol: parent_sv.into(), inum: dir })?;
         let (subvol, _, next) = up(&i);
         dirs.push(i)?;
         if subvol == parent {

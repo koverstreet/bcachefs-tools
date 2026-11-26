@@ -12,6 +12,7 @@ use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering::Relaxed};
 use pin_init::{pin_data, pin_init, PinInit};
 
 use crate::c;
+use crate::sb::members_format::MemberErrorType;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::util::gather::Fold;
 use crate::os::kernel::{local_clock, READ, WRITE};
@@ -68,7 +69,7 @@ impl<B: BioOwns> DevBio<B> {
         let ca = this.ca.take().expect("a DevBio's end, with no device: it wasn't submitted");
         let status = this.bio.raw().bi_status;
         // by the op, not the ref's kind: a btree node write holds a read ref
-        let ty = if this.bio.op() == c::req_op_REQ_OP_WRITE { c::MemberErrorType::write } else { c::MemberErrorType::read };
+        let ty = if this.bio.op() == c::req_op_REQ_OP_WRITE { MemberErrorType::write } else { MemberErrorType::read };
         ca.account_io_result(ty, status == 0);
         if *this.unflushed {
             ca.write_unflushed();

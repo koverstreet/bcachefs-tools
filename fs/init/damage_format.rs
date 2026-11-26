@@ -2,7 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::sb::errors_format::bch_sb_field_error_entry_v2;
+use crate::format::bch_val;
 use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
 
 /*
@@ -18,10 +19,10 @@ use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
  * for "what happened": the sb section counts per-filesystem, damage
  * keys count per-inode.
  */
-#[whole(tail = entries: [c::bch_sb_field_error_entry_v2], bkey)]
+#[whole(tail = entries: [bch_sb_field_error_entry_v2], bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Damage {
-    pub v: c::bch_val,
-    pub entries: [c::bch_sb_field_error_entry_v2; 0],
+    pub v: bch_val,
+    pub entries: [bch_sb_field_error_entry_v2; 0],
 }

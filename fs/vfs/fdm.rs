@@ -41,7 +41,7 @@ pub const FDM_NR_HASH: u32 = 3;
 
 pub const FDM_HASH_BITS: u32 = 9;
 
-pub const FDM_HASH_SIZE: u32 = 1 << c::FDM_HASH_BITS;
+pub const FDM_HASH_SIZE: u32 = 1 << FDM_HASH_BITS;
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -53,12 +53,12 @@ pub struct fdm_slot {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct fdm_hash {
-    pub hash_seeds: [u64; c::FDM_NR_HASH as usize],
+    pub hash_seeds: [u64; FDM_NR_HASH as usize],
     pub wait: EventCount,
-    pub slots: [c::fdm_slot; c::FDM_HASH_SIZE as usize],
+    pub slots: [fdm_slot; FDM_HASH_SIZE as usize],
 }
 
-impl c::fdm_hash {
+impl fdm_hash {
     /// Empty, its hash seeds random.
     pub fn init() -> impl pin_init::Init<Self> {
         pin_init::init!(Self {
@@ -68,13 +68,13 @@ impl c::fdm_hash {
     }
 
     /// The current task's slots, one per hash.
-    fn slots_of_current(&self) -> impl Iterator<Item = &c::fdm_slot> {
+    fn slots_of_current(&self) -> impl Iterator<Item = &fdm_slot> {
         let current = current_id();
-        (0..c::FDM_NR_HASH as usize)
-            .map(move |i| &self.slots[hash_64(current as u64 ^ self.hash_seeds[i], c::FDM_HASH_BITS) as usize])
+        (0..FDM_NR_HASH as usize)
+            .map(move |i| &self.slots[hash_64(current as u64 ^ self.hash_seeds[i], FDM_HASH_BITS) as usize])
     }
 
-    fn slot(&self) -> Option<&c::fdm_slot> {
+    fn slot(&self) -> Option<&fdm_slot> {
         let current = current_id();
         self.slots_of_current()
             .find(|s| s.task.get() == current)
@@ -124,7 +124,7 @@ impl c::fdm_hash {
 }
 
 /// This task's page faults disabled on a mapping, till it's dropped: set()'s.
-pub struct FaultsDisabled<'a>(&'a c::fdm_hash);
+pub struct FaultsDisabled<'a>(&'a fdm_hash);
 
 impl FaultsDisabled<'_> {
     /// Whether a fault dropped this task's locks since set().

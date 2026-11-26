@@ -36,7 +36,10 @@ use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::c;
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkP,
+    ReflinkPIdxFlags, ReflinkV};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_one;
 use crate::errcode::{Errcode, BchError};
@@ -57,7 +60,8 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::MaybeZeroable;
-use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature};
+use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature,
+    BCH_REPLICAS_MAX, bkey};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags_bits::indirect }>;
 
@@ -68,7 +72,7 @@ pub type Indirect = FamilyVal<IndirectTypes>;
 
 pub static REFCOUNT: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::indirect, "refcount");
 
-fn refcount_offset(k: &c::bkey) -> usize {
+fn refcount_offset(k: &bkey) -> usize {
     REFCOUNT.of(k).expect("an indirect extent's type has a refcount")
 }
 
@@ -101,7 +105,7 @@ pub trait BkeyVIndirect: BkeyV<V = Indirect> {
 
 impl<K: BkeyV<V = Indirect>> BkeyVIndirect for K {}
 
-impl c::bkey {
+impl bkey {
     /// The type a direct extent of its type is, made indirect: deleted for a
     /// type that has none, as bkey_type_to_indirect() returns 0.
     pub fn indirect_type(&self) -> BkeyType {
@@ -189,7 +193,7 @@ impl ReflinkGc {
 /// @idx. As gc_trigger_reflink_p_segment().
 fn gc_segment(
     t:            &TransAttempt<'_, '_>,
-    p:            BkeySC<'_, c::ReflinkP>,
+    p:            BkeySC<'_, ReflinkP>,
     idx:          &mut u64,
     flags:        UpdateTriggerFlags,
     r_idx:        usize,
@@ -226,7 +230,7 @@ fn gc_segment(
 /// With @check_repair, what isn't there is the missing indirect extent error.
 fn gc_idx(
     t:            &TransAttempt<'_, '_>,
-    p:            BkeySC<'_, c::ReflinkP>,
+    p:            BkeySC<'_, ReflinkP>,
     refs:         Range<u64>,
     flags:        UpdateTriggerFlags,
     check_repair: bool,
@@ -351,7 +355,7 @@ pub(crate) unsafe fn gc_reflink_free(fs: &Fs) {
 
 // ── reflink pointers ─────────────────────────────────────────────────────
 
-impl BkeySC<'_, c::ReflinkP> {
+impl BkeySC<'_, ReflinkP> {
     /// What it maps, in the reflink btree's offsets.
     pub(crate) fn live(&self) -> Range<u64> {
         let idx = self.v().idx();
@@ -365,9 +369,9 @@ impl BkeySC<'_, c::ReflinkP> {
     }
 }
 
-impl BkeyOps for c::ReflinkP {
+impl BkeyOps for ReflinkP {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let p = v.k.arm::<c::ReflinkP>().expect("a reflink_p").v();
+        let p = v.k.arm::<ReflinkP>().expect("a reflink_p").v();
 
         bkey_fsck_err_on!(v, p.idx() < p.front_pad.get() as u64, id::reflink_p_front_pad_bad,
                           "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())?;
@@ -375,14 +379,14 @@ impl BkeyOps for c::ReflinkP {
         // what it covers ends at an indirect position there can be: what's
         // added to idx - cutting its front, remapping it - stays within that
         let end = p.idx() + v.k.k.size as u64 + p.back_pad.get() as u64;
-        bkey_fsck_err_on!(v, end > c::ReflinkPIdxFlags::IDX_MAX, id::reflink_p_idx_bad,
+        bkey_fsck_err_on!(v, end > ReflinkPIdxFlags::IDX_MAX, id::reflink_p_idx_bad,
                           "past the maximum indirect position: idx {} + size {} + back_pad {} > {}",
-                          p.idx(), { v.k.k.size }, p.back_pad.get(), c::ReflinkPIdxFlags::IDX_MAX)
+                          p.idx(), { v.k.k.size }, p.back_pad.get(), ReflinkPIdxFlags::IDX_MAX)
     }
 
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let p = k.arm::<c::ReflinkP>().expect("a reflink_p").v();
+        let p = k.arm::<ReflinkP>().expect("a reflink_p").v();
 
         write!(out, "idx {} front_pad {} back_pad {}", p.idx(), p.front_pad.get(), p.back_pad.get());
 
@@ -404,10 +408,10 @@ impl BkeyOps for c::ReflinkP {
         return false;
 
         let (l_idx, l_error) = {
-            let l = l.arm::<c::ReflinkP>().expect("a reflink_p");
+            let l = l.arm::<ReflinkP>().expect("a reflink_p");
             (l.v().idx(), l.v().error())
         };
-        let r_p = r.arm::<c::ReflinkP>().expect("a reflink_p").v();
+        let r_p = r.arm::<ReflinkP>().expect("a reflink_p").v();
 
         if l_idx + l.k.size as u64 != r_p.idx() {
             return false;
@@ -423,7 +427,7 @@ impl BkeyOps for c::ReflinkP {
 
     fn check_repair(t: &TransAttempt<'_, '_>, _iter: &BtreeIter<'_>, _btree: Btree, _level: u32,
                     k: BkeySC<'_>) -> Result<(), BchError> {
-        let p = k.arm::<c::ReflinkP>().expect("a reflink_p");
+        let p = k.arm::<ReflinkP>().expect("a reflink_p");
         gc_idx(t, p, p.refd(), UpdateTriggerFlags::empty(), true)
     }
 
@@ -435,11 +439,11 @@ impl BkeyOps for c::ReflinkP {
 /// Either kind: reflink_ps' indices are offsets in inode 0, so nothing past it
 /// can be referenced - and gc's table, built in key order, is in offset order.
 fn indirect_pos_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, c::ReflinkPIdxFlags::IDX_MAX)), id::reflink_v_pos_bad,
-                      "indirect extent above maximum position 0:{}", c::ReflinkPIdxFlags::IDX_MAX)
+    bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, ReflinkPIdxFlags::IDX_MAX)), id::reflink_v_pos_bad,
+                      "indirect extent above maximum position 0:{}", ReflinkPIdxFlags::IDX_MAX)
 }
 
-impl BkeyOps for c::ReflinkV {
+impl BkeyOps for ReflinkV {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         indirect_pos_validate(v)?;
         crate::data::ptrs::bkey_ptrs_validate(v)
@@ -468,7 +472,7 @@ fn indirect_inline_data_to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeyS
     InlineDataRef::of(k).expect("inline data").to_text(out);
 }
 
-impl BkeyOps for c::IndirectInlineData {
+impl BkeyOps for IndirectInlineData {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         indirect_pos_validate(v)
     }
@@ -480,7 +484,7 @@ impl BkeyOps for c::IndirectInlineData {
     const TRIGGER: Option<&'static Trigger> = Some(&INDIRECT_INLINE_DATA);
 }
 
-impl BkeyOps for c::IndirectInlineDataV2 {
+impl BkeyOps for IndirectInlineDataV2 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         indirect_pos_validate(v)?;
         crate::data::inline_data::csum_validate(v)
@@ -498,7 +502,7 @@ impl BkeyOps for c::IndirectInlineDataV2 {
 /// A reflink_p to an indirect extent that's there after all: its error flag
 /// cleared.
 #[cold]
-fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>, should_commit: bool)
+fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, ReflinkP>, should_commit: bool)
     -> Result<(), BchError>
 {
     let mut new = t.bkey_make_mut_noupdate(p)?;
@@ -520,7 +524,7 @@ fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::Reflin
 #[cold]
 fn indirect_extent_missing_error(
     t:             &TransAttempt<'_, '_>,
-    p:             BkeySC<'_, c::ReflinkP>,
+    p:             BkeySC<'_, ReflinkP>,
     missing:       Range<u64>,
     should_commit: bool,
 ) -> Result<(), BchError> {
@@ -595,7 +599,7 @@ pub fn lookup_indirect_extent<'a, 'k>(
     t:                  &'k TransAttempt<'a, '_>,
     iter:               &'k mut BtreeIter<'a>,
     offset_into_extent: &mut i64,
-    p:                  BkeySC<'_, c::ReflinkP>,
+    p:                  BkeySC<'_, ReflinkP>,
     should_commit:      bool,
     iter_flags:         BtreeIterFlags,
 ) -> Result<BkeySC<'k>, BchError> {
@@ -627,7 +631,7 @@ pub fn lookup_indirect_extent<'a, 'k>(
 /// and on insert, @p's pads widened to cover it. @idx moves to its end.
 fn trans_trigger_reflink_p_segment(
     t:     &TransAttempt<'_, '_>,
-    p:     &mut BkeyI<c::ReflinkP>,
+    p:     &mut BkeyI<ReflinkP>,
     idx:   &mut u64,
     flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
@@ -673,7 +677,7 @@ fn trans_trigger_reflink_p_segment(
 
 /// @p's references, taken or dropped - transactionally, a segment at a time,
 /// and for gc, counted in its table.
-fn trigger_reflink_p_key(t: &TransAttempt<'_, '_>, p: &mut BkeyI<c::ReflinkP>, flags: UpdateTriggerFlags)
+fn trigger_reflink_p_key(t: &TransAttempt<'_, '_>, p: &mut BkeyI<ReflinkP>, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
 {
     let refd = BkeySC::from(&*p).refd();
@@ -692,7 +696,7 @@ fn trigger_reflink_p_key(t: &TransAttempt<'_, '_>, p: &mut BkeyI<c::ReflinkP>, f
 }
 
 fn set_pads(k: &mut BkeyS<'_>, front_pad: Le32, back_pad: Le32) {
-    let mut p = k.as_s().arm::<c::ReflinkP>().expect("a reflink_p");
+    let mut p = k.as_s().arm::<ReflinkP>().expect("a reflink_p");
     let v = p.v_mut();
     v.front_pad = front_pad;
     v.back_pad  = back_pad;
@@ -711,7 +715,7 @@ fn trigger_reflink_p(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Re
 
     let mut new_pads = None;
     op.run_overwrite_then_insert(|k, flags| {
-        let mut p = BkeyI::<c::ReflinkP>::from_key(k).expect("a reflink_p");
+        let mut p = BkeyI::<ReflinkP>::from_key(k).expect("a reflink_p");
 
         trigger_reflink_p_key(t, &mut p, flags)?;
         if flags.contains(UpdateTriggerFlags::INSERT) {
@@ -769,7 +773,7 @@ pub fn make_extent_indirect<'a, 't>(
     extent_iter:                     &BtreeIter<'a>,
     mut orig:                        TransBkey<'a, 't>,
     reflink_p_may_update_opts_field: bool,
-) -> Result<BkeyI<c::ReflinkP>, BchError> {
+) -> Result<BkeyI<ReflinkP>, BchError> {
     let fs = t.fs();
 
     if orig.k().key_type() == BkeyType::inline_data {
@@ -796,15 +800,15 @@ pub fn make_extent_indirect<'a, 't>(
      * filesystem: we need to implement wraparound, with a cursor in the
      * logged ops btree:
      */
-    if bkey_ge(reflink_iter.pos(), pos(0, c::ReflinkPIdxFlags::IDX_MAX - orig.k().size as u64)) {
+    if bkey_ge(reflink_iter.pos(), pos(0, ReflinkPIdxFlags::IDX_MAX - orig.k().size as u64)) {
         return fs.throw(Errcode::ENOSPC_reflink_idx_max);
     }
 
-    let r_v_buf_u64s = orig.k().u64s as u32 + 2 + c::BCH_REPLICAS_MAX;
+    let r_v_buf_u64s = orig.k().u64s as u32 + 2 + BCH_REPLICAS_MAX;
     let mut r_v = t.bkey_alloc(r_v_buf_u64s)?;
 
     let k = r_v.k_mut();
-    *k = c::bkey::new();
+    *k = bkey::new();
     k.type_    = orig.k().indirect_type().0 as u8;
     k.p        = reflink_iter.pos();
     k.resize(orig.k().size);
@@ -816,18 +820,18 @@ pub fn make_extent_indirect<'a, 't>(
     refcount.fill(0);
     val.copy_from_slice(BkeySC::from(&orig).val_bytes());
 
-    r_v.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
+    r_v.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
 
     let r_v_start = r_v.k().start_offset();
     t.update(&reflink_iter, r_v, UpdateTriggerFlags::empty())?;
 
     /* orig, rewritten in place as the reflink_p - in the room the caller gave it */
-    orig.set_val_u64s(size_of::<c::ReflinkP>() / size_of::<u64>())
+    orig.set_val_u64s(size_of::<ReflinkP>() / size_of::<u64>())
         .unwrap_or_else(|e| panic!("no room in {} for a reflink_p: {e}", orig.k()));
     orig.k_mut().set_key_type(BkeyType::reflink_p);
     orig.val_bytes_mut().fill(0);
 
-    let mut r_p = orig.reborrow().arm::<c::ReflinkP>().expect("a reflink_p, as just made");
+    let mut r_p = orig.reborrow().arm::<ReflinkP>().expect("a reflink_p, as just made");
     r_p.v_mut().set_idx(r_v_start);
 
     if reflink_p_may_update_opts_field {
@@ -847,9 +851,9 @@ pub fn make_extent_indirect<'a, 't>(
 #[allow(clippy::too_many_arguments)]
 pub fn remap_range(
     fs:                          &Fs,
-    dst_inum:                    c::subvol_inum,
+    dst_inum:                    subvol_inum,
     dst_offset:                  u64,
-    src_inum:                    c::subvol_inum,
+    src_inum:                    subvol_inum,
     src_offset:                  u64,
     remap_sectors:               u64,
     mut new_i_size:              u64,
@@ -900,7 +904,7 @@ pub fn remap_range(
             let src = src_iter.find_max_norestart(t, src_end, |_, k| {
                 Ok(!k.extent_is_unwritten(fs) && k.k.extent_is_data())
             })?
-            .map(|k| t.bkey_reassemble_room(k, size_of::<BkeyI<c::ReflinkP>>()))
+            .map(|k| t.bkey_reassemble_room(k, size_of::<BkeyI<ReflinkP>>()))
             .transpose()?;
             if src.is_none() && bkey_ge(src_iter.pos(), src_end) {
                 src_iter.set_pos(src_end);
@@ -921,7 +925,7 @@ pub fn remap_range(
                 BkeyI::from_key(src.as_sc()).expect("a reflink_p")
             };
 
-            let mut dst_p = t.bkey_alloc_typed::<c::ReflinkP>()?;
+            let mut dst_p = t.bkey_alloc_typed::<ReflinkP>()?;
 
             dst_p.v_mut().set_idx(src_p.v.idx() + (src_want.offset - src_p.k.start_offset()));
 

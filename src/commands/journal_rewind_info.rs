@@ -1,7 +1,8 @@
 use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::c;
+use bcachefs_kernel::format::{DegradedAction, ErrorAction, jset, JsetEntryRef};
+use bcachefs_kernel::opts::FsckErrOpt;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 
@@ -10,17 +11,17 @@ use crate::wrappers::journal::JournalReplays;
 // ---- per-jset accessors ----
 
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
-fn jset_datetime(j: &c::jset) -> Option<u64> {
+fn jset_datetime(j: &jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
-        Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds.get()),
+        Ok(JsetEntryRef::datetime(d)) => Some(d.seconds.get()),
         _ => None,
     })
 }
 
 /// A jset's first rewind_limit entry's seq, or None if absent.
-fn jset_rewind_limit(j: &c::jset) -> Option<u64> {
+fn jset_rewind_limit(j: &jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
-        Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq.get()),
+        Ok(JsetEntryRef::rewind_limit(r)) => Some(r.seq.get()),
         _ => None,
     })
 }
@@ -63,9 +64,9 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     opts.set_nochanges(true);
     opts.set_norecovery(true);
     opts.set_read_only(true);
-    opts.set_degraded(c::DegradedAction::very);
-    opts.set_errors(c::ErrorAction::continue_);
-    opts.set_fix_errors(c::FsckErrOpt::yes as u8);
+    opts.set_degraded(DegradedAction::very);
+    opts.set_errors(ErrorAction::continue_);
+    opts.set_fix_errors(FsckErrOpt::yes as u8);
     opts.set_retain_recovery_info(true);
     opts.set_read_journal_only(true);
     opts.set_read_entire_journal(true);

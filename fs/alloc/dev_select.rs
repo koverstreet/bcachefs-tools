@@ -18,7 +18,11 @@
 //! it), then the clock hands.
 
 use crate::fs::Dev;
-use crate::c;
+use crate::alloc::buckets::bch_dev_usage;
+use crate::alloc::foreground::{alloc_request, dev_alloc_list, Watermark};
+use crate::format::BCH_REPLICAS_MAX;
+use crate::init::dev::{bch_devs_mask, DevsMask};
+use crate::sb::members_format::BCH_SB_MEMBERS_MAX;
 use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::os::kernel::likely;
@@ -44,8 +48,8 @@ use cstruct_macros::MaybeZeroable;
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct dev_stripe_state {
-    pub next_alloc: [u64; c::BCH_SB_MEMBERS_MAX as usize],
-    pub cached_devs: c::bch_devs_mask,
+    pub next_alloc: [u64; BCH_SB_MEMBERS_MAX as usize],
+    pub cached_devs: bch_devs_mask,
 }
 
 published! {
@@ -58,22 +62,22 @@ published! {
         /* bit n - 1: placement decides how much fits at n replicas */
         pub placement_constrained: Volatile<c_ulong>,
         /* at n replicas, the devices every such allocation has to use */
-        pub placement_required: [Volatile<c::DevsMask>; c::BCH_REPLICAS_MAX as usize],
+        pub placement_required: [Volatile<DevsMask>; BCH_REPLICAS_MAX as usize],
     }
 }
 
 
-const NR_DEVS: usize = c::BCH_SB_MEMBERS_MAX as usize;
+const NR_DEVS: usize = BCH_SB_MEMBERS_MAX as usize;
 
 const HAND_RESCALE: u64 = 1 << 62;    /* rescale past this */
 const HAND_MAX: u64     = 1 << 56;    /* the most, after a rescale */
 const HAND_INV: u64     = 1 << 52;    /* the most an allocation adds: no free space */
 
-impl c::dev_stripe_state {
+impl dev_stripe_state {
     /// @devs the devices it's choosing between: those new to it join at the
     /// least hand of the rest - raised to it, never lowered, so one rejoining
     /// keeps its history, and doesn't win every tie while its siblings starve.
-    fn sync(&mut self, devs: &c::bch_devs_mask) {
+    fn sync(&mut self, devs: &bch_devs_mask) {
         if likely(self.cached_devs.d == devs.d) {
             return;
         }
@@ -105,8 +109,8 @@ impl c::dev_stripe_state {
 
     /// An allocation from @ca, its usage @usage: its hand advanced by the
     /// inverse of its free space.
-    pub fn increment(&mut self, ca: &Dev, usage: &c::bch_dev_usage) {
-        let free = ca.free_buckets_at(usage, c::Watermark::normal);
+    pub fn increment(&mut self, ca: &Dev, usage: &bch_dev_usage) {
+        let free = ca.free_buckets_at(usage, Watermark::normal);
         let v = &mut self.next_alloc[usize::from(ca.dev_idx)];
 
         *v = v.saturating_add(if free != 0 { HAND_INV / free } else { HAND_INV });
@@ -117,8 +121,8 @@ impl c::dev_stripe_state {
 
     /// @devs into @ret, ordered for allocation: by @domain_keys, then those
     /// @required, then the hands - ties as they came, by device index.
-    fn alloc_list(&mut self, devs: &c::bch_devs_mask, domain_keys: &[u64; NR_DEVS],
-                  required: Option<&c::DevsMask>, ret: &mut c::dev_alloc_list) {
+    fn alloc_list(&mut self, devs: &bch_devs_mask, domain_keys: &[u64; NR_DEVS],
+                  required: Option<&DevsMask>, ret: &mut dev_alloc_list) {
         self.sync(devs);
 
         ret.nr = 0;
@@ -134,10 +138,10 @@ impl c::dev_stripe_state {
     }
 }
 
-impl c::alloc_request<'_, '_> {
+impl alloc_request<'_, '_> {
     /// The devices placement requires of it - dev_alloc_required()'s - read
     /// now: None if none are.
-    pub fn devs_required(&self) -> Option<c::DevsMask> {
+    pub fn devs_required(&self) -> Option<DevsMask> {
         self.devs_required.map(Volatile::get)
     }
 
@@ -159,7 +163,7 @@ impl Fs {
     /// as each copy's chosen, which changes what the next should avoid. For
     /// erasure coding, failure domains are a hard requirement: a device
     /// sharing one with a chosen block is excluded.
-    pub(crate) fn domain_keys_update(&self, req: &mut c::alloc_request) {
+    pub(crate) fn domain_keys_update(&self, req: &mut alloc_request) {
         let may = req.devs_may_alloc.d;
         {
             let rcu = read_lock();
@@ -177,7 +181,7 @@ impl Fs {
 
     /// @req's devs_sorted: its devs_may_alloc, in the order to allocate from
     /// them, @stripe's hands breaking ties.
-    pub fn dev_alloc_list(&self, stripe: &mut c::dev_stripe_state, req: &mut c::alloc_request) {
+    pub fn dev_alloc_list(&self, stripe: &mut dev_stripe_state, req: &mut alloc_request) {
         self.domain_keys_update(req);
         let required = req.devs_required();
         stripe.alloc_list(&req.devs_may_alloc, &req.domain_keys, required.as_ref(), &mut req.devs_sorted);
@@ -191,11 +195,11 @@ impl Fs {
     /// decision: @req may use one of them, and has more devices to choose
     /// from than copies left to place. Not for erasure coding, whose
     /// nr_replicas is a block count.
-    pub(crate) fn dev_alloc_required(&self, req: &c::alloc_request) -> Option<&Volatile<c::DevsMask>> {
+    pub(crate) fn dev_alloc_required(&self, req: &alloc_request) -> Option<&Volatile<DevsMask>> {
         let n = u32::from(req.nr_replicas);
         let p = &self.capacity.sectors_available_lock;
 
-        if req.bits.ec() || !(2..=c::BCH_REPLICAS_MAX).contains(&n) ||
+        if req.bits.ec() || !(2..=BCH_REPLICAS_MAX).contains(&n) ||
            p.placement_constrained.get() & 1 << (n - 1) == 0 {
             return None;
         }
@@ -208,7 +212,7 @@ impl Fs {
     /// An allocation of @req's made on @dev while placement was restricted,
     /// @have its copies before it: counted, and traced - which builds its
     /// message in a printbuf, so not under a spinlock.
-    pub(crate) fn placement_restricted_count(&self, req: &c::alloc_request, dev: u32, have: u32) {
+    pub(crate) fn placement_restricted_count(&self, req: &alloc_request, dev: u32, have: u32) {
         let Some(required) = req.devs_required() else { return };
 
         self.event_inc_trace(events::bucket_alloc_placement_restricted, |out| {
@@ -226,9 +230,9 @@ impl Fs {
     }
 
     /// The journal's: its domain keys in @domain_keys, not an alloc_request.
-    pub fn dev_alloc_list_devs(&self, stripe: &mut c::dev_stripe_state, devs: &c::bch_devs_mask,
-                               devs_chosen: &c::bch_devs_mask, domain_keys: &mut [u64; NR_DEVS],
-                               ret: &mut c::dev_alloc_list) {
+    pub fn dev_alloc_list_devs(&self, stripe: &mut dev_stripe_state, devs: &bch_devs_mask,
+                               devs_chosen: &bch_devs_mask, domain_keys: &mut [u64; NR_DEVS],
+                               ret: &mut dev_alloc_list) {
         {
             let rcu = read_lock();
             for i in devs.d.iter() {

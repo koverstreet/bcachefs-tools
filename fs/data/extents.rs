@@ -10,7 +10,9 @@ use crate::btree::bkey::{bkey_ge, bkey_gt, bkey_le, bkey_lt, types_with, AllType
 use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyOps};
 use crate::btree::trigger::Trigger;
 use crate::btree::iter::NoRoom;
-use crate::c;
+use crate::data::extents_format::{bch_extent_ptr, bch_extent_stripe_ptr, CRC128_SIZE_MAX,
+    CRC32_SIZE_MAX, CRC64_SIZE_MAX, Reservation};
+use crate::data::reflink_format::ReflinkP;
 use crate::data::inline_data::{InlineDataMut, InlineDataRef};
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, IoFailures, Ptrs, PtrsMut};
@@ -23,7 +25,8 @@ use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::Le8;
-use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits};
+use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, BCH_BKEY_PTRS_MAX,
+    bch_csum, BCH_REPLICAS_MAX, bkey, CompressionType, CsumType};
 
 /*
  * Everything one walk of a key's pointer list can say about its replication.
@@ -92,14 +95,14 @@ pub struct bch_extent_crc_unpacked {
     pub uncompressed_size: u32,
     pub live_size: u32,
 
-    pub csum_type: Le8<c::CsumType>,
-    pub compression_type: Le8<c::CompressionType>,
+    pub csum_type: Le8<CsumType>,
+    pub compression_type: Le8<CompressionType>,
 
     pub offset: u16,
 
     pub nonce: u16,
 
-    pub csum: c::bch_csum,
+    pub csum: bch_csum,
 }
 
 #[repr(C)]
@@ -108,9 +111,9 @@ pub struct extent_ptr_decoded {
     pub has_ec: bool,
     pub do_ec_reconstruct: bool,
     pub crc_retry_nr: u8,
-    pub crc: c::bch_extent_crc_unpacked,
-    pub ptr: c::bch_extent_ptr,
-    pub ec: c::bch_extent_stripe_ptr,
+    pub crc: bch_extent_crc_unpacked,
+    pub ptr: bch_extent_ptr,
+    pub ec: bch_extent_stripe_ptr,
 }
 
 /// What failed reading or writing a key's pointers, for C: its size, not its
@@ -118,7 +121,7 @@ pub struct extent_ptr_decoded {
 #[repr(C)]
 #[derive(Default, MaybeZeroable, TypeInfo)]
 pub struct bch_io_failures {
-    pub(crate) failures: IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>,
+    pub(crate) failures: IoFailures<{ BCH_BKEY_PTRS_MAX as usize }>,
 }
 
 #[bch_enum(closed)]
@@ -160,7 +163,7 @@ pub type Extents = FamilyVal<ExtentsTypes>;
 pub enum ExtentsTypes {}
 
 impl FamilyTypes for ExtentsTypes {
-    fn contains(k: &c::bkey) -> bool {
+    fn contains(k: &bkey) -> bool {
         ByFlag::<{ BkeyTypeFlags_bits::extent }>::contains(k) && k.size != 0
     }
 }
@@ -179,7 +182,7 @@ pub type Data = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::data }>>;
 /// BkeyTypeFlags::user_data.
 pub type UserData = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::user_data }>>;
 
-impl c::bkey {
+impl bkey {
     pub fn extent_is_allocation(&self) -> bool {
         <Allocation as BkeyFamily>::contains(self)
     }
@@ -297,7 +300,7 @@ pub trait BkeyVExtents: BkeyV {
                 }
             }
             BkeyType::reflink_p => {
-                let mut p = k.as_s().arm::<c::ReflinkP>().expect("a reflink_p");
+                let mut p = k.as_s().arm::<ReflinkP>().expect("a reflink_p");
                 let v = p.v_mut();
                 v.update_idx(|i| i + sub);
             }
@@ -384,7 +387,7 @@ pub fn bch2_cut_back_s(where_: Bpos, k: BkeyS<'_>) -> c_int {
 /// @ptr after @k's value - its last entry - and @k a u64 longer: @k a key
 /// with pointers - btree_ptr, btree_ptr_v2, extent - and @ptr to a device it
 /// has none on.
-pub fn bkey_append_ptr(k: &mut DstRoom<BkeyI>, ptr: c::bch_extent_ptr) -> Result<(), NoRoom> {
+pub fn bkey_append_ptr(k: &mut DstRoom<BkeyI>, ptr: bch_extent_ptr) -> Result<(), NoRoom> {
     let t = k.k.key_type();
     assert!(matches!(t, BkeyType::btree_ptr | BkeyType::btree_ptr_v2 | BkeyType::extent),
             "a pointer appended to a key of type {}", t.0);
@@ -403,7 +406,7 @@ enum CrcMerge {
     Both,
 }
 
-fn crc_merge(l: &c::bch_extent_crc_unpacked, r: &c::bch_extent_crc_unpacked) -> CrcMerge {
+fn crc_merge(l: &bch_extent_crc_unpacked, r: &bch_extent_crc_unpacked) -> CrcMerge {
     if u32::from(l.offset) + l.live_size + r.live_size <= l.uncompressed_size {
         CrcMerge::Left
     } else if l.live_size <= u32::from(r.offset) {
@@ -415,7 +418,7 @@ fn crc_merge(l: &c::bch_extent_crc_unpacked, r: &c::bch_extent_crc_unpacked) -> 
 
 /// Whether @r continues @l on disk, so the two can be one pointer of the
 /// merged extent.
-fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::extent_ptr_decoded) -> bool {
+fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &extent_ptr_decoded, r: &extent_ptr_decoded) -> bool {
     let (lc, rc) = (&l.crc, &r.crc);
 
     if l.ptr.offset() + u64::from(lc.offset) + u64::from(lc.live_size) != r.ptr.offset() + u64::from(rc.offset) ||
@@ -470,7 +473,7 @@ fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::ex
             lc.csum_type.get().mergeable() &&
             u32::from(lc.offset) + lc.live_size == lc.compressed_size &&
             rc.offset == 0 &&
-            (lc.csum_type == c::CsumType::none ||
+            (lc.csum_type == CsumType::none ||
              lc.uncompressed_size + rc.uncompressed_size <= fs.opts().encoded_extent_max.get() >> 9),
     }
 }
@@ -479,9 +482,9 @@ fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::ex
 /// bch2_crc_field_size_max[].
 fn crc_size_max(e: ExtentEntry<'_>) -> Option<u32> {
     Some(match e {
-        ExtentEntry::crc32(_)  => c::CRC32_SIZE_MAX,
-        ExtentEntry::crc64(_)  => c::CRC64_SIZE_MAX,
-        ExtentEntry::crc128(_) => c::CRC128_SIZE_MAX,
+        ExtentEntry::crc32(_)  => CRC32_SIZE_MAX,
+        ExtentEntry::crc64(_)  => CRC64_SIZE_MAX,
+        ExtentEntry::crc128(_) => CRC128_SIZE_MAX,
         _ => return None,
     })
 }
@@ -508,7 +511,7 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     // Each crc entry pair's data, summed, must fit their type - whichever crc
     // the pair takes:
     let (lk, rk) = (*l.k(), *r.k());
-    let size = |k: &c::bkey, e: ExtentEntry<'_>| crc_unpack(k, e).expect("a crc entry pair: their types matched").uncompressed_size;
+    let size = |k: &bkey, e: ExtentEntry<'_>| crc_unpack(k, e).expect("a crc entry pair: their types matched").uncompressed_size;
     for (el, er) in l.extent_entries(fs).zip(r.extent_entries(fs)) {
         if crc_size_max(el).is_some_and(|max| size(&lk, el) + size(&rk, er) > max) {
             return false;
@@ -558,26 +561,26 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
 
 // ── reservations ─────────────────────────────────────────────────────────
 
-impl BkeyOps for c::Reservation {
+impl BkeyOps for Reservation {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let r = v.k.arm::<c::Reservation>().expect("a reservation").v();
+        let r = v.k.arm::<Reservation>().expect("a reservation").v();
 
-        bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > c::BCH_REPLICAS_MAX,
+        bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > BCH_REPLICAS_MAX,
                           id::reservation_key_nr_replicas_invalid,
                           "invalid nr_replicas ({})", r.nr_replicas)
     }
 
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let r = k.arm::<c::Reservation>().expect("a reservation").v();
+        let r = k.arm::<Reservation>().expect("a reservation").v();
 
         write!(out, "generation {} replicas {}", r.generation.get(), r.nr_replicas);
     }
 
     /// Adjacent reservations of the same generation and replicas are one.
     fn merge(_fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
-        let lv = l.as_sc().arm::<c::Reservation>().expect("a reservation").v();
-        let rv = r.arm::<c::Reservation>().expect("a reservation").v();
+        let lv = l.as_sc().arm::<Reservation>().expect("a reservation").v();
+        let rv = r.arm::<Reservation>().expect("a reservation").v();
 
         if lv.generation.get() != rv.generation.get() || lv.nr_replicas != rv.nr_replicas {
             return false;

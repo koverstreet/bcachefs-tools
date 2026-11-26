@@ -7,12 +7,14 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::POS_MIN;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
+use crate::btree::bbpos::bbpos;
+use crate::util::time_stats::TimeStat;
 use crate::data::ptrs::drop_stale_ptrs;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::Btree;
-use crate::fs::Fs;
-use crate::init::passes::{self, RecoveryPass};
+use crate::format::{Btree, SbCompat, SbCompats};
+use crate::fs::{Fs, FsFlag};
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
 use crate::sb::members::DevRef;
 use crate::util::alloc::Vec;
 use crate::os::kernel::local_clock;
@@ -26,7 +28,7 @@ use cstruct_macros::{MaybeZeroable, TypeInfo};
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct bch_fs_gc_gens {
     /* gc_gens's: where its walk is, for sysfs */
-    pub pos: Volatile<c::bbpos>,
+    pub pos: Volatile<bbpos>,
 }
 
 fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
@@ -58,13 +60,13 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
     let res = DiskReservation::new(fs);
 
     for btree in (0..Btree::NR).map(Btree).filter(|b| b.has_data_ptrs()) {
-        fs.gc_gens.pos.set(c::bbpos { btree, pos: POS_MIN });
+        fs.gc_gens.pos.set(bbpos { btree, pos: POS_MIN });
 
         BtreeIter::new(&trans, btree, POS_MIN, BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS)
             .for_each_commit(&trans, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
                 res.put();
 
-                if fs.flags.get(c::FsFlag::going_ro) {
+                if fs.flags.get(FsFlag::going_ro) {
                     return fs.throw(Errcode::erofs_gc_gens_going_ro);
                 }
 
@@ -88,14 +90,14 @@ fn recalc_oldest_gens(fs: &Fs, start_time: u64) -> Result<(), BchError> {
             t.update(iter, a, UpdateTriggerFlags::empty())
         })?;
 
-    fs.gc_gens.pos.set(c::bbpos::default());
+    fs.gc_gens.pos.set(bbpos::default());
 
-    fs.times.get(c::TimeStat::btree_gc as usize).update(start_time);
+    fs.times.get(TimeStat::btree_gc as usize).update(start_time);
     fs.event_inc_trace(events::gc_gens_end, |_| {});
 
-    if !fs.compat(c::SbCompat::no_stale_ptrs) {
+    if !fs.compat(SbCompat::no_stale_ptrs) {
         let mut sb = fs.sb_lock();
-        sb.sb_mut().compat.update(|f| f | c::SbCompats::no_stale_ptrs);
+        sb.sb_mut().compat.update(|f| f | SbCompats::no_stale_ptrs);
         fs.write_super(&mut sb);
     }
 
@@ -140,6 +142,6 @@ impl Fs {
     /// gc_gens, scheduled to run in the background.
     pub fn gc_gens_async(&self) {
         let _ = passes::run_explicit(self, &mut Printbuf::new(), RecoveryPass::gc_gens,
-                                     c::RunRecoveryPassFlags::ephemeral);
+                                     RunRecoveryPassFlags::ephemeral);
     }
 }

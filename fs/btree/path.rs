@@ -7,21 +7,22 @@
 use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::cache::{bch2_btree_id_level_to_text, OwnedNode};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeRef, BtreeTrans};
-use crate::btree::key_cache::EntryContents;
+use crate::btree::key_cache::{EntryContents, bkey_cached};
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
 use crate::btree::locking::BtreeNodeLockedType::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents, NodeKey, PublishedKey};
 use crate::btree::traverse::advance_to_pos;
-use crate::c;
-use crate::cstructs::c as cs;
+use crate::btree::locking::btree_bkey_cached_common;
+use crate::btree::update::btree_insert_entry;
+use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::bitmap::Bitmap;
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::{events, TraceEvent};
 use crate::prt;
 use crate::errcode::{Errcode, err_ptr, errptr_or_null, BchError};
-use crate::format::{BkeyType, Bpos, Btree};
+use crate::format::{BkeyType, Bpos, Btree, bch_val, bkey, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
@@ -47,8 +48,8 @@ pub struct btree_trans_paths {
 use crate::os::kernel::local_clock;
 use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
 use crate::locking::{Alone, Guard, Locked, LockedBy};
-use crate::locking::six::{six_trylock_ip, SixHold};
-use crate::c::SixLockType;
+use crate::locking::six::{six_trylock_ip, SixHold, six_lock, six_lock_waiter};
+use crate::locking::six::SixLockType;
 use core::cmp::Ordering;
 use core::ffi::{c_int, c_ulong};
 use core::marker::PhantomData;
@@ -75,7 +76,7 @@ macro_rules! copy {
 /// What a peek found: a key's value - NULL for a hole - its header where the
 /// peek unpacked or copied it - for an iterator's peek, its own, iter->k.
 #[derive(Clone, Copy)]
-pub(crate) struct KeyVal(pub(crate) *const c::bch_val);
+pub(crate) struct KeyVal(pub(crate) *const bch_val);
 
 /// A path level's node, as C has it: NULL above the root, an error pointer
 /// saying why there's no node, or the node - only had by decoding it. An
@@ -128,7 +129,7 @@ impl<T> NodePtr<T> {
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
-pub struct btree_path_level<T: PathNode = cs::btree_bkey_cached_common> {
+pub struct btree_path_level<T: PathNode = btree_bkey_cached_common> {
     /* a cached path's is a struct bkey_cached's */
     pub b: NodePtr<T>,
     pub iter: KeyIter,
@@ -157,8 +158,8 @@ pub struct btree_path_bits {
 /// their common parts. All are C's struct btree_path.
 #[repr(C)]
 #[derive(MaybeZeroable, BitfieldMembers)]
-pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
-    pub sorted_idx: cs::PathIdx,
+pub struct BtreePath<T: PathNode = btree_bkey_cached_common> {
+    pub sorted_idx: PathIdx,
     pub ref_: u8,
     pub intent_ref: u8,
 
@@ -169,7 +170,7 @@ pub struct BtreePath<T: PathNode = cs::btree_bkey_cached_common> {
     pub bits: btree_path_bits,
     pub nodes_locked: u8,
 
-    pub l: [cs::btree_path_level<T>; cs::BTREE_MAX_DEPTH as usize],
+    pub l: [btree_path_level<T>; BTREE_MAX_DEPTH as usize],
     /* C's TRACK_PATH_ALLOCATED, which btree/types_inline.h defines from
      * these: rustc sees only the configuration */
     #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
@@ -190,7 +191,7 @@ impl PathSnapshot {
     }
 }
 
-pub(crate) type DownKey = DstRoom<BkeyI, [u64; BKEY_U64S + cs::BKEY_BTREE_PTR_VAL_U64s_MAX]>;
+pub(crate) type DownKey = DstRoom<BkeyI, [u64; BKEY_U64S + BKEY_BTREE_PTR_VAL_U64s_MAX]>;
 
 /// A transaction's path table, borrowed: one borrow at a time, by a bit in
 /// the transaction's flags - a RefCell's - so a Rust entry into the btree code
@@ -244,10 +245,10 @@ impl Paths<'_> {
     /// to see - waited for with @wait, the transaction's own read holds on the
     /// node set aside meanwhile. On failure, six's error: the lock's back to
     /// intent, and the caller marks the level so, after the wait.
-    pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &c::six_lock_waiter,
+    pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &six_lock_waiter,
                                     should_sleep_fn: impl FnMut() -> c_int, ip: c_ulong) -> Result<(), c_int> {
         let (node, intent) = self[idx].hold_marked_write(level);
-        let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[c::SixLockType::SIX_LOCK_read as usize] as c_int;
+        let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[SixLockType::SIX_LOCK_read as usize] as c_int;
 
         match unsafe { ManuallyDrop::into_inner(intent).write_waiting_over(readers, wait, should_sleep_fn, ip) } {
             Ok(write) => {
@@ -436,17 +437,17 @@ struct TableLayout {
 impl TableLayout {
     const fn of(nr: usize) -> Self {
         let header  = bits_to_longs(nr) * size_of::<c_ulong>();
-        let paths   = header + offset_of!(c::btree_trans_paths, paths);
+        let paths   = header + offset_of!(btree_trans_paths, paths);
         let sorted  = paths + nr * size_of::<BtreePath>();
         let updates = sorted + (nr + 4) * size_of::<PathIdx>();
-        TableLayout { header, paths, sorted, updates, size: updates + nr * size_of::<c::btree_insert_entry>() }
+        TableLayout { header, paths, sorted, updates, size: updates + nr * size_of::<btree_insert_entry>() }
     }
 }
 
 /* the embedded table, laid out as any other */
 const _: () = {
     let base = offset_of!(BtreeTrans<'static>, _paths_allocated);
-    let l = TableLayout::of(cs::BTREE_ITER_INITIAL as usize);
+    let l = TableLayout::of(BTREE_ITER_INITIAL as usize);
     assert!(offset_of!(BtreeTrans<'static>, trans_paths) - base == l.header &&
             offset_of!(BtreeTrans<'static>, _paths) - base == l.paths &&
             offset_of!(BtreeTrans<'static>, _sorted) - base == l.sorted &&
@@ -454,14 +455,14 @@ const _: () = {
 };
 
 /// The header of the table whose paths start at @paths: trans_paths_nr()'s.
-pub(crate) fn table_header(paths: *mut BtreePath) -> *mut c::btree_trans_paths {
-    paths.wrapping_byte_sub(offset_of!(c::btree_trans_paths, paths)).cast()
+pub(crate) fn table_header(paths: *mut BtreePath) -> *mut btree_trans_paths {
+    paths.wrapping_byte_sub(offset_of!(btree_trans_paths, paths)).cast()
 }
 
 /// The rest of the table whose @nr paths start at @paths: its allocated
 /// bitmap - trans_paths_allocated()'s, its start - sorted and updates.
 pub(crate) fn table_arrays(paths: *mut BtreePath, nr: usize)
-    -> (*mut c_ulong, *mut PathIdx, *mut c::btree_insert_entry)
+    -> (*mut c_ulong, *mut PathIdx, *mut btree_insert_entry)
 {
     let l = TableLayout::of(nr);
     let start = paths.cast::<u8>().wrapping_sub(l.paths);
@@ -555,7 +556,7 @@ impl<T: PathNode> BtreePath<T> {
 
 pub(in crate::btree) struct PathsUpdates<'a, 't> {
     pub(in crate::btree) paths:   &'a mut Paths<'t>,
-    pub(in crate::btree) updates: &'a mut [c::btree_insert_entry],
+    pub(in crate::btree) updates: &'a mut [btree_insert_entry],
 }
 
 impl<'t> Paths<'t> {
@@ -582,7 +583,7 @@ impl<'t> Paths<'t> {
     }
 
     /// All the room for updates: one per path.
-    fn updates_buf(&mut self) -> &mut [c::btree_insert_entry] {
+    fn updates_buf(&mut self) -> &mut [btree_insert_entry] {
         let (_, _, updates) = table_arrays(self.table.cast(), self.table.len());
         unsafe { core::slice::from_raw_parts_mut(updates, self.table.len()) }
     }
@@ -599,24 +600,24 @@ impl<'t> Paths<'t> {
     /// The key updates queued: trans_for_each_update(). They're in the
     /// table's allocation, after the paths - growing moves them, and the
     /// transaction beginning drops them, both with the table borrowed mutably.
-    pub(crate) fn updates(&self) -> &[c::btree_insert_entry] {
+    pub(crate) fn updates(&self) -> &[btree_insert_entry] {
         unsafe { self.trans.updates_unguarded() }
     }
 
     /// updates(), each with its key: in the transaction's memory while it's
     /// queued.
-    pub(crate) fn update_keys(&self) -> impl Iterator<Item = (&c::btree_insert_entry, &BkeyI)> {
+    pub(crate) fn update_keys(&self) -> impl Iterator<Item = (&btree_insert_entry, &BkeyI)> {
         self.updates().iter().map(|i| (i, i.key()))
     }
 
-    pub(crate) fn update_mut(&mut self, i: usize) -> &mut c::btree_insert_entry {
+    pub(crate) fn update_mut(&mut self, i: usize) -> &mut btree_insert_entry {
         let nr = self.trans.nr_updates.get() as usize;
         &mut self.updates_buf()[..nr][i]
     }
 
     /// @n queued at @i, the updates from @i on moved up one: there's room for
     /// one per path.
-    pub(crate) fn insert_update(&mut self, i: usize, n: c::btree_insert_entry) -> &mut c::btree_insert_entry {
+    pub(crate) fn insert_update(&mut self, i: usize, n: btree_insert_entry) -> &mut btree_insert_entry {
         let t = self.trans;
         let nr = t.nr_updates.get() as usize;
         assert!(i <= nr, "queueing update {i} of {nr}");
@@ -809,7 +810,7 @@ impl<'t> Paths<'t> {
             }
         }
 
-        for i in 0..c::BTREE_MAX_DEPTH as usize {
+        for i in 0..BTREE_MAX_DEPTH as usize {
             if let Some((_, hold)) = src.hold(i) {
                 hold.increment(hold.ty()).into_raw();
             }
@@ -909,7 +910,7 @@ impl BtreeTrans<'_> {
 
     #[inline(never)]
     fn paths_realloc(&self, paths: &mut Paths<'_>, pos: PathIdx) -> PathIdx {
-        if self.nr_paths.get() as u32 == c::BTREE_ITER_MAX {
+        if self.nr_paths.get() as u32 == BTREE_ITER_MAX {
             self.path_overflow(paths);
             return 0;
         }
@@ -1084,7 +1085,7 @@ impl BtreeTrans<'_> {
         if intent {
             locks_want = locks_want.max(level + 1);
         }
-        locks_want = locks_want.min(c::BTREE_MAX_DEPTH);
+        locks_want = locks_want.min(BTREE_MAX_DEPTH);
 
         let mut path_pos = 0;
         for i in 0..paths.sorted().len() {
@@ -1206,8 +1207,8 @@ impl BtreePath {
 
     /// Its key cache entry, if it's a cached path holding it locked.
     #[inline(always)]
-    pub(crate) fn locked_key_cached(&self) -> Option<LockedNode<'_, c::bkey_cached>> {
-        self.downcast::<c::bkey_cached>()?.locked_node(0)
+    pub(crate) fn locked_key_cached(&self) -> Option<LockedNode<'_, bkey_cached>> {
+        self.downcast::<bkey_cached>()?.locked_node(0)
     }
 
     /// The level's node, to write: a btree node the path holds write locked.
@@ -1219,7 +1220,7 @@ impl BtreePath {
     /// Its key cache entry, to write: locked_btree_node_mut()'s, of a cached
     /// path.
     #[inline(always)]
-    pub(crate) fn locked_key_cached_mut(&mut self) -> Option<LockedNode<'_, c::bkey_cached, Write>> {
+    pub(crate) fn locked_key_cached_mut(&mut self) -> Option<LockedNode<'_, bkey_cached, Write>> {
         self.locked_node_mut(0)
     }
 
@@ -1285,7 +1286,7 @@ impl BtreePath {
         Some((LockedNode { node: unsafe { &*b }, _mode: PhantomData }, &mut self.l[level].iter))
     }
 
-    pub(crate) fn peek_slot(&self, u: &mut c::bkey) -> Option<KeyVal> {
+    pub(crate) fn peek_slot(&self, u: &mut bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
 
         if self.l[level].b.is_null() {
@@ -1309,11 +1310,11 @@ impl BtreePath {
                 }
             }
 
-            *u = c::bkey::new();
+            *u = bkey::new();
             u.p = self.pos;
             Some(KeyVal(ptr::null()))
         } else {
-            let ck = self.downcast::<c::bkey_cached>()?.locked_node(0)?;
+            let ck = self.downcast::<bkey_cached>()?.locked_node(0)?;
 
             ebug_assert!({ let key = ck.key.get(); Btree(key.btree_id) == self.btree_id() && key.pos == self.pos });
 
@@ -1375,7 +1376,7 @@ impl BtreePath {
         prt!(out, "\n\nlocks_want {}\n", self.locks_want());
 
         let out = &mut *out.indent(2);
-        for l in 0..c::BTREE_MAX_DEPTH as usize {
+        for l in 0..BTREE_MAX_DEPTH as usize {
             prt!(out, "l={} locks {} seq {} node ", l, btree_node_locked_str(self.locked_type(l)), self.l[l].lock_seq);
             match self.l[l].b.get() {
                 Err(e)  => prt!(out, "{}", e.msg()),
@@ -1471,7 +1472,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(crate) fn path_verify_now(&self, paths: &mut Paths<'_>, idx: PathIdx) {
-        let levels = if !paths[idx].cached() { c::BTREE_MAX_DEPTH as usize } else { 1 };
+        let levels = if !paths[idx].cached() { BTREE_MAX_DEPTH as usize } else { 1 };
 
         for i in 0..levels {
             let path = &paths[idx];
@@ -1621,9 +1622,9 @@ fn path_verify_level_err(path: &BtreePath, level: usize, keys: &Keys<'_>, p: Opt
 
 /// A transaction's path table, as it starts: its own, embedded.
 pub fn bch2_trans_paths_init(trans: &BtreeTrans<'_>) {
-    trans.nr_paths.set(cs::BTREE_ITER_INITIAL as PathIdx);
+    trans.nr_paths.set(BTREE_ITER_INITIAL as PathIdx);
     trans.paths.set(trans._paths.as_ptr().cast());
-    unsafe { (*trans.trans_paths.as_ptr()).nr_paths = cs::BTREE_ITER_INITIAL.into() };
+    unsafe { (*trans.trans_paths.as_ptr()).nr_paths = BTREE_ITER_INITIAL.into() };
     let mut paths = trans.paths();
 
     /*
@@ -1669,20 +1670,20 @@ pub unsafe trait PathNode: 'static {
     /// The cached flag of a common part that's one of these; None for any.
     const CACHED: Option<bool>;
 
-    fn common(&self) -> &c::btree_bkey_cached_common;
+    fn common(&self) -> &btree_bkey_cached_common;
 
     /// What a common part is the start of, if it's one of these: by its
     /// cached flag.
-    fn from_common(b: &c::btree_bkey_cached_common) -> Option<&Self> where Self: Sized {
+    fn from_common(b: &btree_bkey_cached_common) -> Option<&Self> where Self: Sized {
         Self::CACHED.map_or(true, |cached| cached == b.cached)
             .then(|| unsafe { &*core::ptr::from_ref(b).cast() })
     }
 }
 
-unsafe impl PathNode for c::btree_bkey_cached_common {
+unsafe impl PathNode for btree_bkey_cached_common {
     const CACHED: Option<bool> = None;
 
-    fn common(&self) -> &c::btree_bkey_cached_common {
+    fn common(&self) -> &btree_bkey_cached_common {
         self
     }
 }
@@ -1690,21 +1691,21 @@ unsafe impl PathNode for c::btree_bkey_cached_common {
 unsafe impl PathNode for BtreeNode {
     const CACHED: Option<bool> = Some(false);
 
-    fn common(&self) -> &c::btree_bkey_cached_common {
+    fn common(&self) -> &btree_bkey_cached_common {
         &self.c
     }
 }
 
-unsafe impl PathNode for c::bkey_cached {
+unsafe impl PathNode for bkey_cached {
     const CACHED: Option<bool> = Some(true);
 
-    fn common(&self) -> &c::btree_bkey_cached_common {
+    fn common(&self) -> &btree_bkey_cached_common {
         &self.c
     }
 }
 
-const _: () = assert!(offset_of!(BtreeNode, c) == 0 && offset_of!(c::bkey_cached, c) == 0 &&
-                      offset_of!(c::btree_bkey_cached_common, lock) == 0);
+const _: () = assert!(offset_of!(BtreeNode, c) == 0 && offset_of!(bkey_cached, c) == 0 &&
+                      offset_of!(btree_bkey_cached_common, lock) == 0);
 
 impl BtreePath {
     /// As a path of Ts, if it is one: by its cached flag.
@@ -1736,7 +1737,7 @@ impl PathNodeContents for BtreeNode {
     }
 }
 
-impl PathNodeContents for c::bkey_cached {
+impl PathNodeContents for bkey_cached {
     type Contents = EntryContents;
     type Published = ();
 
@@ -1899,8 +1900,8 @@ impl<'p, T: PathNode> UnlockedNode<'p, T> {
     }
 
     /// Its lock: of a node, what's had without it.
-    pub fn lock(self) -> &'p Locked<c::six_lock> {
-        unsafe { &*self.node.as_ptr().cast::<Locked<c::six_lock>>() }
+    pub fn lock(self) -> &'p Locked<six_lock> {
+        unsafe { &*self.node.as_ptr().cast::<Locked<six_lock>>() }
     }
 }
 
@@ -2061,7 +2062,7 @@ impl<T: PathNode> BtreePath<T> {
     /// NULL above the root, or an error pointer: why there's no node. A
     /// cached path's is a key cache entry's.
     pub(crate) fn node(&self, level: usize) -> NodePtr<T> {
-        if level >= c::BTREE_MAX_DEPTH as usize {
+        if level >= BTREE_MAX_DEPTH as usize {
             return NodePtr::null();
         }
 
@@ -2092,7 +2093,7 @@ impl<T: PathNode> BtreePath<T> {
     }
 
     pub(crate) fn is_btree_node(&self, level: usize) -> bool {
-        level < c::BTREE_MAX_DEPTH as usize && self.l[level].b.is_node()
+        level < BTREE_MAX_DEPTH as usize && self.l[level].b.is_node()
     }
 
     pub(crate) fn locked_type(&self, level: usize) -> BtreeNodeLockedType {
@@ -2120,17 +2121,17 @@ impl<T: PathNode> BtreePath<T> {
 
     pub(crate) fn mark_locked_noreset(&mut self, level: usize, ty: BtreeNodeLockedType) {
         /* relying on this to avoid a branch */
-        const { assert!(c::SixLockType::SIX_LOCK_read as i32 == 0 && c::SixLockType::SIX_LOCK_intent as i32 == 1) };
+        const { assert!(SixLockType::SIX_LOCK_read as i32 == 0 && SixLockType::SIX_LOCK_intent as i32 == 1) };
 
         self.nodes_locked &= !(3 << (level << 1));
         self.nodes_locked |= ((ty as i32 + 1) as u8) << (level << 1);
     }
 
-    pub(crate) fn lock_want_six(&self, level: usize) -> c::SixLockType {
+    pub(crate) fn lock_want_six(&self, level: usize) -> SixLockType {
         if level < self.locks_want() as usize {
-            c::SixLockType::SIX_LOCK_intent
+            SixLockType::SIX_LOCK_intent
         } else {
-            c::SixLockType::SIX_LOCK_read
+            SixLockType::SIX_LOCK_read
         }
     }
 

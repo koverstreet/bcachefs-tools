@@ -2,11 +2,10 @@
 //! builder that picks one to fit the keys a node will hold.
 
 use super::BKEY_U64S;
-use crate::c;
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::errcode::BchError;
 use crate::format::BkeyField::{self, *};
-use crate::format::{bkey_format, Bpos};
+use crate::format::{bkey_format, Bpos, bkey, KEY_PACKED_BITS_START};
 use crate::sb_err_on;
 use crate::types::{field_size, Le64};
 use crate::util::{Printbuf, ToText};
@@ -26,8 +25,8 @@ xmacro! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct bkey_format_state {
-    pub field_min: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
-    pub field_max: [u64; c::BkeyField::BKEY_NR_FIELDS as usize],
+    pub field_min: [u64; BkeyField::BKEY_NR_FIELDS as usize],
+    pub field_max: [u64; BkeyField::BKEY_NR_FIELDS as usize],
 }
 
 pub(super) const NR_FIELDS: usize = BKEY_NR_FIELDS as usize;
@@ -43,7 +42,7 @@ macro_rules! format_current {
     ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {{
         let mut bits_per_field = [0; NR_FIELDS];
         $(bits_per_field[$id as usize] =
-            (field_size(|k: c::bkey| k.$($field).+) * 8) as u8;)*
+            (field_size(|k: crate::format::bkey| k.$($field).+) * 8) as u8;)*
 
         bkey_format {
             key_u64s:     BKEY_U64S as u8,
@@ -112,7 +111,7 @@ impl bkey_format {
     }
 
     pub fn validate(&self, err: &mut Printbuf) -> Result<(), BchError> {
-        let mut bits = c::KEY_PACKED_BITS_START;
+        let mut bits = KEY_PACKED_BITS_START;
 
         sb_err_on!(err, self.nr_fields as usize != NR_FIELDS, invalid,
                    "incorrect number of fields: got {}, should be {NR_FIELDS}", self.nr_fields)?;
@@ -172,7 +171,7 @@ impl bkey_format_state {
     /*
      * Changes @format so that @k can be successfully packed with @format
      */
-    pub fn add_key(&mut self, k: &c::bkey) {
+    pub fn add_key(&mut self, k: &bkey) {
         macro_rules! add {
             ($( ($id:ident, $($field:ident).+) ),* $(,)?) => { $(self.add($id, k.$($field).+ as u64);)* };
         }
@@ -180,7 +179,7 @@ impl bkey_format_state {
     }
 
     pub fn done(&mut self) -> bkey_format {
-        let mut bits = c::KEY_PACKED_BITS_START;
+        let mut bits = KEY_PACKED_BITS_START;
         let mut ret = bkey_format { nr_fields: BKEY_NR_FIELDS as u8, ..Default::default() };
 
         for f in FIELDS {

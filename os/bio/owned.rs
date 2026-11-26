@@ -39,7 +39,7 @@ use crate::util::gather::{Fold, GatherRef, Width};
 use crate::util::task::{waiter, Completion, Exclusive, Resumable, TaskSlot, Waiter};
 use crate::c;
 use crate::data_structures::dst_vec::DstVec;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::locking::MemallocFlags;
 use crate::os::blkdev::BlockDevice;
 use crate::os::module::{Quiesced, ThisModule};
@@ -545,7 +545,7 @@ impl<T: HasBio> BioSet<T> {
         };
         let bio = self.alloc_raw(nr_vecs, opf, Flags::empty());
         if bio.is_null() {
-            return Err(BchError::from(c::Errcode::ENOMEM_bio_alloc).into());
+            return Err(BchError::from(Errcode::ENOMEM_bio_alloc).into());
         }
         // SAFETY: front_pad bytes before it, a U's, laid out as a T
         let t = unsafe { of_bio::<U>(bio) };
@@ -739,7 +739,7 @@ impl<'a, T: HasBio, A: Alloc> BioBox<'a, T, A> {
         E: From<BchError>,
     {
         let layout = Layout::new::<T>();
-        let p = alloc.allocate_zeroed(layout).map_err(|_| BchError::from(c::Errcode::ENOMEM_bio_new_in))?.cast::<T>();
+        let p = alloc.allocate_zeroed(layout).map_err(|_| BchError::from(Errcode::ENOMEM_bio_new_in))?.cast::<T>();
         unsafe {
             match init_at(bio_in(nr_vecs, opf, bvecs, init), p.as_ptr()) {
                 Ok(()) => Ok(BioBox { t: p, alloc, _init: PhantomData }),

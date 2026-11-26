@@ -7,7 +7,9 @@
 
 use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
-use crate::c;
+use crate::data::extents_format::ExtentEntryType;
+use crate::data::extents_sb_format::bch_sb_field_extent_type_u64s;
+use crate::format::bch_sb;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
@@ -17,7 +19,7 @@ use crate::util::Printbuf;
 use crate::sb::io::SbResize;
 
 fn ours() -> impl Iterator<Item = u8> {
-    (0..c::ExtentEntryType::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8)
+    (0..ExtentEntryType::NR).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8)
 }
 
 /// A section's sizes, @d: a 0 ends them.
@@ -35,11 +37,11 @@ fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
     for (d, s) in u64s.iter_mut().zip(ours()) {
         *d = s;
     }
-    (u64s, nr.max(c::ExtentEntryType::NR as usize) as u8)
+    (u64s, nr.max(ExtentEntryType::NR as usize) as u8)
 }
 
-impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
-    fn validate(_sb: &c::bch_sb<Unvalidated>, e: &c::bch_sb_field_extent_type_u64s<Unvalidated>,
+impl SbFieldOps for bch_sb_field_extent_type_u64s<Validated> {
+    fn validate(_sb: &bch_sb<Unvalidated>, e: &bch_sb_field_extent_type_u64s<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         for (ty, (&theirs, ours)) in sizes(&e.d).iter().zip(ours()).enumerate() {
             sb_err_on!(err, theirs != ours, invalid_sb_extent_type_u64s,
@@ -49,8 +51,8 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                e: &c::bch_sb_field_extent_type_u64s<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                e: &bch_sb_field_extent_type_u64s<Unvalidated>) {
         for (ty, &u64s) in sizes(&e.d).iter().enumerate() {
             match extent_entry_type_name(ty as u32) {
                 Some(name) => write!(out, "{name}"),
@@ -63,7 +65,7 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
     /// c->sb's extent entry sizes.
     fn to_cpu(_fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let (handle, cpu) = sb.parts();
-        let theirs = handle.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], |e| sizes(&e.d));
+        let theirs = handle.field::<bch_sb_field_extent_type_u64s>().map_or(&[][..], |e| sizes(&e.d));
         let (u64s, known) = sizes_to_cpu(theirs);
 
         set_all(&cpu.extent_type_u64s, u64s);
@@ -73,9 +75,9 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
 
     /// This version's sizes.
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let u64s = (c::ExtentEntryType::NR as usize).div_ceil(size_of::<u64>());
+        let u64s = (ExtentEntryType::NR as usize).div_ceil(size_of::<u64>());
         let mut sb = fs.sb_resize(sb);
-        let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
+        let e = sb.field_get_minsize::<bch_sb_field_extent_type_u64s>(u64s as u32);
         let Some(e) = e else {
             crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
             return fs.throw(Errcode::ENOSPC_sb_extent_type_u64s);
@@ -91,18 +93,20 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s<Validated> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::SbFieldType;
+    use crate::format::bch_sb_field;
     use crate::types::Le32;
     use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head};
 
     /// A section of @sizes, in @buf, as read: Unvalidated.
-    fn section<'a>(buf: &'a mut [u64], sizes: &[u8]) -> &'a c::bch_sb_field_extent_type_u64s<Unvalidated> {
+    fn section<'a>(buf: &'a mut [u64], sizes: &[u8]) -> &'a bch_sb_field_extent_type_u64s<Unvalidated> {
         let u64s = buf.len();
         let b = plain_bytes_mut(buf);
-        let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
+        let f = cast_plain_mut::<Head<bch_sb_field>>(b).unwrap();
         f.set_u64s(u64s);
-        f.type_ = Le32::new(c::SbFieldType::extent_type_u64s.0);
-        b[size_of::<Head<c::bch_sb_field>>()..][..sizes.len()].copy_from_slice(sizes);
-        c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap().arm().unwrap()
+        f.type_ = Le32::new(SbFieldType::extent_type_u64s.0);
+        b[size_of::<Head<bch_sb_field>>()..][..sizes.len()].copy_from_slice(sizes);
+        bch_sb_field::<Unvalidated>::from_bytes(b).unwrap().arm().unwrap()
     }
 
     /// An older version's section has fewer types, a newer one's more: ours
@@ -113,7 +117,7 @@ mod tests {
 
         let (u64s, known) = sizes_to_cpu(&[9, 9, 9]);
         assert_eq!(u64s[..ours.len()], ours[..]);
-        assert_eq!(known, c::ExtentEntryType::NR as u8);
+        assert_eq!(known, ExtentEntryType::NR as u8);
 
         let newer = [&ours[..], &[4, 5]].concat();
         let (u64s, known) = sizes_to_cpu(&newer);
@@ -131,15 +135,15 @@ mod tests {
     #[test]
     fn validate_sizes() {
         // a superblock of no sections: its header
-        let mut sb = [0u64; size_of::<Head<c::bch_sb>>() / size_of::<u64>()];
+        let mut sb = [0u64; size_of::<Head<bch_sb>>() / size_of::<u64>()];
         let sb_bytes = plain_bytes_mut(&mut sb[..]);
-        cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_u64s(0);
-        let sb = c::bch_sb::<Unvalidated>::from_bytes(sb_bytes).unwrap();
+        cast_plain_mut::<Head<bch_sb>>(sb_bytes).unwrap().set_u64s(0);
+        let sb = bch_sb::<Unvalidated>::from_bytes(sb_bytes).unwrap();
         let flags = ValidateFlags::from_bits_retain(0);
         let validate = |sizes: &[u8]| {
             let mut buf = [0u64; 4];
             let mut err = Printbuf::new();
-            <c::bch_sb_field_extent_type_u64s<Validated> as SbFieldOps>::validate(sb, section(&mut buf, sizes), flags, &mut err)
+            <bch_sb_field_extent_type_u64s<Validated> as SbFieldOps>::validate(sb, section(&mut buf, sizes), flags, &mut err)
                 .map_err(|_| err.as_str().to_owned())
         };
 

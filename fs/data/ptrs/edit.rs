@@ -7,6 +7,9 @@ use super::*;
 use crate::btree::bkey::{BkeyI, BKEY_U64S};
 use crate::btree::iter::{NoRoom, TransBkey};
 use crate::data_structures::dst_room::DstRoom;
+use crate::data::extents::{bch_extent_crc_unpacked, extent_ptr_decoded};
+use crate::data::extents_format::{bch_extent_crc32, bch_extent_flags, BKEY_EXTENT_VAL_U64s_MAX,
+    ExtentEntryType, bch_extent_crc128, bch_extent_crc64, ExtentFlags};
 
 /// What a PtrsMut key does, in whichever form it's held: dropping only
 /// shrinks it, so any mutable key can; inserting grows it, so that's
@@ -135,9 +138,9 @@ impl TransBkey<'_, '_, PtrsMut> {
     /// Its extent flags made @flags: its flags entry's, which comes first, or
     /// one inserted first - NoRoom if the buffer can't hold it. The caller
     /// requests the extent_flags incompat feature. bch2_bkey_extent_flags_set().
-    pub fn extent_flags_set(&mut self, fs: &Fs, flags: c::ExtentFlags) -> Result<(), NoRoom> {
+    pub fn extent_flags_set(&mut self, fs: &Fs, flags: ExtentFlags) -> Result<(), NoRoom> {
         // the field's 57 bits, as C's bitfield assignment truncates to
-        let flags = c::ExtentFlags::from_bits_retain(flags.bits() & ((1 << 57) - 1));
+        let flags = ExtentFlags::from_bits_retain(flags.bits() & ((1 << 57) - 1));
 
         if let Some(ExtentEntryMut::flags(f)) = self.extent_entries_mut(fs).next() {
             f.set_flags(flags);
@@ -145,7 +148,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         }
 
         let start = EntryPos(PtrsMut::entry_range(self.as_sc()).start / size_of::<u64>());
-        self.insert_entry(start, &[c::bch_extent_flags::new().with_flags(flags).into_bits()])
+        self.insert_entry(start, &[bch_extent_flags::new().with_flags(flags).into_bits()])
     }
 
     /// @p inserted where its crc applies: its pointer, after its stripe_ptr if
@@ -155,7 +158,7 @@ impl TransBkey<'_, '_, PtrsMut> {
     /// else after a new one, at the end. Only the last is an append: the
     /// others go ahead of pointers already there, renumbering them. NoRoom if
     /// the buffer can't hold it, and the key's as it was.
-    pub fn insert_decoded_ptr(&mut self, fs: &Fs, p: &c::extent_ptr_decoded) -> Result<(), NoRoom> {
+    pub fn insert_decoded_ptr(&mut self, fs: &Fs, p: &extent_ptr_decoded) -> Result<(), NoRoom> {
         let mut entries = ArrayVec::<u64, 5>::new();
 
         let at = if p.crc == crc_none(self.k()) {
@@ -170,7 +173,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         {
             at
         } else {
-            entries.extend(crc_entry(&p.crc, c::ExtentEntryType::crc32));
+            entries.extend(crc_entry(&p.crc, ExtentEntryType::crc32));
             self.entries_end()
         };
 
@@ -190,7 +193,7 @@ impl TransBkey<'_, '_, PtrsMut> {
     /// is currently live (so that readers won't have to bounce) while we've
     /// got the checksum we need: those under crc @old, to @new. False if it
     /// has no entry for @old.
-    pub fn narrow_crc(&mut self, fs: &Fs, old: c::bch_extent_crc_unpacked, new: c::bch_extent_crc_unpacked)
+    pub fn narrow_crc(&mut self, fs: &Fs, old: bch_extent_crc_unpacked, new: bch_extent_crc_unpacked)
         -> bool
     {
         assert!(!crc_is_compressed(&new) && new.offset == 0 && new.uncompressed_size == new.live_size,
@@ -216,7 +219,7 @@ impl TransBkey<'_, '_, PtrsMut> {
         // which may no longer fit the old entry's nonce field: replace it with
         // a larger entry in the same position. The caller leaves room for a
         // crc128.
-        let entry = crc_entry(&new, c::ExtentEntryType(old_ty));
+        let entry = crc_entry(&new, ExtentEntryType(old_ty));
         self.drop_entry(fs, at);
         self.insert_entry(at, &entry).expect("room for a crc128: narrowing's caller makes it");
         true
@@ -226,26 +229,26 @@ impl TransBkey<'_, '_, PtrsMut> {
 /// @crc appended to @k's entries, as the smallest entry it packs into:
 /// bch2_extent_crc_append(). @k is a key with pointers, its entries running
 /// to its value's end.
-pub(crate) fn extent_crc_append(k: &mut DstRoom<BkeyI>, crc: &c::bch_extent_crc_unpacked) -> Result<(), NoRoom> {
-    let e = crc_entry(crc, c::ExtentEntryType::crc32);
+pub(crate) fn extent_crc_append(k: &mut DstRoom<BkeyI>, crc: &bch_extent_crc_unpacked) -> Result<(), NoRoom> {
+    let e = crc_entry(crc, ExtentEntryType::crc32);
     let val_u64s = k.k.val_u64s();
-    assert!(val_u64s + e.len() <= c::BKEY_EXTENT_VAL_U64s_MAX as usize,
+    assert!(val_u64s + e.len() <= BKEY_EXTENT_VAL_U64s_MAX as usize,
             "appending a crc past an extent's largest value");
     k.append_val(&e)
 }
 
 /// @crc as the smallest crc entry it packs into, of type @min or larger, in
 /// u64s.
-pub(crate) fn crc_entry(crc: &c::bch_extent_crc_unpacked, min: c::ExtentEntryType) -> ArrayVec<u64, 3> {
-    use c::ExtentEntryType as t;
+pub(crate) fn crc_entry(crc: &bch_extent_crc_unpacked, min: ExtentEntryType) -> ArrayVec<u64, 3> {
+    use crate::data::extents_format::ExtentEntryType as t;
     let words = |b: &[u8]| b.chunks(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect();
 
-    if let Some(e) = (min.0 <= t::crc32.0).then(|| c::bch_extent_crc32::pack(crc)).flatten() {
+    if let Some(e) = (min.0 <= t::crc32.0).then(|| bch_extent_crc32::pack(crc)).flatten() {
         [e.into_bits().0].into_iter().collect()
-    } else if let Some(e) = (min.0 <= t::crc64.0).then(|| c::bch_extent_crc64::pack(crc)).flatten() {
+    } else if let Some(e) = (min.0 <= t::crc64.0).then(|| bch_extent_crc64::pack(crc)).flatten() {
         words(plain_bytes(&e))
     } else {
-        let e = c::bch_extent_crc128::pack(crc)
+        let e = bch_extent_crc128::pack(crc)
             .unwrap_or_else(|| panic!("a crc no entry holds: csum type {}", crc.csum_type.get()));
         words(plain_bytes(&e))
     }

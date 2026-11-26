@@ -17,6 +17,10 @@
 
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::data::ec::head::StripeBlockMask;
+use crate::format::{bch_csum, CsumType};
+use crate::sb::members_format::MemberErrorType;
 use crate::data::ec::stripe::{shape, Shape, StripeKey, MAX_BLOCKS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -123,9 +127,9 @@ pub struct StripeBuf {
     /// Each block's buffer, of @bytes
     pub(crate) data:   [Option<IoBuf>; MAX_BLOCKS],
     /// Stale when we read the stripe key: an alloc inconsistency
-    pub(crate) stale:  c::StripeBlockMask,
-    pub(crate) csum_good: [c::bch_csum; MAX_BLOCKS],
-    pub(crate) csum_bad:  [c::bch_csum; MAX_BLOCKS],
+    pub(crate) stale:  StripeBlockMask,
+    pub(crate) csum_good: [bch_csum; MAX_BLOCKS],
+    pub(crate) csum_bad:  [bch_csum; MAX_BLOCKS],
 }
 
 impl StripeBuf {
@@ -138,7 +142,7 @@ impl StripeBuf {
     /// only there because pin-init can't initialize an Option in place, and
     /// a stripe being made keeps its buffers in Options; C's ec_stripe_new has
     /// them inline. Drop it when pin-init can.
-    pub(crate) fn new(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, blocks: u32, offset: u32, size: u32,
+    pub(crate) fn new(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, blocks: u32, offset: u32, size: u32,
                       wait: MemWait) -> Result<KBox<Self>, BchError> {
         let sh = shape(s);
         let granularity = 1u32 << sh.csum_granularity_bits;
@@ -163,8 +167,8 @@ impl StripeBuf {
             err:       [[None; MAX_BLOCKS]; 2],
             data:      [const { None }; MAX_BLOCKS],
             stale:     Default::default(),
-            csum_good: [c::bch_csum::default(); MAX_BLOCKS],
-            csum_bad:  [c::bch_csum::default(); MAX_BLOCKS],
+            csum_good: [bch_csum::default(); MAX_BLOCKS],
+            csum_bad:  [bch_csum::default(); MAX_BLOCKS],
         }? BchError).chain(|buf| {
             fs.stripe_buf_mem_get(bytes * blocks.count_ones() as usize, wait)?;
             // charged for all of @blocks: a drop on the way out frees what it
@@ -187,7 +191,7 @@ impl StripeBuf {
     }
 
     /// Every block of @s, all of it.
-    pub(crate) fn new_whole(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, wait: MemWait)
+    pub(crate) fn new_whole(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, wait: MemWait)
         -> Result<KBox<Self>, BchError>
     {
         let sectors = s.v().sectors.get().into();
@@ -197,7 +201,7 @@ impl StripeBuf {
     /// The window moved to the granule at @offset, for scrub's walk along a
     /// block: as many sectors as the buffer was made for, or as the stripe
     /// has left. Its errors are cleared.
-    pub(crate) fn slide(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, offset: u32) {
+    pub(crate) fn slide(&mut self, s: BkeySC<'_, Stripe<Validated>>, offset: u32) {
         let sh = self.shape(s);
         let granularity = 1u32 << sh.csum_granularity_bits;
         assert!(offset & (granularity - 1) == 0 && offset < sh.sectors,
@@ -209,7 +213,7 @@ impl StripeBuf {
     }
 
     /// @s's shape, checked against what the buffer was made for.
-    pub(crate) fn shape(&self, s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
+    pub(crate) fn shape(&self, s: BkeySC<'_, Stripe<Validated>>) -> Shape {
         let sh = shape(s);
         assert_eq!(sh.nr_blocks, self.nr_blocks, "a stripe buffer, handed a stripe of another width");
         sh
@@ -267,7 +271,7 @@ impl StripeBuf {
     }
 
     /// Data block @i of @s folded into its parity: blocks it has, all of each.
-    pub(crate) fn fold_block(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, i: usize) {
+    pub(crate) fn fold_block(&mut self, s: BkeySC<'_, Stripe<Validated>>, i: usize) {
         let (sh, parity) = (self.shape(s), parity_blocks(s));
         assert!(self.blocks & parity == parity && self.has(i) && i < sh.nr_data as usize &&
                 self.offset == 0 && self.size == sh.sectors,
@@ -350,7 +354,7 @@ impl Drop for StripeBuf {
 }
 
 /// @s's parity blocks, as a mask: those past its data.
-pub(crate) fn parity_blocks(s: BkeySC<'_, c::Stripe<Validated>>) -> u32 {
+pub(crate) fn parity_blocks(s: BkeySC<'_, Stripe<Validated>>) -> u32 {
     let sh = shape(s);
     ((1u64 << sh.nr_blocks) - (1u64 << sh.nr_data)) as u32
 }
@@ -364,7 +368,7 @@ pub(crate) fn blocks_in(mask: u32) -> impl Iterator<Item = usize> {
 
 /// Block @block's checksum over the granule at @offset - sectors into the
 /// stripe - as far as the buffer goes, or the stripe does.
-pub(crate) fn block_checksum(s: BkeySC<'_, c::Stripe<Validated>>, b: &StripeBuf, block: u32, offset: u32) -> c::bch_csum {
+pub(crate) fn block_checksum(s: BkeySC<'_, Stripe<Validated>>, b: &StripeBuf, block: u32, offset: u32) -> bch_csum {
     let sh = b.shape(s);
     let granularity = 1u32 << sh.csum_granularity_bits;
     let end = b.offset + b.size;
@@ -388,7 +392,7 @@ pub fn generate_checksums(key: &mut StripeKey, buf: &StripeBuf) {
 /// Block @i's checksums, into @key, from a buffer of the whole stripe.
 pub(crate) fn generate_block_checksums(key: &mut StripeKey, buf: &StripeBuf, i: usize) {
     let sh = buf.shape(key.stripe());
-    if sh.csum_type == c::CsumType::none {
+    if sh.csum_type == CsumType::none {
         return;
     }
 
@@ -403,9 +407,9 @@ pub(crate) fn generate_block_checksums(key: &mut StripeKey, buf: &StripeBuf, i: 
 /// The blocks - data only with @data_only - that came back without error @e,
 /// checked against their checksums: a mismatch is a checksum error, the
 /// device's.
-fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, data_only: bool, e: usize) {
+fn validate_checksums(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeBuf, data_only: bool, e: usize) {
     let sh = buf.shape(s);
-    if sh.csum_type == c::CsumType::none {
+    if sh.csum_type == CsumType::none {
         return;
     }
 
@@ -433,7 +437,7 @@ fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut St
                 // any more
                 let dev = s.v().block_ptrs()[i as usize].dev();
                 if let Some(ca) = fs.dev_get(dev.into()) {
-                    ca.io_error(c::MemberErrorType::checksum);
+                    ca.io_error(MemberErrorType::checksum);
                 }
                 break;
             }
@@ -446,7 +450,7 @@ fn validate_checksums(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut St
 /// checksums. Records nothing: a failure here is followed by a full read
 /// and validate_msg(), which does - and fails a checksum type this version
 /// doesn't know.
-pub fn blocks_good(s: BkeySC<'_, c::Stripe<Validated>>, buf: &StripeBuf, mask: u32) -> bool {
+pub fn blocks_good(s: BkeySC<'_, Stripe<Validated>>, buf: &StripeBuf, mask: u32) -> bool {
     let v = s.v();
     let Some(csums) = v.csums() else { return false };
     let granularity = 1u32 << v.csum_granularity_bits;
@@ -454,7 +458,7 @@ pub fn blocks_good(s: BkeySC<'_, c::Stripe<Validated>>, buf: &StripeBuf, mask: u
 
     (0..u32::from(v.nr_blocks)).filter(|i| mask & 1 << i != 0).all(|i| {
         buf.err[PRE][i as usize].is_none() &&
-            (v.csum_type == c::CsumType::none ||
+            (v.csum_type == CsumType::none ||
              (start..end).step_by(granularity as usize).all(|offset| {
                  csums.get(i, offset >> v.csum_granularity_bits) == block_checksum(s, buf, i, offset)
              }))
@@ -472,7 +476,7 @@ fn has_all(buf: &StripeBuf) -> bool {
 /// The blocks that came back bad, rebuilt from the rest - if any of
 /// @required, the blocks the caller will use, is one - and the data blocks
 /// checked after.
-fn do_recov(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, required: u32)
+fn do_recov(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeBuf, required: u32)
     -> Result<(), BchError>
 {
     // Nothing the caller wants is bad: nothing to reconstruct. Damage to
@@ -524,7 +528,7 @@ pub fn errs_only_dev_offline(buf: &StripeBuf) -> bool {
     buf.err.iter().all(|e| e[..nr].iter().all(|e| e.is_none_or(|e| e == offline)))
 }
 
-fn errs_to_text_one(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &StripeBuf, e: usize,
+fn errs_to_text_one(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &StripeBuf, e: usize,
                     is_open: bool, required: u32) {
     let v = s.v();
 
@@ -557,7 +561,7 @@ fn errs_to_text_one(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validat
 
 /// Each block's errors, before reconstruction and after.
 #[cold]
-pub fn errs_to_text(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &StripeBuf,
+pub fn errs_to_text(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &StripeBuf,
                     is_open: bool, required: u32) {
     for (e, what) in [(PRE, "pre"), (POST, "post")] {
         if buf.nr_failed(e) != 0 {
@@ -573,7 +577,7 @@ pub fn errs_to_text(out: &mut Printbuf, fs: &Fs, s: BkeySC<'_, c::Stripe<Validat
 /// if it couldn't be. A block of a stripe that isn't open (@is_open) going
 /// stale is the stripe changing under the read: stripe_reconstruct_stale_race,
 /// for the caller to retry.
-pub fn validate(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, is_open: bool, required: u32)
+pub fn validate(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeBuf, is_open: bool, required: u32)
     -> Result<(), BchError>
 {
     s.v().csum_type_check(fs)?;
@@ -606,7 +610,7 @@ pub fn validate(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBu
 
 /// validate(), and what went wrong logged, as from @caller - and counted -
 /// unless it was nothing, or only devices offline.
-pub fn validate_msg(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, is_open: bool, required: u32,
+pub fn validate_msg(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeBuf, is_open: bool, required: u32,
                     caller: &CStr) -> Result<(), BchError> {
     let ret = validate(fs, s, buf, is_open, required);
 

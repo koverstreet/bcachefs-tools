@@ -16,7 +16,7 @@
 //! accesses - what an inlined memcpy() of a length known only at runtime is
 //! in C - never a slice copy, which is a call to memcpy().
 
-use crate::c::Errcode;
+use crate::errcode::Errcode;
 use crate::errcode::BchError;
 
 /// The most bytes an encoded integer takes.

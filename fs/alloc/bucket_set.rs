@@ -18,10 +18,14 @@
 //! A request's done when its durability's met - or at its first bucket, for
 //! a cached write, a stripe's block, or a cache device's: add_new_bucket().
 
-use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketRef};
+use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketRef, alloc_request};
 use crate::btree::iter::{is_restart, TransAttempt};
-use crate::c;
-use crate::c::Errcode;
+use crate::alloc::dev_select::dev_stripe_state;
+use crate::alloc::write_point::WritePointLocked;
+use crate::data::write::WriteFlags;
+use crate::format::BCH_REPLICAS_MAX;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::errcode::Errcode;
 use crate::data::ec::head::{head_get, stripe_head_put};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -34,9 +38,9 @@ use core::sync::atomic::Ordering::Relaxed;
 /// and the copies the request had before each - traced once freelist_lock
 /// is dropped. Placement restricts only 2 to BCH_REPLICAS_MAX copies, so
 /// that's as many as there can be.
-type Restricted = ArrayVec<(u32, u32), { c::BCH_REPLICAS_MAX as usize }>;
+type Restricted = ArrayVec<(u32, u32), { BCH_REPLICAS_MAX as usize }>;
 
-impl c::alloc_request<'_, '_> {
+impl alloc_request<'_, '_> {
     /// @ob, added: its device chosen, its durability counted, its pin in
     /// ptrs. Whether that's the request done: its durability met, or the one
     /// copy of a cached write, a stripe's block, or a cache device's bucket.
@@ -53,7 +57,7 @@ impl c::alloc_request<'_, '_> {
         self.ptrs.push(ob);
 
         self.nr_effective >= u32::from(self.nr_replicas) ||
-            self.flags.contains(c::WriteFlags::cached) || ec || durability == 0
+            self.flags.contains(WriteFlags::cached) || ec || durability == 0
     }
 
     /// Whether the open bucket @ob - a write point's, or the partial list's
@@ -72,7 +76,7 @@ impl Fs {
     /// picks: their iterators, lists and traces aren't needed in the frame a
     /// fresh bucket's allocation runs under.
     #[inline(never)]
-    fn bucket_alloc_set_writepoint(&self, req: &mut c::alloc_request, wp: &mut c::WritePointLocked) -> bool {
+    fn bucket_alloc_set_writepoint(&self, req: &mut alloc_request, wp: &mut WritePointLocked) -> bool {
         let mut done = false;
 
         req.scratch_ptrs.nr = 0;
@@ -89,7 +93,7 @@ impl Fs {
 
     /// The partial list's @i'th, freelist_lock held, added to @req - into
     /// @restricted, if placement's restricted, for its trace.
-    fn partial_bucket_alloc(&self, g: &mut FreelistGuard<'_>, req: &mut c::alloc_request, i: usize,
+    fn partial_bucket_alloc(&self, g: &mut FreelistGuard<'_>, req: &mut alloc_request, i: usize,
                             restricted: &mut Restricted) -> bool {
         let ob = self.open_buckets_partial_take(g, i);
         if req.devs_required().is_some() {
@@ -103,7 +107,7 @@ impl Fs {
     }
 
     /// @restricted traced, freelist_lock dropped.
-    fn partial_restricted_trace(&self, req: &c::alloc_request, restricted: &Restricted) {
+    fn partial_restricted_trace(&self, req: &alloc_request, restricted: &Restricted) {
         for &(dev, have) in restricted {
             self.placement_restricted_count(req, dev, have);
         }
@@ -114,7 +118,7 @@ impl Fs {
     /// and first fit would undo bucket_alloc_set()'s spreading of fresh
     /// buckets - until it's done, or none will do.
     #[inline(never)]
-    fn bucket_alloc_set_partial(&self, req: &mut c::alloc_request) -> bool {
+    fn bucket_alloc_set_partial(&self, req: &mut alloc_request) -> bool {
         let a = &self.allocator;
         if a.freelist_lock.open_buckets_partial_nr.get() == 0 {
             return false;
@@ -126,7 +130,7 @@ impl Fs {
         done
     }
 
-    fn bucket_alloc_set_partial_locked(&self, g: &mut FreelistGuard<'_>, req: &mut c::alloc_request,
+    fn bucket_alloc_set_partial_locked(&self, g: &mut FreelistGuard<'_>, req: &mut alloc_request,
                                        restricted: &mut Restricted) -> bool {
         let a = &self.allocator;
         while a.freelist_lock.open_buckets_partial_nr.get() != 0 {
@@ -169,7 +173,7 @@ impl TransAttempt<'_, '_> {
     /// it got before an error. Running out of devices, the last one's error,
     /// or insufficient_devices, traced. A restart, a blocked allocation or no
     /// open buckets end it at once: no other device will do better.
-    pub fn bucket_alloc_set(&self, req: &mut c::alloc_request, stripe: &mut c::dev_stripe_state)
+    pub fn bucket_alloc_set(&self, req: &mut alloc_request, stripe: &mut dev_stripe_state)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -216,13 +220,13 @@ impl TransAttempt<'_, '_> {
 
         ret?;
         let e = fs.err(Errcode::insufficient_devices);
-        req.trace_add(c::BCH_SB_MEMBER_INVALID as u8, Some(e), 0, 0, false);
+        req.trace_add(BCH_SB_MEMBER_INVALID as u8, Some(e), 0, 0, false);
         Err(e)
     }
 
     /// For an erasure coded write: a block of the stripe @req's stripe head
     /// is making, if it has one for us - placed by @wp's round robin.
-    fn bucket_alloc_from_stripe(&self, req: &mut c::alloc_request, wp: &mut c::WritePointLocked)
+    fn bucket_alloc_from_stripe(&self, req: &mut alloc_request, wp: &mut WritePointLocked)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -238,7 +242,7 @@ impl TransAttempt<'_, '_> {
 
     /// A write's buckets: @wp's own, the partial list's, then fresh ones -
     /// a stripe's, if it's erasure coded.
-    pub(crate) fn write_point_buckets(&self, req: &mut c::alloc_request, wp: &mut c::WritePointLocked)
+    pub(crate) fn write_point_buckets(&self, req: &mut alloc_request, wp: &mut WritePointLocked)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -256,7 +260,7 @@ impl TransAttempt<'_, '_> {
     /// for its cached copy, and not getting one isn't an error. Only a
     /// restart is.
     #[inline(never)]
-    pub(crate) fn bucket_alloc_cached(&self, req: &mut c::alloc_request, wp: &mut c::WritePointLocked)
+    pub(crate) fn bucket_alloc_cached(&self, req: &mut alloc_request, wp: &mut WritePointLocked)
         -> Result<(), BchError>
     {
         let fs = self.fs();

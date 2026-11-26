@@ -5,11 +5,11 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::journal_overlay;
 use crate::btree::path::Paths;
-use crate::btree::update::peek_slot_exact;
-use crate::c;
+use crate::btree::update::{peek_slot_exact, btree_insert_entry};
+use crate::btree::check_allocations::{gc_pos, GcPhase};
 use crate::data_structures::dst_room::DstRoom;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, bkey, Deleted};
 use crate::prt;
 use crate::util::Printbuf;
 use core::marker::PhantomData;
@@ -126,12 +126,12 @@ pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) 
 
 /// verify_update_old_key(): @i's old key is the one at its position - the
 /// btree's, or before replay's done, the journal's. Debug builds only.
-pub(crate) fn verify_update_old_key(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree_insert_entry) {
+pub(crate) fn verify_update_old_key(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &btree_insert_entry) {
     if !cfg!(CONFIG_BCACHEFS_DEBUG) || i.bits.key_cache_flushing() {
         return;
     }
 
-    let mut u = c::bkey::new();
+    let mut u = bkey::new();
     let mut v = peek_slot_exact(&paths[i.path], &mut u);
     let mut k = &u;
 
@@ -159,7 +159,7 @@ pub(crate) fn verify_update_old_key(t: &TransAttempt<'_, '_>, paths: &Paths<'_>,
 ///
 /// # Safety
 /// @i is queued: its key is the triggers' to edit while the commit runs.
-unsafe fn update_op<'a, 't>(t: &TransAttempt<'_, 't>, i: &c::btree_insert_entry, old_k: &'a c::bkey,
+unsafe fn update_op<'a, 't>(t: &TransAttempt<'_, 't>, i: &btree_insert_entry, old_k: &'a bkey,
                             flags: UpdateTriggerFlags) -> TriggerOp<'a, 't> {
     TriggerOp {
         btree: i.bits.btree_id(),
@@ -181,13 +181,13 @@ pub(crate) fn deleted_room(p: Bpos) -> DstRoom<BkeyI, [u64; BKEY_U64S]> {
 /// @flags - its snapshot's count of keys first, from its old key to its new,
 /// then its key type's trigger, once, with both keys, where the old and new
 /// types share one.
-fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &c::btree_insert_entry,
+fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &btree_insert_entry,
                        flags: UpdateTriggerFlags) -> Result<(), BchError>
 {
     verify_update_old_key(t, paths, i);
 
     let p = i.key().k.p;
-    let (no_old, mut no_new) = (BkeyI::<c::Deleted>::at(p), deleted_room(p));
+    let (no_old, mut no_new) = (BkeyI::<Deleted>::at(p), deleted_room(p));
     let old_k = i.old_k;
     let mut op = unsafe { update_op(t, i, &old_k, flags) };
     let old = op.old;
@@ -259,7 +259,7 @@ fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: u
     })
 }
 
-fn trans_triggers_run(i: &c::btree_insert_entry) -> bool {
+fn trans_triggers_run(i: &btree_insert_entry) -> bool {
     i.flags & UpdateTriggerFlags::NORUN.bits() != 0 ||
         !i.has_trans_triggers() ||
         (i.bits.insert_trigger_run() && i.bits.overwrite_trigger_run())
@@ -335,7 +335,7 @@ pub(crate) fn run_mem_triggers(t: &TransAttempt<'_, '_>, paths: &Paths<'_>) -> R
         }
     }
 
-    if t.fs().gc.phase() != c::GcPhase::not_running {
+    if t.fs().gc.phase() != GcPhase::not_running {
         run_gc_triggers(t, paths)?;
     }
     Ok(())
@@ -349,7 +349,7 @@ fn run_gc_triggers(t: &TransAttempt<'_, '_>, paths: &Paths<'_>) -> Result<(), Bc
         let flags = UpdateTriggerFlags::from_bits_retain(i.flags);
 
         if i.has_triggers() && !flags.contains(UpdateTriggerFlags::NORUN) &&
-           gc.visited(c::gc_pos::in_btree(i.bits.btree_id(), i.bits.level().into(), i.key().k.p)) {
+           gc.visited(gc_pos::in_btree(i.bits.btree_id(), i.bits.level().into(), i.key().k.p)) {
             run_one_mem_trigger(t, paths, i, flags | UpdateTriggerFlags::GC)?;
         }
     }

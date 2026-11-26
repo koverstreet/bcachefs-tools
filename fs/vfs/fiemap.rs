@@ -31,6 +31,7 @@ use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
+use crate::data::reflink_format::{ReflinkP, ReflinkV};
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reflink::lookup_indirect_extent;
@@ -41,7 +42,7 @@ use crate::fs::Fs;
 use crate::snapshots::subvolume;
 
 use super::inode::InodeInfo;
-use crate::format::{Btree, BkeyType};
+use crate::format::{Btree, BkeyType, CompressionType};
 
 enum Mapping {
     Extent(BkeyBuf),
@@ -79,7 +80,7 @@ impl Mapping {
 
         if let Some(p) = k.arm::<PtrsMut>() {
             let flags = flags |
-                if k.k.key_type().is::<c::ReflinkV>() { c::FIEMAP_EXTENT_SHARED } else { 0 };
+                if k.k.key_type().is::<ReflinkV>() { c::FIEMAP_EXTENT_SHARED } else { 0 };
 
             for d in p.ptrs_decoded(fs) {
                 let mut flags = flags;
@@ -88,7 +89,7 @@ impl Mapping {
                 if d.p.ptr.unwritten() != 0 {
                     flags |= c::FIEMAP_EXTENT_UNWRITTEN;
                 }
-                if d.p.crc.compression_type != c::CompressionType::none {
+                if d.p.crc.compression_type != CompressionType::none {
                     flags |= c::FIEMAP_EXTENT_ENCODED;
                 } else {
                     offset += u64::from(d.p.crc.offset);
@@ -137,7 +138,7 @@ fn pagecache_dirty(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end:
     };
 
     match scan(true) {
-        Err(e) if e == BchError::from(c::Errcode::EAGAIN_folio_lock_nonblock) => t.drop_locks_do(|| scan(false)),
+        Err(e) if e == BchError::from(Errcode::EAGAIN_folio_lock_nonblock) => t.drop_locks_do(|| scan(false)),
         r => r,
     }
 }
@@ -160,7 +161,7 @@ fn next_mapping(t: &TransAttempt<'_, '_>, inode: &InodeInfo, start: u64, end: u6
         Some(k) if k.k.start_offset() <= dirty.start => k,
         _ => return Ok(Mapping::Delalloc(dirty)),
     };
-    let Some(p) = k.arm::<c::ReflinkP>() else {
+    let Some(p) = k.arm::<ReflinkP>() else {
         return Ok(Mapping::Extent(BkeyBuf::from_key(k)));
     };
 

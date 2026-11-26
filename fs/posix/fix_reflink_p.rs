@@ -10,7 +10,7 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
-use crate::c;
+use crate::data::reflink_format::ReflinkP;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::format::{Btree, MetadataVersion};
@@ -20,7 +20,7 @@ fn fix_reflink_p_key<'t>(
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let Some(k) = k.arm::<c::ReflinkP>() else {
+    let Some(k) = k.arm::<ReflinkP>() else {
         return Ok(());
     };
     let p = k.v();

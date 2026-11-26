@@ -302,6 +302,7 @@ impl<T: ?Sized, B: Storage> DstRoom<T, B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::bch_sb;
 
     /// realloc() keeps the storage, not the T: what a T read in parts has
     /// so far - its header, saying it's longer than its room - is kept, and
@@ -310,7 +311,7 @@ mod tests {
     fn realloc_keeps_storage() {
         let mut b = AlignedBox::<[u64], 8>::try_new_zeroed_slice_gfp(2, Flags::empty()).unwrap();
         b.copy_from_slice(&[u64::MAX, 7]);
-        let mut r = DstRoom::<crate::c::bch_sb, _>::from_storage(b);
+        let mut r = DstRoom::<bch_sb, _>::from_storage(b);
 
         r.realloc(4, Flags::empty()).unwrap();
         assert_eq!(r.elems(), [u64::MAX, 7, 0, 0]);

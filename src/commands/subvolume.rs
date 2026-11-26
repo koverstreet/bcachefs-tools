@@ -3,11 +3,7 @@ use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
 use chrono::{Local, TimeZone};
 
 use anyhow::{anyhow, ensure, Context, Result};
-use bcachefs_kernel::c::{
-    BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2,
-    bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
-    bch_ioctl_subvol_dirent, bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path,
-};
+use bcachefs_kernel::bcachefs_ioctl::{BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2, bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2, bch_ioctl_subvol_dirent, bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};

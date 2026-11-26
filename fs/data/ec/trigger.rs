@@ -14,17 +14,23 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::RecoveryPass;
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::fs::Dev;
 use crate::alloc::accounting::ReconcileType;
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_change, LruId};
-use crate::alloc::replicas::{bkey_replicas_acct, bkey_replicas_padded, entry_acct};
+use crate::alloc::replicas::{bkey_replicas_acct, bkey_replicas_padded, entry_acct,
+    bch_replicas_padded};
 use crate::btree::bkey::{pos, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, UpdateTriggerFlags};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::alloc::format::AllocV4;
+use crate::btree::check_allocations::GcPhase;
+use crate::data::ec::bch_fs_ec;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
 use crate::data::ptrs::BkeyVPtrs;
 use crate::data::reconcile::trigger::data_to_rb_work_pos;
@@ -40,7 +46,7 @@ use crate::{bch_err, fs_inconsistent, fsck_err_on, prt};
 use crate::alloc::accounting;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, BCH_BKEY_PTRS_MAX};
 use crate::locking::{ByteLock, Locked};
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
@@ -71,10 +77,10 @@ nest! {
         pub sectors: u16,
         pub nr_blocks: u8,
         pub nr_redundant: u8,
-        pub block_sectors: [u16; c::BCH_BKEY_PTRS_MAX as usize],
-        pub ptrs: [c::bch_extent_ptr; c::BCH_BKEY_PTRS_MAX as usize],
+        pub block_sectors: [u16; BCH_BKEY_PTRS_MAX as usize],
+        pub ptrs: [bch_extent_ptr; BCH_BKEY_PTRS_MAX as usize],
 
-        pub r: c::bch_replicas_padded,
+        pub r: bch_replicas_padded,
     }
 }
 
@@ -96,15 +102,15 @@ impl TransAttempt<'_, '_> {
 
 // ── gc's stripes ─────────────────────────────────────────────────────────
 
-impl c::bch_fs_ec {
+impl bch_fs_ec {
     /// gc's copy of stripe @idx, if it has one.
-    pub fn gc_stripe(&self, idx: u64) -> Option<&c::gc_stripe> {
+    pub fn gc_stripe(&self, idx: u64) -> Option<&gc_stripe> {
         // SAFETY: an entry - a Locked, all of whose state is behind its lock
         self.gc_stripes.get(idx as usize)
     }
 
     /// gc_stripe(), allocated - zeroed, not alive - if it wasn't.
-    pub fn gc_stripe_alloc(&self, idx: u64) -> Result<&c::gc_stripe, AllocError> {
+    pub fn gc_stripe_alloc(&self, idx: u64) -> Result<&gc_stripe, AllocError> {
         self.gc_stripes.prealloc(idx as usize)?;
         Ok(self.gc_stripe(idx).expect("an entry, allocated"))
     }
@@ -115,7 +121,7 @@ impl c::bch_fs_ec {
 
 /// @k's stripe, if it's one - not a deletion.
 fn stripe_of(k: BkeySC<'_>) -> Option<StripeK<'_>> {
-    k.arm::<c::Stripe>()
+    k.arm::<Stripe>()
 }
 
 /// Its time in the stripe lru - none for no stripe.
@@ -146,7 +152,7 @@ fn blocks_unchanged(old: StripeK<'_>, new: StripeK<'_>) -> bool {
 /// an update committing after reconcile's stripes scan passed the stripe
 /// would keep a stale one, and the scan's cookie be cleared with it wrong.
 fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
-    let Some(mut s) = new.as_s().arm::<c::Stripe>() else { return };
+    let Some(mut s) = new.as_s().arm::<Stripe>() else { return };
     let v = s.v();
     let want = v.want_can_widen(fs.ec_rw_member_devs_nr(v.disk_label, v.sectors.get()),
                                 fs.opts().ec_max_data_blocks.get().into());
@@ -175,7 +181,7 @@ fn stripe_frag_acct(t: &TransAttempt<'_, '_>, s: Option<StripeK<'_>>, gc: bool, 
 fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: Option<StripeK<'_>>, gc: bool)
     -> Result<(), BchError>
 {
-    type Deltas = ArrayVec<(u8, accounting::DevStripeFragCounters<i64>), { 2 * c::BCH_BKEY_PTRS_MAX as usize }>;
+    type Deltas = ArrayVec<(u8, accounting::DevStripeFragCounters<i64>), { 2 * BCH_BKEY_PTRS_MAX as usize }>;
 
     fn add(d: &mut Deltas, s: Option<StripeK<'_>>, sign: i64) {
         let Some(s) = s else { return };
@@ -233,7 +239,7 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool)
          if overflow { "adding ref to" } else { "dropping ref to" });
 
     let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_alloc_info,
-                                 c::RunRecoveryPassFlags::from_bits_retain(0));
+                                 RunRecoveryPassFlags::from_bits_retain(0));
 }
 
 /// Block @i's part of @a, the alloc key of its bucket @bucket, for @s going
@@ -242,7 +248,7 @@ fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool)
 /// count.
 #[allow(clippy::too_many_arguments)]
 fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, i: u32, deleting: bool,
-                            bucket: Bpos, a: &mut c::AllocV4, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+                            bucket: Bpos, a: &mut AllocV4, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
     let v = s.v();
     let ptr = &s.v().block_ptrs()[i as usize];
@@ -276,7 +282,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
         }
     }
 
-    let inconsistent = |a: &c::AllocV4| (a.stripe_refcount == 0) != (a.dirty_sectors == 0);
+    let inconsistent = |a: &AllocV4| (a.stripe_refcount == 0) != (a.dirty_sectors == 0);
     if parity && inconsistent(a) {
         // XXX: with gc this runs under the gc bucket's lock - gc_bucket_mod()
         // - and a btree walk and an fsck error can sleep. As C's.
@@ -294,7 +300,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
                  { bucket.inode }, { bucket.offset });
             prt!(&mut msg, "stripe_refcount {} but dirty_sectors {}\n", a.stripe_refcount, a.dirty_sectors);
 
-            let flags = c::RunRecoveryPassFlags::from_bits_retain(0);
+            let flags = RunRecoveryPassFlags::from_bits_retain(0);
             let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations, flags);
             let _ = passes::run_explicit(fs, &mut msg, RecoveryPass::check_alloc_info, flags);
 
@@ -321,7 +327,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     // of a missing device it reports
     let Some(ca) = fs.dev_bkey_tryget(s.untyped(), dev).unwrap_or(None) else {
         cold_path();
-        if dev != c::BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
+        if dev != BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
             return fs.throw(Errcode::mark_stripe);
         }
         return Ok(());
@@ -348,7 +354,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
 fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool) -> Result<(), BchError> {
     let fs = t.fs();
     let d = s.ptrs_decoded(fs).nth(i as usize).expect("a block of the stripe's");
-    if u32::from(d.p.ptr.dev()) == c::BCH_SB_MEMBER_INVALID {
+    if u32::from(d.p.ptr.dev()) == BCH_SB_MEMBER_INVALID {
         return Ok(());
     }
 
@@ -361,7 +367,7 @@ fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool
 /// too (the backpointer carries the reconcile phys bits).
 fn mark_stripe_buckets(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: Option<StripeK<'_>>,
                        flags: UpdateTriggerFlags) -> Result<(), BchError> {
-    fn block<'a>(s: Option<StripeK<'a>>, i: u32) -> Option<&'a c::bch_extent_ptr> {
+    fn block<'a>(s: Option<StripeK<'a>>, i: u32) -> Option<&'a bch_extent_ptr> {
         s.and_then(|s| s.v().block_ptrs().get(i as usize))
     }
     let nr_blocks = |s: Option<StripeK<'_>>| s.map_or(0, |s| u32::from(s.v().nr_blocks));
@@ -533,7 +539,7 @@ pub fn ec_stripe_mem_alloc(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>) -> Re
     let idx = iter.pos().offset;
 
     t.allocate_dropping_locks(|| {
-        if fs.gc.phase() != c::GcPhase::not_running && fs.ec.gc_stripe_alloc(idx).is_err() {
+        if fs.gc.phase() != GcPhase::not_running && fs.ec.gc_stripe_alloc(idx).is_err() {
             return fs.throw(Errcode::ENOMEM_ec_stripe_mem_alloc);
         }
         Ok(())

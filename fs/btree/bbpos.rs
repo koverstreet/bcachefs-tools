@@ -1,6 +1,5 @@
 #![allow(non_camel_case_types)]
 
-use crate::c;
 use core::cmp::Ordering;
 use cstruct_macros::{MaybeZeroable, Plain, bitfield, BitfieldMembers};
 use nestify::nest;
@@ -40,31 +39,31 @@ use crate::errcode::{Errcode, BchError};
 #[cfg(feature = "std")]
 use core::str::FromStr;
 
-impl PartialEq for c::bbpos {
+impl PartialEq for bbpos {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
 
-impl Eq for c::bbpos {}
+impl Eq for bbpos {}
 
-impl PartialOrd for c::bbpos {
+impl PartialOrd for bbpos {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for c::bbpos {
+impl Ord for bbpos {
     fn cmp(&self, other: &Self) -> Ordering {
         self.btree.0.cmp(&{ other.btree.0 })
             .then(self.pos.cmp(&other.pos))
     }
 }
 
-impl c::bbpos {
-    pub const MIN: Self = c::bbpos { btree: Btree(0), pos: crate::btree::bkey::POS_MIN };
+impl bbpos {
+    pub const MIN: Self = bbpos { btree: Btree(0), pos: crate::btree::bkey::POS_MIN };
     /// The last of Btree::NR - 1.
-    pub const MAX: Self = c::bbpos {
+    pub const MAX: Self = bbpos {
         btree: Btree(Btree::NR as u32 - 1),
         pos:   crate::btree::bkey::SPOS_MAX,
     };
@@ -72,24 +71,24 @@ impl c::bbpos {
     /// Past the last btree's last, panics.
     pub fn successor(self) -> Self {
         if self.pos != crate::btree::bkey::SPOS_MAX {
-            return c::bbpos { pos: self.pos.successor(), ..self };
+            return bbpos { pos: self.pos.successor(), ..self };
         }
 
         assert!(self.btree.0 != Btree::NR as u32, "no position after the last btree's last");
-        c::bbpos { btree: Btree(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
+        bbpos { btree: Btree(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
     }
 }
 
 /// btree:pos, as bch2_bbpos_to_text().
-impl crate::util::ToText for c::bbpos {
+impl crate::util::ToText for bbpos {
     fn to_text(&self, out: &mut crate::util::Printbuf) {
         crate::prt!(out, "{}:{}", self.btree, self.pos);
     }
 }
-crate::display_via_to_text!(c::bbpos);
+crate::display_via_to_text!(bbpos);
 
 #[cfg(feature = "std")]
-impl FromStr for c::bbpos {
+impl FromStr for bbpos {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -100,7 +99,7 @@ impl FromStr for c::bbpos {
         let btree: Btree = btree_s.parse().map_err(|_| err())?;
         let pos: Bpos = pos_s.parse().map_err(|_| err())?;
 
-        Ok(c::bbpos { btree, pos })
+        Ok(bbpos { btree, pos })
     }
 }
 
@@ -108,8 +107,8 @@ impl FromStr for c::bbpos {
 #[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub struct BbposRange {
-    pub start: c::bbpos,
-    pub end:   c::bbpos,
+    pub start: bbpos,
+    pub end:   bbpos,
 }
 
 /// Parse a bbpos range string "start-end" or just "pos" (start == end).
@@ -120,8 +119,8 @@ pub fn bbpos_range_parse(s: &str) -> Result<BbposRange, BchError> {
         None => (s, None),
     };
 
-    let start: c::bbpos = start_s.parse()?;
-    let end: c::bbpos = match end_s {
+    let start: bbpos = start_s.parse()?;
+    let end: bbpos = match end_s {
         Some(e) => e.parse()?,
         None => start,
     };

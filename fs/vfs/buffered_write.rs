@@ -12,7 +12,9 @@ use crate::os::kiocb::Kiocb;
 use super::file::InodeFile;
 use super::pagecache::ContigFolios;
 use crate::c;
-use crate::errcode::BchError;
+use crate::locking::TwoStateGuard;
+use crate::vfs::inode::PagecacheAdd;
+use crate::errcode::{BchError, Errcode};
 use crate::util::alloc::KBox;
 use kernel::alloc::flags;
 use crate::os::iov_iter::IovIter;
@@ -23,7 +25,7 @@ use kernel::page::PAGE_SHIFT;
 /// What write_begin() leaves write_end(): the inode's page cache held for
 /// adding to, and the folio's reservation.
 pub struct WriteBegun {
-    _add: c::TwoStateGuard<'static, c::PagecacheAdd>,
+    _add: TwoStateGuard<'static, PagecacheAdd>,
     res:  FolioReservation<'static>,
 }
 
@@ -37,7 +39,7 @@ pub(super) fn write_begin(inode: &'static InodeInfo, mapping: Mapping, pos: u64,
     let begun = KBox::<WriteBegun>::new_uninit(flags::GFP_KERNEL)?;
     let mut begun = KBox::write(begun, WriteBegun {
         res:  FolioReservation::new(inode),
-        _add: inode.ei_pagecache_lock.lock::<c::PagecacheAdd>(),
+        _add: inode.ei_pagecache_lock.lock::<PagecacheAdd>(),
     });
 
     if pos > inode.v.size() {
@@ -270,12 +272,12 @@ fn buffered_write_chunk(inode: &InodeInfo, mapping: Mapping, iter: &mut IovIter<
             bytes = iter.count().min(PAGE_SIZE - offset);
 
             if unlikely(iter.fault_in_readable(bytes) != 0) {
-                return Err(c::Errcode::EFAULT_buffered_write_fault_in.into());
+                return Err(Errcode::EFAULT_buffered_write_fault_in.into());
             }
         }
 
         if unlikely(fatal_signal_pending()) {
-            return Err(c::Errcode::EINTR_buffered_write_fatal_signal.into());
+            return Err(Errcode::EINTR_buffered_write_fatal_signal.into());
         }
 
         let copied = buffered_write_folios(inode, mapping, iter, pos, bytes)?;
@@ -303,7 +305,7 @@ fn buffered_write(k: &Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>) -> Result<us
     let inode = k.inode();
     let mut written = 0;
 
-    let _add = inode.ei_pagecache_lock.lock::<c::PagecacheAdd>();
+    let _add = inode.ei_pagecache_lock.lock::<PagecacheAdd>();
 
     if k.pos() > inode.v.size() {
         inode.zero_pagecache_posteof();

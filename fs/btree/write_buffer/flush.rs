@@ -8,12 +8,14 @@ use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
 use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
-use crate::c;
-use crate::c::FsFlag as Flag;
-use crate::c::JournalFlag as Journal;
+use crate::btree::write_buffer::{bch_fs_btree_write_buffer, btree_write_buffered_key, wb_key_ref,
+    WbFlushCaller};
+use crate::util::time_stats::TimeStat;
+use crate::fs::FsFlag as Flag;
+use crate::journal::journal::JournalFlag as Journal;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Btree};
+use crate::format::{BkeyType, Btree, bkey};
 use crate::locking::MemallocFlags;
 use crate::data_structures::sort::heapsort_by_lt;
 use crate::util::alloc::Vec;
@@ -27,7 +29,7 @@ use core::sync::atomic::fence;
  * The refs sort as one 192 bit integer, hi:mi:lo - pos, then idx: a sub/sbb
  * chain, with no branches.
  */
-fn wb_key_ref_lt(l: &c::wb_key_ref, r: &c::wb_key_ref) -> bool {
+fn wb_key_ref_lt(l: &wb_key_ref, r: &wb_key_ref) -> bool {
     let ((l_hi, l_mi, l_lo), (r_hi, r_mi, r_lo)) = (l.words(), r.words());
     let (_, lo_borrow) = l_lo.overflowing_sub(r_lo);
     let (mi, b1) = l_mi.overflowing_sub(r_mi);
@@ -38,7 +40,7 @@ fn wb_key_ref_lt(l: &c::wb_key_ref, r: &c::wb_key_ref) -> bool {
 }
 
 /* Compare excluding idx, the low 32 bits: */
-fn wb_key_eq(l: &c::wb_key_ref, r: &c::wb_key_ref) -> bool {
+fn wb_key_eq(l: &wb_key_ref, r: &wb_key_ref) -> bool {
     let (l, r) = (l.words(), r.words());
 
     ((l.0 ^ r.0) |
@@ -53,7 +55,7 @@ struct FlushCounters {
     slowpath: usize,
 }
 
-pub(super) fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_buffer, inc: &mut IncGuard<'_>,
+pub(super) fn move_keys_from_inc_to_flushing(wb: &bch_fs_btree_write_buffer, inc: &mut IncGuard<'_>,
                                              flushing: &mut FlushingGuard<'_>) {
     let fs = wb.fs();
     let j = &fs.journal;
@@ -111,7 +113,7 @@ pub(super) fn move_keys_from_inc_to_flushing(wb: &c::bch_fs_btree_write_buffer, 
 }
 
 #[inline(never)]
-fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &mut c::btree_write_buffered_key)
+fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &mut btree_write_buffered_key)
     -> Result<(), BchError>
 {
     let trans = t.trans();
@@ -133,9 +135,9 @@ fn flush_one_slowpath<'a>(t: &TransAttempt<'a, 'a>, iter: &BtreeIter<'a>, wb: &m
 #[inline(always)]
 fn flush_one<'a>(
     t:                      &TransAttempt<'a, 'a>,
-    wbb:                    &c::bch_fs_btree_write_buffer,
+    wbb:                    &bch_fs_btree_write_buffer,
     iter:                   &mut BtreeIter<'a>,
-    wb:                     &mut c::btree_write_buffered_key,
+    wb:                     &mut btree_write_buffered_key,
     write_locked:           &mut bool,
     accounting_accumulated: &mut bool,
     cnt:                    &mut FlushCounters,
@@ -150,7 +152,7 @@ fn flush_one<'a>(
     iter.traverse(t)?;
 
     if !*accounting_accumulated && wb.k.k.key_type() == BkeyType::accounting {
-        let mut u = c::bkey::new();
+        let mut u = bkey::new();
         let k = iter.path_peek_slot(t, &mut u);
 
         if k.k.key_type() == BkeyType::accounting {
@@ -175,7 +177,7 @@ fn flush_one<'a>(
     let path = &paths[iter.path];
     let level = path.level() as usize;
     let l = path.locked_btree_node(level).expect("a traversed path has its node");
-    let mut old_u = c::bkey::new();
+    let mut old_u = bkey::new();
     let old = path.l[level].iter.peek_all()
         .map(|p| l.keys(l.contents()).disassemble(p, &mut old_u))
         .filter(|old| old.k.p == wb.k.k.p);
@@ -220,7 +222,7 @@ fn flush_one<'a>(
  * before the current transaction. If we were to journal this key again and
  * crash, recovery would process updates in the wrong order.
  */
-fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut c::btree_write_buffered_key)
+fn btree_write_buffered_insert(t: &TransAttempt<'_, '_>, btree: Btree, wb: &mut btree_write_buffered_key)
     -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(t, btree, wb.k.k.start_pos(), BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
@@ -249,7 +251,7 @@ pub(in crate::btree) struct FlushKey(());
  */
 fn flush_sorted_range(
     trans:                  &BtreeTrans<'_>,
-    wb:                     &c::bch_fs_btree_write_buffer,
+    wb:                     &bch_fs_btree_write_buffer,
     mut shard:              Shard<'_>,
     accounting_replay_done: bool,
     cnt:                    &mut FlushCounters,
@@ -347,7 +349,7 @@ fn flush_n_shards(n_keys: usize) -> usize {
 
 fn flush_sorted_sharded(
     trans:                  &BtreeTrans<'_>,
-    wb:                     &c::bch_fs_btree_write_buffer,
+    wb:                     &bch_fs_btree_write_buffer,
     mut sorted:             Shard<'_>,
     shards_total:           &VolatileWriter<u64>,
     accounting_replay_done: bool,
@@ -371,10 +373,10 @@ fn flush_sorted_sharded(
                     let trans = btree_trans!(fs);
                     let wb = &fs.btree.write_buffer[wb_idx];
 
-                    fs.times.get(c::TimeStat::btree_write_buffer_flush_shard_sched_delay as usize)
+                    fs.times.get(TimeStat::btree_write_buffer_flush_shard_sched_delay as usize)
                         .update(queued_time);
 
-                    fs.times.get(c::TimeStat::btree_write_buffer_flush_shard_work as usize)
+                    fs.times.get(TimeStat::btree_write_buffer_flush_shard_work as usize)
                         .time(|| flush_sorted_range(&trans, wb, shard, accounting_replay_done, cnt))
                 }).inspect_err(|_| spawn_failed = true)?;
             }
@@ -395,8 +397,8 @@ fn flush_sorted_sharded(
     flush_sorted_range(trans, wb, sorted, accounting_replay_done, cnt)
 }
 
-pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_buffer, g: &mut FlushingGuard<'_>,
-                           caller: c::WbFlushCaller) -> Result<(), BchError> {
+pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &bch_fs_btree_write_buffer, g: &mut FlushingGuard<'_>,
+                           caller: WbFlushCaller) -> Result<(), BchError> {
     let fs = trans.fs();
     let j = &fs.journal;
     let btree = wb_btree_to_btree(wb.wb_btree());
@@ -433,7 +435,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
 
     sorted.clear();
     for i in keys.idxs() {
-        let r = c::wb_key_ref::new(i, keys.key(i).k.k.p);
+        let r = wb_key_ref::new(i, keys.key(i).k.k.p);
         if sorted.push_within_capacity(r).is_err() {
             panic!("Overflowed wb->sorted at {}, flushing size {}", sorted.len(), keys.len());
         }
@@ -587,7 +589,7 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &c::bch_fs_btree_write_bu
         fs_fatal_error!(fs, "{}", e.msg());
     }
 
-    fs.times.get(c::TimeStat::btree_write_buffer_flush as usize).update(start_time);
+    fs.times.get(TimeStat::btree_write_buffer_flush as usize).update(start_time);
 
     *live.nr_flushes.place()                     += 1;
     *live.nr_flushes_caller[caller as usize].place() += 1;

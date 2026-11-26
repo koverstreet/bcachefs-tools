@@ -59,6 +59,9 @@ pub(crate) struct FieldDef {
 /// An x-macro list.
 #[derive(Debug)]
 pub(crate) struct XMacro {
+    /// `in MODULE;`: where it's declared - a list that splices in others is a
+    /// chain of macros, which name each other by it.
+    pub(crate) module:   Option<syn::Path>,
     pub(crate) name:     syn::Ident,
     pub(crate) entries:  Vec<XEntry>,
 }
@@ -196,6 +199,7 @@ pub(crate) fn int_bits(ty: &str) -> Option<u32> {
 pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<XMacro, String> {
     use proc_macro2::{Delimiter, TokenTree};
     syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+        let module = crate::tokens::parse_module(input)?;
         input.call(syn::Attribute::parse_outer)?;
         let name: syn::Ident = input.parse()?;
         let list;
@@ -230,7 +234,7 @@ pub(crate) fn parse_xmacro(input: proc_macro2::TokenStream) -> Result<XMacro, St
                 list.parse::<syn::Token![,]>()?;
             }
         }
-        Ok(XMacro { name, entries })
+        Ok(XMacro { module, name, entries })
     }, input).map_err(|e| format!("an entry is (args), SUB(), or SUB((params) => (args)) - {e}"))
 }
 

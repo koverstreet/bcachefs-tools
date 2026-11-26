@@ -19,6 +19,7 @@ use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 use crate::c;
+use crate::c::rcu_head;
 use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
@@ -50,7 +51,7 @@ pub unsafe trait RcuRealloc: HasRcuHead + Sized {
 }
 
 /// An item, given up: its rcu_head, what the lists thread through.
-type Raw = NonNull<c::rcu_head>;
+type Raw = NonNull<rcu_head>;
 
 fn into_raw<T: HasRcuHead>(p: NonNull<T>) -> Raw {
     unsafe { p.byte_add(T::HEAD).cast() }
@@ -63,7 +64,7 @@ unsafe fn from_raw<T: HasRcuHead>(raw: Raw) -> NonNull<T> {
 }
 
 /// @h's link: the kernel's next, or liburcu's next.next.
-fn link(h: NonNull<c::rcu_head>) -> *mut Option<NonNull<c::rcu_head>> {
+fn link(h: NonNull<rcu_head>) -> *mut Option<NonNull<rcu_head>> {
     #[cfg(kernel)]
     return unsafe { (&raw mut (*h.as_ptr()).next).cast() };
     #[cfg(not(kernel))]
@@ -74,13 +75,13 @@ fn link(h: NonNull<c::rcu_head>) -> *mut Option<NonNull<c::rcu_head>> {
 /// it.
 #[derive(Default)]
 struct List {
-    head: Option<NonNull<c::rcu_head>>,
-    tail: Option<NonNull<c::rcu_head>>,
+    head: Option<NonNull<rcu_head>>,
+    tail: Option<NonNull<rcu_head>>,
     seq:  GpCookie,
 }
 
 impl List {
-    fn add(&mut self, n: NonNull<c::rcu_head>) {
+    fn add(&mut self, n: NonNull<rcu_head>) {
         match self.tail {
             None    => self.head = Some(n),
             Some(t) => unsafe { *link(t) = Some(n) },
@@ -107,7 +108,7 @@ impl List {
     }
 
     /// The first entry @f is true of, unlinked.
-    fn remove_where(&mut self, mut f: impl FnMut(NonNull<c::rcu_head>) -> bool) -> Option<NonNull<c::rcu_head>> {
+    fn remove_where(&mut self, mut f: impl FnMut(NonNull<rcu_head>) -> bool) -> Option<NonNull<rcu_head>> {
         let mut prev = None;
         let mut cur = self.head;
 
@@ -132,12 +133,12 @@ impl List {
     }
 }
 
-struct Drain(Option<NonNull<c::rcu_head>>);
+struct Drain(Option<NonNull<rcu_head>>);
 
 impl Iterator for Drain {
-    type Item = NonNull<c::rcu_head>;
+    type Item = NonNull<rcu_head>;
 
-    fn next(&mut self) -> Option<NonNull<c::rcu_head>> {
+    fn next(&mut self) -> Option<NonNull<rcu_head>> {
         let h = self.0?;
         self.0 = unsafe { *link(h) };
         Some(h)
@@ -292,7 +293,7 @@ struct Pcpu<'f, T: RcuRealloc, A: Alloc> {
     /* what's queued here: added under the lock, taken off as it's processed */
     nr:     AtomicUsize,
     cpu:    c_uint,
-    cb:     Opaque<c::rcu_head>,
+    cb:     Opaque<rcu_head>,
     work:   RawWork,
 }
 

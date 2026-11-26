@@ -14,7 +14,7 @@
 //! which in userspace, or without CONFIG_TRACEPOINTS, has none: none is ever
 //! on.
 
-use crate::c;
+use crate::sb::counters_format::PersistentCounter_arms;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use cstruct_macros::xmacro;
@@ -80,8 +80,8 @@ macro_rules! event_types {
 /// The events, each a type: events::<name>.
 #[allow(non_camel_case_types)]
 pub mod events {
-    use crate::c;
-    c::PersistentCounter_arms!(event_types);
+    use crate::sb::counters_format::PersistentCounter_arms;
+    PersistentCounter_arms!(event_types);
     super::BCH_NOCOUNTER_TRACEPOINTS!(event_types);
     super::BCH_PATH_TRACEPOINTS!(event_types);
 }
@@ -109,7 +109,7 @@ macro_rules! no_trace_events {
         $( impl TraceEvent for events::$name {} )*
     };
 }
-c::PersistentCounter_arms!(trace_events);
+PersistentCounter_arms!(trace_events);
 BCH_NOCOUNTER_TRACEPOINTS!(trace_events);
 #[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
 BCH_PATH_TRACEPOINTS!(trace_events);

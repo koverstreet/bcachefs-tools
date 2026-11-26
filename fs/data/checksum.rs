@@ -28,7 +28,9 @@
 
 use crate::btree::bkey::ValidateFlags;
 use crate::sb_err_on;
-use crate::c;
+use crate::data::extents::bch_extent_crc_unpacked;
+use crate::data::reconcile::format::bch_extent_reconcile;
+use crate::opts::bch_inode_opts;
 use crate::util::vstructs::{plain_bytes, Unvalidated, Validated, VStruct};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -36,7 +38,8 @@ use crate::sb::io::{SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
 use crate::os::bio::BioRange;
 use crate::util::Printbuf;
-use crate::format::{Bversion, Nonce};
+use crate::format::{Bversion, Nonce, bch_csum, bch_encrypted_key, bch_key, bch_sb,
+    bch_sb_field_crypt, CsumOpt, CsumType, KdfType};
 use crate::os::checksum::{Checksum, Crc32c, Crc64, Xxh64};
 // a glob: userspace's are RustCrypto's, called through their traits
 use crate::os::crypto::*;
@@ -89,8 +92,8 @@ enum Csum {
 
 impl Csum {
     /// An encryption type's is keyed by @fs's key: panics without one.
-    fn new(fs: Option<&Fs>, ty: c::CsumType, mut nonce: Nonce) -> Self {
-        use c::CsumType as t;
+    fn new(fs: Option<&Fs>, ty: CsumType, mut nonce: Nonce) -> Self {
+        use crate::format::CsumType as t;
         match ty {
             t::crc32c          => Csum::Crc32c { crc: Crc32c::new(0), xor: 0 },
             t::crc32c_nonzero  => Csum::Crc32c { crc: Crc32c::new(u32::MAX), xor: u32::MAX },
@@ -103,7 +106,7 @@ impl Csum {
                 nonce.d[3] = Le32::new(nonce.d[3].get() ^ BCH_NONCE_POLY);
                 // as C's, with a key it hasn't - all zeroes - though callers
                 // check valid() first
-                let unset = c::bch_key::default();
+                let unset = bch_key::default();
                 chacha20(fs.encryption_key().unwrap_or(&unset), nonce, &mut key);
 
                 Csum::Poly1305 {
@@ -153,7 +156,7 @@ impl Csum {
         }
     }
 
-    fn finish(self) -> c::bch_csum {
+    fn finish(self) -> bch_csum {
         let lo = match self {
             Csum::None(seed) => seed,
             Csum::Crc32c { crc, xor } => u64::from(crc.finalize() ^ xor),
@@ -161,48 +164,48 @@ impl Csum {
             Csum::Xxhash(h) => h.finalize(),
             Csum::Poly1305 { mac, buf, buffered, bytes } => {
                 let tag = mac.compute_unpadded(&buf[..buffered]);
-                let mut ret = c::bch_csum::default();
+                let mut ret = bch_csum::default();
                 crate::util::vstructs::plain_bytes_mut(&mut ret)[..bytes].copy_from_slice(&tag[..bytes]);
                 return ret;
             }
         };
-        c::bch_csum { lo: Le64::new(lo), hi: Le64::new(0) }
+        bch_csum { lo: Le64::new(lo), hi: Le64::new(0) }
     }
 }
 
 /// The checksum of vstruct @v whose first field is its checksum: of all of it
 /// after that field - C's csum_vstruct(). @fs for an encryption type's key.
-pub fn csum_vstruct<T: VStruct + ?Sized>(fs: Option<&Fs>, ty: c::CsumType, nonce: Nonce,
-                                         v: &T) -> c::bch_csum {
-    checksum(fs, ty, nonce, &v.as_bytes()[size_of::<c::bch_csum>()..])
+pub fn csum_vstruct<T: VStruct + ?Sized>(fs: Option<&Fs>, ty: CsumType, nonce: Nonce,
+                                         v: &T) -> bch_csum {
+    checksum(fs, ty, nonce, &v.as_bytes()[size_of::<bch_csum>()..])
 }
 
 /// @data's checksum: Fs::checksum()'s, and checksum_unkeyed()'s.
-fn checksum(fs: Option<&Fs>, ty: c::CsumType, nonce: Nonce, data: &[u8]) -> c::bch_csum {
+fn checksum(fs: Option<&Fs>, ty: CsumType, nonce: Nonce, data: &[u8]) -> bch_csum {
     let mut csum = Csum::new(fs, ty, nonce);
     csum.update(data);
     csum.finish()
 }
 
-impl c::CsumType {
+impl CsumType {
     /// Whether it's an encryption type: bch2_csum_type_is_encryption().
     pub fn is_encryption(self) -> bool {
-        matches!(self, c::CsumType::chacha20_poly1305_80 |
-                       c::CsumType::chacha20_poly1305_128)
+        matches!(self, CsumType::chacha20_poly1305_80 |
+                       CsumType::chacha20_poly1305_128)
     }
 
     /// Its checksum's size in bytes - None for a type this version doesn't
     /// know: bch_crc_bytes[].
     pub fn bytes(self) -> Option<u32> {
         Some(match self {
-            c::CsumType::none                  => 0,
-            c::CsumType::crc32c_nonzero |
-            c::CsumType::crc32c                => 4,
-            c::CsumType::crc64_nonzero |
-            c::CsumType::crc64 |
-            c::CsumType::xxhash                => 8,
-            c::CsumType::chacha20_poly1305_80  => 10,
-            c::CsumType::chacha20_poly1305_128 => 16,
+            CsumType::none                  => 0,
+            CsumType::crc32c_nonzero |
+            CsumType::crc32c                => 4,
+            CsumType::crc64_nonzero |
+            CsumType::crc64 |
+            CsumType::xxhash                => 8,
+            CsumType::chacha20_poly1305_80  => 10,
+            CsumType::chacha20_poly1305_128 => 16,
             _ => return None,
         })
     }
@@ -211,20 +214,20 @@ impl c::CsumType {
     /// bch2_checksum_merge() - so an extent with it can merge:
     /// bch2_checksum_mergeable().
     pub fn mergeable(self) -> bool {
-        matches!(self, c::CsumType::none |
-                       c::CsumType::crc32c |
-                       c::CsumType::crc64)
+        matches!(self, CsumType::none |
+                       CsumType::crc32c |
+                       CsumType::crc64)
     }
 
     /// Whether @fs can use it - a type this version knows, and an encryption
     /// type only with the key loaded: bch2_checksum_type_valid().
     pub fn valid(self, fs: &Fs) -> bool {
-        self.0 < c::CsumType::NR && (!self.is_encryption() || fs.encryption_key().is_some())
+        self.0 < CsumType::NR && (!self.is_encryption() || fs.encryption_key().is_some())
     }
 
     /// @data's checksum, of a type that takes no key - nor so a nonce, or a
     /// filesystem. Not an encryption type's.
-    pub fn checksum_unkeyed(self, data: &[u8]) -> c::bch_csum {
+    pub fn checksum_unkeyed(self, data: &[u8]) -> bch_csum {
         assert!(!self.is_encryption(), "an unkeyed checksum, of encryption type {}", self.0);
         checksum(None, self, Nonce::default(), data)
     }
@@ -232,7 +235,7 @@ impl c::CsumType {
     /// The checksum of a range whose two halves checksum to @a and @b, @b
     /// @b_len bytes: a crc of b_len zeroes on top of @a, XOR @b. Panics on a
     /// type that isn't mergeable().
-    pub fn merge(self, a: c::bch_csum, b: c::bch_csum, b_len: usize) -> c::bch_csum {
+    pub fn merge(self, a: bch_csum, b: bch_csum, b_len: usize) -> bch_csum {
         assert!(self.mergeable(), "merging checksums of type {self}, which don't merge");
         static ZEROES: [u8; 4096] = [0; 4096];
 
@@ -245,14 +248,14 @@ impl c::CsumType {
             left -= n;
         }
         let lo = csum.finish().lo.get();
-        c::bch_csum { lo: Le64::new(lo ^ b.lo.get()), hi: Le64::new(a.hi.get() ^ b.hi.get()) }
+        bch_csum { lo: Le64::new(lo ^ b.lo.get()), hi: Le64::new(a.hi.get() ^ b.hi.get()) }
     }
 }
 
-impl c::bch_csum {
+impl bch_csum {
     /// As many of its bytes as a @ty checksum has, in hex - all 16, for a
     /// type this version doesn't know: bch2_csum_to_text().
-    pub fn to_text(&self, out: &mut Printbuf, ty: c::CsumType) {
+    pub fn to_text(&self, out: &mut Printbuf, ty: CsumType) {
         let bytes = crate::util::vstructs::plain_bytes(self);
         for b in &bytes[..ty.bytes().unwrap_or(16) as usize] {
             write!(out, "{b:02x}");
@@ -260,20 +263,20 @@ impl c::bch_csum {
     }
 }
 
-pub fn csum_err_msg(out: &mut Printbuf, ty: c::CsumType, expected: c::bch_csum, got: c::bch_csum) {
+pub fn csum_err_msg(out: &mut Printbuf, ty: CsumType, expected: bch_csum, got: bch_csum) {
     write!(out, "checksum error, type {ty}: got ");
     got.to_text(out, ty);
     write!(out, " should be ");
     expected.to_text(out, ty);
 }
 
-impl c::CsumOpt {
+impl CsumOpt {
     /// The checksum type it writes, for data or metadata - metadata's crcs
     /// are the nonzero variants: bch2_csum_opt_to_type(). An unknown opt is
     /// an incompat feature, so warned about, and crc32c.
-    pub fn to_type(self, fs: &Fs, data: bool) -> c::CsumType {
-        use c::CsumOpt as o;
-        use c::CsumType as t;
+    pub fn to_type(self, fs: &Fs, data: bool) -> CsumType {
+        use crate::format::CsumOpt as o;
+        use crate::format::CsumType as t;
         match self {
             o::none   => t::none,
             o::crc32c => if data { t::crc32c } else { t::crc32c_nonzero },
@@ -291,51 +294,51 @@ impl Fs {
     /// The checksum type data written with @opts gets - none for nocow, which
     /// can't checksum what it overwrites in place, and encrypted on an
     /// encrypted filesystem.
-    pub fn data_checksum_type(&self, opts: &c::bch_inode_opts) -> c::CsumType {
+    pub fn data_checksum_type(&self, opts: &bch_inode_opts) -> CsumType {
         if opts.nocow != 0 {
-            return c::CsumType::none;
+            return CsumType::none;
         }
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
-                c::CsumType::chacha20_poly1305_128
+                CsumType::chacha20_poly1305_128
             } else {
-                c::CsumType::chacha20_poly1305_80
+                CsumType::chacha20_poly1305_80
             };
         }
-        c::CsumOpt(opts.data_checksum.into()).to_type(self, true)
+        CsumOpt(opts.data_checksum.into()).to_type(self, true)
     }
 
-    pub fn meta_checksum_type(&self) -> c::CsumType {
+    pub fn meta_checksum_type(&self) -> CsumType {
         if self.sb.encryption_type.get() != 0 {
-            return c::CsumType::chacha20_poly1305_128;
+            return CsumType::chacha20_poly1305_128;
         }
-        c::CsumOpt(self.opts().metadata_checksum.get().into()).to_type(self, false)
+        CsumOpt(self.opts().metadata_checksum.get().into()).to_type(self, false)
     }
 
     /// The checksum type data reconciled to @r is written with - encrypted,
     /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
-    pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::CsumType {
+    pub fn data_checksum_type_rb(&self, r: &bch_extent_reconcile) -> CsumType {
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
-                c::CsumType::chacha20_poly1305_128
+                CsumType::chacha20_poly1305_128
             } else {
-                c::CsumType::chacha20_poly1305_80
+                CsumType::chacha20_poly1305_80
             };
         }
-        c::CsumOpt(r.data_checksum().into()).to_type(self, true)
+        CsumOpt(r.data_checksum().into()).to_type(self, true)
     }
 
     /// @data's checksum of type @ty, with @nonce - an encryption type's under
     /// the filesystem's key. A type this version doesn't know checksums to
     /// zero.
-    pub fn checksum(&self, ty: c::CsumType, nonce: Nonce, data: &[u8]) -> c::bch_csum {
+    pub fn checksum(&self, ty: CsumType, nonce: Nonce, data: &[u8]) -> bch_csum {
         checksum(Some(self), ty, nonce, data)
     }
 
     /// The checksum of @r's data. As checksum(). Not inlined: a Csum is
     /// hundreds of bytes, and the write path, where it's called from, is deep.
     #[inline(never)]
-    pub fn checksum_range(&self, ty: c::CsumType, nonce: Nonce, r: BioRange<'_>) -> c::bch_csum {
+    pub fn checksum_range(&self, ty: CsumType, nonce: Nonce, r: BioRange<'_>) -> bch_csum {
         let mut csum = Csum::new(Some(self), ty, nonce);
         for chunk in r {
             chunk.with_mapped(|p, len| csum.update(unsafe { core::slice::from_raw_parts(p, len) }));
@@ -347,7 +350,7 @@ impl Fs {
 // ── Encryption ───────────────────────────────────────────────────────────
 
 /// ChaCha20 under @key from @nonce, the block it starts at its first word.
-fn keystream(key: &c::bch_key, nonce: Nonce) -> ChaCha20 {
+fn keystream(key: &bch_key, nonce: Nonce) -> ChaCha20 {
     let key: &[u8; 32] = plain_bytes(key).try_into().unwrap();
     let iv: &[u8; 12] = plain_bytes(&nonce.d[1..]).try_into().unwrap();
     let mut stream = ChaCha20::new(key.into(), iv.into());
@@ -356,14 +359,14 @@ fn keystream(key: &c::bch_key, nonce: Nonce) -> ChaCha20 {
 }
 
 /// @data, ChaCha20'd under @key from @nonce: encrypted, or decrypted.
-pub fn chacha20(key: &c::bch_key, nonce: Nonce, data: &mut [u8]) {
+pub fn chacha20(key: &bch_key, nonce: Nonce, data: &mut [u8]) {
     keystream(key, nonce).apply_keystream(data)
 }
 
-impl c::bch_encrypted_key {
+impl bch_encrypted_key {
     /// Encrypted under @key, from the superblock's @nonce - or decrypted: the
     /// right key leaves its magic as it should be.
-    pub fn chacha20(&mut self, key: &c::bch_key, nonce: Nonce) {
+    pub fn chacha20(&mut self, key: &bch_key, nonce: Nonce) {
         chacha20(key, nonce, crate::util::vstructs::plain_bytes_mut(self))
     }
 }
@@ -371,7 +374,7 @@ impl c::bch_encrypted_key {
 impl Fs {
     /// The key to encrypt with: an encryption type without one is an
     /// inconsistency.
-    fn chacha20_key(&self) -> Result<&c::bch_key, BchError> {
+    fn chacha20_key(&self) -> Result<&bch_key, BchError> {
         let Some(key) = self.encryption_key() else {
             crate::fs_inconsistent!(self, "attempting to encrypt without encryption key");
             return self.throw(Errcode::no_encryption_key);
@@ -382,7 +385,7 @@ impl Fs {
     /// @data encrypted with @ty under the filesystem's key - or decrypted,
     /// ChaCha20 being its own inverse. Nothing, for a type that isn't
     /// encryption.
-    pub fn encrypt(&self, ty: c::CsumType, nonce: Nonce, data: &mut [u8]) -> Result<(), BchError> {
+    pub fn encrypt(&self, ty: CsumType, nonce: Nonce, data: &mut [u8]) -> Result<(), BchError> {
         if ty.is_encryption() {
             chacha20(self.chacha20_key()?, nonce, data);
         }
@@ -413,10 +416,10 @@ impl Fs {
     /// they merge, else it checksummed again whole. Can't encrypt or decrypt,
     /// so both types are encryption, or neither.
     #[allow(clippy::too_many_arguments)]
-    pub fn rechecksum_bio(&self, range: BioRange<'_>, version: Bversion, crc_old: c::bch_extent_crc_unpacked,
-                          crc_a: Option<&mut c::bch_extent_crc_unpacked>,
-                          crc_b: Option<&mut c::bch_extent_crc_unpacked>,
-                          len_a: u32, len_b: u32, new_csum_type: c::CsumType) -> Result<(), BchError> {
+    pub fn rechecksum_bio(&self, range: BioRange<'_>, version: Bversion, crc_old: bch_extent_crc_unpacked,
+                          crc_a: Option<&mut bch_extent_crc_unpacked>,
+                          crc_b: Option<&mut bch_extent_crc_unpacked>,
+                          len_a: u32, len_b: u32, new_csum_type: CsumType) -> Result<(), BchError> {
         use crate::data::ptrs::{crc_is_compressed, extent_nonce};
         let fs = self;
         let (old_ty, new_ty) = (crc_old.csum_type.get(), new_csum_type);
@@ -430,7 +433,7 @@ impl Fs {
 
         let mergeable = old_ty == new_ty && new_ty.mergeable();
         let mut splits = [(crc_a, len_a), (crc_b, len_b), (None, sectors - len_a - len_b)]
-            .map(|(crc, len)| (crc, len, c::bch_csum::default()));
+            .map(|(crc, len)| (crc, len, bch_csum::default()));
 
         let (mut r, mut nonce) = (range, extent_nonce(version, &crc_old));
         for (crc, len, csum) in &mut splits {
@@ -442,7 +445,7 @@ impl Fs {
         }
 
         let merged = if mergeable {
-            splits.iter().fold(c::bch_csum::default(), |m, (_, len, csum)| new_ty.merge(m, *csum, (*len << 9) as usize))
+            splits.iter().fold(bch_csum::default(), |m, (_, len, csum)| new_ty.merge(m, *csum, (*len << 9) as usize))
         } else {
             fs.checksum_range(old_ty, extent_nonce(version, &crc_old), range)
         };
@@ -463,7 +466,7 @@ impl Fs {
         let mut crc_nonce = u32::from(crc_old.nonce);
         for (crc, len, csum) in splits {
             if let Some(crc) = crc {
-                *crc = c::bch_extent_crc_unpacked {
+                *crc = bch_extent_crc_unpacked {
                     csum_type:          new_ty.into(),
                     compression_type:   crc_old.compression_type,
                     compressed_size:    len,
@@ -486,17 +489,17 @@ impl Fs {
 
 /// A section shorter than the struct is refused before validate(), as too
 /// short to be one.
-impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
-    fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
+impl SbFieldOps for bch_sb_field_crypt<Validated> {
+    fn validate(_sb: &bch_sb<Unvalidated>, crypt: &bch_sb_field_crypt<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.kdf_type();
-        sb_err_on!(err, kdf != c::KdfType::scrypt, invalid_sb_crypt,
+        sb_err_on!(err, kdf != KdfType::scrypt, invalid_sb_crypt,
                    "bad kdf type {kdf}")?;
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                crypt: &c::bch_sb_field_crypt<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                crypt: &bch_sb_field_crypt<Unvalidated>) {
         write!(out, "KFD:               {}\n", crypt.kdf_type());
         write!(out, "scrypt n:          {}\n", crypt.scrypt_n());
         write!(out, "scrypt r:          {}\n", crypt.scrypt_r());
@@ -505,12 +508,12 @@ impl SbFieldOps for c::bch_sb_field_crypt<Validated> {
 }
 
 #[cfg(not(kernel))]
-impl c::bch_sb_field_crypt<Validated> {
+impl bch_sb_field_crypt<Validated> {
     /// The scrypt parameters a passphrase is derived with. A key stored
     /// unencrypted - formatted with --no_passphrase - never had any, so this
     /// has to run before the first passphrase is set on it.
     pub fn kdf_init(&mut self) {
-        self.set_kdf_type(c::KdfType::scrypt);
+        self.set_kdf_type(KdfType::scrypt);
         self.set_scrypt_n(16384u16.ilog2() as u16);
         self.set_scrypt_r(8u16.ilog2() as u16);
         self.set_scrypt_p(16u16.ilog2() as u16);
@@ -518,10 +521,10 @@ impl c::bch_sb_field_crypt<Validated> {
 }
 
 #[cfg(not(kernel))]
-impl c::bch_sb_field_crypt {
-    pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<c::bch_key, BchError> {
+impl bch_sb_field_crypt {
+    pub fn derive_passphrase(&self, passphrase: &[u8]) -> Result<bch_key, BchError> {
         let kdf = self.kdf_type();
-        assert!(kdf == c::KdfType::scrypt, "unknown kdf type {kdf}");
+        assert!(kdf == KdfType::scrypt, "unknown kdf type {kdf}");
 
         /*
          * Stored as log2, so r and p of 1 are legal and only N can be
@@ -549,7 +552,7 @@ impl c::bch_sb_field_crypt {
         }
 
         let salt = b"bcache\0";
-        let mut key = c::bch_key::default();
+        let mut key = bch_key::default();
         let ret = scrypt::Params::new(n_log as u8, r as u32, p as u32).map_err(|e| e.to_string())
             .and_then(|params| scrypt::scrypt(passphrase, salt, &params,
                                               crate::util::vstructs::plain_bytes_mut(&mut key))
@@ -573,9 +576,9 @@ pub fn key_description(uuid: &uuid::Uuid) -> Printbuf {
 }
 
 /// The user key @desc, from the keyring.
-fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
+fn keyring_key(desc: &core::ffi::CStr) -> Result<bch_key, BchError> {
     let key = keyring::request_key(desc)?;
-    let mut k = c::bch_key::default();
+    let mut k = bch_key::default();
     match key.read(&mut crate::util::vstructs::plain_bytes_mut(&mut k)) {
         Ok(n) if n == size_of_val(&k) => Ok(k),
         _                             => Err(Errcode::EINVAL_keyring_key_size.into()),
@@ -589,7 +592,7 @@ fn keyring_key(desc: &core::ffi::CStr) -> Result<c::bch_key, BchError> {
 /// one handed back a garbage key and success, and the caller found out as a
 /// checksum error somewhere further on.
 #[cfg(not(kernel))]
-fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
+fn passphrase_key(sb: &bch_sb) -> Result<bch_key, BchError> {
     use crate::util::prompt::{read_passphrase, Given};
 
     let crypt = sb.crypt().expect("filesystem is not encrypted");
@@ -600,7 +603,7 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
             Ok(key) => key,
             Err(e) => {
                 eprintln!("error deriving key from passphrase: {e}");
-                return Some(Err(BchError::from(c::Errcode::crypt_kdf_failed)));
+                return Some(Err(BchError::from(Errcode::crypt_kdf_failed)));
             }
         };
         let mut sb_key = crypt.key.clone();
@@ -622,12 +625,12 @@ fn passphrase_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
         Err(e)                => format!("error reading passphrase: {e}"),
     };
     eprintln!("{why}");
-    Err(c::Errcode::no_encryption_key.into())
+    Err(Errcode::no_encryption_key.into())
 }
 
 /// The user's key, for @sb: from the keyring - or in userspace, failing
 /// that, a passphrase.
-pub fn request_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
+pub fn request_key(sb: &bch_sb) -> Result<bch_key, BchError> {
     let ret = keyring_key(key_description(&sb.uuid()).as_c_str());
     #[cfg(not(kernel))]
     let ret = ret.or_else(|_| passphrase_key(sb));
@@ -636,7 +639,7 @@ pub fn request_key(sb: &c::bch_sb) -> Result<c::bch_key, BchError> {
 
 /// @sb's key taken out of the user keyring: its passphrase is changing.
 #[cfg(not(kernel))]
-pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
+pub fn revoke_key(sb: &bch_sb) -> Result<(), BchError> {
     use keyring::{KeyRing, KeyRingIdentifier};
 
     let desc = key_description(&sb.uuid());
@@ -649,8 +652,8 @@ pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
 
 /// The filesystem's key: the superblock's, decrypted with the user's if a
 /// passphrase was ever set on it - @user_key, or the keyring's.
-fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt, user_key: Option<&c::bch_key>)
-    -> Result<c::bch_key, BchError>
+fn decrypt_sb_key(fs: &Fs, sb: &bch_sb, crypt: &bch_sb_field_crypt, user_key: Option<&bch_key>)
+    -> Result<bch_key, BchError>
 {
     let mut sb_key = crypt.key.clone();
     if sb_key.is_encrypted() {
@@ -681,9 +684,9 @@ fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt, user_k
 
 /// The filesystem's key set, if it's encrypted: at mount, @user_key the key
 /// whoever opened it was handed - its owner's still, to wipe.
-pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), BchError> {
+pub fn encryption_init(fs: &Fs, user_key: Option<&bch_key>) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
-    let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else { return Ok(()) };
+    let Some(crypt) = sb.field::<bch_sb_field_crypt>() else { return Ok(()) };
 
     let key = decrypt_sb_key(fs, sb.sb(), crypt, user_key)?;
     assert!(sb.published().encryption_key.set(key), "the filesystem's key set before mount");
@@ -701,7 +704,7 @@ pub fn encryption_init(fs: &Fs, user_key: Option<&c::bch_key>) -> Result<(), Bch
 /// The key stored unencrypted, and encryption off for what's written from now.
 pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
-    let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else {
+    let Some(crypt) = sb.field::<bch_sb_field_crypt>() else {
         return fs.throw(Errcode::EINVAL_disable_encryption_no_crypt);
     };
     // XXX: as C had it - but a key that isn't encrypted is the one that has
@@ -711,8 +714,8 @@ pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
     }
     let key = decrypt_sb_key(fs, sb.sb(), crypt, None)?;
 
-    sb.field_mut::<c::bch_sb_field_crypt>().expect("its crypt section, just read").key =
-        c::bch_encrypted_key::new_unencrypted(key);
+    sb.field_mut::<bch_sb_field_crypt>().expect("its crypt section, just read").key =
+        bch_encrypted_key::new_unencrypted(key);
     sb.sb_mut().set_encryption_type(0);
     fs.write_super(&mut sb);
     Ok(())
@@ -722,22 +725,22 @@ pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
 /// keyring, if @keyed. Not on a filesystem that has a key already.
 pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     let mut sb = fs.sb_lock();
-    if sb.field::<c::bch_sb_field_crypt>().is_some() {
+    if sb.field::<bch_sb_field_crypt>().is_some() {
         return fs.throw(Errcode::EINVAL_enable_encryption_already);
     }
 
-    let mut key = c::bch_key::default();
+    let mut key = bch_key::default();
     crate::os::kernel::random_bytes(crate::util::vstructs::plain_bytes_mut(&mut key));
 
-    let mut sb_key = c::bch_encrypted_key::new_unencrypted(key.clone());
+    let mut sb_key = bch_encrypted_key::new_unencrypted(key.clone());
     if keyed {
         let user_key = request_key(sb.sb())
             .inspect_err(|e| crate::bch_err!(fs, "error requesting encryption key: {e}"))?;
         sb_key.chacha20(&user_key, sb.sb().nonce());
     }
 
-    let u64s = (size_of::<c::bch_sb_field_crypt>() / size_of::<u64>()) as u32;
-    match fs.sb_resize(&mut sb).field_get_minsize::<c::bch_sb_field_crypt>(u64s) {
+    let u64s = (size_of::<bch_sb_field_crypt>() / size_of::<u64>()) as u32;
+    match fs.sb_resize(&mut sb).field_get_minsize::<bch_sb_field_crypt>(u64s) {
         Some(crypt) => crypt.key = sb_key,
         None => return fs.throw(Errcode::ENOSPC_sb_crypt),
     }
@@ -759,8 +762,8 @@ mod tests {
     // gives - and OpenSSL's
     #[test]
     fn derive_passphrase() {
-        let mut crypt = c::bch_sb_field_crypt::default();
-        crypt.set_kdf_type(c::KdfType::scrypt);
+        let mut crypt = bch_sb_field_crypt::default();
+        crypt.set_kdf_type(KdfType::scrypt);
         crypt.set_scrypt_n(10);
         crypt.set_scrypt_r(3);
         crypt.set_scrypt_p(1);

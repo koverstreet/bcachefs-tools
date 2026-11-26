@@ -10,6 +10,7 @@
 
 use super::inode::InodeInfo;
 use crate::c;
+use crate::vfs::pagecache::{bch_folio_sector, FolioState};
 use crate::errcode::BchError;
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::os::folio;
@@ -59,27 +60,27 @@ impl Folio {
 
 /// A folio's bcachefs state, its lock held.
 pub struct FolioStateGuard<'a> {
-    guard:   ExclusiveGuard<'a, SpinLockIrq, c::FolioState>,
+    guard:   ExclusiveGuard<'a, SpinLockIrq, FolioState>,
     sectors: usize,
 }
 
 impl Deref for FolioStateGuard<'_> {
-    type Target = c::FolioState;
+    type Target = FolioState;
 
-    fn deref(&self) -> &c::FolioState {
+    fn deref(&self) -> &FolioState {
         &self.guard
     }
 }
 
 impl DerefMut for FolioStateGuard<'_> {
-    fn deref_mut(&mut self) -> &mut c::FolioState {
+    fn deref_mut(&mut self) -> &mut FolioState {
         &mut self.guard
     }
 }
 
 impl FolioStateGuard<'_> {
     /// s[], a sector of the folio each.
-    pub fn sectors(&mut self) -> &mut [c::bch_folio_sector] {
+    pub fn sectors(&mut self) -> &mut [bch_folio_sector] {
         unsafe { core::slice::from_raw_parts_mut((&raw mut self.guard.s).cast(), self.sectors) }
     }
 }

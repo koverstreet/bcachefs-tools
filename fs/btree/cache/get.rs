@@ -9,10 +9,10 @@ use crate::btree::path::{bch2_btree_path_to_text, LockedNode, NodePtr, PathIdx, 
 use crate::btree::read::{bch2_btree_node_wait_on_read, bch2_btree_node_wait_on_write};
 use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
-use crate::c;
+use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Btree};
+use crate::format::{BkeyType, Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
 use crate::locking::six::SixHold;
@@ -20,10 +20,10 @@ use crate::prt;
 use crate::types::L1_CACHE_BYTES;
 use crate::os::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::util::log::LogMsg;
-use c::SixLockType::{self, SIX_LOCK_read};
+use crate::locking::six::SixLockType::{self, SIX_LOCK_read};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
-    let p = BkeySC::from(k).arm::<c::BtreePtrV2>()?;
+    let p = BkeySC::from(k).arm::<BtreePtrV2>()?;
     let mem_ptr = p.v().mem_ptr.get() as *const BtreeNode;
     (!mem_ptr.is_null()).then(|| unsafe { cached_node(fs, mem_ptr) })
 }
@@ -60,7 +60,7 @@ fn btree_check_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
     if Btree(b.c.btree_id.get().into()) != data.btree_id() ||
         b.c.level.get() != data.level() ||
         data.max_key != k.k.p ||
-        k.arm::<c::BtreePtrV2>().is_some_and(|p| data.min_key != p.v().min_key) {
+        k.arm::<BtreePtrV2>().is_some_and(|p| data.min_key != p.v().min_key) {
         btree_bad_header(fs, b);
     }
 }
@@ -127,7 +127,7 @@ impl BtreeTrans<'_> {
             return Err(self.btree_node_reused(paths, idx));
         }
 
-        ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
+        ebug_assert!(level < BTREE_MAX_DEPTH as usize);
 
         let (b, held) = 'retry: loop {
             let (b, mut held) = match fs.btree_cache_find(k) {
@@ -254,7 +254,7 @@ impl BtreeTrans<'_> {
                                  lock_type: SixLockType, flags: BtreeIterFlags)
         -> Result<(&BtreeNode, SixHold<'_>), BchError>
     {
-        ebug_assert!(level < c::BTREE_MAX_DEPTH as usize);
+        ebug_assert!(level < BTREE_MAX_DEPTH as usize);
         ebug_assert!(level + 1 == paths[idx].level() as usize);
 
         let b = btree_node_mem_ptr(self.fs(), k);
@@ -315,7 +315,7 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
 
         assert!(path.is_none_or(|p| paths[p].locked(level + 1)), "prefetching from an unlocked node");
-        assert!(level < c::BTREE_MAX_DEPTH as usize, "prefetching at level {level}");
+        assert!(level < BTREE_MAX_DEPTH as usize, "prefetching at level {level}");
 
         if fs.btree_cache_find(k).is_some() {
             return Ok(());

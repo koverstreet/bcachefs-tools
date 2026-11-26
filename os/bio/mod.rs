@@ -56,7 +56,7 @@ use core::task::{ready, Context, Poll};
 
 use crate::c;
 use crate::data_structures::inline_vec::InlineVec;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::blkdev::BlockDevice;
 use crate::util::backtrace::prt_fn_name;
 use crate::util::sleep::Sleep;
@@ -159,7 +159,7 @@ fn reserve_bvecs<V>(vecs: &mut InlineVec<V, BIO_INLINE_VECS, u16, BvecAlloc>, ad
     -> Result<(), BchError>
 {
     if vecs.len() + additional > c::BIO_MAX_VECS as usize {
-        return Err(c::Errcode::bio_full.into());
+        return Err(Errcode::bio_full.into());
     }
     Ok(vecs.reserve(additional)?)
 }

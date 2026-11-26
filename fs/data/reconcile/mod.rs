@@ -10,7 +10,8 @@ pub mod scan;
 pub mod trigger;
 pub mod work;
 
-use crate::cstructs::c;
+use crate::data::moving::MoveStats;
+use crate::init::progress::progress_indicator;
 use crate::fs::Fs;
 use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::Status;
@@ -43,9 +44,9 @@ pub struct bch_fs_reconcile {
     #[pin]
     #[init(SeqLock::new(Status::new()))]
     pub(crate) status: SeqLock<Status>,
-    pub work_stats: c::MoveStats,
-    pub progress: c::progress_indicator,
-    pub scan_stats: c::MoveStats,
+    pub work_stats: MoveStats,
+    pub progress: progress_indicator,
+    pub scan_stats: MoveStats,
 
     /*
      * The scans the option change in progress has requested: the reconcile

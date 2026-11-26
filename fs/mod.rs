@@ -203,7 +203,6 @@ pub mod sb;
 pub mod snapshots;
 /// The records types defined in Rust that C shares are written from.
 pub mod types;
-pub mod cstructs;
 pub mod data_structures;
 pub mod locking;
 #[cfg_attr(kernel, path = "../os/linux_kernel/mod.rs")]
@@ -256,7 +255,8 @@ pub mod format;
 pub mod opts;
 
 pub use paste::paste;
-use crate::format::{Btree, BtreeFlags, CompressionType, DataType, BkeyType, MetadataVersion};
+use crate::format::{Btree, BtreeFlags, CompressionType, DataType, BkeyType, MetadataVersion,
+    Btree_arms};
 
 pub mod c {
     #![allow(clippy::missing_safety_doc)]
@@ -307,9 +307,12 @@ pub mod c {
     #[cfg(kernel)]
     unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable for __BindgenUnionField<T> {}
 
-    // The types defined in Rust that C shares. printbuf the shim has too -
-    // ours.
-    pub use crate::cstructs::c::*;
+    // C's limits, which the constants use.
+    pub const U8_MAX:  u8  = u8::MAX;
+    pub const U16_MAX: u16 = u16::MAX;
+    pub const U32_MAX: u32 = u32::MAX;
+    pub const U64_MAX: u64 = u64::MAX;
+    pub const INT_MAX: i32 = i32::MAX;
 
     // The kernel's rcu_head, which is #define rcu_head callback_head: a
     // macro, which the kernel crate's bindings don't have.
@@ -324,108 +327,16 @@ pub mod c {
     #[cfg(kernel)]
     #[cfg(not(linux_ge = "6.17"))]
     pub use self::system_unbound_wq as system_dfl_wq;
-
-    impl bch_sb_field_crypt {
-        pub fn key(&self) -> &bch_encrypted_key {
-            &self.key
-        }
-    }
-
-    // ── Encryption key material ─────────────────────────────────────
-    //
-    // bch_key/bch_encrypted_key hold the filesystem encryption key. They're
-    // kept out of DERIVE_READD (see codegen.rs) so they derive neither Copy (a
-    // Drop type can't be Copy) nor Debug (don't leak key bytes). The key is
-    // wiped on drop — via the `zeroize` crate in userspace, and a hand-rolled
-    // volatile memset in-kernel, which can't pull in the `zeroize` crate.
-
-    impl Clone for bch_key {
-        fn clone(&self) -> Self {
-            Self { key: self.key }
-        }
-    }
-
-    impl Clone for bch_encrypted_key {
-        fn clone(&self) -> Self {
-            Self { magic: self.magic, key: self.key.clone() }
-        }
-    }
-
-    impl bch_encrypted_key {
-        pub const MAGIC: &[u8; 8] = b"bch**key";
-
-        /// Plaintext (unencrypted) key for the crypt field (remove-passphrase).
-        pub fn new_unencrypted(key: bch_key) -> Self {
-            Self { magic: u64::from_le_bytes(*Self::MAGIC).into(), key }
-        }
-
-        pub fn is_encrypted(&self) -> bool {
-            self.magic.get() != u64::from_le_bytes(*Self::MAGIC)
-        }
-
-        pub fn into_key(self) -> bch_key {
-            self.key.clone()
-        }
-    }
-
-    #[cfg(feature = "std")]
-    use zeroize::{Zeroize, ZeroizeOnDrop};
-
-    #[cfg(feature = "std")]
-    impl Zeroize for bch_key {
-        fn zeroize(&mut self) { self.key.zeroize(); }
-    }
-    #[cfg(feature = "std")]
-    impl Drop for bch_key {
-        fn drop(&mut self) { self.zeroize(); }
-    }
-    #[cfg(feature = "std")]
-    impl ZeroizeOnDrop for bch_key {}
-
-    #[cfg(feature = "std")]
-    impl Zeroize for bch_encrypted_key {
-        fn zeroize(&mut self) {
-            self.magic.zeroize();
-            self.key.zeroize();
-        }
-    }
-    #[cfg(feature = "std")]
-    impl Drop for bch_encrypted_key {
-        fn drop(&mut self) { self.zeroize(); }
-    }
-    #[cfg(feature = "std")]
-    impl ZeroizeOnDrop for bch_encrypted_key {}
-
-    // memzero_explicit(): volatile writes + a compiler fence, so the store
-    // can't be optimized away as dead - the wipe is the point (the technique
-    // the `zeroize` crate uses internally). The keys' Drop in-kernel, which
-    // has no `zeroize`; and in both builds, key material that isn't a bch_key.
-    pub(crate) fn wipe<T: ?Sized>(v: &mut T) {
-        let len = core::mem::size_of_val(v);
-        let p = (v as *mut T).cast::<u8>();
-        for i in 0..len {
-            unsafe { core::ptr::write_volatile(p.add(i), 0) };
-        }
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    }
-    #[cfg(not(feature = "std"))]
-    impl Drop for bch_key {
-        fn drop(&mut self) { wipe(&mut self.key); }
-    }
-    #[cfg(not(feature = "std"))]
-    impl Drop for bch_encrypted_key {
-        fn drop(&mut self) { wipe(self); }
-    }
 }
 
-pub use crate::c::OptId;
+pub use crate::opts::OptId;
 
 macro_rules! btree_ids_known {
     ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
         pub const BTREE_IDS_KNOWN: &[Btree] = &[$(Btree::$name,)*];
     };
 }
-c::Btree_arms!(btree_ids_known);
+Btree_arms!(btree_ids_known);
 
 /// The btrees with any of @flags, a bit each, by id.
 pub const fn btrees_with(flags: BtreeFlags) -> u64 {
@@ -499,7 +410,7 @@ pub fn path_to_cstr<P: AsRef<std::path::Path>>(p: P) -> CString {
     CString::new(p.as_ref().as_os_str().as_bytes()).unwrap()
 }
 
-impl c::SbFieldType {
+impl crate::format::SbFieldType {
     pub fn bit(self) -> u32 {
         1u32 << self.0
     }
@@ -536,11 +447,11 @@ impl DataType {
 
     /// Whether copygc moves data of this type.
     pub fn is_movable(self) -> bool {
-        c::DATA_TYPES_MOVABLE.contains(self.into())
+        crate::alloc::format::DATA_TYPES_MOVABLE.contains(self.into())
     }
 }
 
-impl c::DiskAccountingType {
+impl crate::alloc::accounting_format::DiskAccountingType {
     pub fn bit(self) -> u32 {
         1u32 << self.0
     }
@@ -564,8 +475,8 @@ impl From<MetadataVersion> for u32 {
     }
 }
 
-impl From<c::OptId> for u32 {
-    fn from(id: c::OptId) -> u32 {
+impl From<OptId> for u32 {
+    fn from(id: OptId) -> u32 {
         id.0
     }
 }
@@ -576,8 +487,8 @@ impl From<BkeyType> for u32 {
     }
 }
 
-impl From<c::DiskAccountingType> for u32 {
-    fn from(t: c::DiskAccountingType) -> u32 {
+impl From<crate::alloc::accounting_format::DiskAccountingType> for u32 {
+    fn from(t: crate::alloc::accounting_format::DiskAccountingType) -> u32 {
         t.0
     }
 }

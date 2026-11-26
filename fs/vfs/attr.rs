@@ -28,6 +28,9 @@ use crate::os::inode_ops::InodeAttrs;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode_format::InodeOptId;
+use crate::posix::quota_format::QuotaType;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::posix::inode;
 use crate::posix::inode_opts::InodeOpt;
@@ -41,7 +44,7 @@ use super::inode::InodeInfo;
 use crate::os::iattr::{ATTR_CTIME, ATTR_SIZE};
 use crate::os::super_block::IsInode;
 
-use c::InodeFlags as F;
+use crate::posix::inode_format::InodeFlags as F;
 
 /// Each flag's bit in FS_IOC_GETFLAGS's flags, and in FS_IOC_FSGETXATTR's.
 const FLAGS: [(F, u32, u32); 5] = [
@@ -76,7 +79,7 @@ struct FileattrSet {
 }
 
 impl FileattrSet {
-    fn apply(&self, t: &TransAttempt<'_, '_>, inode: &InodeInfo, bi: &mut c::bch_inode_unpacked)
+    fn apply(&self, t: &TransAttempt<'_, '_>, inode: &InodeInfo, bi: &mut bch_inode_unpacked)
         -> Result<(), BchError>
     {
         let fs = t.fs();
@@ -92,7 +95,7 @@ impl FileattrSet {
 
         if let Some(project) = self.project {
             bi.bi_project = project;
-            InodeOpt::of(c::InodeOptId::project).set_own(bi, true);
+            InodeOpt::of(InodeOptId::project).set_own(bi, true);
         }
 
         bi.set_flags(bi.flags().difference(self.mask).union(self.flags));
@@ -155,13 +158,13 @@ impl InodeAttrs for InodeInfo {
         let xflags = FLAGS.iter().filter(|f| bi.flag(f.0)).fold(0, |x, f| x | f.2);
 
         crate::os::fileattr::fill_xflags(fa, xflags);
-        if InodeOpt::of(c::InodeOptId::project).is_own(&bi) {
+        if InodeOpt::of(InodeOptId::project).is_own(&bi) {
             fa.fsx_xflags |= c::FS_XFLAG_PROJINHERIT;
         }
         if bi.casefold(self.fs()) {
             fa.flags |= c::FS_CASEFOLD_FL;
         }
-        fa.fsx_projid = self.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ];
+        fa.fsx_projid = self.ei_quota.lock().ei_qid.q[QuotaType::QTYP_PRJ];
     }
 
     /// @dentry is this inode's.
@@ -245,7 +248,7 @@ impl InodeInfo {
     /// What @attr changes, into @bi: @uid as stored, @kgid as the
     /// filesystem has it.
     fn setattr_copy(&self, idmap: MntIdmap<'_>, attr: &Iattr, uid: Option<u32>,
-                    kgid: Option<c::kgid_t>, bi: &mut c::bch_inode_unpacked) {
+                    kgid: Option<c::kgid_t>, bi: &mut bch_inode_unpacked) {
         let fs = self.fs();
         let v = self.vfs();
 
@@ -289,10 +292,10 @@ impl InodeInfo {
         let old_qid = self.ei_quota.lock().ei_qid;
         let mut qid = old_qid;
         if let Some(uid) = uid {
-            qid.q[c::QuotaType::QTYP_USR] = uid;
+            qid.q[QuotaType::QTYP_USR] = uid;
         }
         if let Some(gid) = kgid {
-            qid.q[c::QuotaType::QTYP_GRP] = v.gid_of(gid);
+            qid.q[QuotaType::QTYP_GRP] = v.gid_of(gid);
         }
 
         lock.quota_transfer(qid, !0, QuotaAcctMode::PREALLOC)?;

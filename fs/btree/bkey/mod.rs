@@ -4,7 +4,7 @@
 //! are positions, comparisons, and to and from text; here is the header, the
 //! struct bkey every form has.
 //!
-//! **Value types and key types.** A key's type is its value's: c::Extent,
+//! **Value types and key types.** A key's type is its value's: Extent,
 //! c::Dirent, the c::bch_<name> structs of format.rs's bkey_val. A key type
 //! is a BkeyTag, the tag and minimum size, and a BkeyFamily, the set of just
 //! it, whose Validated is the value as a key read in place
@@ -100,8 +100,7 @@ pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;
 
-use crate::c;
-use crate::format::{Bpos, BkeyType};
+use crate::format::{Bpos, BkeyType, bkey, bkey_format_bits, KEY_FORMAT_CURRENT};
 
 /* DOC_LATEX(bkey-structures)
  *
@@ -180,21 +179,21 @@ use crate::format::{Bpos, BkeyType};
  * See \S\ref{bkey-type-list} for the complete list of key types.
  */
 
-pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
+pub const BKEY_U64S: usize = core::mem::size_of::<bkey>() / core::mem::size_of::<u64>();
 
 /// The empty key - new()'s, not zeroes, which say it's shorter than itself.
-impl Default for c::bkey {
+impl Default for bkey {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl c::bkey {
+impl bkey {
     /// Of type deleted, at POS_MIN, with no value: as bkey_init() sets.
     pub fn new() -> Self {
         Self {
             u64s:        BKEY_U64S as u8,
-            format_bits: c::bkey_format_bits::new().with_format(c::KEY_FORMAT_CURRENT as u8),
+            format_bits: bkey_format_bits::new().with_format(KEY_FORMAT_CURRENT as u8),
             ..::pin_init::zeroed()
         }
     }

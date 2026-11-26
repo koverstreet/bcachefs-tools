@@ -4,10 +4,9 @@ use super::OwnedNode;
 use super::state::state_hashed;
 use crate::btree::node::bset::BSET_CACHELINE;
 use crate::btree::node::{BtreeNode, NodeContents};
-use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::locking::six::six_lock_exit;
+use crate::locking::six::{six_lock_exit, SixLockInitFlags};
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, Global, KVmalloc, Vmalloc, WithFlags};
 use crate::os::kernel::is_vmalloc_addr;
@@ -264,7 +263,7 @@ pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags
         fs.btree.cache.nodes.get_slot().ok()?
     };
 
-    let flags = if pcpu_read_locks { c::SixLockInitFlags::pcpu } else { c::SixLockInitFlags::empty() };
+    let flags = if pcpu_read_locks { SixLockInitFlags::pcpu } else { SixLockInitFlags::empty() };
     let b = alloc_at::<_, Global, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()?;
     unsafe {
         (*b.as_ptr()).nodes_idx = slot.set(b.cast());

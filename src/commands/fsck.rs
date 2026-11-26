@@ -6,8 +6,9 @@ use std::process;
 
 use anyhow::{anyhow, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::c;
-use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_fsck_offline, bch_ioctl_fsck_online};
+use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::Head;
@@ -78,7 +79,7 @@ fn splice_fd_to_stdinout(fd: BorrowedFd<'_>) -> i32 {
 
 fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
     let c_opts = CString::new(opt_str)?;
-    let fsck = c::bch_ioctl_fsck_online {
+    let fsck = bch_ioctl_fsck_online {
         flags: 0,
         opts: c_opts.as_ptr() as u64,
     };
@@ -102,7 +103,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
     }
 
     let dev_paths: Vec<std::path::PathBuf> = devs.iter().map(|d| d.as_str().into()).collect();
-    let mut opts = c::bch_opts::default();
+    let mut opts = bch_opts::default();
     opts.set_nostart(true);
     opts.set_noexcl(true);
     opts.set_nochanges(true);
@@ -289,7 +290,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             }
         }
 
-        let mut buf = IoctlBuf::<Head<c::bch_ioctl_fsck_offline>>::new(dev_ptrs.len());
+        let mut buf = IoctlBuf::<Head<bch_ioctl_fsck_offline>>::new(dev_ptrs.len());
         let c_opts = CString::new(opts_str.as_str())?;
         let hdr = buf.hdr_mut();
         hdr.opts = c_opts.as_ptr() as u64;
@@ -325,7 +326,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
     run_userspace_fsck(devices, fs_opts)
 }
 
-fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
+fn run_userspace_fsck(devices: &[String], fs_opts: bch_opts) -> Result<()> {
     println!("Running userspace offline fsck");
 
     let dev_paths: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
@@ -341,7 +342,7 @@ fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
     // shutdown_with_errors reports the errors fsck_errcode() already counted:
     // not a shutdown that failed
     let ret2 = fs.exit();
-    if ret2 != 0 && !BchError::from_raw(ret2).matches(c::Errcode::shutdown_with_errors) {
+    if ret2 != 0 && !BchError::from_raw(ret2).matches(Errcode::shutdown_with_errors) {
         eprintln!("error shutting down filesystem: {}", BchError::from_raw(ret2));
         process::exit(ret | 8);
     }

@@ -82,7 +82,8 @@ pub(crate) fn xmacro_expand(input: TokenStream) -> Result<TokenStream, String> {
         let e = args(from, to);
         quote!(#(#e,)*)
     };
-    let path = quote!(crate::cstructs::c);
+    let path = x.module.as_ref().ok_or_else(|| format!(
+        "xmacro! {name}: no `in MODULE;` - it splices in other lists, a chain of macros that name each other by it"))?;
     let carry = quote!(($($cb)::+) ($($pre)?));
     let step = |n: usize| format_ident!("__{name}_{n}");
     for (n, &i) in subs.iter().enumerate() {

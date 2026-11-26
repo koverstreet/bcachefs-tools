@@ -2,14 +2,14 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::format::bch_val;
 use crate::types::Le64;
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Lru {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub idx: Le64,
 }
 
@@ -46,4 +46,4 @@ pub const BCH_LRU_STRIPE_REUSE: u32 = (1 << 16) - 3;
 pub const BCH_LRU_BUCKET_FRAGMENTATION_OLD: u32 = (1 << 16) - 1;
 
 pub const LRU_TIME_BITS: u32 = 48;
-pub const LRU_TIME_MAX: u64 = (1 << c::LRU_TIME_BITS) - 1;
+pub const LRU_TIME_MAX: u64 = (1 << LRU_TIME_BITS) - 1;

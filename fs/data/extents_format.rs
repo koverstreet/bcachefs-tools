@@ -2,11 +2,12 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::data::reconcile::format::{bch_extent_reconcile, bch_extent_reconcile_bp};
 use crate::types::{Le8, Le16, Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, bch_csum, BCH_REPLICAS_MAX, bch_val, BKEY_U64s, CompressionType,
+    CsumType};
 
 /* DOC_LATEX(extent-checksums)
  *
@@ -154,8 +155,8 @@ pub struct bch_extent_crc32 {
     uncompressed_size_raw: u7,
     offset:                u7,
     unused_raw:            u1,
-    #[bits(4)] csum_type:  c::CsumType,
-    #[bits(4)] compression_type: c::CompressionType,
+    #[bits(4)] csum_type:  CsumType,
+    #[bits(4)] compression_type: CompressionType,
     csum:                  u32,
 }
 
@@ -175,8 +176,8 @@ nest! {
             uncompressed_size_raw: u9,
             offset:                u9,
             nonce:                 u10,
-            #[bits(4)] csum_type:  c::CsumType,
-            #[bits(4)] compression_type: c::CompressionType,
+            #[bits(4)] csum_type:  CsumType,
+            #[bits(4)] compression_type: CompressionType,
             csum_hi:               u16,
         },
         pub csum_lo: u64,
@@ -199,10 +200,10 @@ nest! {
             uncompressed_size_raw: u13,
             offset:                u13,
             nonce:                 u13,
-            #[bits(4)] csum_type:  c::CsumType,
-            #[bits(4)] compression_type: c::CompressionType,
+            #[bits(4)] csum_type:  CsumType,
+            #[bits(4)] compression_type: CompressionType,
         },
-        pub csum: c::bch_csum,
+        pub csum: bch_csum,
     }
 }
 
@@ -261,17 +262,17 @@ pub struct bch_extent_entry {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct BtreePtr {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub _data: [u64; 0],
-    pub start: [c::bch_extent_ptr; 0],
+    pub start: [bch_extent_ptr; 0],
 }
 
 #[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct BtreePtrV2 {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     /* the node in memory: written racing readers, in a node's keys */
     pub mem_ptr: crate::util::projections::Volatile<u64>,
@@ -281,7 +282,7 @@ pub struct BtreePtrV2 {
     pub flags: BtreePtrV2Flags,
     pub min_key: Bpos,
     pub _data: [u64; 0],
-    pub start: [c::bch_extent_ptr; 0],
+    pub start: [bch_extent_ptr; 0],
 }
 
 #[bitfield(Le16)]
@@ -294,17 +295,17 @@ pub struct BtreePtrV2Flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Extent {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub _data: [u64; 0],
-    pub start: [c::bch_extent_entry; 0],
+    pub start: [bch_extent_entry; 0],
 }
 
 /* Maximum size (in u64s) a single pointer could be: */
 #[allow(non_upper_case_globals)]
 pub const BKEY_EXTENT_PTR_U64s_MAX: usize =
-    (size_of::<c::bch_extent_crc128>() +
-     size_of::<c::bch_extent_ptr>()) / size_of::<u64>();
+    (size_of::<bch_extent_crc128>() +
+     size_of::<bch_extent_ptr>()) / size_of::<u64>();
 
 /*
  * Maximum possible size of an entire extent value:
@@ -317,11 +318,11 @@ pub const BKEY_EXTENT_PTR_U64s_MAX: usize =
  */
 #[allow(non_upper_case_globals)]
 pub const BKEY_EXTENT_VAL_U64s_MAX: usize =
-    5 + c::BKEY_EXTENT_PTR_U64s_MAX * (c::BCH_REPLICAS_MAX as usize * 2 + 1);
+    5 + BKEY_EXTENT_PTR_U64s_MAX * (BCH_REPLICAS_MAX as usize * 2 + 1);
 
 /* Maximum possible size of an entire extent, key + value: */
 #[allow(non_upper_case_globals)]
-pub const BKEY_EXTENT_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_EXTENT_VAL_U64s_MAX;
+pub const BKEY_EXTENT_U64s_MAX: usize = BKEY_U64s + BKEY_EXTENT_VAL_U64s_MAX;
 
 /*
  * Btree pointers don't carry around checksums:
@@ -334,17 +335,17 @@ pub const BKEY_EXTENT_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_EXTENT_VAL_U64s_M
  */
 #[allow(non_upper_case_globals)]
 pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
-    (size_of::<c::BtreePtrV2>() +
-     size_of::<c::bch_extent_ptr>() * c::BCH_REPLICAS_MAX as usize * 2 +
-     size_of::<c::bch_extent_reconcile>() +
-     size_of::<c::bch_extent_reconcile_bp>()) / size_of::<u64>();
+    (size_of::<BtreePtrV2>() +
+     size_of::<bch_extent_ptr>() * BCH_REPLICAS_MAX as usize * 2 +
+     size_of::<bch_extent_reconcile>() +
+     size_of::<bch_extent_reconcile_bp>()) / size_of::<u64>();
 #[allow(non_upper_case_globals)]
-pub const BKEY_BTREE_PTR_U64s_MAX: usize = c::BKEY_U64s + c::BKEY_BTREE_PTR_VAL_U64s_MAX;
+pub const BKEY_BTREE_PTR_U64s_MAX: usize = BKEY_U64s + BKEY_BTREE_PTR_VAL_U64s_MAX;
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Reservation {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub generation: Le32,
     pub nr_replicas: u8,
@@ -355,7 +356,7 @@ pub struct Reservation {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineData {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub data: [u8; 0],
 }
 
@@ -373,11 +374,11 @@ pub struct InlineData {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineDataCsum {
-    pub csum_type: Le8<c::CsumType>,
+    pub csum_type: Le8<CsumType>,
     pub flags: u8,
     pub pad: [u8; 2],
     pub offset: Le32,
-    pub csum: c::bch_csum,
+    pub csum: bch_csum,
 }
 
 pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
@@ -386,7 +387,7 @@ pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct InlineDataV2 {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub csum: InlineDataCsum,
     pub data: [u8; 0],
 }

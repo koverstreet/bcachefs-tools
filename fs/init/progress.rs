@@ -19,7 +19,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::btree::iter::{BtreeIter, BtreeNodeRef, TransAttempt};
-use crate::c;
+use crate::bcachefs_ioctl::ProgressUnit;
+use crate::btree::bbpos::bbpos;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::passes;
@@ -78,8 +79,8 @@ const PRINT_INTERVAL: u64 = 10 * 1_000_000_000;
 #[derive(Clone, Copy, ::pin_init::Zeroable)]
 pub(crate) struct ProgressState {
     msg:        Option<&'static CStr>,
-    units:      c::ProgressUnit,
-    pos:        c::bbpos,
+    units:      ProgressUnit,
+    pos:        bbpos,
     /// local_clock() at which it's next due to print
     next_print: u64,
     seen:       u64,
@@ -90,7 +91,7 @@ pub(crate) struct ProgressState {
 }
 
 impl ProgressState {
-    fn new(msg: Option<&'static CStr>, units: c::ProgressUnit, total: u64) -> Self {
+    fn new(msg: Option<&'static CStr>, units: ProgressUnit, total: u64) -> Self {
         Self {
             msg: msg.map(strip_bch2),
             units,
@@ -187,7 +188,7 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
     total
 }
 
-impl Default for c::progress_indicator {
+impl Default for progress_indicator {
     fn default() -> Self {
         // zeroed, an indicator is valid, and nothing in it - a SeqLock
         // of plain data - cares where it lives
@@ -195,7 +196,7 @@ impl Default for c::progress_indicator {
     }
 }
 
-impl c::progress_indicator {
+impl progress_indicator {
     /// Whether it has a total - an estimate of its work's size - to show.
     pub fn has_total(&self) -> bool {
         self.status().2 != 0
@@ -222,13 +223,13 @@ impl c::progress_indicator {
     /// init_mask(), quietly with no @msg.
     pub(crate) fn init_masks(&self, fs: &Fs, msg: Option<&'static CStr>, leaf_mask: u64, inner_mask: u64) {
         let total = total_nodes(fs, leaf_mask, inner_mask);
-        let new = ProgressState::new(msg, c::ProgressUnit::nodes, total);
+        let new = ProgressState::new(msg, ProgressUnit::nodes, total);
         self.state.write(|s| *s = new);
     }
 
     /// Start reporting work that isn't a btree walk - no node to count, no
     /// position - of @total @units, counted by update_count().
-    pub fn init_count(&self, msg: Option<&'static CStr>, units: c::ProgressUnit, total: u64) {
+    pub fn init_count(&self, msg: Option<&'static CStr>, units: ProgressUnit, total: u64) {
         let new = ProgressState::new(msg, units, total);
         self.state.write(|s| *s = new);
     }
@@ -253,7 +254,7 @@ impl c::progress_indicator {
         let Some((b, end)) = iter.node(t).map(|l| (BtreeNodeRef::from(l.node()), l.key().k.p)) else {
             return Ok(());
         };
-        let pos = c::bbpos { btree: iter.btree(), pos: end };
+        let pos = bbpos { btree: iter.btree(), pos: end };
 
         let print = self.state.write(|s| {
             s.seen += (b.addr() != s.last_node && pos > s.pos) as u64;
@@ -290,14 +291,14 @@ impl c::progress_indicator {
 
     /// What BCH_IOCTL_RECOVERY_STATUS reports: units, seen, total - from the
     /// one copy.
-    pub fn status(&self) -> (c::ProgressUnit, u64, u64) {
+    pub fn status(&self) -> (ProgressUnit, u64, u64) {
         let s = self.state.read();
         (s.units, s.seen, s.total)
     }
 }
 
 /// How far the work has got: as bch2_progress_to_text().
-impl ToText for c::progress_indicator {
+impl ToText for progress_indicator {
     fn to_text(&self, out: &mut Printbuf) {
         self.state.read().to_text(out)
     }
@@ -307,12 +308,12 @@ impl ToText for c::progress_indicator {
 /// c->recovery.progress - one for the whole filesystem, as passes run one at a
 /// time - or the caller's own.
 pub struct Progress<'f> {
-    p: &'f c::progress_indicator,
+    p: &'f progress_indicator,
 }
 
 impl<'f> Progress<'f> {
     /// @p, init()ed: its btrees as masks, a bit per btree id.
-    pub fn new(p: &'f c::progress_indicator, fs: &Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64)
+    pub fn new(p: &'f progress_indicator, fs: &Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64)
         -> Self
     {
         p.init_masks(fs, Some(msg), leaf_mask, inner_mask);

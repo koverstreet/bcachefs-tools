@@ -33,12 +33,14 @@
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
+use crate::alloc::write_point::write_point_specifier;
+use crate::opts::bch_inode_opts;
 use crate::data::moving::Moving;
 use crate::data::read::{Rbio, ReadDone};
 use crate::data::scrub_journal::BadRef;
-use crate::data::update::Held;
-use crate::debug::async_objs::{AsyncObj, AsyncObjSlot};
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::data::update::{Held, data_update, data_update_opts};
+use crate::debug::async_objs::{AsyncObj, AsyncObjSlot, AsyncObjKind};
+use crate::errcode::{ret_to_result_void, BchError, Errcode};
 use crate::data::promote::InFlight;
 use crate::fs::Fs;
 use crate::os::workqueue::Queue;
@@ -59,7 +61,7 @@ use crate::format::Btree;
 
 // SAFETY: its pointers - to the filesystem, its devices, its read - are good
 // on any thread, and an update runs on whichever thread its IO completes on
-unsafe impl Send for c::data_update {}
+unsafe impl Send for data_update {}
 
 #[pin_data(PinnedDrop)]
 pub(crate) struct Update {
@@ -73,18 +75,18 @@ pub(crate) struct Update {
     /// its place under the limit
     promote:   Option<InFlight>,
     /// Zeroed until init(), which expects that; read by the listing's walk
-    u:         UnsafeCell<MaybeUninit<c::data_update>>,
+    u:         UnsafeCell<MaybeUninit<data_update>>,
     /// The listing's walk may be reading its key
     rcu:       RcuDropMember,
 }
 
 impl Update {
     /// Its data_update, init()ed: every Update but alloc()'s and init()'s is.
-    fn data(&self) -> &c::data_update {
+    fn data(&self) -> &data_update {
         unsafe { (*self.u.get()).assume_init_ref() }
     }
 
-    fn data_mut(self: Pin<&mut Self>) -> &mut c::data_update {
+    fn data_mut(self: Pin<&mut Self>) -> &mut data_update {
         unsafe { self.project().u.get_mut().assume_init_mut() }
     }
 }
@@ -101,7 +103,7 @@ pub struct Borrowed<'q> {
 
 pub struct WriteHeld(fn(&Fs) -> &Queue);
 
-fn alloc<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, enomem: c::Errcode) -> Result<Slot<'q, F>, BchError> {
+fn alloc<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, enomem: Errcode) -> Result<Slot<'q, F>, BchError> {
     let fs = t.fs();
     t.allocate_dropping_locks(|| {
         let init = pin_init!(Update {
@@ -125,7 +127,7 @@ fn alloc<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, enomem: c::Errcode) -> 
 /// @at, and what the body borrows, outlive the task; the body keeps its Body
 /// only in the future it makes.
 pub unsafe fn spawn<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, at: Spawn<'q, 'static>, tasks: &'q TaskList,
-                                          enomem: c::Errcode) -> Result<Spawned<'q, F>, BchError> {
+                                          enomem: Errcode) -> Result<Spawned<'q, F>, BchError> {
     Ok(Spawned { slot: alloc(t, enomem)?, on: Borrowed { at, tasks } })
 }
 
@@ -133,7 +135,7 @@ pub unsafe fn spawn<'q, F: Future + Send>(t: &TransAttempt<'_, '_>, at: Spawn<'q
 /// @in_flight's write ref keeps - which the update holds till it's dropped,
 /// after its task.
 pub(crate) fn spawn_held<F: Future + Send>(t: &TransAttempt<'_, '_>, in_flight: InFlight, on: fn(&Fs) -> &Queue,
-                                           enomem: c::Errcode) -> Result<Spawned<'static, F, WriteHeld>, BchError> {
+                                           enomem: Errcode) -> Result<Spawned<'static, F, WriteHeld>, BchError> {
     let mut slot = alloc(t, enomem)?;
     *slot.home().project().promote = Some(in_flight);
     Ok(Spawned { slot, on: WriteHeld(on) })
@@ -151,7 +153,7 @@ impl<'q, F: Future + Send, K> Spawned<'q, F, K> {
     /// read: lists it. On error the box is dropped.
     #[allow(clippy::too_many_arguments)]
     pub fn init(mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
-                wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
+                wp: write_point_specifier, io_opts: &bch_inode_opts, data_opts: data_update_opts,
                 btree: Btree, k: BkeySC<'_>) -> Result<Ready<'q, F, K>, BchError> {
         let mut up = self.slot.home();
         // SAFETY: zeroed, and pinned in the box
@@ -210,15 +212,15 @@ impl<F: Future + Send> Ready<'static, F, WriteHeld> {
 }
 
 impl<F: Future + Send, K> Deref for Ready<'_, F, K> {
-    type Target = c::data_update;
+    type Target = data_update;
 
-    fn deref(&self) -> &c::data_update {
+    fn deref(&self) -> &data_update {
         self.slot.data()
     }
 }
 
 impl<F: Future + Send, K> DerefMut for Ready<'_, F, K> {
-    fn deref_mut(&mut self) -> &mut c::data_update {
+    fn deref_mut(&mut self) -> &mut data_update {
         self.slot.home().data_mut()
     }
 }
@@ -263,7 +265,7 @@ impl PinnedDrop for Update {
     fn drop(self: Pin<&mut Self>) {
         // the key buffer, dropped a grace period on, past the list's walk.
         // Zeroed, for an update never init()ed, it's valid too
-        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<c::data_update>()).index.k) };
+        unsafe { core::ptr::drop_in_place(&raw mut (*self.u.get().cast::<data_update>()).index.k) };
     }
 }
 
@@ -273,7 +275,7 @@ impl PinnedDrop for Update {
 // completing just after: the XXX at the top of async_objs.rs. A mover's
 // doesn't read its context, which isn't freed a grace period after it's done
 unsafe impl AsyncObj for Update {
-    const LIST: c::AsyncObjKind = c::AsyncObjKind::data_update;
+    const LIST: AsyncObjKind = AsyncObjKind::data_update;
 
     #[cold]
     fn to_text(&self, out: &mut Printbuf, _: &Fs) {
@@ -326,15 +328,15 @@ impl Body<'_> {
 }
 
 impl Deref for Body<'_> {
-    type Target = c::data_update;
+    type Target = data_update;
 
-    fn deref(&self) -> &c::data_update {
+    fn deref(&self) -> &data_update {
         self.up.data()
     }
 }
 
 impl DerefMut for Body<'_> {
-    fn deref_mut(&mut self) -> &mut c::data_update {
+    fn deref_mut(&mut self) -> &mut data_update {
         self.up.as_mut().data_mut()
     }
 }

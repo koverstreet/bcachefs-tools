@@ -12,9 +12,9 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use zerocopy::IntoBytes;
 
-use crate::btree::bkey::{AnyKey, BkeySCToText, ValidateFlags};
+use crate::btree::bkey::{AnyKey, BkeySCToText, ValidateFlags, bkey_validate_context,
+    BkeyValidateFrom};
 use crate::btree::interior::btree_roots_to_journal_entries;
-use crate::c;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::journal::entries::{entry_u64s, EntryWriter, NoRoom};
@@ -28,10 +28,12 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, U
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 use crate::sb::io::SbResize;
-use crate::format::{Btree, MetadataVersion, SbFeatures};
+use crate::format::{Btree, MetadataVersion, SbFeatures, bch_sb, bch_sb_field_clean, FsUsageType,
+    jset, jset_entry, jset_entry_clock, jset_entry_usage, JsetEntryRef, JsetEntryType, SbCompats,
+    SbFieldType};
 use crate::fs::btree_id_is_alloc;
 
-type Section = c::bch_sb_field_clean<Validated>;
+type Section = bch_sb_field_clean<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
@@ -39,13 +41,13 @@ const SECTION_HEAD: usize = size_of::<Head<Section>>();
 /// its end, are sb_field_validate()'s, and the entries themselves are
 /// validated late, with the filesystem - bch2_sb_clean_validate_late().
 impl SbFieldOps for Section {
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                f: &c::bch_sb_field_clean<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                f: &bch_sb_field_clean<Unvalidated>) {
         write!(out, "flags:          {:x}\n", f.flags.get());
         write!(out, "journal_seq:    {}\n", f.journal_seq.get());
 
         for e in f.entries().map_while(Result::ok) {
-            if e.type_() == c::JsetEntryType::btree_keys && e.u64s() == 0 {
+            if e.type_() == JsetEntryType::btree_keys && e.u64s() == 0 {
                 continue;
             }
             journal_entry_to_text(out, fs, e);
@@ -54,7 +56,7 @@ impl SbFieldOps for Section {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<c::jset_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
+        entries_end::<jset_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
     }
 }
 
@@ -67,8 +69,8 @@ impl SbFieldOps for Section {
 fn validate_late(fs: &Fs, version: MetadataVersion, big_endian: bool, f: &mut Section, write: bool)
     -> Result<(), BchError>
 {
-    let mut from = c::bkey_validate_context::default();
-    from.set_from(c::BkeyValidateFrom::superblock);
+    let mut from = bkey_validate_context::default();
+    from.set_from(BkeyValidateFrom::superblock);
     from.set_flags(if write { ValidateFlags::write } else { ValidateFlags::empty() });
 
     for e in ValidatedEntriesMut::of(f) {
@@ -122,11 +124,11 @@ type Key<'a> = &'a AnyKey<Validated>;
 
 /// A btree root's entry in @entries, if there is one: its level, and its key
 /// - None for an entry with no key.
-fn btree_root<'a>(mut entries: impl Iterator<Item = &'a c::jset_entry>, id: u32)
+fn btree_root<'a>(mut entries: impl Iterator<Item = &'a jset_entry>, id: u32)
     -> Option<(u8, Option<Key<'a>>)>
 {
     let (e, r) = entries.find_map(|e| match e.typed() {
-        Ok(c::JsetEntryRef::btree_root(r)) if u32::from(e.btree_id) == id => Some((e, r)),
+        Ok(JsetEntryRef::btree_root(r)) if u32::from(e.btree_id) == id => Some((e, r)),
         _ => None,
     })?;
     Some((e.level, r.entries().next()))
@@ -150,7 +152,7 @@ impl Fs {
     /// entry, after a clean shutdown: its seq, and every btree root. False if
     /// its seq doesn't - it's of no use then - and an error if a root doesn't
     /// and that can't be fixed.
-    pub(crate) fn verify_superblock_clean(&self, clean: &Section, j: &c::jset) -> Result<bool, BchError> {
+    pub(crate) fn verify_superblock_clean(&self, clean: &Section, j: &jset) -> Result<bool, BchError> {
         if mustfix_fsck_err_on!(self, j.seq != clean.journal_seq,
                 SbErrorId::sb_clean_journal_seq_mismatch,
                 "superblock journal seq ({}) doesn't match journal ({}) after clean shutdown",
@@ -181,17 +183,17 @@ impl Fs {
 // ── Writing it, at a clean shutdown ──────────────────────────────────────────
 
 /// The u64s super_entries_add_common() writes.
-pub(crate) const COMMON_U64S: usize = entry_u64s::<c::jset_entry_usage>() + 2 * entry_u64s::<c::jset_entry_clock>();
+pub(crate) const COMMON_U64S: usize = entry_u64s::<jset_entry_usage>() + 2 * entry_u64s::<jset_entry_clock>();
 
 /// The entries every journal write carries, and the clean section: the key
 /// version, and both io clocks' times.
 pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
-    let mut u = c::jset_entry_usage::default();
+    let mut u = jset_entry_usage::default();
     u.v = Le64::new(fs.key_version.load(Relaxed) as u64);
-    w.push_entry(c::FsUsageType::key_version.0 as u8, 0, u)?;
+    w.push_entry(FsUsageType::key_version.0 as u8, 0, u)?;
 
     for (rw, clock) in fs.io_clock.iter().enumerate() {
-        let mut e = c::jset_entry_clock::default();
+        let mut e = jset_entry_clock::default();
         e.rw = rw as u8;
         e.time = Le64::new(clock.now.load(Relaxed) as u64);
         w.push_entry(0, 0, e)?;
@@ -203,7 +205,7 @@ pub(crate) fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Resu
 pub(crate) fn fs_mark_dirty(sb: &mut SbLockGuard<'_>) {
     let sb = sb.sb_mut();
     sb.set_clean(false);
-    sb.features.update(|f| f | c::SbFeatures::ALWAYS);
+    sb.features.update(|f| f | SbFeatures::ALWAYS);
 }
 
 /// Marked clean: the clean section written, so the next mount needn't read
@@ -218,7 +220,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     }
 
     let (version, big_endian) = (sb.sb().version.get(), sb.sb().big_endian());
-    sb.sb_mut().compat.update(|f| f | c::SbCompats::alloc_info | c::SbCompats::alloc_metadata);
+    sb.sb_mut().compat.update(|f| f | SbCompats::alloc_info | SbCompats::alloc_metadata);
 
     let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.lock.entry_u64s_reserved.get() as usize;
     let Some(f) = sb.field_resize::<Section>(u64s as u32) else {
@@ -261,9 +263,9 @@ pub fn strip_alloc(fs: &Fs, guard: &mut SbLockGuard<'_>) {
         let f = bytes_of_mut(sb.field_mut::<Section>().expect("a clean filesystem's clean section"));
         let (mut src, mut dst) = (SECTION_HEAD, SECTION_HEAD);
         while src < f.len() {
-            let e = c::jset_entry::<Unvalidated>::from_bytes(&f[src..]).expect("an entry that fits");
+            let e = jset_entry::<Unvalidated>::from_bytes(&f[src..]).expect("an entry that fits");
             let len = size_of_val(e);
-            if !(e.type_() == c::JsetEntryType::btree_root && btree_id_is_alloc(e.btree_id.into())) {
+            if !(e.type_() == JsetEntryType::btree_root && btree_id_is_alloc(e.btree_id.into())) {
                 f.copy_within(src..src + len, dst);
                 dst += len;
             }
@@ -273,12 +275,12 @@ pub fn strip_alloc(fs: &Fs, guard: &mut SbLockGuard<'_>) {
 
         fs.replicas_clear();
 
-        sb.field_delete(c::SbFieldType::replicas_v0);
-        sb.field_delete(c::SbFieldType::replicas);
+        sb.field_delete(SbFieldType::replicas_v0);
+        sb.field_delete(SbFieldType::replicas);
 
         for _ca in fs.online_members() {
-            sb.field_delete(c::SbFieldType::journal);
-            sb.field_delete(c::SbFieldType::journal_v2);
+            sb.field_delete(SbFieldType::journal);
+            sb.field_delete(SbFieldType::journal_v2);
         }
     }
 

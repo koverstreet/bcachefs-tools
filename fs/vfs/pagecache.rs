@@ -23,10 +23,10 @@ use nestify::nest;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::c;
-use crate::c::FolioSectorState as SectorState;
+use self::FolioSectorState as SectorState;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
-use crate::errcode::{errptr_to_result, BchError};
+use crate::errcode::{errptr_to_result, BchError, Errcode};
 use crate::format::{Btree, BkeyType};
 use crate::fs::Fs;
 use crate::new_lock;
@@ -109,7 +109,7 @@ nest! {
  * Used to size the writepage_buf_pool reserve.
  */
 pub const BCH_WRITEPAGE_BUF_BYTES: usize =
-    ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<c::bch_folio_sector>();
+    ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<bch_folio_sector>();
 
 /// A folio's sector state, under its bch_folio's lock: written by writeback
 /// completion with the folio unlocked, so the folio lock doesn't cover it.
@@ -126,7 +126,7 @@ pub struct FolioState {
      * inode's count - see Folio::reserve_writeback().
      */
     pub reserved_degraded: bool,
-    pub s: [c::bch_folio_sector; 0],
+    pub s: [bch_folio_sector; 0],
 }
 
 #[repr(C)]
@@ -245,7 +245,7 @@ impl ContigFolios {
     }
 }
 
-impl c::bch_folio_sector {
+impl bch_folio_sector {
     pub(crate) fn state(&self) -> SectorState {
         SectorState::from_bits(self.state.into())
     }
@@ -269,11 +269,11 @@ impl c::bch_folio_sector {
 }
 
 /// A folio's, with s[] - a sector of the folio each - after it.
-impl FolioPrivate for c::bch_folio {
+impl FolioPrivate for bch_folio {
     fn alloc(size: usize) -> Option<NonNull<Self>> {
         let layout = Layout::from_size_align(Self::alloc_size(size), align_of::<Self>()).ok()?;
         let s = kzalloc(layout).ok()?.cast::<Self>();
-        let state = c::FolioState { state_uptodate: false, replicas_reserved_at: 0, reserved_degraded: false, s: [] };
+        let state = FolioState { state_uptodate: false, replicas_reserved_at: 0, reserved_degraded: false, s: [] };
         let Ok(()) = unsafe { init_at(new_lock!(state), &raw mut (*s.as_ptr()).state) };
         Some(s)
     }
@@ -283,9 +283,9 @@ impl FolioPrivate for c::bch_folio {
     }
 }
 
-impl c::bch_folio {
+impl bch_folio {
     fn alloc_size(folio_size: usize) -> usize {
-        size_of::<Self>() + size_of::<c::bch_folio_sector>() * (folio_size >> 9)
+        size_of::<Self>() + size_of::<bch_folio_sector>() * (folio_size >> 9)
     }
 }
 
@@ -360,7 +360,7 @@ impl InodeInfo {
 
         for f in folios.iter().map(folio) {
             if f.create_private().is_none() {
-                return Err(c::Errcode::ENOMEM_read_folio_state_private.into());
+                return Err(Errcode::ENOMEM_read_folio_state_private.into());
             }
 
             if f.pos()     >= self.ei_reserved.ei_reserved_start.get() &&
@@ -550,7 +550,7 @@ impl FsMapping for InodeInfo {
 #[vtable]
 impl AddressSpaceOps for InodeInfo {
     type FsData = WriteBegun;
-    type Private = c::bch_folio;
+    type Private = bch_folio;
 
     fn read_folio(_file: *mut c::file, folio: FolioGuard<'_>) -> Result<(), BchError> {
         let mapping = folio.mapping().expect("a folio to read, in its mapping");

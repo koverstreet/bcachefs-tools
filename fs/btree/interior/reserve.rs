@@ -8,7 +8,7 @@
 use core::mem::size_of;
 use core::ptr;
 use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::AllocWait;
+use crate::alloc::foreground::{AllocWait, alloc_request, open_buckets};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
 use crate::btree::iter::CommitOpts;
@@ -16,12 +16,19 @@ use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
 use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::c;
+use crate::alloc::buckets::ReservationFlags;
+use crate::alloc::write_point::write_point_specifier;
+use crate::btree::cache::BtreeNodeCacheState;
+use crate::btree::update::TransCommitFlags;
+use crate::data::extents_format::BtreePtrV2;
+use crate::data::write::WriteFlags;
+use crate::init::dev::bch_devs_list;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::{POS_MIN, SPOS_MAX};
-use crate::format::{BkeyType, Bpos, DataType};
+use crate::format::{BkeyType, Bpos, DataType, bkey_format, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::prt;
 use crate::os::kernel::WRITE;
@@ -41,7 +48,7 @@ use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, Taken, TakenNode, BT
  *
  * Assumes all keys will successfully pack with the new format.
  */
-fn format_fits(b: LockedNode<'_, BtreeNode>, new_f: &c::bkey_format) -> bool {
+fn format_fits(b: LockedNode<'_, BtreeNode>, new_f: &bkey_format) -> bool {
     let contents = b.contents();
     b.fits_u64s(contents.nr.u64s_with_format(&contents.format, new_f))
 }
@@ -62,7 +69,7 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
 /// A new node's range: its key's, and its data's.
 pub(super) fn set_range(b: &BtreeNode, contents: &mut crate::btree::node::NodeContents, min: Bpos, max: Bpos) {
     b.update_key(contents, |k| {
-        if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
+        if let Some(mut p) = (&mut **k).as_s().arm::<BtreePtrV2>() {
             p.v_mut().min_key = min;
         }
         k.k.p = max;
@@ -107,18 +114,18 @@ impl<'t> InteriorUpdate<'t> {
     /// The disk space, and the nodes, leaf and interior, that @nr_nodes says
     /// the update might need, reserved.
     pub(super) fn reserve(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], target: u32, commit: CommitOpts,
-                          write: c::WriteFlags) -> Result<(), BchError> {
-        use c::Watermark as wm;
+                          write: WriteFlags) -> Result<(), BchError> {
+        use crate::alloc::foreground::Watermark as wm;
 
         let t = self.t();
         let trans = t.trans();
         let fs = self.fs();
         let watermark = commit.get_watermark();
         let flags = commit.to_c();
-        let disk_res_flags = if flags.contains(c::TransCommitFlags::no_enospc) {
-            c::ReservationFlags::nofail
+        let disk_res_flags = if flags.contains(TransCommitFlags::no_enospc) {
+            ReservationFlags::nofail
         } else {
-            c::ReservationFlags::empty()
+            ReservationFlags::empty()
         };
 
         self.disk_res.add((nr_nodes[0] + nr_nodes[1]) as u64 * u64::from(fs.btree_sectors()),
@@ -126,7 +133,7 @@ impl<'t> InteriorUpdate<'t> {
 
         let target = [target, fs.opts.metadata_target.get().into(), fs.opts.foreground_target.get().into()]
             .into_iter().find(|&t| t != 0).unwrap_or(0);
-        let devs_have = c::bch_devs_list::default();
+        let devs_have = bch_devs_list::default();
         let nr_replicas = self.disk_res.nr_replicas.get();
         let mut req = paths.lend(|| t.alloc_request(target, false, Some(&devs_have), nr_replicas, nr_replicas,
                                                     watermark, write, AllocWait::Never))?;
@@ -138,7 +145,7 @@ impl<'t> InteriorUpdate<'t> {
                  * flag
                  */
                 if e.matches(c::EAGAIN) &&
-                   flags.contains(c::TransCommitFlags::journal_reclaim) &&
+                   flags.contains(TransCommitFlags::journal_reclaim) &&
                    (watermark as u32) < wm::reclaim as u32 {
                     return fs.throw(Errcode::journal_reclaim_would_deadlock);
                 }
@@ -180,7 +187,7 @@ impl<'t> InteriorUpdate<'t> {
     /// allocator, which drops it: the nodes come from other cached nodes when
     /// memory can't be had, and the update with the lock gets all of them -
     /// two reserving at once, each with part, could deadlock.
-    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut c::alloc_request<'_, 't>,
+    fn reserve_get(&self, paths: &mut Paths<'_>, nr_nodes: [usize; 2], req: &mut alloc_request<'_, 't>,
                    low_mem: bool) -> Result<(), BchError>
     {
         let trans = self.trans();
@@ -206,7 +213,7 @@ impl<'t> InteriorUpdate<'t> {
         ret
     }
 
-    fn node_alloc_from_allocator(&self, paths: &mut Paths<'_>, interior: bool, req: &mut c::alloc_request<'_, 't>)
+    fn node_alloc_from_allocator(&self, paths: &mut Paths<'_>, interior: bool, req: &mut alloc_request<'_, 't>)
         -> Result<Reserved, BchError>
     {
         let t = self.t();
@@ -214,11 +221,11 @@ impl<'t> InteriorUpdate<'t> {
         let fs = self.fs();
 
         let mut b = trans.btree_node_mem_alloc(paths, interior)?;
-        let mut ob = c::open_buckets::default();
+        let mut ob = open_buckets::default();
 
         let ret: Result<(), BchError> = (|| {
             let mut wp = loop {
-                let wp = paths.lend(|| t.alloc_sectors(req, c::write_point_specifier::BTREE))?;
+                let wp = paths.lend(|| t.alloc_sectors(req, write_point_specifier::BTREE))?;
                 if wp.sectors_free() >= fs.btree_sectors() {
                     break wp;
                 }
@@ -235,7 +242,7 @@ impl<'t> InteriorUpdate<'t> {
 
                 /* check if it has sufficient durability */
 
-                let target = if req.flags.contains(c::WriteFlags::only_specified_devs) {
+                let target = if req.flags.contains(WriteFlags::only_specified_devs) {
                     req.target
                 } else {
                     0
@@ -253,7 +260,7 @@ impl<'t> InteriorUpdate<'t> {
             n.update_key(|k| {
                 let k = k.init();
                 k.k.set_key_type(BkeyType::btree_ptr_v2);
-                k.set_val_u64s(size_of::<c::BtreePtrV2>() / size_of::<u64>())
+                k.set_val_u64s(size_of::<BtreePtrV2>() / size_of::<u64>())
                     .expect("a btree node's key with room for a btree_ptr_v2");
                 wp.append_ptrs(k, fs.btree_sectors(), false);
             });
@@ -278,7 +285,7 @@ impl<'t> InteriorUpdate<'t> {
     pub(crate) fn alloc_node(&self, level: usize) -> NewNode<'_> {
         let fs = self.fs();
 
-        assert!(level < c::BTREE_MAX_DEPTH as usize, "allocating a node at level {level}");
+        assert!(level < BTREE_MAX_DEPTH as usize, "allocating a node at level {level}");
 
         let Reserved { mut node, ob } = self.owned.borrow_mut().reserve[usize::from(level != 0)].pop()
             .expect("an interior update's reserve, used up");
@@ -308,7 +315,7 @@ impl<'t> InteriorUpdate<'t> {
         data.set_level(level as u8);
         let seq = data.keys.seq;
 
-        n.update_key(contents, |k| if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
+        n.update_key(contents, |k| if let Some(mut p) = (&mut **k).as_s().arm::<BtreePtrV2>() {
             let v = p.v_mut();
             v.mem_ptr.set(0);
             v.seq             = seq;
@@ -431,7 +438,7 @@ impl<'t> InteriorUpdate<'t> {
         let b = paths[path].locked_btree_node(level).expect("a node to free, held by its path");
         node_free(fs, &b);
 
-        let _ = fs.btree_node_transition_state(&b, c::BtreeNodeCacheState::FREEABLE);
+        let _ = fs.btree_node_transition_state(&b, BtreeNodeCacheState::FREEABLE);
         let b = ptr::from_ref(b.node());
         self.trans().node_forget(paths, b);
     }

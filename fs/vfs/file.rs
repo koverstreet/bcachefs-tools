@@ -70,6 +70,8 @@ use core::ffi::{c_int, c_uint};
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
+use crate::fs::FsFlag;
+use crate::vfs::inode::{InodeInfoFlag, PagecacheAdd, PagecacheBlock};
 use crate::errcode::{Errcode, BchError};
 use crate::snapshots::subvolume;
 use crate::types::CStatic;
@@ -107,13 +109,13 @@ impl VmOps for InodeInfo {
 
         /* Lock ordering: */
         let _add = match fdm {
-            Some(fdm) if fdm > mapping => match inode.ei_pagecache_lock.try_lock::<c::PagecacheAdd>() {
+            Some(fdm) if fdm > mapping => match inode.ei_pagecache_lock.try_lock::<PagecacheAdd>() {
                 Some(add) => add,
                 None => {
                     // the DIO that disabled faults on @fdm has its pagecache_block
                     unsafe {
-                        fdm.inode().ei_pagecache_lock.unlocked_while::<c::PagecacheBlock, _>(|| {
-                            drop(inode.ei_pagecache_lock.lock::<c::PagecacheAdd>())
+                        fdm.inode().ei_pagecache_lock.unlocked_while::<PagecacheBlock, _>(|| {
+                            drop(inode.ei_pagecache_lock.lock::<PagecacheAdd>())
                         })
                     };
 
@@ -122,7 +124,7 @@ impl VmOps for InodeInfo {
                     return VmFaultRet::SIGBUS;
                 }
             },
-            _ => inode.ei_pagecache_lock.lock::<c::PagecacheAdd>(),
+            _ => inode.ei_pagecache_lock.lock::<PagecacheAdd>(),
         };
 
         vmf.filemap_fault()
@@ -151,7 +153,7 @@ impl VmOps for InodeInfo {
          * a bch2_write_invalidate_inode_pages_range() that works without dropping
          * page lock before invalidating page
          */
-        let _add = inode.ei_pagecache_lock.lock::<c::PagecacheAdd>();
+        let _add = inode.ei_pagecache_lock.lock::<PagecacheAdd>();
 
         let locked = folio.lock();
         let isize = inode.vfs().size();
@@ -200,7 +202,7 @@ impl InodeFileOps for InodeInfo {
     /// Writeback started, if a truncate to zero asked for it: see
     /// DOC(replace-in-place).
     fn released(&self, _file: &File<InodeFile>) {
-        if self.ei_flags.swap(c::InodeInfoFlag::EI_INODE_FLUSH_ON_CLOSE, false) {
+        if self.ei_flags.swap(InodeInfoFlag::EI_INODE_FLUSH_ON_CLOSE, false) {
             let _ = self.vfs().mapping().flush();
         }
     }
@@ -212,7 +214,7 @@ fn mmap(mut vma: VmArea<'_, InodeFile>) -> Result<(), BchError> {
     let file = vma.file();
     let fs = file.inode().fs();
     let shared_writable = c::VM_SHARED | c::VM_WRITE;
-    if vma.flags() & shared_writable == shared_writable && fs.flags.get(c::FsFlag::emergency_ro) {
+    if vma.flags() & shared_writable == shared_writable && fs.flags.get(FsFlag::emergency_ro) {
         return fs.throw(Errcode::mmap_emergency_ro);
     }
     file.accessed();

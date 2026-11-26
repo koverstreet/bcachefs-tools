@@ -12,7 +12,7 @@
 use super::iov_iter::IovIter;
 use super::kernel::PAGE_SIZE;
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::file::Any;
 use crate::os::folio::Folio;
 use crate::os::bio::{Bio, Bvec, FolioHold, Holds};
@@ -100,7 +100,7 @@ impl<const PINNED: bool> UserPage for UserFolio<PINNED> {
                 if bio.nr_vecs() != start {
                     break;
                 }
-                return Err(if got < 0 { BchError::from_raw(got as c_int) } else { c::Errcode::EFAULT_extract_pages.into() });
+                return Err(if got < 0 { BchError::from_raw(got as c_int) } else { Errcode::EFAULT_extract_pages.into() });
             }
 
             let (mut left, mut i) = (got as usize, 0);

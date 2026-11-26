@@ -5,7 +5,7 @@
 //! discarded by io_uring, or by syscall where there's none.
 
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::{ret_to_result_void, BchError, Errcode};
 use crate::os::kobject::Kobject;
 use crate::os::bio::Bio;
 use crate::util::futex::EventCount;
@@ -134,7 +134,7 @@ pub fn kobj(bdev: &BlockDevice) -> &Kobject {
 
 /// @path's device, by number: lookup_bdev(), which userspace hasn't got.
 pub fn lookup(_path: &CStr) -> Result<c::dev_t, BchError> {
-    Err(c::Errcode::EINVAL_lookup_bdev_userspace.into())
+    Err(Errcode::EINVAL_lookup_bdev_userspace.into())
 }
 
 /* BLKGETSIZE64: _IOR(0x12, 114, size_t) */

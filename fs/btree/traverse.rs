@@ -11,7 +11,7 @@ use core::ptr::{self, NonNull};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::bch2_btree_id_level_to_text;
-use crate::btree::interior::check_topology_msg;
+use crate::btree::interior::{check_topology_msg, BTREE_ROOT_LEVEL_BITS};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::btree::journal_overlay::BtreeAndJournalIter;
 use crate::btree::node::iter::KeyIter;
@@ -19,10 +19,11 @@ use crate::btree::node::keys::Keys;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{BtreePath, DownKey, KeyVal, LockedNode, NodePtr, PathIdx, Paths};
 use crate::c;
+use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Bpos};
-use crate::fs::Fs;
+use crate::format::{BkeyType, Bpos, bkey, BTREE_MAX_DEPTH};
+use crate::fs::{Fs, FsFlag};
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::kernel::race_fault;
@@ -50,7 +51,7 @@ pub(crate) fn advance_to_pos(iter: &mut KeyIter, keys: &Keys<'_>, pos: &Bpos, ma
     true
 }
 
-fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut c::bkey) -> Option<KeyVal> {
+fn level_unpack(keys: &Keys<'_>, k: Option<u16>, u: &mut bkey) -> Option<KeyVal> {
     match k {
         Some(k) => Some(KeyVal(keys.disassemble(k, u).v)),
         None => {
@@ -79,7 +80,7 @@ pub(crate) fn level_init_iter(iter: &mut KeyIter, fs: &Fs, keys: &Keys<'_>, pos:
 }
 
 impl BtreePath {
-    pub(crate) fn level_peek_all(&self, u: &mut c::bkey) -> Option<KeyVal> {
+    pub(crate) fn level_peek_all(&self, u: &mut bkey) -> Option<KeyVal> {
         let level = self.level() as usize;
         let b = self.locked_btree_node(level).expect("a path peeked is locked");
         let keys = b.keys(b.contents());
@@ -116,7 +117,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut c::bkey) -> Option<KeyVal> {
+    pub(crate) fn path_level_prev(&self, paths: &mut Paths<'_>, idx: PathIdx, u: &mut bkey) -> Option<KeyVal> {
         let path = &mut paths[idx];
         let level = path.level() as usize;
 
@@ -160,10 +161,10 @@ impl BtreeTrans<'_> {
 // ── Traversal ───────────────────────────────────────────────────────────────
 
 fn root_unpack(packed: c_ulong) -> (Option<NonNull<BtreeNode>>, usize) {
-    let mask = (1 << c::BTREE_ROOT_LEVEL_BITS) - 1;
+    let mask = (1 << BTREE_ROOT_LEVEL_BITS) - 1;
     let level = (packed & mask) as usize;
     // journal_entry_btree_root_validate() rejects a root any deeper
-    invariant!(level < c::BTREE_MAX_DEPTH as usize);
+    invariant!(level < BTREE_MAX_DEPTH as usize);
     (NonNull::new((packed & !mask) as *mut BtreeNode), level)
 }
 
@@ -176,7 +177,7 @@ fn bpos_in_btree_node_key(pos: Bpos, k: &BkeyI) -> bool {
         return false;
     }
 
-    if BkeySC::from(k).arm::<c::BtreePtrV2>().is_some_and(|p| pos < p.v().min_key) {
+    if BkeySC::from(k).arm::<BtreePtrV2>().is_some_and(|p| pos < p.v().min_key) {
         return false;
     }
 
@@ -185,7 +186,7 @@ fn bpos_in_btree_node_key(pos: Bpos, k: &BkeyI) -> bool {
 
 /// @k: the key @dst was copied from.
 fn down_key_mem_ptr_reload(dst: &mut DownKey, k: BkeySC<'_>) {
-    if let Some(p) = k.arm::<c::BtreePtrV2>() {
+    if let Some(p) = k.arm::<BtreePtrV2>() {
         // mem_ptr: the value's first field
         dst.elems_mut()[BKEY_U64S] = p.v().mem_ptr.get();
     }
@@ -195,13 +196,13 @@ fn set_down_key(dst: &mut DownKey, k: BkeySC<'_>) {
     let val = k.val_bytes();
     let room = plain_bytes_mut(dst.elems_mut());
 
-    room[..size_of::<c::bkey>()].copy_from_slice(plain_bytes(k.k));
-    room[size_of::<c::bkey>()..][..val.len()].copy_from_slice(val);
+    room[..size_of::<bkey>()].copy_from_slice(plain_bytes(k.k));
+    room[size_of::<bkey>()..][..val.len()].copy_from_slice(val);
     down_key_mem_ptr_reload(dst, k);
 }
 
 fn set_down_key_packed(dst: &mut DownKey, keys: &Keys<'_>, k: u16) {
-    let mut u = c::bkey::new();
+    let mut u = bkey::new();
     let key = keys.disassemble(k, &mut u);
 
     keys.key_at(k).unpacked_into(&keys.contents().format, *key.k, dst.elems_mut());
@@ -230,7 +231,7 @@ impl BtreeTrans<'_> {
             let packed = root_packed(fs, btree);
             let (b, level) = root_unpack(packed);
             let Some(b) = b else {
-                if btree.0 >= fs.btree_id_nr_alive() || !fs.flags.get(c::FsFlag::btree_running) {
+                if btree.0 >= fs.btree_id_nr_alive() || !fs.flags.get(FsFlag::btree_running) {
                     return Err(fs.err(Errcode::btree_not_started));
                 }
 
@@ -259,7 +260,7 @@ impl BtreeTrans<'_> {
                  */
                 let path = &mut paths[idx];
                 path.bits.set_level(depth_want as u8);
-                for l in depth_want..c::BTREE_MAX_DEPTH as usize {
+                for l in depth_want..BTREE_MAX_DEPTH as usize {
                     path.l[l].b = NodePtr::null();
                 }
                 return Err(Errcode::no_btree_node_shallow.into());
@@ -282,7 +283,7 @@ impl BtreeTrans<'_> {
                     for l in path.l.iter_mut().take(level) {
                         l.b = NodePtr::err(Errcode::no_btree_node_lock_root.into());
                     }
-                    for l in level + 1..c::BTREE_MAX_DEPTH as usize {
+                    for l in level + 1..BTREE_MAX_DEPTH as usize {
                         path.l[l].b = NodePtr::null();
                     }
 
@@ -300,7 +301,7 @@ impl BtreeTrans<'_> {
     }
 
     fn prefetch_nr(&self, level: usize) -> u32 {
-        if self.fs().flags.get(c::FsFlag::started) {
+        if self.fs().flags.get(FsFlag::started) {
             if level > 1 { 0 } else { 2 }
         } else if level > 1 {
             1
@@ -324,7 +325,7 @@ impl BtreeTrans<'_> {
                 node_iter.advance(&keys);
                 let Some(k) = node_iter.peek(&keys) else { break };
 
-                let mut u = c::bkey::new();
+                let mut u = bkey::new();
                 tmp.set_key(keys.disassemble(k, &mut u));
             }
             self.node_prefetch(paths, idx, &tmp, level)?;
@@ -398,7 +399,7 @@ impl BtreeTrans<'_> {
         let b = path.locked_btree_node(level).expect("a path goes down from a locked node");
         let contents = b.contents();
         let keys = b.keys(contents);
-        let v2 = BkeySC::from(k).arm::<c::BtreePtrV2>();
+        let v2 = BkeySC::from(k).arm::<BtreePtrV2>();
         let have_min = v2.is_some();
         let child_min = v2.map_or(POS_MIN, |p| p.v().min_key);
         let child_max = k.k.p;
@@ -434,7 +435,7 @@ impl BtreeTrans<'_> {
                     prt!(&mut *msg, "{}", label);
                     match k {
                         Some(k) => {
-                            let mut u = c::bkey::new();
+                            let mut u = bkey::new();
                             let tmp = BkeyBuf::from_key(keys.disassemble(k, &mut u));
                             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(tmp.as_ref()));
                         }
@@ -562,7 +563,7 @@ impl BtreeTrans<'_> {
         self.set_in_traverse_all(true);
 
         let ret = 'retry_all: loop {
-            self.set_restarted(c::Errcode(0));
+            self.set_restarted(Errcode(0));
             self.last_restarted_ip.set(0);
 
             for i in self.path_idxs() {
@@ -667,7 +668,7 @@ impl BtreeTrans<'_> {
             self.path_up_until_good_node_slowpath(paths, idx, check_pos)
         };
         // node() is NULL at BTREE_MAX_DEPTH: the walk up stops there at most
-        invariant!(l <= c::BTREE_MAX_DEPTH as usize);
+        invariant!(l <= BTREE_MAX_DEPTH as usize);
         l
     }
 
@@ -752,7 +753,7 @@ impl BtreeTrans<'_> {
 
     fn path_walk_down(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: PathIdx, flags: BtreeIterFlags,
                       depth_want: usize) -> Result<(), BchError> {
-        if paths[idx].level() as u32 >= c::BTREE_MAX_DEPTH {
+        if paths[idx].level() as u32 >= BTREE_MAX_DEPTH {
             self.path_traverse_end_trace(paths, idx);
             return Ok(());
         }

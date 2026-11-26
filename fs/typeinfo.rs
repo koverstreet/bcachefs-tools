@@ -646,17 +646,19 @@ pub fn struct_to_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::c;
+    use crate::bcachefs_ioctl::bch_ioctl_fsck_offline;
+    use crate::format::bch_sb_head;
+    use crate::snapshots::format::Snapshot;
 
     fn snapshot_info() -> &'static StructInfo {
-        <c::Snapshot as TypeInfo>::INFO
+        <Snapshot as TypeInfo>::INFO
     }
 
     #[test]
     fn snapshot_table() {
         let info = snapshot_info();
         assert_eq!(info.name, "Snapshot");
-        assert_eq!(info.size, core::mem::size_of::<c::Snapshot>());
+        assert_eq!(info.size, core::mem::size_of::<Snapshot>());
     }
 
     #[test]
@@ -695,7 +697,7 @@ mod tests {
     /// zero; anywhere else it's a zero-length array.
     #[test]
     fn flex_array_tail() {
-        let info = <crate::util::vstructs::Head<c::bch_ioctl_fsck_offline> as TypeInfo>::INFO;
+        let info = <crate::util::vstructs::Head<bch_ioctl_fsck_offline> as TypeInfo>::INFO;
         let devs = info.fields.iter().find(|f| f.name == "devs").unwrap();
         assert!(matches!(devs.kind, FieldKind::VarTail { stride: 8, .. }));
 
@@ -710,7 +712,7 @@ mod tests {
     #[test]
     fn scalar_roundtrip() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::Snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Snapshot>()];
 
         let r = resolve(info, "parent").unwrap();
         write_scalar(&mut buf, &r, 249).unwrap();
@@ -733,7 +735,7 @@ mod tests {
     #[test]
     fn to_text() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::Snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Snapshot>()];
         let r = resolve(info, "parent").unwrap();
         write_scalar(&mut buf, &r, 249).unwrap();
 
@@ -762,7 +764,7 @@ mod tests {
     #[test]
     fn member_roundtrip() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::Snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Snapshot>()];
 
         let r = resolve_with_bits(info, "no_keys_obsolete").unwrap();
         write_scalar(&mut buf, &r, 1).unwrap();
@@ -782,7 +784,7 @@ mod tests {
     #[test]
     fn bits_decode_display() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::Snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Snapshot>()];
         buf[0] = 2 | 8; // SUBVOL_OBSOLETE | NO_KEYS_OBSOLETE
 
         let mut s = String::new();
@@ -794,8 +796,8 @@ mod tests {
     /// members bits of it - as tests set an inode's bi_flags, a number.
     #[test]
     fn bitfield_word() {
-        let info = <c::bch_sb_head as TypeInfo>::INFO;
-        let mut buf = [0u8; core::mem::size_of::<c::bch_sb_head>()];
+        let info = <bch_sb_head as TypeInfo>::INFO;
+        let mut buf = [0u8; core::mem::size_of::<bch_sb_head>()];
         let field = |path| resolve_with_bits(info, path).unwrap();
         let (word, clean, csum_type) = (field("flags0"), field("clean"), field("csum_type"));
 
@@ -810,7 +812,7 @@ mod tests {
 
     #[test]
     fn typed_accessors() {
-        let mut s: c::Snapshot = Default::default();
+        let mut s: Snapshot = Default::default();
         s.set_no_keys_obsolete(true);
         assert!(s.no_keys_obsolete());
         assert_eq!(s.flags.into_bits().get(), 8);

@@ -1,9 +1,8 @@
 use std::fmt::Write;
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::Errcode;
-use bcachefs_kernel::opts::{Opt, OptType};
+use bcachefs_kernel::opts::{Opt, OptType, OptFlags, OptId};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
 
@@ -17,7 +16,7 @@ fn leak(s: String) -> &'static str {
 fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &'static Opt)) {
     for opt in &bcachefs_kernel::opts::OPTS {
         if opt.flags.bits() & flag_filter == 0 { continue }
-        if opt.flags.bits() & c::OptFlags::hidden.bits() != 0 { continue }
+        if opt.flags.bits() & OptFlags::hidden.bits() != 0 { continue }
         f(opt.name, opt);
     }
 }
@@ -163,7 +162,7 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
 
 /// Look up a bcachefs option by name, handling --nooption negation for booleans.
 /// Returns (opt_id, opt_ref, negated).
-pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::OptId, &'static Opt, bool)> {
+pub fn bch_opt_lookup_negated(name: &str) -> Option<(OptId, &'static Opt, bool)> {
     if let Some(r) = bch_opt_lookup(name) {
         return Some((r.0, r.1, false));
     }
@@ -173,7 +172,7 @@ pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::OptId, &'static Opt, boo
 }
 
 /// Look up a bcachefs option by name. Returns the typed option id and reference.
-pub fn bch_opt_lookup(name: &str) -> Option<(c::OptId, &'static Opt)> {
+pub fn bch_opt_lookup(name: &str) -> Option<(OptId, &'static Opt)> {
     bcachefs_kernel::opts::opt_lookup(name).map(|opt| (opt.id, opt))
 }
 

@@ -5,7 +5,7 @@
 //! write's flush decision too, or on flush_wait, a plain list, with no live
 //! buf to wait on.
 
-use crate::c;
+use crate::journal::journal::{journal, journal_buf};
 use crate::util::alloc::{kbox_zeroed_nofail, KBox};
 use crate::util::task::{waiter, Armable, Completion, DynDone, Unarmed, Waiter};
 use core::cell::UnsafeCell;
@@ -152,7 +152,7 @@ impl<'a, W: Waiter> FlushWait<'a, W> {
 impl Flush<'_> {
     /// Attached to @seq's flush, in @j: its wait armed, and its entry on a
     /// list - the word returned.
-    pub fn attach(self, j: &c::journal, seq: u64) -> &AtomicPtr<FlushEntry> {
+    pub fn attach(self, j: &journal, seq: u64) -> &AtomicPtr<FlushEntry> {
         // on no list yet: the entry's ours
         unsafe { *self.entry.done.get() = Some(self.done.arm()) };
         j.__flush_seq_async(seq, self.entry)
@@ -214,7 +214,7 @@ pub enum BufWait {
     Waiting { first: bool },
 }
 
-impl c::journal_buf {
+impl journal_buf {
     pub(crate) fn wait_word(&self) -> &AtomicPtr<FlushEntry> {
         &self.wait
     }

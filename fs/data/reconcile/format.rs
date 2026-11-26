@@ -2,7 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::data::extents_format::ExtentEntryType;
+use crate::opts::bch_inode_opts;
 use cstruct_macros::{bitfield, bch_enum};
 
 /*
@@ -54,7 +55,7 @@ use cstruct_macros::{bitfield, bch_enum};
 
 #[bitfield(u64)]
 pub struct bch_extent_rebalance_v1 {
-    #[bits(default = 1 << c::ExtentEntryType::rebalance_v1.0)]
+    #[bits(default = 1 << ExtentEntryType::rebalance_v1.0)]
     pub(self) type_:                   u6,
     unused:                            u3,
 
@@ -75,7 +76,7 @@ pub struct bch_extent_rebalance_v1 {
 
 #[bitfield(u64)]
 pub struct bch_extent_reconcile {
-    #[bits(default = 1 << c::ExtentEntryType::reconcile.0)]
+    #[bits(default = 1 << ExtentEntryType::reconcile.0)]
     pub(self) type_:                   u8,
     unused:                            u2,
     ptrs_moving:                       u5,
@@ -100,7 +101,7 @@ pub struct bch_extent_reconcile {
 
 #[bitfield(u64)]
 pub struct bch_extent_reconcile_bp {
-    #[bits(default = 1 << c::ExtentEntryType::reconcile_bp.0)]
+    #[bits(default = 1 << ExtentEntryType::reconcile_bp.0)]
     pub(self) type_: u9,
     idx:   u55,
 }
@@ -121,7 +122,7 @@ impl bch_extent_reconcile {
     /// An entry with @opts' reconcile options, and whether the inode set
     /// each: io_opts_to_reconcile_opts(). Truncated to the entry's fields,
     /// as C's bitfield assignments truncate.
-    pub fn from_io_opts(opts: &c::bch_inode_opts) -> Self {
+    pub fn from_io_opts(opts: &bch_inode_opts) -> Self {
         let mut r = Self::new();
         macro_rules! opts {
             ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { $(
@@ -130,19 +131,19 @@ impl bch_extent_reconcile {
                 r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
             )* } };
         }
-        c::ReconcileOpt_arms!(opts);
+        ReconcileOpt_arms!(opts);
         r
     }
 
     /// Each of @opts' reconcile options too big for its field - what
     /// from_io_opts() truncates - as (name, value).
-    pub fn too_big(opts: &c::bch_inode_opts) -> impl Iterator<Item = (&'static str, u64)> {
+    pub fn too_big(opts: &bch_inode_opts) -> impl Iterator<Item = (&'static str, u64)> {
         macro_rules! opts {
             ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { [$(
                 (stringify!($name), u64::from(opts.$name), Self::[<$name:upper _BITS>]),
             )*] } };
         }
-        c::ReconcileOpt_arms!(opts).into_iter()
+        ReconcileOpt_arms!(opts).into_iter()
             .filter(|&(_, v, bits)| v >> bits != 0)
             .map(|(name, v, _)| (name, v))
     }

@@ -6,14 +6,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::c::{
-    self,
-    DegradedAction,
-    BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
-};
+use bcachefs_kernel::opts::{bch_opts, OptFlags};
+use bcachefs_kernel::format::DegradedAction;
+use bcachefs_kernel::bcachefs_ioctl::{BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::format::MetadataVersion;
+use bcachefs_kernel::sb::members_format;
 use bcachefs_kernel::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
@@ -26,7 +25,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
 
 fn device_add_opt_flags() -> u32 {
-    c::OptFlags::format.bits() | c::OptFlags::device.bits()
+    OptFlags::format.bits() | OptFlags::device.bits()
 }
 
 fn device_add_cmd() -> Command {
@@ -57,7 +56,7 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     // Open the filesystem without starting it if it isn't mounted - same
     // approach as 'bcachefs image update'; works even when the allocator
     // is stuck and the filesystem can't mount normally:
-    let mut offline_opts: c::bch_opts = Default::default();
+    let mut offline_opts: bch_opts = Default::default();
     offline_opts.set_nostart(true);
     offline_opts.set_copygc_enabled(false);
     offline_opts.set_reconcile_enabled(false);
@@ -287,12 +286,12 @@ enum MemberState {
 }
 
 impl MemberState {
-    fn state(self) -> c::MemberState {
+    fn state(self) -> members_format::MemberState {
         match self {
-            MemberState::Rw         => c::MemberState::rw,
-            MemberState::Ro         => c::MemberState::ro,
-            MemberState::Evacuating => c::MemberState::evacuating,
-            MemberState::Spare      => c::MemberState::spare,
+            MemberState::Rw         => members_format::MemberState::rw,
+            MemberState::Ro         => members_format::MemberState::ro,
+            MemberState::Evacuating => members_format::MemberState::evacuating,
+            MemberState::Spare      => members_format::MemberState::spare,
         }
     }
 }
@@ -353,9 +352,9 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
         .context("setting device state")
 }
 
-fn set_state_offline(device: &str, new_state: c::MemberState) -> Result<()> {
+fn set_state_offline(device: &str, new_state: members_format::MemberState) -> Result<()> {
 
-    let mut opts: c::bch_opts = Default::default();
+    let mut opts: bch_opts = Default::default();
     opts.set_nostart(true);
     opts.set_will_not_start(true);
     opts.set_degraded(DegradedAction::very);
@@ -444,7 +443,7 @@ fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
 fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
     use bcachefs_kernel::util::printbuf::Printbuf;
 
-    let opts: c::bch_opts = Default::default();
+    let opts: bch_opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
@@ -502,7 +501,7 @@ fn cmd_device_resize_journal(cli: ResizeJournalCli) -> Result<()> {
 }
 
 fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
-    let opts: c::bch_opts = Default::default();
+    let opts: bch_opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
@@ -547,14 +546,14 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     let usage = handle.dev_usage(dev_idx)
         .context("querying device usage")?;
 
-    if c::MemberState(usage.state) == c::MemberState::rw {
+    if members_format::MemberState(usage.state) == members_format::MemberState::rw {
         println!("Setting {} readonly", cli.device);
-        handle.disk_set_state(dev_idx, c::MemberState::ro, BCH_FORCE_IF_DEGRADED)
+        handle.disk_set_state(dev_idx, members_format::MemberState::ro, BCH_FORCE_IF_DEGRADED)
             .context("setting device readonly")?;
     }
 
     println!("Setting {} evacuating", cli.device);
-    handle.disk_set_state(dev_idx, c::MemberState::evacuating, BCH_FORCE_IF_DEGRADED)
+    handle.disk_set_state(dev_idx, members_format::MemberState::evacuating, BCH_FORCE_IF_DEGRADED)
         .context("setting device evacuating")?;
 
     // Trigger reconcile wakeup so it starts processing the evacuation

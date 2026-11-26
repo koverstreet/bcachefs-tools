@@ -26,7 +26,6 @@ mod select_test;
 mod workqueue_test;
 
 use std::process::ExitCode;
-use bcachefs_kernel::c;
 
 /// Read the running kernel's .config from /boot or /proc/config.gz.
 fn read_kernel_config() -> Option<String> {
@@ -269,7 +268,7 @@ fn generate_cli_doc() -> ExitCode {
 fn opts_table() -> String {
     use bcachefs_kernel::opts::{opt_to_text, OptType, DEFAULTS, OPTS};
     use bcachefs_kernel::util::Printbuf;
-    use c::OptFlags as f;
+    use bcachefs_kernel::opts::OptFlags as f;
     use std::fmt::Write;
 
     let scopes = [(f::fs, "fs"), (f::format, "format"), (f::mount, "mount"),

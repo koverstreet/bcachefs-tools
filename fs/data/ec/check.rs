@@ -19,7 +19,7 @@ use crate::btree::bkey::{pos, BkeySC, BkeyV, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
-use crate::c;
+use crate::data::ec::format::Stripe;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -49,7 +49,7 @@ fn bucket_stripe_ref_mod(t: &TransAttempt<'_, '_>, bucket: Bpos, stripe: u64, se
 fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
 {
-    let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
+    let Some(s) = k.arm::<Stripe>() else { return Ok(()) };
     let fs = t.fs();
     let idx = k.k.p.offset;
 
@@ -82,7 +82,7 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
 }
 
 /// Whether stripe @s has a block in @bucket. bucket_matches_stripe().
-fn bucket_matches_stripe(fs: &Fs, bucket: Bpos, s: &c::Stripe<Validated>) -> bool {
+fn bucket_matches_stripe(fs: &Fs, bucket: Bpos, s: &Stripe<Validated>) -> bool {
     s.block_ptrs().iter()
         .any(|ptr| fs.dev_get(ptr.dev().into()).is_some_and(|ca| ca.ptr_bucket_pos(ptr) == bucket))
 }
@@ -97,7 +97,7 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
     let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, stripe), BtreeIterFlags::empty());
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
-    let Some(s) = k.arm::<c::Stripe>() else {
+    let Some(s) = k.arm::<Stripe>() else {
         if fsck_err!(t, id::bucket_stripe_ref_to_missing_stripe, "bucket {}:{} points to missing stripe {stripe}",
                      { bucket.inode }, { bucket.offset })? {
             return bucket_stripe_ref_mod(t, bucket, stripe, false);

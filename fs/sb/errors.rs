@@ -20,7 +20,10 @@ use core::cmp::{Ordering, Reverse};
 use core::ffi::c_int;
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use crate::btree::bkey::ValidateFlags;
-use crate::c;
+use crate::format::{bch_sb, SbFieldType};
+use crate::sb::errors_format::{BCH_SB_ERROR_ENTRY_V2_NR_MAX, BCH_SB_ERROR_ENTRY_V2_TIME_MAX,
+    bch_sb_field_error_entry, bch_sb_field_errors, bch_sb_field_errors_v2,
+    bch_sb_field_error_entry_v2};
 pub use crate::sb::errors_format::{FsckFlags, SbErrorId};
 use crate::util::vstructs::{Unvalidated, Validated};
 use crate::errcode::{Errcode, BchError};
@@ -64,7 +67,7 @@ pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = SbErrorId
 /// A v2 count, which saturates: one that did is a floor, not an exact value.
 pub fn prt_error_nr(out: &mut Printbuf, nr: u64) {
     write!(out, "{nr}");
-    if nr >= c::BCH_SB_ERROR_ENTRY_V2_NR_MAX {
+    if nr >= BCH_SB_ERROR_ENTRY_V2_NR_MAX {
         write!(out, "+");
     }
 }
@@ -82,7 +85,7 @@ pub(crate) trait ErrorEntry: Copy {
     fn last(&self) -> u64;
 }
 
-impl ErrorEntry for c::bch_sb_field_error_entry {
+impl ErrorEntry for bch_sb_field_error_entry {
     const V2: bool = false;
 
     fn id(&self) -> SbErrorId {
@@ -102,7 +105,7 @@ impl ErrorEntry for c::bch_sb_field_error_entry {
     }
 }
 
-impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
+impl ErrorEntry for bch_sb_field_error_entry_v2 {
     const V2: bool = true;
 
     fn id(&self) -> SbErrorId {
@@ -122,22 +125,22 @@ impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
     }
 }
 
-impl c::bch_sb_field_error_entry_v2 {
+impl bch_sb_field_error_entry_v2 {
     /// A count past its field's width is pinned at the most it holds, and so
     /// is a time, as C's setters pin them: a wrapped one would be worse.
     pub(crate) fn new(id: SbErrorId, nr: u64, first: u64, last: u64) -> Self {
         let mut e = Self::default();
         e.v.set_id(id);
-        e.v.set_nr(nr.min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
-        e.v.set_first_error_time(first.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-        e.v.set_last_error_time(last.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        e.v.set_nr(nr.min(BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
+        e.v.set_first_error_time(first.min(BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        e.v.set_last_error_time(last.min(BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
         e
     }
 }
 
 /// Memory's count as v2 has it.
-impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
-    fn from(s: &c::bch_sb_error_entry_cpu) -> Self {
+impl From<&bch_sb_error_entry_cpu> for bch_sb_field_error_entry_v2 {
+    fn from(s: &bch_sb_error_entry_cpu) -> Self {
         Self::new(s.id(), s.nr(), s.first_error_time, s.last_error_time)
     }
 }
@@ -184,26 +187,26 @@ fn to_text<E: ErrorEntry>(out: &mut Printbuf, entries: &[E]) {
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_errors<Validated> {
-    fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_errors<Unvalidated>,
+impl SbFieldOps for bch_sb_field_errors<Validated> {
+    fn validate(_sb: &bch_sb<Unvalidated>, f: &bch_sb_field_errors<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         validate(&f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                f: &c::bch_sb_field_errors<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                f: &bch_sb_field_errors<Unvalidated>) {
         to_text(out, &f.entries)
     }
 }
 
-impl SbFieldOps for c::bch_sb_field_errors_v2<Validated> {
-    fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_errors_v2<Unvalidated>,
+impl SbFieldOps for bch_sb_field_errors_v2<Validated> {
+    fn validate(_sb: &bch_sb<Unvalidated>, f: &bch_sb_field_errors_v2<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         validate(&f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                f: &c::bch_sb_field_errors_v2<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                f: &bch_sb_field_errors_v2<Unvalidated>) {
         to_text(out, &f.entries)
     }
 
@@ -214,8 +217,8 @@ impl SbFieldOps for c::bch_sb_field_errors_v2<Validated> {
     /// counted twice across a downgrade and upgrade - and the next superblock
     /// write folds everything back into v2.
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let v2: &[c::bch_sb_field_error_entry_v2] = sb.field::<c::bch_sb_field_errors_v2>().map_or(&[], |f| &f.entries);
-        let v1: &[c::bch_sb_field_error_entry]    = sb.field::<c::bch_sb_field_errors>().map_or(&[], |f| &f.entries);
+        let v2: &[bch_sb_field_error_entry_v2] = sb.field::<bch_sb_field_errors_v2>().map_or(&[], |f| &f.entries);
+        let v1: &[bch_sb_field_error_entry]    = sb.field::<bch_sb_field_errors>().map_or(&[], |f| &f.entries);
 
         let mut counts = fs.errors.counts.lock();
         counts.clear();
@@ -244,15 +247,15 @@ impl SbFieldOps for c::bch_sb_field_errors_v2<Validated> {
         let mut sb = fs.sb_resize(guard);
         let counts = fs.errors.counts.lock();
 
-        let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());
-        let Some(f) = sb.field_resize::<c::bch_sb_field_errors_v2>(u64s) else { return Ok(()) };
+        let u64s = sb_field_u64s::<bch_sb_field_errors_v2>(counts.len());
+        let Some(f) = sb.field_resize::<bch_sb_field_errors_v2>(u64s) else { return Ok(()) };
 
         // what the resize left there doesn't matter: each entry is overwritten
         for (d, s) in f.entries.iter_mut().zip(counts.iter()) {
             *d = s.into();
         }
 
-        sb.field_delete(c::SbFieldType::errors);
+        sb.field_delete(SbFieldType::errors);
         Ok(())
     }
 }
@@ -353,8 +356,8 @@ pub fn bch2_decompress_sb_err(err: c_int) -> SbErrorId {
 /// The largest in-memory count: nr is 48 bits.
 const CPU_NR_MAX: u64 = (1 << 48) - 1;
 
-fn cpu_entry(id: SbErrorId, nr: u64, first: u64, last: u64) -> c::bch_sb_error_entry_cpu {
-    let mut e = c::bch_sb_error_entry_cpu {
+fn cpu_entry(id: SbErrorId, nr: u64, first: u64, last: u64) -> bch_sb_error_entry_cpu {
+    let mut e = bch_sb_error_entry_cpu {
         first_error_time: first,
         last_error_time:  last,
         ..Default::default()
@@ -364,7 +367,7 @@ fn cpu_entry(id: SbErrorId, nr: u64, first: u64, last: u64) -> c::bch_sb_error_e
     e
 }
 
-impl<E: ErrorEntry> From<&E> for c::bch_sb_error_entry_cpu {
+impl<E: ErrorEntry> From<&E> for bch_sb_error_entry_cpu {
     fn from(e: &E) -> Self {
         cpu_entry(e.id(), e.nr(), e.first(), e.last())
     }
@@ -372,7 +375,7 @@ impl<E: ErrorEntry> From<&E> for c::bch_sb_error_entry_cpu {
 
 /// One error's counts from both sections: summed, over the union of their
 /// time ranges.
-pub(crate) fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) -> c::bch_sb_error_entry_cpu {
+pub(crate) fn merge(a: bch_sb_error_entry_cpu, b: bch_sb_error_entry_cpu) -> bch_sb_error_entry_cpu {
     cpu_entry(a.id(), a.nr().saturating_add(b.nr()),
               a.first_error_time.min(b.first_error_time),
               a.last_error_time.max(b.last_error_time))

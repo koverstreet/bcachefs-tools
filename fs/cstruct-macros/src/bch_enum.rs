@@ -529,7 +529,7 @@ fn enum_gen(e: &EnumDef) -> TokenStream {
             #[allow(non_snake_case, non_upper_case_globals)]
             pub mod #bits_mod {
                 #[allow(unused_imports)]
-                use {super::*, crate::c::*};
+                use super::*;
                 #(pub const #names: #repr = #raw_values;)*
             }
         },

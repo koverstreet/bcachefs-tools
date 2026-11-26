@@ -5,7 +5,6 @@
 //! rust_percpu_init_rwsem(), and the rest of its rust_percpu_* wrappers.
 
 use crate::locking::{RawLock, RawLockBase, RawReadLock, RawRwLock};
-use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::Opaque;
 use core::ffi::CStr;

@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::{BkeyI, BKEY_U64S};
-use crate::c;
+use crate::btree::write_buffer::{btree_write_buffered_key, wb_key_ref};
 use crate::data::keylist;
 use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::{Flags, AllocError, Vec};
 use crate::os::kernel::prefetch;
 use crate::util::projections::Volatile;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::format::Bpos;
+use crate::format::{Bpos, bkey};
 use super::{REF_HI_MI_LO, REF_IDX, REF_POS, SEQ_U64S};
 use core::marker::PhantomData;
 use core::ops::{Deref, Range};
 use core::ptr::NonNull;
 
 /// A key in the write buffer, over its u64s.
-type KeyRoom = DstRoom<c::btree_write_buffered_key>;
+type KeyRoom = DstRoom<btree_write_buffered_key>;
 
 /// Its size in the write buffer: the key, and its journal seq.
-pub(super) fn wb_key_u64s(k: &c::bkey) -> usize {
+pub(super) fn wb_key_u64s(k: &bkey) -> usize {
     usize::from(k.u64s) + SEQ_U64S
 }
 
@@ -89,7 +89,7 @@ impl WbKeys {
         self.0[idx]
     }
 
-    pub(super) fn key(&self, idx: usize) -> &c::btree_write_buffered_key {
+    pub(super) fn key(&self, idx: usize) -> &btree_write_buffered_key {
         KeyRoom::from_elems(&self.0[idx..self.next(idx)])
     }
 
@@ -105,14 +105,14 @@ impl WbKeys {
         })
     }
 
-    pub(super) fn get_mut(&mut self, idx: usize) -> &mut c::btree_write_buffered_key {
+    pub(super) fn get_mut(&mut self, idx: usize) -> &mut btree_write_buffered_key {
         let end = self.next(idx);
         KeyRoom::from_elems_mut(&mut self.0[idx..end])
     }
 
     /// The keys at @a and @b, which are different keys.
     pub(super) fn pair_mut(&mut self, a: usize, b: usize)
-        -> (&mut c::btree_write_buffered_key, &mut c::btree_write_buffered_key)
+        -> (&mut btree_write_buffered_key, &mut btree_write_buffered_key)
     {
         let (a_end, b_end) = (self.next(a), self.next(b));
         assert!(a_end <= b || b_end <= a, "write buffer keys at {a} and {b} overlap");
@@ -186,7 +186,7 @@ impl WbKeys {
 /// distinct, one for each key: so a key is reached by one shard, and that
 /// shard has it one at a time.
 pub(super) struct Shard<'a> {
-    refs:  &'a [c::wb_key_ref],
+    refs:  &'a [wb_key_ref],
     range: Range<usize>,
     keys:  NonNull<u64>,
     len:   usize,
@@ -201,7 +201,7 @@ impl<'a> Shard<'a> {
     ///
     /// # Safety
     /// @refs are distinct, each the index of a key in @keys.
-    pub(super) unsafe fn new(keys: &'a mut WbKeys, refs: &'a [c::wb_key_ref]) -> Self {
+    pub(super) unsafe fn new(keys: &'a mut WbKeys, refs: &'a [wb_key_ref]) -> Self {
         let len = keys.len();
         let keys = NonNull::new(keys.0.as_mut_ptr()).expect("a vec's pointer");
         Shard { refs, range: 0..refs.len(), keys, len, _keys: PhantomData }
@@ -229,7 +229,7 @@ impl<'a> Shard<'a> {
     }
 
     /// The key of the shard's @i'th ref.
-    pub(super) fn key(&mut self, i: usize) -> &mut c::btree_write_buffered_key {
+    pub(super) fn key(&mut self, i: usize) -> &mut btree_write_buffered_key {
         assert!(self.range.contains(&i));
         let idx = self.idx(i);
         if idx + BKEY_U64S > self.len {
@@ -237,17 +237,17 @@ impl<'a> Shard<'a> {
         }
 
         let k = self.keys.as_ptr().wrapping_add(idx);
-        let u64s = SEQ_U64S + usize::from(unsafe { (*k.add(SEQ_U64S).cast::<c::bkey>()).u64s });
+        let u64s = SEQ_U64S + usize::from(unsafe { (*k.add(SEQ_U64S).cast::<bkey>()).u64s });
         assert!(idx + u64s <= self.len, "write buffer key at {idx} of {} u64s overruns the {}", u64s, self.len);
 
         KeyRoom::from_elems_mut(unsafe { core::slice::from_raw_parts_mut(k, u64s) })
     }
 }
 
-impl c::wb_key_ref {
+impl wb_key_ref {
     /// The ref of the key at @idx, at @pos.
     pub(super) fn new(idx: usize, pos: Bpos) -> Self {
-        let mut r = c::wb_key_ref { words: [0; 3] };
+        let mut r = wb_key_ref { words: [0; 3] };
         let b = plain_bytes_mut(&mut r.words[..]);
         b[REF_IDX].copy_from_slice(&u32::try_from(idx).expect("a write buffer key's index, in 32 bits").to_ne_bytes());
         b[REF_POS].copy_from_slice(plain_bytes(&pos));

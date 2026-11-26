@@ -13,8 +13,11 @@ use core::ffi::c_int;
 use crate::alloc::accounting;
 use crate::alloc::capacity::avail_factor;
 use crate::c;
-use crate::errcode::BchError;
-use crate::fs::Fs;
+use crate::format::{BCACHEFS_STATFS_MAGIC, BCH_REPLICAS_MAX};
+use crate::opts::{bch_opts_mask, OPT_SHOW_MOUNT_STYLE, OptFlags};
+use crate::posix::dirent_format::BCH_NAME_MAX;
+use crate::errcode::{BchError, Errcode};
+use crate::fs::{Fs, FsFlag};
 use crate::posix::inode_opts;
 use crate::locking::Guard as _;
 use crate::prt;
@@ -96,11 +99,11 @@ impl SuperOps for Fs {
         // whole free buckets - which applications size fallocate() from; and
         // never more than capacity less used
         let opts = inode_opts::get_inode(self, &inode.inode());
-        let nr_replicas = (opts.data_replicas as usize).clamp(1, c::BCH_REPLICAS_MAX as usize);
+        let nr_replicas = (opts.data_replicas as usize).clamp(1, BCH_REPLICAS_MAX as usize);
         let placeable = self.sectors_placeable().eventual[nr_replicas - 1];
         let avail = avail_factor(usage.free).min(placeable) / nr_replicas as u64;
 
-        buf.f_type    = c::BCACHEFS_STATFS_MAGIC as _;
+        buf.f_type    = BCACHEFS_STATFS_MAGIC as _;
         buf.f_bsize   = block_bytes as _;
         buf.f_blocks  = usage.capacity >> shift;
         buf.f_bfree   = usage.free >> shift;
@@ -108,7 +111,7 @@ impl SuperOps for Fs {
         buf.f_files   = accounting::nr_inodes(self) + avail_inodes;
         buf.f_ffree   = avail_inodes;
         buf.f_fsid    = uuid_to_fsid(&self.sb.user_uuid.each_ref().map(|b| b.get()));
-        buf.f_namelen = c::BCH_NAME_MAX as _;
+        buf.f_namelen = BCH_NAME_MAX as _;
         Ok(())
     }
 
@@ -127,11 +130,11 @@ impl SuperOps for Fs {
     fn show_options(&self, m: &SeqFile, _root: Dentry<'_>) -> Result<(), BchError> {
         let mut out = Printbuf::new();
         // No superblock: with the filesystem, every option's to_text reads it
-        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&c::bch_opts_mask::load(&self.mount_opts)),
-                                  c::OptFlags::mount.bits(), c::OptFlags::hidden.bits(),
-                                  c::OPT_SHOW_MOUNT_STYLE);
+        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&bch_opts_mask::load(&self.mount_opts)),
+                                  OptFlags::mount.bits(), OptFlags::hidden.bits(),
+                                  OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {
-            return Err(c::Errcode::ENOMEM_show_options.into());
+            return Err(Errcode::ENOMEM_show_options.into());
         }
         m.write(b",");
         m.write(out.as_bytes());
@@ -154,7 +157,7 @@ impl SuperOps for Fs {
     }
 
     fn unfreeze_fs(&self, _sb: &SuperBlock) -> Result<(), BchError> {
-        if self.flags.get(c::FsFlag::emergency_ro) {
+        if self.flags.get(FsFlag::emergency_ro) {
             return Ok(());
         }
         self.state_lock_write().read_write()

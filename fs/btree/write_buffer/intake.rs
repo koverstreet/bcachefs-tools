@@ -5,14 +5,14 @@ use super::keys::{wb_key_u64s, KeysLiveWriter, WbKeys};
 use super::{insert_checks, resize_gfp, wb_btree_idx, AccountingKey, Buf, FlushingGuard, IncGuard, SEQ_U64S, WB_RESIZE_GFP};
 use crate::alloc::accounting::{self, DiskAccountingPos};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
-use crate::c;
-use crate::c::WbFlushCaller as Caller;
+use crate::btree::write_buffer::{bch_fs_btree_write_buffer, WbBtree};
+use crate::btree::write_buffer::WbFlushCaller as Caller;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::eytzinger::Eytzinger0;
 use crate::locking::Guard as _;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
-use crate::format::{jset_entry, BkeyType, Btree};
+use crate::format::{jset_entry, BkeyType, Btree, bkey, jset_entry_write_buffer_keys, JsetEntryType};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::alloc::{Flags, AllocError};
@@ -32,14 +32,14 @@ crate::module_param! {
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 static TEST_WB_PIN_STATE: AtomicI32 = AtomicI32::new(0);
 
-fn is_accounting_mem(k: &c::bkey) -> bool {
+fn is_accounting_mem(k: &bkey) -> bool {
     k.key_type() == BkeyType::accounting && accounting::is_mem(&DiskAccountingPos::from_bpos(k.p))
 }
 
 /// A write buffered btree's part of a journal intake: its inc locked, and
 /// its flushing too while its keys go straight there.
 struct IntakeBtree<'a> {
-    wb:       &'a c::bch_fs_btree_write_buffer,
+    wb:       &'a bch_fs_btree_write_buffer,
     inc:      IncGuard<'a>,
     flushing: Option<FlushingGuard<'a>>,
     room:     usize,
@@ -56,7 +56,7 @@ impl<'a> IntakeBtree<'a> {
      * Takes inc.lock (always), and flushing.lock (opportunistically, to let us
      * skip staging via inc if flushing has room).
      */
-    fn lock(wb: &'a c::bch_fs_btree_write_buffer) -> Self {
+    fn lock(wb: &'a bch_fs_btree_write_buffer) -> Self {
         let (inc, flushing) = match wb.flushing.try_lock() {
             Some(mut flushing) => {
                 let mut inc = wb.inc.lock();
@@ -72,7 +72,7 @@ impl<'a> IntakeBtree<'a> {
         b.room = b.room_now();
         #[cfg(CONFIG_BCACHEFS_TESTS)]
         if wb_pin_publication.get() &&
-            wb.wb_btree() == c::WbBtree::backpointers &&
+            wb.wb_btree() == WbBtree::backpointers &&
             b.flushing.is_some() &&
             TEST_WB_PIN_STATE.load(Relaxed) == 0 {
             b.room = 0;
@@ -173,7 +173,7 @@ pub struct Intake<'a> {
     #[cfg(CONFIG_BCACHEFS_TESTS)]
     test_wb_pin_armed: bool,
     /* None once dropped */
-    btrees:  Option<[IntakeBtree<'a>; c::WbBtree::NR as usize]>,
+    btrees:  Option<[IntakeBtree<'a>; WbBtree::NR as usize]>,
 }
 
 impl<'a> Intake<'a> {
@@ -201,7 +201,7 @@ impl<'a> Intake<'a> {
         self.btrees.as_mut().expect("an intake not yet dropped")
     }
 
-    fn btree(&mut self, idx: c::WbBtree) -> &mut IntakeBtree<'a> {
+    fn btree(&mut self, idx: WbBtree) -> &mut IntakeBtree<'a> {
         &mut self.btrees()[idx as usize]
     }
 
@@ -225,7 +225,7 @@ impl<'a> Intake<'a> {
          * bch2_accounting_key_to_wb(), slowpath, and _end() inject /
          * compact / sort — run with inc.lock held).
          */
-        for i in self.btree(c::WbBtree::accounting).inc.accounting.iter_mut() {
+        for i in self.btree(WbBtree::accounting).inc.accounting.iter_mut() {
             (&mut &mut i.k).val_bytes_mut().fill(0);
         }
     }
@@ -270,7 +270,7 @@ impl<'a> Intake<'a> {
         }
     }
 
-    fn key_to_wb_idx(&mut self, idx: c::WbBtree, k: &BkeyI) -> Result<(), BchError> {
+    fn key_to_wb_idx(&mut self, idx: WbBtree, k: &BkeyI) -> Result<(), BchError> {
         let seq = self.seq;
         let b = self.btree(idx);
 
@@ -282,7 +282,7 @@ impl<'a> Intake<'a> {
         Ok(())
     }
 
-    fn key_to_wb_slowpath(&mut self, idx: c::WbBtree, k: &BkeyI) -> Result<(), BchError> {
+    fn key_to_wb_slowpath(&mut self, idx: WbBtree, k: &BkeyI) -> Result<(), BchError> {
         let u64s = wb_key_u64s(&k.k);
         let seq = self.seq;
 
@@ -304,7 +304,7 @@ impl<'a> Intake<'a> {
             let force_alloc_failure =
                 wb_pin_publication.get() &&
                 armed &&
-                idx == c::WbBtree::backpointers &&
+                idx == WbBtree::backpointers &&
                 b.flushing.is_some() &&
                 !b.keys_empty() &&
                 b.wb.pin(b.buf()).seq() == 0 &&
@@ -360,7 +360,7 @@ impl<'a> Intake<'a> {
         b.push(seq, k);
         #[cfg(CONFIG_BCACHEFS_TESTS)]
         if wb_pin_publication.get() &&
-            idx == c::WbBtree::backpointers &&
+            idx == WbBtree::backpointers &&
             b.flushing.as_ref().is_some_and(|f| f.keys.len() == u64s) &&
             b.wb.pin(Buf::Flushing).seq() == 0 &&
             TEST_WB_PIN_STATE.compare_exchange(0, 1, Relaxed, Relaxed).is_ok() {
@@ -378,7 +378,7 @@ impl<'a> Intake<'a> {
         // released: every one's entries whole, not written yet, so not
         // encrypted
         for i in unsafe { ValidatedEntriesMut::<jset_entry>::of_bytes(entries) } {
-            if c::JsetEntryType(i.type_.into()) == c::JsetEntryType::write_buffer_keys {
+            if JsetEntryType(i.type_.into()) == JsetEntryType::write_buffer_keys {
                 self.entry(i)?;
             }
         }
@@ -390,12 +390,12 @@ impl<'a> Intake<'a> {
     /// retyped to btree keys.
     pub fn entry(&mut self, i: &mut jset_entry) -> Result<(), BchError> {
         let btree = Btree(i.btree_id.into());
-        let keys = i.arm::<c::jset_entry_write_buffer_keys<Validated>>().expect("a write buffer keys entry");
+        let keys = i.arm::<jset_entry_write_buffer_keys<Validated>>().expect("a write buffer keys entry");
         for k in keys.entries() {
             self.key_to_wb(btree, k)?;
         }
 
-        i.type_ = c::JsetEntryType::btree_keys.0 as u8;
+        i.type_ = JsetEntryType::btree_keys.0 as u8;
         Ok(())
     }
 
@@ -415,7 +415,7 @@ impl<'a> Intake<'a> {
          * that btree's intake buffer, compact the darray if mostly-zero, then
          * drop the empty-keys pin and release the locks taken in _start().
          */
-        for idx in (0..c::WbBtree::NR).map(c::WbBtree::from_bits) {
+        for idx in (0..WbBtree::NR).map(WbBtree::from_bits) {
             let mut accounting = core::mem::take(&mut self.btree(idx).inc.accounting);
             let mut live_accounting_keys = 0;
 

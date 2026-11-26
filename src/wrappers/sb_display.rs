@@ -12,9 +12,10 @@
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
-use bcachefs_kernel::c;
+use bcachefs_kernel::format::bch_sb;
+use bcachefs_kernel::sb::members_format::bch_member;
 use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::c::bch_sb_handle;
+use bcachefs_kernel::init::dev::bch_sb_handle;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::{self, SbFieldType};
 use bcachefs_kernel::sb::io::SbState;
@@ -31,8 +32,8 @@ fn find_dev(sbs: &[(PathBuf, bch_sb_handle)], idx: u32) -> Option<&(PathBuf, bch
 fn print_one_member(
     out: &mut Printbuf,
     sbs: &[(PathBuf, bch_sb_handle)],
-    sb: &c::bch_sb,
-    m: &c::bch_member,
+    sb: &bch_sb,
+    m: &bch_member,
     idx: u32,
 ) {
     if !m.alive() {
@@ -68,7 +69,7 @@ fn print_one_member(
 pub fn sb_to_text_with_names(
     out: &mut Printbuf,
     fs: Option<&Fs>,
-    sb: &c::bch_sb,
+    sb: &bch_sb,
     print_layout: bool,
     fields: u32,
     field_only: Option<SbFieldType>,

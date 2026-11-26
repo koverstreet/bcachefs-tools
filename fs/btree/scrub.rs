@@ -11,17 +11,19 @@ use crate::btree::cache::{btree_pos_to_text, Bounce};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
 use crate::btree::read::{BsetHolder, NodePtr};
 use crate::c;
+use crate::data::extents::ReadFlags;
+use crate::data::extents_format::BtreePtrV2;
 use crate::data::checksum::csum_err_msg;
 use crate::data::inline_data::InlineDataRef;
 use crate::data::moving::{Moving, MovingIo};
 use crate::data::ptrs::BkeyVRead;
 use crate::data::update::dev_ptr_bit;
 use crate::data_structures::array_vec::ArrayVec;
-use crate::errcode::BchError;
-use crate::format::{BkeyTypeFlags, Btree};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BkeyTypeFlags, Btree, BCH_BKEY_PTRS_MAX, btree_node, btree_node_entry};
 use crate::fs::{Dev, Fs, WriteRef};
 use crate::os::workqueue::Queue;
-use crate::sb::members::DevIoRef;
+use crate::sb::members::{DevIoRef, DevReadRefKind};
 use crate::os::bio::{Bio, BioBox, BioSubmit, Buffer};
 use crate::util::task::{spawn, waiter, Resumable, Resume};
 use crate::util::vstructs::{cast_plain, Head, Unvalidated};
@@ -57,7 +59,7 @@ pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf)
     // A corrupt key's sectors_written can't take the walk past the buffer
     let end = p.end.min(buf.len() >> 9);
 
-    let bn = cast_plain::<Head<c::btree_node>>(buf).expect("a btree node's worth of buffer");
+    let bn = cast_plain::<Head<btree_node>>(buf).expect("a btree node's worth of buffer");
     if bn.magic.get() != fs.bset_magic() {
         prt!(err, "bad magic: want {:x}, got {:x}", fs.bset_magic(), bn.magic.get());
         return false;
@@ -71,11 +73,11 @@ pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf)
     let mut written = 0;
     while written < end {
         let sectors = if written == 0 {
-            replica_bset::<c::btree_node<Unvalidated>>(fs, buf, written, end, err)
-        } else if c::btree_node_entry::<Unvalidated>::head(&buf[written << 9..]).seq != bn.keys.seq {
+            replica_bset::<btree_node<Unvalidated>>(fs, buf, written, end, err)
+        } else if btree_node_entry::<Unvalidated>::head(&buf[written << 9..]).seq != bn.keys.seq {
             break;
         } else {
-            replica_bset::<c::btree_node_entry<Unvalidated>>(fs, buf, written, end, err)
+            replica_bset::<btree_node_entry<Unvalidated>>(fs, buf, written, end, err)
         };
         let Some(sectors) = sectors else { return false };
 
@@ -90,11 +92,11 @@ pub fn node_replica_good(fs: &Fs, k: BkeySC<'_>, buf: &[u8], err: &mut Printbuf)
     true
 }
 
-pub type Replicas<T> = ArrayVec<T, { c::BCH_BKEY_PTRS_MAX as usize }>;
+pub type Replicas<T> = ArrayVec<T, { BCH_BKEY_PTRS_MAX as usize }>;
 
 pub struct ReplicaRead<'f> {
     fs:                &'f Fs,
-    pub(super) ca:     DevIoRef<c::DevReadRefKind>,
+    pub(super) ca:     DevIoRef<DevReadRefKind>,
     pub(super) sector: u64,
     pub(super) bio:    BioBox<'static, Bio<Buffer<Bounce<'f>>>>,
     pub ptr_bit:       u32,
@@ -102,12 +104,12 @@ pub struct ReplicaRead<'f> {
 
 impl<'f> ReplicaRead<'f> {
     pub fn new(fs: &'f Fs, k: BkeySC<'_>, dev: u32) -> Result<Option<Self>, BchError> {
-        let pick = k.pick_read_device(fs, None, dev, c::ReadFlags::hard_require_read_device)?;
+        let pick = k.pick_read_device(fs, None, dev, ReadFlags::hard_require_read_device)?;
         let Some(pick) = pick else { return Ok(None) };
         let ptr_bit = dev_ptr_bit(fs, k, pick.ptr.dev().into());
 
-        let ca = fs.dev_get_ioref::<c::DevReadRefKind>(pick.ptr.dev().into())
-            .ok_or_else(|| fs.err(c::Errcode::device_offline))?;
+        let ca = fs.dev_get_ioref::<DevReadRefKind>(pick.ptr.dev().into())
+            .ok_or_else(|| fs.err(Errcode::device_offline))?;
 
         let bytes = fs.opts.btree_node_size.get() as usize;
         let buf = Bounce::new(fs, bytes);
@@ -161,7 +163,7 @@ pub async fn read_replicas(reads: &mut [ReplicaRead<'_>], q: &Queue) -> Replicas
 /// checked against its own checksums, and what fails is lost.
 fn inline_data_bad(fs: &Fs, key: &BtreeKeyBuf) -> u64 {
     let k = key.key();
-    let Some(min_key) = k.arm::<c::BtreePtrV2>().map(|v2| v2.v().min_key) else { return 0 };
+    let Some(min_key) = k.arm::<BtreePtrV2>().map(|v2| v2.v().min_key) else { return 0 };
 
     let trans = crate::btree_trans!(fs);
     let (mut bad, mut seen) = (0u64, None);
@@ -233,13 +235,13 @@ pub fn btree_node_scrub(m: &Moving<'_>, btree: Btree, level: u32, k: BkeySC<'_>,
     -> Result<(), BchError>
 {
     // A v1 pointer carries nothing to check a replica against
-    if k.arm::<c::BtreePtrV2>().is_none() {
+    if k.arm::<BtreePtrV2>().is_none() {
         return Ok(());
     }
 
     let fs = m.trans().fs();
     // the task's filesystem: going read-only waits for it
-    let write = fs.writes.tryget().ok_or_else(|| fs.err(c::Errcode::erofs_no_writes_btree_node_scrub))?;
+    let write = fs.writes.tryget().ok_or_else(|| fs.err(Errcode::erofs_no_writes_btree_node_scrub))?;
     let key = BtreeKeyBuf::new(btree, level, k);
     let io = m.io_start(false, fs.btree_sectors());
 

@@ -4,16 +4,16 @@
 //! "Cycle detection" in locking.rs.
 
 use crate::btree::iter::BtreeTrans;
-use crate::btree::locking::{BtreeNodeLockedType, btree_node_pos};
+use crate::btree::locking::{BtreeNodeLockedType, btree_node_pos, btree_bkey_cached_common};
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{table_arrays, table_header, BtreePath, PathNode};
-use crate::btree::trans::foreign_bits;
+use crate::btree::trans::{foreign_bits, btree_trans_bits};
 use crate::c;
 use crate::errcode::{Errcode, BchError};
-use crate::format::Btree;
+use crate::format::{Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
-use crate::locking::six::six_lock_counts;
+use crate::locking::six::{six_lock_counts, six_lock_waiter, SixLockType};
 use crate::prt;
 use crate::debug::trace::events;
 use crate::util::alloc::AllocError;
@@ -41,11 +41,11 @@ use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Rela
 struct Trans(*mut BtreeTrans<'static>);
 
 impl Trans {
-    fn locking(self) -> *mut c::btree_bkey_cached_common {
-        unsafe { (&raw const (*self.0).locking).cast::<*mut c::btree_bkey_cached_common>().read_volatile() }
+    fn locking(self) -> *mut btree_bkey_cached_common {
+        unsafe { (&raw const (*self.0).locking).cast::<*mut btree_bkey_cached_common>().read_volatile() }
     }
 
-    fn lock_want(self) -> c::SixLockType {
+    fn lock_want(self) -> SixLockType {
         unsafe { (*self.0).locking_wait.lock_want.get() }
     }
 
@@ -58,7 +58,7 @@ impl Trans {
     }
 
     fn may_not_fail(self) -> bool {
-        unsafe { (&raw const (*self.0).bits).cast::<c::btree_trans_bits>().read_volatile() }.lock_may_not_fail()
+        unsafe { (&raw const (*self.0).bits).cast::<btree_trans_bits>().read_volatile() }.lock_may_not_fail()
     }
 
     fn must_abort(self) -> bool {
@@ -99,7 +99,7 @@ impl Trans {
 
     /// container_of(@w, struct btree_trans, locking_wait): every waiter on a
     /// btree node lock is a transaction's.
-    fn of_waiter(w: *mut c::six_lock_waiter) -> Self {
+    fn of_waiter(w: *mut six_lock_waiter) -> Self {
         Trans(w.wrapping_byte_sub(offset_of!(BtreeTrans<'_>, locking_wait)).cast())
     }
 }
@@ -123,7 +123,7 @@ unsafe fn paths_allocated<'a>(paths: *mut BtreePath) -> (&'a AtomicBitmap, usize
     (AtomicBitmap::from_words(unsafe { core::slice::from_raw_parts(words, bits_to_longs(nr)) }), nr)
 }
 
-fn bkey_cached_common_to_text(out: &mut Printbuf, b: &c::btree_bkey_cached_common) {
+fn bkey_cached_common_to_text(out: &mut Printbuf, b: &btree_bkey_cached_common) {
     let c = six_lock_counts(b.lock.six());
 
     let pid = {
@@ -190,7 +190,7 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
         prt!(out, "  path {} {} {} l={}:{}\n", i, if path.cached() { 'c' } else { 'b' },
              path.btree_id(), path.level(), path.pos);
 
-        for l in 0..c::BTREE_MAX_DEPTH as usize {
+        for l in 0..BTREE_MAX_DEPTH as usize {
             let lock_type = BtreeNodeLockedType::of(path.nodes_locked, l);
 
             if lock_type != BtreeNodeLockedType::BTREE_NODE_UNLOCKED {
@@ -212,7 +212,7 @@ pub(crate) unsafe fn bch2_btree_trans_to_text(out: &mut Printbuf, trans: *mut Bt
     }
 }
 
-fn lock_type_conflicts(t1: BtreeNodeLockedType, t2: c::SixLockType) -> bool {
+fn lock_type_conflicts(t1: BtreeNodeLockedType, t2: SixLockType) -> bool {
     t1 as i32 + t2 as i32 > 1
 }
 
@@ -232,14 +232,14 @@ pub(crate) enum Cycle {
  */
 struct TransWaitingForLock {
     trans:        *mut BtreeTrans<'static>,
-    node_want:    *mut c::btree_bkey_cached_common,
-    lock_want:    c::SixLockType,
+    node_want:    *mut btree_bkey_cached_common,
+    lock_want:    SixLockType,
 
     /* for iterating over held locks :*/
     level:        usize,
     path_idx:     usize,
     waitlist_idx: usize,
-    node_have:    *mut c::btree_bkey_cached_common,
+    node_have:    *mut btree_bkey_cached_common,
 
     /*
      * Conflicting waiters we found on the lock at (@path_idx, @level),
@@ -254,7 +254,7 @@ impl TransWaitingForLock {
         Self {
             trans:        null_mut(),
             node_want:    null_mut(),
-            lock_want:    c::SixLockType::SIX_LOCK_read,
+            lock_want:    SixLockType::SIX_LOCK_read,
             level:        0,
             path_idx:     0,
             waitlist_idx: 0,
@@ -532,7 +532,7 @@ impl LockGraph {
                 self.g[top].level    = 0;
             }
 
-            while self.g[top].level < c::BTREE_MAX_DEPTH as usize {
+            while self.g[top].level < BTREE_MAX_DEPTH as usize {
                 let level = self.g[top].level;
                 let lock_held = unsafe { path_locked_type(path, level) };
 
@@ -695,7 +695,7 @@ fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
 
 /// The six lock's should_sleep_fn, for btree node locks: before @trans sleeps
 /// on @b's lock.
-pub(crate) fn bch2_six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &c::btree_bkey_cached_common) -> c_int {
+pub(crate) fn bch2_six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &btree_bkey_cached_common) -> c_int {
     /*
      * Store->load fence: orders publishing ourselves as a waiter (done by
      * six's WaitListLocked::insert() before should_sleep_fn ran) before the two

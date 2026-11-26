@@ -11,10 +11,11 @@ use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::build_aux_trees;
 use crate::btree::path::{PathIdx, Paths};
 use crate::btree::bkey::BkeyV;
-use crate::c;
+use crate::btree::interior::btree_alloc;
+use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::debug::trace::events;
 use crate::errcode::BchError;
-use crate::format::{BkeyType, Btree};
+use crate::format::{BkeyType, Btree, BTREE_ID_NR_MAX, jset_entry, jset_entry_btree_root};
 use crate::fs::Fs;
 use crate::prt;
 use crate::util::Printbuf;
@@ -35,7 +36,7 @@ use pin_init::pin_data;
 #[repr(C)]
 #[derive(Default)]
 pub struct btree_root {
-    pub key: DstRoom<BkeyI, [u64; BKEY_U64S + c::BKEY_BTREE_PTR_VAL_U64s_MAX]>,
+    pub key: DstRoom<BkeyI, [u64; BKEY_U64S + BKEY_BTREE_PTR_VAL_U64s_MAX]>,
     pub level: u8,
     pub alive: u8,
 }
@@ -47,17 +48,17 @@ pub struct btree_root {
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct BtreeRoots {
-    #[init(::pin_init::init_array_from_fn(|_| c::btree_root::default()))]
-    pub roots_known: [c::btree_root; Btree::NR as usize],
+    #[init(::pin_init::init_array_from_fn(|_| btree_root::default()))]
+    pub roots_known: [btree_root; Btree::NR as usize],
     #[pin]
     #[init(Vec::new())]
-    pub roots_extra: Vec<c::btree_root>,
+    pub roots_extra: Vec<btree_root>,
 }
 
 impl BtreeRoots {
     /// Btree @id's: a known btree's, or past them, roots_extra's -
     /// bch2_btree_id_root(). None for one past those.
-    pub fn get(&self, id: u32) -> Option<&c::btree_root> {
+    pub fn get(&self, id: u32) -> Option<&btree_root> {
         let nr_known = Btree::NR;
         if id < nr_known {
             return Some(&self.roots_known[id as usize]);
@@ -65,7 +66,7 @@ impl BtreeRoots {
         self.roots_extra.get((id - nr_known) as usize)
     }
 
-    pub fn get_mut(&mut self, id: u32) -> Option<&mut c::btree_root> {
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut btree_root> {
         let nr_known = Btree::NR;
         if id < nr_known {
             return Some(&mut self.roots_known[id as usize]);
@@ -101,8 +102,8 @@ crate::published! {
     /// BTREE_ID_NR_MAX, so nothing here moves when roots_extra grows.
     #[derive(MaybeZeroable)]
     pub struct BtreeRootsLive {
-        pub roots_b: [Volatile<c_ulong>; c::BTREE_ID_NR_MAX as usize],
-        pub roots_error: [Volatile<i16>; c::BTREE_ID_NR_MAX as usize],
+        pub roots_b: [Volatile<c_ulong>; BTREE_ID_NR_MAX as usize],
+        pub roots_error: [Volatile<i16>; BTREE_ID_NR_MAX as usize],
         pub roots_nr_extra: Volatile<u32>,
     }
 }
@@ -110,7 +111,7 @@ crate::published! {
 impl BtreeRootsLive {
     /// Btree @id's root node: bch2_btree_id_root_b().
     pub fn node(&self, id: u32) -> Option<&BtreeNode> {
-        let b = self.roots_b.get(id as usize)?.get() & !((1 << c::BTREE_ROOT_LEVEL_BITS) - 1);
+        let b = self.roots_b.get(id as usize)?.get() & !((1 << BTREE_ROOT_LEVEL_BITS) - 1);
         // SAFETY: a root's node, live while it's the root
         unsafe { (b as *const BtreeNode).as_ref() }
     }
@@ -123,7 +124,7 @@ impl BtreeRootsLive {
 
 
 fn root_pack(b: &BtreeNode) -> c_ulong {
-    let mask = (1 << c::BTREE_ROOT_LEVEL_BITS) - 1;
+    let mask = (1 << BTREE_ROOT_LEVEL_BITS) - 1;
     let p = ptr::from_ref(b) as c_ulong;
 
     assert!(p & mask == 0, "a btree node not aligned for its level packed with it");
@@ -185,7 +186,7 @@ impl Fs {
 
     /// A btree root as journal entry @e has it, propagated back to the
     /// in-memory roots: as each journal write is made.
-    pub(crate) fn journal_entry_to_btree_root(&self, e: &c::jset_entry) {
+    pub(crate) fn journal_entry_to_btree_root(&self, e: &jset_entry) {
         /*
          * The on-disk root fields (key/level/alive) are owned by root_lock:
          * that's what bch2_btree_set_root_inmem() takes for ->b, and what the
@@ -194,7 +195,7 @@ impl Fs {
          * dragged interior_updates.lock into the journal write path under
          * sb_lock — closing a lockdep cycle with pin_resize_lock.
          */
-        let root = e.arm::<c::jset_entry_btree_root<Validated>>().expect("a btree root entry");
+        let root = e.arm::<jset_entry_btree_root<Validated>>().expect("a btree root entry");
         let k = root.entries().next().expect("a btree root entry with no key");
 
         let mut g = self.btree.cache.roots.lock();
@@ -205,7 +206,7 @@ impl Fs {
         r.key.set_key(k);
     }
 
-    fn btree_alloc_to_text(&self, out: &mut Printbuf, a: &c::btree_alloc) {
+    fn btree_alloc_to_text(&self, out: &mut Printbuf, a: &btree_alloc) {
         out.indent_add(2);
         prt!(out, "{}\n", (&*a.k).to_text(self));
 

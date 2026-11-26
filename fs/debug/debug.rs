@@ -17,9 +17,8 @@ use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter};
 use crate::btree::BtreeIter;
 use crate::btree::node::BtreeNode;
 use crate::btree::trans::transaction_fn;
-use crate::c;
 use crate::errcode::BchError;
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::os::debugfs::{DebugFile, DebugOut, DebugRoot};
 use crate::os::module::ModuleExit;
 use crate::data_structures::eytzinger::Eytzinger0;
@@ -27,7 +26,7 @@ use crate::util::place::Contained;
 use crate::util::task::{TaskList, TASKS};
 use crate::util::{rcu, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
 use cstruct_macros::{placed, Init, MaybeZeroable};
 use pin_init::pin_data;
 
@@ -39,12 +38,12 @@ pub struct btree_debug {}
 
 
 fn may_iterate(fs: &Fs) -> bool {
-    fs.flags.get(c::FsFlag::may_go_rw)
+    fs.flags.get(FsFlag::may_go_rw)
 }
 
 /* btrees/<btree>/ */
 
-impl c::btree_debug {
+impl btree_debug {
     /// The filesystem it's one of the btree_debug[] of.
     fn fs(&self) -> &Fs {
         self.container()
@@ -54,9 +53,9 @@ impl c::btree_debug {
 enum Keys {}
 
 impl DebugFile for Keys {
-    type Obj = c::btree_debug;
+    type Obj = btree_debug;
 
-    async fn show(bd: &c::btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(bd: &btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
@@ -82,9 +81,9 @@ impl DebugFile for Keys {
 enum Formats {}
 
 impl DebugFile for Formats {
-    type Obj = c::btree_debug;
+    type Obj = btree_debug;
 
-    async fn show(bd: &c::btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(bd: &btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());
@@ -94,7 +93,7 @@ impl DebugFile for Formats {
         let mut from = Bpos::default();
         out.print_each(|out| {
             let trans = btree_trans!(fs);
-            while level < c::BTREE_MAX_DEPTH as u32 {
+            while level < BTREE_MAX_DEPTH as u32 {
                 let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), from, 0, level,
                                                   BtreeIterFlags::empty());
                 loop {
@@ -138,9 +137,9 @@ impl DebugFile for Formats {
 enum BfloatFailed {}
 
 impl DebugFile for BfloatFailed {
-    type Obj = c::btree_debug;
+    type Obj = btree_debug;
 
-    async fn show(bd: &c::btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(bd: &btree_debug, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = bd.fs();
         if !may_iterate(fs) {
             return Ok(());

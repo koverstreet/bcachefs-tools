@@ -22,7 +22,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::AllocError;
 use crate::os::percpu::{IrqGuard, PerCpu};
@@ -69,7 +68,7 @@ struct Cache(ArrayVec<u32, 31>);
 // MaybeUninits
 unsafe impl ::pin_init::Zeroable for Cache {}
 
-impl c::fast_list {
+impl fast_list {
     /// @f on this CPU's cache, interrupts off.
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
@@ -201,7 +200,7 @@ impl PinnedDrop for fast_list {
 /// A slot had before its item, empty: given back if it's dropped so.
 #[must_use = "a slot dropped is given back"]
 pub struct Slot<'l> {
-    list: &'l c::fast_list,
+    list: &'l fast_list,
     idx:  u32,
 }
 

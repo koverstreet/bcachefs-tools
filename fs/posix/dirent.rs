@@ -34,12 +34,17 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
+use crate::posix::dirent_format;
+use crate::posix::dirent_format::{BCH_NAME_MAX, DT_SUBVOL, bch_dirent_cf_name_block,
+    bch_dirent_subvol, bch_dirent_target};
+use crate::posix::inode::bch_inode_unpacked;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BkeyType};
 use crate::fs::Fs;
 use crate::posix::inode;
 use crate::snapshots::subvolume;
-use crate::posix::str_hash::{self, HashTable};
+use crate::posix::str_hash::{self, HashTable, bch_hash_info};
 use crate::os::unicode::UnicodeMap;
 use crate::util::os_str::{OsStr, OsStrExt};
 use core::ops::ControlFlow;
@@ -50,20 +55,20 @@ use core::ops::ControlFlow;
 /// btree has.
 #[derive(Clone, Copy)]
 pub struct Dirent<'k> {
-    k:     BkeySC<'k, c::Dirent>,
-    v:     &'k c::Dirent,
+    k:     BkeySC<'k, dirent_format::Dirent>,
+    v:     &'k dirent_format::Dirent,
     names: DirentName<'k>,
 }
 
 impl<'k> Dirent<'k> {
     /// @k as a dirent, if it is one.
     pub fn new(k: BkeySC<'k>) -> Option<Self> {
-        k.arm::<c::Dirent>().map(Dirent::from)
+        k.arm::<dirent_format::Dirent>().map(Dirent::from)
     }
 
-    pub fn k(&self) -> BkeySC<'k, c::Dirent> { self.k }
+    pub fn k(&self) -> BkeySC<'k, dirent_format::Dirent> { self.k }
 
-    pub fn v(&self) -> &'k c::Dirent { self.v }
+    pub fn v(&self) -> &'k dirent_format::Dirent { self.v }
 
     pub fn d_type(&self) -> u8 { self.v.d_type() }
 
@@ -78,8 +83,8 @@ impl<'k> Dirent<'k> {
     pub fn lookup_name(&self) -> &'k OsStr { self.names.lookup_name() }
 }
 
-impl<'k> From<BkeySC<'k, c::Dirent>> for Dirent<'k> {
-    fn from(k: BkeySC<'k, c::Dirent>) -> Self {
+impl<'k> From<BkeySC<'k, dirent_format::Dirent>> for Dirent<'k> {
+    fn from(k: BkeySC<'k, dirent_format::Dirent>) -> Self {
         let v = k.v();
         let names = RawNames::new(k).names()
             .expect("dirent names within the value, as validate checked");
@@ -97,28 +102,28 @@ pub struct Dirents;
 /// casefolded directory.
 impl HashTable for Dirents {
     type Key<'k> = OsStr;
-    type Val = c::Dirent;
+    type Val = dirent_format::Dirent;
 
     const BTREE: Btree = Btree::dirents;
 
-    fn hash_key(info: &c::bch_hash_info, key: &OsStr) -> u64 {
+    fn hash_key(info: &bch_hash_info, key: &OsStr) -> u64 {
         hash(info, key)
     }
 
-    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_, c::Dirent>) -> u64 {
+    fn hash_bkey(info: &bch_hash_info, k: BkeySC<'_, dirent_format::Dirent>) -> u64 {
         hash(info, Dirent::from(k).lookup_name())
     }
 
-    fn matches(k: BkeySC<'_, c::Dirent>, key: &OsStr) -> bool {
+    fn matches(k: BkeySC<'_, dirent_format::Dirent>, key: &OsStr) -> bool {
         Dirent::from(k).lookup_name() == key
     }
 
-    fn same_name(a: BkeySC<'_, c::Dirent>, b: BkeySC<'_, c::Dirent>) -> bool {
+    fn same_name(a: BkeySC<'_, dirent_format::Dirent>, b: BkeySC<'_, dirent_format::Dirent>) -> bool {
         Dirent::from(a).lookup_name() == Dirent::from(b).lookup_name()
     }
 
     /// A subvolume's dirent lists only in its parent subvolume.
-    fn is_visible(inum: c::subvol_inum, k: BkeySC<'_, c::Dirent>) -> bool {
+    fn is_visible(inum: subvol_inum, k: BkeySC<'_, dirent_format::Dirent>) -> bool {
         match Dirent::from(k).target() {
             DirentTarget::Subvol { parent, .. } => u64::from(parent) == inum.subvol,
             DirentTarget::Inode(_)              => true,
@@ -129,7 +134,7 @@ impl HashTable for Dirents {
 /// @name's hash under @info, its offset in its directory: as
 /// bch2_dirent_hash(). Offsets 0 and 1 are kept for . and .., which aren't
 /// stored.
-pub fn hash(info: &c::bch_hash_info, name: &OsStr) -> u64 {
+pub fn hash(info: &bch_hash_info, name: &OsStr) -> u64 {
     str_hash::hash_parts(info, &[name.as_bytes()], true).max(2)
 }
 
@@ -138,13 +143,13 @@ pub fn hash(info: &c::bch_hash_info, name: &OsStr) -> u64 {
 /// A dirent key at @pos with room for any name, to be filled in with
 /// copy_target() and init_name().
 pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: Bpos)
-    -> Result<TransBkey<'a, 't, c::Dirent>, BchError>
+    -> Result<TransBkey<'a, 't, dirent_format::Dirent>, BchError>
 {
-    t.bkey_alloc_init::<c::Dirent>(u8::MAX as usize - BKEY_U64S, pos)
+    t.bkey_alloc_init::<dirent_format::Dirent>(u8::MAX as usize - BKEY_U64S, pos)
 }
 
 /// Point @dst at what @src points at: as dirent_copy_target().
-pub fn copy_target(dst: &mut TransBkey<'_, '_, c::Dirent>, src: Dirent<'_>) {
+pub fn copy_target(dst: &mut TransBkey<'_, '_, dirent_format::Dirent>, src: Dirent<'_>) {
     let d = dst.v_mut();
     d.target = src.v().target;
     d.set_d_type(src.d_type());
@@ -156,15 +161,15 @@ pub fn copy_target(dst: &mut TransBkey<'_, '_, c::Dirent>, src: Dirent<'_>) {
 /// here.
 pub fn init_name(
     fs:        &Fs,
-    k:         &mut BkeyI<c::Dirent>,
-    hash_info: &c::bch_hash_info,
+    k:         &mut BkeyI<dirent_format::Dirent>,
+    hash_info: &bch_hash_info,
     name:      &OsStr,
     cf_name:   Option<&OsStr>,
 ) -> Result<(), BchError> {
     let name = name.as_bytes();
     let cf_name = cf_name.map(OsStrExt::as_bytes);
 
-    if name.len() > c::BCH_NAME_MAX as usize {
+    if name.len() > BCH_NAME_MAX as usize {
         return Err(Errcode::ENAMETOOLONG_dirent_name.into());
     }
 
@@ -174,7 +179,7 @@ pub fn init_name(
 
     let end = match hash_info.cf_encoding {
         None => {
-            let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
+            let v = BkeyS::<dirent_format::Dirent>::from(&mut *k).into_val_bytes_mut();
             v[D_NAME_OFFSET..][..name.len()].copy_from_slice(name);
             D_NAME_OFFSET + name.len()
         }
@@ -198,12 +203,12 @@ pub fn init_name(
 /// their lengths. Where the names end.
 #[cfg(CONFIG_UNICODE)]
 fn casefold_name(
-    k:       &mut BkeyI<c::Dirent>,
+    k:       &mut BkeyI<dirent_format::Dirent>,
     map:     &UnicodeMap,
     name:    &[u8],
     cf_name: Option<&[u8]>,
 ) -> Result<usize, BchError> {
-    let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
+    let v = BkeyS::<dirent_format::Dirent>::from(&mut *k).into_val_bytes_mut();
     let (names, out) = v[D_NAMES_OFFSET..].split_at_mut(name.len());
     names.copy_from_slice(name);
 
@@ -215,8 +220,8 @@ fn casefold_name(
         None => map.casefold(OsStr::from_bytes(name), out)?,
     };
 
-    let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
-    let cf_block = cast_plain_mut::<c::bch_dirent_cf_name_block>(&mut v[D_NAME_OFFSET..])
+    let v = BkeyS::<dirent_format::Dirent>::from(&mut *k).into_val_bytes_mut();
+    let cf_block = cast_plain_mut::<bch_dirent_cf_name_block>(&mut v[D_NAME_OFFSET..])
         .expect("a dirent's name block");
     cf_block.d_name_len    = (name.len() as u16).into();
     cf_block.d_cf_name_len = (cf_len as u16).into();
@@ -226,7 +231,7 @@ fn casefold_name(
 
 #[cfg(not(CONFIG_UNICODE))]
 fn casefold_name(
-    _k:       &mut BkeyI<c::Dirent>,
+    _k:       &mut BkeyI<dirent_format::Dirent>,
     map:      &UnicodeMap,
     _name:    &[u8],
     _cf_name: Option<&[u8]>,
@@ -240,21 +245,21 @@ fn casefold_name(
 /// is for the caller to fill in.
 pub fn create_key<'a, 't>(
     t:         &TransAttempt<'a, 't>,
-    hash_info: &c::bch_hash_info,
-    dir:       c::subvol_inum,
+    hash_info: &bch_hash_info,
+    dir:       subvol_inum,
     d_type:    u8,
     name:      &OsStr,
     cf_name:   Option<&OsStr>,
     target:    u64,
-) -> Result<TransBkey<'a, 't, c::Dirent>, BchError> {
+) -> Result<TransBkey<'a, 't, dirent_format::Dirent>, BchError> {
     let mut k = alloc_max(t, pos(dir.inum, 0))?;
 
     let d = k.v_mut();
     d.set_d_type(d_type);
-    if d_type as u32 != c::DT_SUBVOL {
+    if d_type as u32 != DT_SUBVOL {
         d.target.d_inum = target.into();
     } else {
-        d.target.subvol = c::bch_dirent_subvol {
+        d.target.subvol = bch_dirent_subvol {
             d_child_subvol:  (target as u32).into(),
             d_parent_subvol: (dir.subvol as u32).into(),
         };
@@ -272,7 +277,7 @@ pub fn create_snapshot(
     t:            &TransAttempt<'_, '_>,
     subvol:       u32,
     snapshot:     u32,
-    dir:          &c::bch_inode_unpacked,
+    dir:          &bch_inode_unpacked,
     d_type:       u8,
     name:         &OsStr,
     target:       DirentTarget,
@@ -280,7 +285,7 @@ pub fn create_snapshot(
     set_flags:    str_hash::SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
-    let dir_inum = c::subvol_inum { subvol: subvol as u64, inum: dir.bi_inum };
+    let dir_inum = subvol_inum { subvol: subvol as u64, inum: dir.bi_inum };
     let hash_info = str_hash::hash_info_init(t.fs(), dir)?;
 
     // A subvolume dirent's parent is @subvol:
@@ -301,8 +306,8 @@ pub fn create_snapshot(
 #[allow(clippy::too_many_arguments)]
 pub fn create(
     t:            &TransAttempt<'_, '_>,
-    dir:          c::subvol_inum,
-    dir_u:        &c::bch_inode_unpacked,
+    dir:          subvol_inum,
+    dir_u:        &bch_inode_unpacked,
     d_type:       u8,
     name:         &OsStr,
     target:       u64,
@@ -328,7 +333,7 @@ pub fn casefold<'a>(
 ) -> Result<&'a OsStr, BchError> {
     t.fs().casefold_enabled()?;
 
-    let buf = t.kmalloc(c::BCH_NAME_MAX as usize + 1)?;
+    let buf = t.kmalloc(BCH_NAME_MAX as usize + 1)?;
     let len = map.casefold(name, buf)?;
     Ok(OsStr::from_bytes(&buf[..len]))
 }
@@ -346,7 +351,7 @@ pub fn casefold<'a>(
 /// casefolded, if the directory is: as bch2_maybe_casefold().
 pub fn maybe_casefold<'a>(
     t:    &TransAttempt<'a, '_>,
-    info: &c::bch_hash_info,
+    info: &bch_hash_info,
     name: &'a OsStr,
 ) -> Result<&'a OsStr, BchError> {
     match info.cf_encoding {
@@ -362,25 +367,25 @@ pub fn maybe_casefold<'a>(
 /// in another subvolume.
 pub fn read_target(
     t:   &TransAttempt<'_, '_>,
-    dir: c::subvol_inum,
+    dir: subvol_inum,
     d:   Dirent<'_>,
-) -> Result<Option<c::subvol_inum>, BchError> {
+) -> Result<Option<subvol_inum>, BchError> {
     match d.target() {
         DirentTarget::Subvol { parent, .. } if u64::from(parent) != dir.subvol => Ok(None),
         DirentTarget::Subvol { child, .. } => {
             let s = subvolume::get(t, child, true)?;
-            Ok(Some(c::subvol_inum { subvol: child as u64, inum: s.inode.get() }))
+            Ok(Some(subvol_inum { subvol: child as u64, inum: s.inode.get() }))
         }
-        DirentTarget::Inode(inum) => Ok(Some(c::subvol_inum { subvol: dir.subvol, inum })),
+        DirentTarget::Inode(inum) => Ok(Some(subvol_inum { subvol: dir.subvol, inum })),
     }
 }
 
 /// What a lookup found: its target - ENOENT for a dirent @dir doesn't list.
 pub fn lookup_target(
     t:   &TransAttempt<'_, '_>,
-    dir: c::subvol_inum,
-    k:   BkeySC<'_, c::Dirent>,
-) -> Result<c::subvol_inum, BchError> {
+    dir: subvol_inum,
+    k:   BkeySC<'_, dirent_format::Dirent>,
+) -> Result<subvol_inum, BchError> {
     read_target(t, dir, Dirent::from(k))?
         .ok_or_else(|| t.fs().err(Errcode::ENOENT_dirent_target))
 }
@@ -391,12 +396,12 @@ pub fn lookup_target(
 pub fn lookup_snapshot<'a>(
     t:         &TransAttempt<'a, '_>,
     iter:      &mut BtreeIter<'a>,
-    dir:       c::subvol_inum,
+    dir:       subvol_inum,
     snapshot:  u32,
-    hash_info: &c::bch_hash_info,
+    hash_info: &bch_hash_info,
     name:      &OsStr,
     flags:     BtreeIterFlags,
-) -> Result<c::subvol_inum, BchError> {
+) -> Result<subvol_inum, BchError> {
     let lookup_name = maybe_casefold(t, hash_info, name)?;
     let k = str_hash::lookup_in_snapshot::<Dirents>(t, iter, hash_info, dir, lookup_name,
                                                     flags, snapshot)?;
@@ -408,11 +413,11 @@ pub fn lookup_snapshot<'a>(
 pub fn lookup_key<'i, 'a>(
     t:         &'i TransAttempt<'a, '_>,
     iter:      &'i mut BtreeIter<'a>,
-    dir:       c::subvol_inum,
-    hash_info: &c::bch_hash_info,
+    dir:       subvol_inum,
+    hash_info: &bch_hash_info,
     name:      &OsStr,
     flags:     BtreeIterFlags,
-) -> Result<BkeySC<'i, c::Dirent>, BchError> {
+) -> Result<BkeySC<'i, dirent_format::Dirent>, BchError> {
     let lookup_name = maybe_casefold(t, hash_info, name)?;
     str_hash::lookup::<Dirents>(t, iter, hash_info, dir, lookup_name, flags)
 }
@@ -422,21 +427,21 @@ pub fn lookup_key<'i, 'a>(
 pub fn lookup_trans<'a>(
     t:         &TransAttempt<'a, '_>,
     iter:      &mut BtreeIter<'a>,
-    dir:       c::subvol_inum,
-    hash_info: &c::bch_hash_info,
+    dir:       subvol_inum,
+    hash_info: &bch_hash_info,
     name:      &OsStr,
     flags:     BtreeIterFlags,
-) -> Result<c::subvol_inum, BchError> {
+) -> Result<subvol_inum, BchError> {
     lookup_target(t, dir, lookup_key(t, iter, dir, hash_info, name, flags)?)
 }
 
 /// What @name in directory @dir points at.
 pub fn lookup(
     fs:        &Fs,
-    dir:       c::subvol_inum,
-    hash_info: &c::bch_hash_info,
+    dir:       subvol_inum,
+    hash_info: &bch_hash_info,
     name:      &OsStr,
-) -> Result<c::subvol_inum, BchError> {
+) -> Result<subvol_inum, BchError> {
     let trans = crate::btree_trans!(fs);
 
     lockrestart_do(&trans, |t| {
@@ -467,7 +472,7 @@ pub fn empty_dir_snapshot(
 
 /// Whether directory @dir is empty, as its subvolume sees it: as
 /// bch2_empty_dir_trans(). ENOTEMPTY_dir_not_empty if it isn't.
-pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: c::subvol_inum) -> Result<(), BchError> {
+pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: subvol_inum) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, dir.subvol as u32)?;
     empty_dir_snapshot(t, dir.inum, dir.subvol as u32, snapshot)
 }
@@ -497,7 +502,7 @@ impl<E: DirEmit> DirEmit for &mut E {
 
 /// Emit @d, pointing at @target, unlocking @t. False once the buffer is
 /// full.
-fn dir_emit(ctx: &mut impl DirEmit, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum) -> bool {
+fn dir_emit(ctx: &mut impl DirEmit, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: subvol_inum) -> bool {
     let offset = d.k().k.p.offset;
 
     // Although not required by the kernel code, updating ctx->pos is
@@ -512,7 +517,7 @@ fn dir_emit(ctx: &mut impl DirEmit, t: &TransAttempt<'_, '_>, d: Dirent<'_>, tar
     let d = Dirent::new(BkeySC::from(&k)).expect("a dirent");
     let name = d.name().as_bytes();
     let d_type = match d.d_type() as u32 {
-        c::DT_SUBVOL => c::DT_DIR,
+        DT_SUBVOL => c::DT_DIR,
         d_type       => d_type,
     };
 
@@ -538,8 +543,8 @@ fn dir_emit(ctx: &mut impl DirEmit, t: &TransAttempt<'_, '_>, d: Dirent<'_>, tar
 /// at the next key.
 pub fn readdir(
     fs:        &Fs,
-    dir:       c::subvol_inum,
-    hash_info: &mut c::bch_hash_info,
+    dir:       subvol_inum,
+    hash_info: &mut bch_hash_info,
     mut ctx:   impl DirEmit,
 ) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
@@ -576,7 +581,7 @@ pub fn readdir(
 #[derive(Clone, Copy)]
 struct OldDirent {
     d_type:   u8,
-    target:   c::bch_dirent_target,
+    target:   bch_dirent_target,
     snapshot: u32,
 }
 
@@ -586,11 +591,11 @@ impl OldDirent {
     }
 
     fn is_subvol(&self) -> bool {
-        self.d_type as u32 == c::DT_SUBVOL
+        self.d_type as u32 == DT_SUBVOL
     }
 
     /// Point @dst at what this pointed at: as dirent_copy_target().
-    fn copy_target_to(&self, dst: &mut TransBkey<'_, '_, c::Dirent>) {
+    fn copy_target_to(&self, dst: &mut TransBkey<'_, '_, dirent_format::Dirent>) {
         let d = dst.v_mut();
         d.target = self.target;
         d.set_d_type(self.d_type);
@@ -599,9 +604,9 @@ impl OldDirent {
 
 /// If @k is a subvolume's dirent, it lists in @dir's subvolume - the
 /// directory it's being moved into.
-fn set_subvol_parent(k: &mut TransBkey<'_, '_>, dir: c::subvol_inum) {
-    if let Some(d) = k.as_mut().arm::<c::Dirent>().map(|k| k.v_mut()) {
-        if d.d_type() as u32 == c::DT_SUBVOL {
+fn set_subvol_parent(k: &mut TransBkey<'_, '_>, dir: subvol_inum) {
+    if let Some(d) = k.as_mut().arm::<dirent_format::Dirent>().map(|k| k.v_mut()) {
+        if d.d_type() as u32 == DT_SUBVOL {
             d.set_parent_subvol(dir.subvol as u32);
         }
     }
@@ -611,8 +616,8 @@ fn set_subvol_parent(k: &mut TransBkey<'_, '_>, dir: c::subvol_inum) {
 /// now named src and dst went.
 #[derive(Default)]
 pub struct Renamed {
-    pub src_inum:   c::subvol_inum,
-    pub dst_inum:   c::subvol_inum,
+    pub src_inum:   subvol_inum,
+    pub dst_inum:   subvol_inum,
     pub src_offset: u64,
     pub dst_offset: u64,
 }
@@ -625,15 +630,15 @@ pub struct Renamed {
 #[allow(clippy::too_many_arguments)]
 pub fn rename(
     t:        &TransAttempt<'_, '_>,
-    src_dir:  c::subvol_inum,
-    src_hash: &c::bch_hash_info,
-    dst_dir:  c::subvol_inum,
-    dst_hash: &c::bch_hash_info,
+    src_dir:  subvol_inum,
+    src_hash: &bch_hash_info,
+    dst_dir:  subvol_inum,
+    dst_hash: &bch_hash_info,
     src_name: &OsStr,
     dst_name: &OsStr,
-    mode:     c::RenameMode,
+    mode:     RenameMode,
 ) -> Result<Renamed, BchError> {
-    use c::RenameMode::*;
+    use self::RenameMode::*;
 
     let mut r = Renamed::default();
     let mut src_iter = BtreeIter::uninit(t.trans());
@@ -667,7 +672,7 @@ pub fn rename(
         r.src_offset = dst_pos.offset;
     }
 
-    let cf = |hash: &c::bch_hash_info, lookup| hash.cf_encoding.is_some().then_some(lookup);
+    let cf = |hash: &bch_hash_info, lookup| hash.cf_encoding.is_some().then_some(lookup);
 
     // Untyped, as new_src may be a deletion or a whiteout:
     let mut new_dst: TransBkey<'_, '_> = {
@@ -754,7 +759,7 @@ pub fn rename(
 
 /// The first version of inode @inum, in any snapshot.
 fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
-    -> Result<c::bch_inode_unpacked, BchError>
+    -> Result<bch_inode_unpacked, BchError>
 {
     let fs = t.fs();
     let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, inum),

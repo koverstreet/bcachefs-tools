@@ -34,9 +34,11 @@ use core::pin::Pin;
 use kernel::ffi::{c_long, c_ulong};
 
 use crate::c;
+use crate::format::StrHashKind;
+use crate::posix::str_hash::bch_hash_info;
 use crate::posix::dirent::{self, DirEmit};
 use crate::os::dir_context::DirContext;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::locking::{Guard, LockedBy};
 use crate::posix::str_hash;
 use crate::util::alloc::KBox;
@@ -69,10 +71,10 @@ fn dirents_32bit(file: &File) -> bool {
          (cfg!(target_pointer_width = "32") || crate::os::kernel::in_compat_syscall()))
 }
 
-fn cookie_shift(hash: &c::bch_hash_info) -> u32 {
+fn cookie_shift(hash: &bch_hash_info) -> u32 {
     if hash.is_31bit {
         0
-    } else if hash.type_ == c::StrHashKind::crc32c {
+    } else if hash.type_ == StrHashKind::crc32c {
         1
     } else {
         32
@@ -186,7 +188,7 @@ impl FileOps for Dir {
 
     /// generic_read_dir()'s: read(2) of a directory is EISDIR.
     fn read(&self, _file: &File<Self>, _buf: &mut UserBuf) -> Result<(), BchError> {
-        Err(c::Errcode::EISDIR_read_dir.into())
+        Err(Errcode::EISDIR_read_dir.into())
     }
 
     /// A 32-bit reader's positions are cookies, up to READDIR_32_EOF.

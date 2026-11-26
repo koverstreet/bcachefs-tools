@@ -23,7 +23,8 @@ use std::{
 use anyhow::Context;
 use rustix::fs::{flock, FlockOperation};
 
-use bcachefs_kernel::c;
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_fs_usage, bch_ioctl_recovery_status,
+    bch_recovery_pass_mask, bch_replicas_usage, ProgressUnit};
 use bcachefs_kernel::init::passes::RecoveryPass;
 use bcachefs_kernel::format::DataType;
 use bcachefs_kernel::init::passes;
@@ -124,7 +125,7 @@ impl<'a> RecoveryDisplay<'a> {
     ///
     /// Cached, not polled: accounting settles under mark_lock and doesn't move
     /// again.
-    fn devices_line(&mut self, s: &c::bch_ioctl_recovery_status) -> String {
+    fn devices_line(&mut self, s: &bch_ioctl_recovery_status) -> String {
         if let Some(line) = &self.devices_line {
             return line.clone();
         }
@@ -160,12 +161,12 @@ impl<'a> RecoveryDisplay<'a> {
 
     /// ENODEV is ordinary, not a failure: the ioctl only answers while a
     /// filesystem is coming up on this channel.
-    fn read(&mut self) -> Option<c::bch_ioctl_recovery_status> {
+    fn read(&mut self) -> Option<bch_ioctl_recovery_status> {
         if !self.supported {
             return None;
         }
 
-        let mut arg = c::bch_ioctl_recovery_status::default();
+        let mut arg = bch_ioctl_recovery_status::default();
 
         match ioctl_rw::<BCH_IOCTL_RECOVERY_STATUS>(self.fd, &mut arg) {
             Ok(_) => {
@@ -179,7 +180,7 @@ impl<'a> RecoveryDisplay<'a> {
         }
     }
 
-    fn fields(&mut self, s: &c::bch_ioctl_recovery_status) -> Fields<'_> {
+    fn fields(&mut self, s: &bch_ioctl_recovery_status) -> Fields<'_> {
         let running = s.pass != 0;
 
         // The denominator is what this run will have touched, which grows if a
@@ -375,7 +376,7 @@ fn render_line(f: &Fields, cols: usize) -> String {
     l
 }
 
-fn pass_complete(s: &c::bch_ioctl_recovery_status, pass: RecoveryPass) -> bool {
+fn pass_complete(s: &bch_ioctl_recovery_status, pass: RecoveryPass) -> bool {
     let n = pass as u32;
 
     s.passes_complete.v[(n / 64) as usize] & (1u64 << (n % 64)) != 0
@@ -384,7 +385,7 @@ fn pass_complete(s: &c::bch_ioctl_recovery_status, pass: RecoveryPass) -> bool {
 /// BCH_IOCTL_FS_USAGE's reply: a fixed header followed by variable-size
 /// replicas entries, each as long as its own device list.
 struct FsUsage {
-    buf:   IoctlBuf<c::bch_ioctl_fs_usage>,
+    buf:   IoctlBuf<bch_ioctl_fs_usage>,
     bytes: usize,
 }
 
@@ -392,7 +393,7 @@ impl FsUsage {
     /// Each entry, as long as its nr_devs says - checked against what's left
     /// of the tail: one that doesn't fit, the kernel and us disagreeing
     /// about the layout, an error.
-    fn replicas(&self) -> UnvalidatedEntries<'_, c::bch_replicas_usage<Unvalidated>> {
+    fn replicas(&self) -> UnvalidatedEntries<'_, bch_replicas_usage<Unvalidated>> {
         UnvalidatedEntries::new(self.buf.trailing_bytes(self.bytes))
     }
 }
@@ -404,7 +405,7 @@ impl FsUsage {
 /// which combinations of devices exist is the question.
 fn fs_usage(fd: BorrowedFd<'_>) -> io::Result<FsUsage> {
     grow_on_erange(4096, 1 << 20, |bytes| {
-        let mut buf = IoctlBuf::<c::bch_ioctl_fs_usage>::with_trailing_bytes(bytes);
+        let mut buf = IoctlBuf::<bch_ioctl_fs_usage>::with_trailing_bytes(bytes);
         buf.hdr_mut().replica_entries_bytes = bytes as u32;
         unsafe { ioctl_ptr::<BCH_IOCTL_FS_USAGE>(fd, buf.as_mut_ptr())? };
 
@@ -413,7 +414,7 @@ fn fs_usage(fd: BorrowedFd<'_>) -> io::Result<FsUsage> {
     })
 }
 
-fn mask_count(m: &c::bch_recovery_pass_mask) -> u32 {
+fn mask_count(m: &bch_recovery_pass_mask) -> u32 {
     m.v.iter().map(|w| w.count_ones()).sum()
 }
 
@@ -422,7 +423,7 @@ fn pass_name(pass: u32) -> &'static str {
 }
 
 fn units_name(units: u32) -> &'static str {
-    if units == c::ProgressUnit::keys.0 {
+    if units == ProgressUnit::keys.0 {
         "keys"
     } else {
         "nodes"

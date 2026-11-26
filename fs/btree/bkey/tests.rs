@@ -1,6 +1,9 @@
 use super::*;
-use crate::c;
-use crate::format::BkeyType;
+use crate::alloc::lru_format::Lru;
+use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkV};
+use crate::posix::inode_format::InodeGeneration;
+use crate::snapshots::format::{Snapshot, Subvolume};
+use crate::format::{BkeyType, bkey};
 use crate::util::vstructs::{len_at, plain_bytes, plain_bytes_mut, ArmRef, VStructError};
 use crate::types::Le32;
 
@@ -9,26 +12,26 @@ use crate::types::Le32;
 /// what's in the buffer past it.
 #[test]
 fn bkey_short_value() {
-    assert_eq!(c::Snapshot::MIN_VAL_SIZE, 24);
+    assert_eq!(Snapshot::MIN_VAL_SIZE, 24);
 
-    let mut k = BkeyI::<c::Snapshot>::new();
+    let mut k = BkeyI::<Snapshot>::new();
     k.v.subvol = Le32::new(5);
     k.v.children = [Le32::new(3), Le32::new(4)];
     k.v.depth = Le32::new(7);
     k.k.set_val_bytes(24);
 
-    let s = BkeySC::from(k.as_ref()).arm::<c::Snapshot>().expect("a snapshot").v();
+    let s = BkeySC::from(k.as_ref()).arm::<Snapshot>().expect("a snapshot").v();
     assert_eq!((s.subvol.get(), s.children[0].get(), s.children[1].get()), (5, 3, 4));
     assert_eq!(s.depth().get(), 0);
     assert!(s.whole().is_none());
-    assert!(BkeySC::from(k.as_ref()).arm::<c::Subvolume>().is_none());
+    assert!(BkeySC::from(k.as_ref()).arm::<Subvolume>().is_none());
 }
 
 /// A key by its type: a grown type's value its family's, an older value
 /// of it read as one - inline too: dispatch is by type, as C's.
 #[test]
 fn bkey_typed_short_values() {
-    let mut k = BkeyI::<c::Subvolume>::new();
+    let mut k = BkeyI::<Subvolume>::new();
     k.v.snapshot = Le32::new(5);
     k.k.set_val_bytes(16);
     match BkeySC::from(k.as_ref()).typed() {
@@ -42,9 +45,9 @@ fn bkey_typed_short_values() {
         _ => panic!("a subvolume"),
     }
 
-    let mut g = BkeyI::<c::InodeGeneration>::new();
+    let mut g = BkeyI::<InodeGeneration>::new();
     g.v.bi_generation = Le32::new(3);
-    assert_eq!(BkeySC::from(g.as_ref()).arm::<c::InodeGeneration>().map(|g| g.v().bi_generation.get()),
+    assert_eq!(BkeySC::from(g.as_ref()).arm::<InodeGeneration>().map(|g| g.v().bi_generation.get()),
                Some(3));
     assert!(matches!(g.as_ref().typed(), Typed::inode_generation(_)));
 }
@@ -56,8 +59,8 @@ fn bkey_unfloored() {
     let b = [0u64; 3];
     let b = crate::util::vstructs::plain_bytes(&b);
     use crate::util::vstructs::Validated;
-    assert!(<c::Snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
-    assert!(<c::Snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());
+    assert!(<Snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
+    assert!(<Snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());
 }
 
 /// A subvolume key from before fs_path_parent - 16 bytes of its 48 - edited
@@ -65,20 +68,20 @@ fn bkey_unfloored() {
 /// write the key wouldn't carry. One grown whole does.
 #[test]
 fn bkey_edit_short_value() {
-    let mut k = BkeyI::<c::Subvolume>::new();
+    let mut k = BkeyI::<Subvolume>::new();
     k.k.set_val_bytes(16);
     let k = k.as_mut();
 
-    assert!(k.arm::<c::Snapshot>().is_none());
+    assert!(k.arm::<Snapshot>().is_none());
 
     let s = BkeyS::from(&mut *k);
     let Typed::subvolume(mut s) = s.typed() else { panic!("a subvolume") };
     s.v_mut().snapshot = Le32::new(5);
 
-    let mut full = BkeyI::<c::Subvolume>::new();
+    let mut full = BkeyI::<Subvolume>::new();
     full.v.fs_path_parent = Le32::new(9);
     assert_eq!(full.v.fs_path_parent, 9);
-    let s = BkeySC::from(&*k).arm::<c::Subvolume>().expect("a subvolume").v();
+    let s = BkeySC::from(&*k).arm::<Subvolume>().expect("a subvolume").v();
     assert_eq!((s.snapshot.get(), s.fs_path_parent().get()), (5, 0));
 }
 
@@ -93,19 +96,19 @@ fn key_type_info() {
     assert_eq!("snapshot".parse::<BkeyType>().ok(), Some(BkeyType::snapshot));
     assert!("no_such_type".parse::<BkeyType>().is_err());
 
-    let k = |ty: BkeyType| c::bkey { type_: ty.0 as u8, ..Default::default() };
+    let k = |ty: BkeyType| bkey { type_: ty.0 as u8, ..Default::default() };
 
     let r = k(BkeyType::reflink_v);
-    assert_eq!(REFCOUNT.of(&r), Some(core::mem::offset_of!(c::ReflinkV, repr.refcount)));
+    assert_eq!(REFCOUNT.of(&r), Some(core::mem::offset_of!(ReflinkV, repr.refcount)));
     assert_eq!((DATA.of(&r), CSUM.of(&r)), (None, None));
 
     let i = k(BkeyType::indirect_inline_data);
-    assert_eq!((DATA.of(&i), CSUM.of(&i)), (Some(size_of::<c::IndirectInlineData>()), None));
+    assert_eq!((DATA.of(&i), CSUM.of(&i)), (Some(size_of::<IndirectInlineData>()), None));
 
     let v2 = k(BkeyType::indirect_inline_data_v2);
-    assert_eq!(REFCOUNT.of(&v2), Some(core::mem::offset_of!(c::IndirectInlineDataV2, repr.refcount)));
-    assert_eq!(CSUM.of(&v2),     Some(core::mem::offset_of!(c::IndirectInlineDataV2, repr.csum)));
-    assert_eq!(DATA.of(&v2),     Some(size_of::<c::IndirectInlineDataV2>()));
+    assert_eq!(REFCOUNT.of(&v2), Some(core::mem::offset_of!(IndirectInlineDataV2, repr.refcount)));
+    assert_eq!(CSUM.of(&v2),     Some(core::mem::offset_of!(IndirectInlineDataV2, repr.csum)));
+    assert_eq!(DATA.of(&v2),     Some(size_of::<IndirectInlineDataV2>()));
 }
 
 #[test]
@@ -140,11 +143,11 @@ fn bpos_predecessor_of_min() {
 /// claiming the value past the bytes.
 #[test]
 fn bkey_len_short() {
-    let mut k = c::bkey::default();
-    k.u64s = (size_of::<c::bkey>() / size_of::<u64>()) as u8;
-    let mut b = [0u64; size_of::<c::bkey>() / size_of::<u64>()];
+    let mut k = bkey::default();
+    k.u64s = (size_of::<bkey>() / size_of::<u64>()) as u8;
+    let mut b = [0u64; size_of::<bkey>() / size_of::<u64>()];
     plain_bytes_mut(&mut b).copy_from_slice(plain_bytes(&k));
 
-    assert!(matches!(len_at::<BkeyI<c::Lru>>(plain_bytes(&b), c::bkey::bytes),
+    assert!(matches!(len_at::<BkeyI<Lru>>(plain_bytes(&b), bkey::bytes),
                      Err(VStructError::Short { len: 40, min: 48, .. })));
 }

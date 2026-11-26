@@ -18,9 +18,12 @@
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, TransAttempt};
-use crate::c;
-use crate::c::Errcode;
-use crate::data::extents::BkeyVExtents;
+use crate::alloc::write_point::write_point_specifier;
+use crate::data::update::{data_update_opts, DataUpdateType};
+use crate::opts::bch_inode_opts;
+use crate::util::time_stats::TimeStat;
+use crate::errcode::Errcode;
+use crate::data::extents::{BkeyVExtents, bch_io_failures};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::read::Rbio;
 use crate::data::update_task::{self, AwaitingRead, Body, ReadBody};
@@ -104,14 +107,14 @@ pub(crate) async fn run<'h>(mut u: Body<'h>, start_time: u64) {
     }
 
     let _ = u.write(read, None, Resume::queue(fs.promote_wq())).await;
-    fs.times.get(c::TimeStat::data_promote as usize).update(start_time);
+    fs.times.get(TimeStat::data_promote as usize).update(start_time);
     drop(listed);
     u.exit(Ok(()));
 }
 
 // ── Making one ───────────────────────────────────────────────────────────
 
-fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &c::bch_inode_opts) -> Result<(), BchError> {
+fn should_promote(fs: &Fs, k: BkeySC<'_>, opts: &bch_inode_opts) -> Result<(), BchError> {
     assert!(opts.promote_target != 0, "should_promote() with no promote target");
 
     if k.arm::<Ptrs>().is_some_and(|k| k.has_target(fs, Target::decode(opts.promote_target.into()))) {
@@ -148,19 +151,19 @@ impl ReadBody for PromoteBody {
 /// A promote's task, awaiting its read.
 pub(crate) type PromoteTask = AwaitingRead<PromoteBody>;
 
-fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC<'_>, opts: &c::bch_inode_opts,
-                   failed: Option<&mut c::bch_io_failures>) -> Result<PromoteTask, BchError> {
+fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC<'_>, opts: &bch_inode_opts,
+                   failed: Option<&mut bch_io_failures>) -> Result<PromoteTask, BchError> {
 
     if failed.is_none() {
         should_promote(fs, k, opts)?;
     }
 
-    use c::WriteFlags as w;
-    let mut update_opts = c::data_update_opts { write_flags: w::alloc_nowait, ..::pin_init::zeroed() };
+    use crate::data::write::WriteFlags as w;
+    let mut update_opts = data_update_opts { write_flags: w::alloc_nowait, ..::pin_init::zeroed() };
 
     match failed.as_deref() {
         Some(f) if !f.is_empty() => {
-            update_opts.type_ = c::DataUpdateType::self_heal;
+            update_opts.type_ = DataUpdateType::self_heal;
             update_opts.target = opts.background_target;
 
             if let Some(kp) = k.arm::<Ptrs>() {
@@ -177,7 +180,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC
             }
         }
         _ => {
-            update_opts.type_ = c::DataUpdateType::promote;
+            update_opts.type_ = DataUpdateType::promote;
             update_opts.target = opts.promote_target;
             update_opts.extra_replicas = 1;
             update_opts.write_flags |= w::cached | w::only_specified_devs;
@@ -190,7 +193,7 @@ fn promote_new<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, btree: Btree, k: BkeySC
     let task = update_task::spawn_held(t, in_flight, |fs| fs.promote_wq(), Errcode::nopromote_enomem)?;
     // On error - such as nocow_lock_blocked, ENOSPC_disk_reservation - the
     // box is dropped
-    let u = task.init(t, None, None, c::write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
+    let u = task.init(t, None, None, write_point_specifier::hashed(current_id()), opts, update_opts, btree, k)?;
 
     Ok(u.awaiting_read(PromoteBody { start_time }))
 }
@@ -211,7 +214,7 @@ pub(crate) struct Promoted {
 // is in the frame of every read's fragment_of()
 #[inline(never)]
 pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, k: BkeySC<'_>, orig: &'r Rbio,
-                                opts: &c::bch_inode_opts, failed: Option<&mut c::bch_io_failures>)
+                                opts: &bch_inode_opts, failed: Option<&mut bch_io_failures>)
     -> Result<Option<Promoted>, BchError>
 {
     let self_healing = failed.is_some();

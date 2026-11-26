@@ -10,12 +10,20 @@ use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::trigger::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::data::compress::bch_compression_opt;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::data::reconcile::format::{bch_extent_reconcile, ReconcileOpt, ReconcileOpt_arms};
+use crate::data::reconcile::work::ReconcileScan;
+use crate::init::dev::bch_devs_mask;
+use crate::opts::bch_inode_opts;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
-use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
-use crate::errcode::BchError;
-use crate::format::{CompressionType, BkeyType, MetadataVersion};
+use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile,
+    per_snapshot_io_opts, SetNeedsReconcileCtx};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{CompressionType, BkeyType, MetadataVersion, BCH_REPLICAS_MAX, bkey, CsumType};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::posix::inode_opts::get_io_opts;
@@ -27,19 +35,19 @@ use crate::util::Printbuf;
 use core::mem::size_of;
 
 /// Option @o's need_rb bit.
-pub(crate) fn rb_bit(o: c::ReconcileOpt) -> u8 {
+pub(crate) fn rb_bit(o: ReconcileOpt) -> u8 {
     1 << o.0
 }
 
 /// Whether a key should carry @r: while it has work - and a reflink_v while
 /// it has any option its inode set, as it has no inode to take them from
 /// after. bkey_should_have_rb_opts().
-fn should_have_rb_opts(k: &c::bkey, r: &c::bch_extent_reconcile) -> bool {
+fn should_have_rb_opts(k: &bkey, r: &bch_extent_reconcile) -> bool {
     if k.key_type() == BkeyType::reflink_v {
         macro_rules! any_from_inode {
             ($(($name:tt, $nr:expr)),* $(,)?) => { crate::paste! { false $(|| r.[<$name _from_inode>]() != 0)* } };
         }
-        if c::ReconcileOpt_arms!(any_from_inode) {
+        if ReconcileOpt_arms!(any_from_inode) {
             return true;
         }
     }
@@ -48,7 +56,7 @@ fn should_have_rb_opts(k: &c::bkey, r: &c::bch_extent_reconcile) -> bool {
 
 /// What a key's reconcile state should be: needs_reconcile()'s.
 struct NeedsReconcile {
-    r:            c::bch_extent_reconcile,
+    r:            bch_extent_reconcile,
     /// Padding pointers to BCH_SB_MEMBER_INVALID to drop, or - negative - to
     /// add, standing in for replicas the key is short.
     invalid_devs: i32,
@@ -58,10 +66,10 @@ struct NeedsReconcile {
 /// pointers need, and which are moving - and the padding pointers it should
 /// gain or lose; None if it has them already: bch2_bkey_needs_reconcile().
 /// A stripe goes by its needs_reconcile bit: data_replicas work, or none.
-fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_inode_opts)
+fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &bch_inode_opts)
     -> Result<Option<NeedsReconcile>, BchError>
 {
-    use c::ReconcileOpt as o;
+    use crate::data::reconcile::format::ReconcileOpt as o;
     let fs = t.fs();
     let btree = k.k.is_btree_ptr();
 
@@ -69,12 +77,12 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
         return Ok(None);
     }
 
-    let mut r = c::bch_extent_reconcile::from_io_opts(opts);
-    let need = |r: &mut c::bch_extent_reconcile, opt| r.update_need_rb(|n| n | rb_bit(opt));
+    let mut r = bch_extent_reconcile::from_io_opts(opts);
+    let need = |r: &mut bch_extent_reconcile, opt| r.update_need_rb(|n| n | rb_bit(opt));
 
     let poisoned = k.poisoned(fs);
-    let compression_type = c::bch_compression_opt::to_type(r.background_compression(), fs);
-    let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::CsumType::none };
+    let compression_type = bch_compression_opt::to_type(r.background_compression(), fs);
+    let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { CsumType::none };
     let stripe = k.k.key_type() == BkeyType::stripe;
 
     let (mut incompressible, mut unwritten, mut ec) = (false, false, false);
@@ -111,7 +119,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
                 r.background_target() != 0 &&
                 !fs.dev_in_target(dev, Target::decode(r.background_target().into()), &rcu) {
                 need(&mut r, o::background_target);
-                if dev != c::BCH_SB_MEMBER_INVALID {
+                if dev != BCH_SB_MEMBER_INVALID {
                     r.set_ptr_moving(i);
                 }
             }
@@ -119,7 +127,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
             if evacuating {
                 need(&mut r, o::data_replicas);
                 r.set_hipri(1);
-                if dev != c::BCH_SB_MEMBER_INVALID {
+                if dev != BCH_SB_MEMBER_INVALID {
                     r.set_ptr_moving(i);
                 }
             }
@@ -128,11 +136,11 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
                 ec_redundancy = ec_redundancy.max(p.ec.redundancy().into());
             }
             ec |= p.has_ec;
-            invalid += u32::from(dev == c::BCH_SB_MEMBER_INVALID);
+            invalid += u32::from(dev == BCH_SB_MEMBER_INVALID);
         }
     }
 
-    if let Some(s) = k.arm::<c::Stripe>() {
+    if let Some(s) = k.arm::<Stripe>() {
         // both ways: a device that stops evacuating leaves the bit set on
         // stripes that no longer need anything (#929)
         let needs = r.need_rb() & rb_bit(o::data_replicas) != 0;
@@ -200,7 +208,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_
 /// Whether @scan is requested - remembered in @cache once it is: a set
 /// cookie stays set while a walk runs, an unset one can be set any time.
 /// check_reconcile_scan_cookie().
-fn scan_cookie_set(t: &TransAttempt<'_, '_>, scan: c::ReconcileScan, cache: Option<&mut bool>)
+fn scan_cookie_set(t: &TransAttempt<'_, '_>, scan: ReconcileScan, cache: Option<&mut bool>)
     -> Result<bool, BchError>
 {
     if cache.as_deref() == Some(&true) {
@@ -215,17 +223,17 @@ fn scan_cookie_set(t: &TransAttempt<'_, '_>, scan: c::ReconcileScan, cache: Opti
 
 /// Whether a scan cookie is set for a device @k points to - @cache, the ones
 /// found set, checked first: check_dev_reconcile_scan_cookie().
-fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Option<&mut c::bch_devs_mask>)
+fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Option<&mut bch_devs_mask>)
     -> Result<bool, BchError>
 {
     let fs = t.fs();
-    let devs = || k.ptrs(fs).map(|p| u32::from(p.dev())).filter(|&dev| dev != c::BCH_SB_MEMBER_INVALID);
+    let devs = || k.ptrs(fs).map(|p| u32::from(p.dev())).filter(|&dev| dev != BCH_SB_MEMBER_INVALID);
 
     if cache.as_deref().is_some_and(|m| devs().any(|dev| m.d.test(dev as usize))) {
         return Ok(true);
     }
     for dev in devs() {
-        if scan_cookie_set(t, c::ReconcileScan::device(dev), None)? {
+        if scan_cookie_set(t, ReconcileScan::device(dev), None)? {
             if let Some(m) = cache {
                 m.d.set(dev as usize);
             }
@@ -245,12 +253,12 @@ fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Opti
 /// Checking for scan cookies is cached in @s - only their being set, so a
 /// cookie set meanwhile isn't missed.
 #[allow(clippy::too_many_arguments)]
-fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>, k: &impl BkeyVPtrs,
-                        ctx: c::SetNeedsReconcileCtx, opt_change_cookie: u32,
-                        old: Option<&c::bch_extent_reconcile>, new: &c::bch_extent_reconcile,
+fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>, k: &impl BkeyVPtrs,
+                        ctx: SetNeedsReconcileCtx, opt_change_cookie: u32,
+                        old: Option<&bch_extent_reconcile>, new: &bch_extent_reconcile,
                         mut new_need_rb: u8) -> Result<(), BchError> {
-    use c::ReconcileOpt as o;
-    use c::SetNeedsReconcileCtx as x;
+    use crate::data::reconcile::format::ReconcileOpt as o;
+    use crate::data::reconcile::trigger::SetNeedsReconcileCtx as x;
     let fs = t.fs();
 
     if ctx == x::SET_NEEDS_RECONCILE_opt_change || ctx == x::SET_NEEDS_RECONCILE_opt_change_indirect {
@@ -285,11 +293,11 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
 
     // btree node pointers follow the metadata options, so theirs is the
     // metadata cookie
-    if scan_cookie_set(t, c::ReconcileScan::fs, fs_cookie)? ||
+    if scan_cookie_set(t, ReconcileScan::fs, fs_cookie)? ||
         if k.k().is_btree_ptr() {
-            scan_cookie_set(t, c::ReconcileScan::metadata, None)?
+            scan_cookie_set(t, ReconcileScan::metadata, None)?
         } else {
-            scan_cookie_set(t, c::ReconcileScan::inum(k.k().p.inode), inum_cookie)?
+            scan_cookie_set(t, ReconcileScan::inum(k.k().p.inode), inum_cookie)?
         } {
         return Ok(());
     }
@@ -298,7 +306,7 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
         return Ok(());
     }
 
-    let old = old.copied().unwrap_or(c::bch_extent_reconcile::from_bits(0));
+    let old = old.copied().unwrap_or(bch_extent_reconcile::from_bits(0));
     let diff = Msg(|out: &mut Printbuf| {
         macro_rules! diff {
             ($(($name:tt, $nr:expr)),* $(,)?) => { $(
@@ -307,7 +315,7 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
                 }
             )* };
         }
-        c::ReconcileOpt_arms!(diff);
+        ReconcileOpt_arms!(diff);
     });
     fsck_err!(t, id::extent_io_opts_not_set, "extent with incorrect/missing reconcile opts:\n{}\nnew reconcile : {}{}",
               k.as_sc().untyped().to_text(fs), Msg(|out: &mut Printbuf| extent_reconcile_to_text(out, Some(fs), new)), diff)?;
@@ -321,8 +329,8 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
     /// it needs none, and its padding pointers to BCH_SB_MEMBER_INVALID added
     /// or dropped. New work must be allowed - new_needs_rb_allowed().
     /// bch2_bkey_set_needs_reconcile(); its room is what it's grown into.
-    pub fn set_needs_reconcile(&mut self, t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
-                               opts: &c::bch_inode_opts, ctx: c::SetNeedsReconcileCtx,
+    pub fn set_needs_reconcile(&mut self, t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>,
+                               opts: &bch_inode_opts, ctx: SetNeedsReconcileCtx,
                                opt_change_cookie: u32) -> Result<(), BchError> {
         let fs = t.fs();
 
@@ -332,9 +340,9 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
         };
 
         let Some(mut k) = self.reborrow().arm::<PtrsMut>() else {
-            let stripe = self.reborrow().arm::<c::Stripe>().expect("with pointers, and not PtrsMut: a stripe");
+            let stripe = self.reborrow().arm::<Stripe>().expect("with pointers, and not PtrsMut: a stripe");
             return set_needs_reconcile_stripe(t, s, stripe,
-                new.need_rb() & rb_bit(c::ReconcileOpt::data_replicas) != 0);
+                new.need_rb() & rb_bit(ReconcileOpt::data_replicas) != 0);
         };
         let old = k.reconcile_opts(fs).copied();
         let new_need_rb = new.need_rb() & !old.map_or(0, |old| old.need_rb());
@@ -360,7 +368,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
 
         if unlikely(invalid_devs > 0) {
             k.drop_ptrs_noerror(fs, |p| {
-                let drop = p.p.ptr.dev() as u32 == c::BCH_SB_MEMBER_INVALID && !p.p.has_ec && invalid_devs > 0;
+                let drop = p.p.ptr.dev() as u32 == BCH_SB_MEMBER_INVALID && !p.p.has_ec && invalid_devs > 0;
                 invalid_devs -= i32::from(drop);
                 drop
             });
@@ -371,7 +379,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
 
             for _ in 0..n {
                 let end = k.entries_end();
-                let ptr = c::bch_extent_ptr::new().with_dev(c::BCH_SB_MEMBER_INVALID as u8);
+                let ptr = bch_extent_ptr::new().with_dev(BCH_SB_MEMBER_INVALID as u8);
                 k.insert_entry(end, &[ptr.into_bits().0]).expect("room for padding pointers: its caller's");
             }
         }
@@ -382,8 +390,8 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
 /// A stripe's needs_reconcile bit made @needs - set where the stripe's
 /// devices have no scan pending to explain it, an fsck error:
 /// set_needs_reconcile_stripe().
-fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
-                              mut k: TransBkey<'_, '_, c::Stripe<Validated>>, needs: bool) -> Result<(), BchError> {
+fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>,
+                              mut k: TransBkey<'_, '_, Stripe<Validated>>, needs: bool) -> Result<(), BchError> {
     if needs && k.v().needs_reconcile() == 0 && !dev_scan_cookie_set(t, &k, s.map(|s| &mut s.dev_cookie))? {
         fsck_err!(t, id::stripe_needs_reconcile_not_set, "stripe with needs_reconcile incorrectly unset\n{}",
                   k.to_text(t.fs()))?;
@@ -394,7 +402,7 @@ fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sn
 
 /// What set_needs_reconcile() can grow a key by: a reconcile entry, and a
 /// padding pointer for each replica.
-const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + c::BCH_REPLICAS_MAX;
+const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + BCH_REPLICAS_MAX;
 
 /// The extent trigger's: the reconcile entry filled in on the key going in,
 /// so callers needn't - its room made here, as callers like extent split
@@ -405,7 +413,7 @@ pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &
     let opts = get_io_opts(t, None, BkeySC::from(&op.new).untyped())?;
     let needed = u32::from(op.new.k().u64s) + SET_NEEDS_RECONCILE_ROOM;
     op.new_with_room(t, needed)?
-        .set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)
+        .set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)
 }
 
 /// @k, at @iter, with its reconcile state brought in line with @opts, as an
@@ -413,9 +421,9 @@ pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &
 /// pointer to the node below, updated in place: committed, and the
 /// transaction restarted. Nothing if it's right already:
 /// bch2_update_reconcile_opts().
-pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
-                             opts: &c::bch_inode_opts, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>,
-                             ctx: c::SetNeedsReconcileCtx) -> Result<(), BchError> {
+pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>,
+                             opts: &bch_inode_opts, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>,
+                             ctx: SetNeedsReconcileCtx) -> Result<(), BchError> {
     let flags = iter.iter_flags();
     assert!(!flags.contains(BtreeIterFlags::IS_EXTENTS), "update_reconcile_opts() on an extents iterator");
     assert!(!flags.contains(BtreeIterFlags::FILTER_SNAPSHOTS),
@@ -434,7 +442,7 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
     }
 
     t.btree_node_edit_key(iter.btree(), level, iter.pos(), |n| n.set_needs_reconcile(t, s, opts, ctx, 0))?;
-    Err(t.restart(c::Errcode::transaction_restart_commit))
+    Err(t.restart(Errcode::transaction_restart_commit))
 }
 
 /// @k's reconcile state taken off - its reconcile entries, and the padding
@@ -453,7 +461,7 @@ pub(crate) fn strip_reconcile(fs: &Fs, k: BkeyS<'_>) {
         kp.drop_entry(fs, at);
     }
 
-    kp.drop_ptrs_noerror(fs, |p| p.p.ptr.dev() as u32 == c::BCH_SB_MEMBER_INVALID);
+    kp.drop_ptrs_noerror(fs, |p| p.p.ptr.dev() as u32 == BCH_SB_MEMBER_INVALID);
 
     assert!(kp.durability_safe(fs).nr_ptrs != 0, "a key with no pointers left once its reconcile state's off");
 }

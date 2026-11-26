@@ -6,8 +6,8 @@ use core::marker::PhantomData;
 
 use super::{AllTypes, BkeyI, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
 use crate::btree::node::NodeContents;
-use crate::c;
-use crate::format::{Bpos, BkeyType};
+use crate::format::{Bpos, BkeyType, bkey, bkey_format, bkey_format_bits, bkey_packed,
+    KEY_FORMAT_CURRENT};
 use crate::os::kernel::likely;
 use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, Unsized, Unvalidated};
 use cstruct_macros::Plain;
@@ -28,7 +28,7 @@ pub struct BkeyP<V: ?Sized = FamilyVal<AllTypes>> {
 #[derive(Plain)]
 pub struct BkeyPHeader {
     pub(super) u64s:        u8,
-    pub(super) format_bits: c::bkey_format_bits,
+    pub(super) format_bits: bkey_format_bits,
     pub(super) type_:       u8,
     _key:                   [u8; 5],
 }
@@ -53,17 +53,17 @@ impl BkeyPHeader {
     pub fn is_packed(&self) -> bool {
         let format = self.format() as u32;
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            assert!(format <= c::KEY_FORMAT_CURRENT, "key of format {format}");
+            assert!(format <= KEY_FORMAT_CURRENT, "key of format {format}");
         }
-        format != c::KEY_FORMAT_CURRENT
+        format != KEY_FORMAT_CURRENT
     }
 
-    pub fn key_u64s(&self, f: &c::bkey_format) -> usize {
+    pub fn key_u64s(&self, f: &bkey_format) -> usize {
         if self.is_packed() { f.key_u64s as usize } else { BKEY_U64S }
     }
 
     /// Its value fits a bkey_i's, once unpacked.
-    pub fn u64s_valid(&self, f: &c::bkey_format) -> bool {
+    pub fn u64s_valid(&self, f: &bkey_format) -> bool {
         self.u64s()
             .checked_sub(self.key_u64s(f))
             .is_some_and(|v| v <= u8::MAX as usize - BKEY_U64S)
@@ -71,11 +71,11 @@ impl BkeyPHeader {
 }
 
 impl BkeyP {
-    pub unsafe fn from_raw(p: *const c::bkey_packed) -> *const Self {
+    pub unsafe fn from_raw(p: *const bkey_packed) -> *const Self {
         unsafe { core::ptr::slice_from_raw_parts(p.cast::<u64>(), (*p).u64s as usize) as *const Self }
     }
 
-    pub unsafe fn from_raw_mut(p: *mut c::bkey_packed) -> *mut Self {
+    pub unsafe fn from_raw_mut(p: *mut bkey_packed) -> *mut Self {
         unsafe { core::ptr::slice_from_raw_parts_mut(p.cast::<u64>(), (*p).u64s as usize) as *mut Self }
     }
 
@@ -90,7 +90,7 @@ impl BkeyP {
     }
 
     /// A key in a bkey_packed of its own, as one packed onto the stack.
-    pub fn from_packed(k: &c::bkey_packed) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+    pub fn from_packed(k: &bkey_packed) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
         Self::from_slice(cast_plain_slice(plain_bytes(k)).expect("a bkey_packed is whole u64s"))
     }
 
@@ -158,15 +158,15 @@ impl<V: ?Sized> BkeyP<V> {
         self.header_mut().type_ = t.0 as u8;
     }
 
-    pub fn key_u64s(&self, f: &c::bkey_format) -> usize {
+    pub fn key_u64s(&self, f: &bkey_format) -> usize {
         self.header().key_u64s(f)
     }
 
-    pub fn key_bytes(&self, f: &c::bkey_format) -> usize {
+    pub fn key_bytes(&self, f: &bkey_format) -> usize {
         self.key_u64s(f) * size_of::<u64>()
     }
 
-    pub fn u64s_valid(&self, f: &c::bkey_format) -> bool {
+    pub fn u64s_valid(&self, f: &bkey_format) -> bool {
         self.header().u64s_valid(f)
     }
 
@@ -178,15 +178,15 @@ impl<V: ?Sized> BkeyP<V> {
 /// Reading past the header - the value, or an unpacked key's whole header,
 /// a bkey - needs the key's u64s to be validate's.
 impl<V: ?Sized + ValidatedVal> BkeyP<V> {
-    pub fn val_u64s(&self, f: &c::bkey_format) -> usize {
+    pub fn val_u64s(&self, f: &bkey_format) -> usize {
         self.u64s() - self.key_u64s(f)
     }
 
-    pub fn val_bytes(&self, f: &c::bkey_format) -> usize {
+    pub fn val_bytes(&self, f: &bkey_format) -> usize {
         self.val_u64s(f) * size_of::<u64>()
     }
 
-    pub fn val(&self, f: &c::bkey_format) -> &[u64] {
+    pub fn val(&self, f: &bkey_format) -> &[u64] {
         let key_u64s = self.key_u64s(f);
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             assert!(key_u64s <= self.data.len());
@@ -194,7 +194,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         unsafe { self.data.get_unchecked(key_u64s..) }
     }
 
-    pub fn val_mut(&mut self, f: &c::bkey_format) -> &mut [u64] {
+    pub fn val_mut(&mut self, f: &bkey_format) -> &mut [u64] {
         let key_u64s = self.key_u64s(f);
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             assert!(key_u64s <= self.data.len());
@@ -202,15 +202,15 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
         unsafe { self.data.get_unchecked_mut(key_u64s..) }
     }
 
-    fn unpacked_header(&self) -> &c::bkey {
+    fn unpacked_header(&self) -> &bkey {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
             assert!(self.is_bkey_i());
         }
-        unsafe { &*core::ptr::from_ref(self).cast::<c::bkey>() }
+        unsafe { &*core::ptr::from_ref(self).cast::<bkey>() }
     }
 
     /// Just the key, not the value.
-    pub fn unpack(&self, b: &NodeContents) -> c::bkey {
+    pub fn unpack(&self, b: &NodeContents) -> bkey {
         if likely(self.is_packed()) {
             b.format.unpack_key(self)
         } else {
@@ -224,7 +224,7 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// unpack_into(), of the key unpacked already: @k.
-    pub(crate) fn unpacked_into(&self, f: &c::bkey_format, k: c::bkey, dst: &mut [u64]) {
+    pub(crate) fn unpacked_into(&self, f: &bkey_format, k: bkey, dst: &mut [u64]) {
         let val = self.val(f);
 
         plain_bytes_mut(&mut dst[..BKEY_U64S]).copy_from_slice(plain_bytes(&k));
@@ -240,13 +240,13 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// The key unpacked into @u, the value where it is.
-    pub fn disassemble<'a>(&'a self, b: &NodeContents, u: &'a mut c::bkey) -> BkeySC<'a, V> {
+    pub fn disassemble<'a>(&'a self, b: &NodeContents, u: &'a mut bkey) -> BkeySC<'a, V> {
         self.disassembled(&b.format, self.unpack(b), u)
     }
 
     /// disassemble(), of the key unpacked already: @k.
-    pub(crate) fn disassembled<'a>(&'a self, f: &c::bkey_format, k: c::bkey,
-                                   u: &'a mut c::bkey) -> BkeySC<'a, V> {
+    pub(crate) fn disassembled<'a>(&'a self, f: &bkey_format, k: bkey,
+                                   u: &'a mut bkey) -> BkeySC<'a, V> {
         *u = k;
         BkeySC {
             k:    u,

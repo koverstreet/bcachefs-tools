@@ -46,13 +46,14 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::c;
+use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::sb::members::DevReadRefKind;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
 use clap::Parser;
-use bcachefs_kernel::format::{Bpos, Btree};
+use bcachefs_kernel::format::{Bpos, Btree, bset, btree_node, btree_node_entry};
 use bcachefs_kernel::os::kernel::PAGE_SIZE;
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
 
@@ -161,10 +162,10 @@ struct BsetLoc {
 /// empty still has to be corruptible: on a freshly formatted filesystem every
 /// btree leaf is one of those, which is exactly what the spin repro formats.
 fn first_bset(node: &[u8]) -> BsetLoc {
-    let n = cast_plain::<Head<c::btree_node>>(node).expect("node buffer: aligned, at least a block");
+    let n = cast_plain::<Head<btree_node>>(node).expect("node buffer: aligned, at least a block");
 
     BsetLoc {
-        at:     std::mem::offset_of!(Head<c::btree_node>, keys),
+        at:     std::mem::offset_of!(Head<btree_node>, keys),
         sector: 0,
         u64s:   n.keys.u64s(),
     }
@@ -176,11 +177,11 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) ->
     while off < written_sectors * 512 {
         // where the bset is, its u64s, and its container's sectors
         let (bset_at, u64s, sectors) = if off == 0 {
-            let n = c::btree_node::<Unvalidated>::from_bytes(&node[off..]).ok()?;
-            (std::mem::offset_of!(Head<c::btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
+            let n = btree_node::<Unvalidated>::from_bytes(&node[off..]).ok()?;
+            (std::mem::offset_of!(Head<btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
         } else {
-            let n = c::btree_node_entry::<Unvalidated>::from_bytes(&node[off..]).ok()?;
-            (off + std::mem::offset_of!(Head<c::btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
+            let n = btree_node_entry::<Unvalidated>::from_bytes(&node[off..]).ok()?;
+            (off + std::mem::offset_of!(Head<btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
         };
 
         if u64s != 0 {
@@ -207,7 +208,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         .map(|s| parse_kill_node(s))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut fs_opts = c::bch_opts::default();
+    let mut fs_opts = bch_opts::default();
     fs_opts.set_read_only(true);
 
     let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;
@@ -255,7 +256,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                     continue;
                 }
 
-                let Some(ca) = fs.dev_get_ioref::<c::DevReadRefKind>(dev) else {
+                let Some(ca) = fs.dev_get_ioref::<DevReadRefKind>(dev) else {
                     continue;
                 };
 
@@ -292,13 +293,13 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                                      --error keys has nothing to corrupt"))?;
 
                             let (victim, what) = if cli.error == ErrorType::Csum {
-                                (bset.at + std::mem::offset_of!(Head<c::bset>, journal_seq),
+                                (bset.at + std::mem::offset_of!(Head<bset>, journal_seq),
                                  "bset header")
                             } else {
                                 /* midway into the keys: inside the checksummed
                                  * region, and corrupts a key rather than a
                                  * header field the keys don't depend on */
-                                (bset.at + size_of::<Head<c::bset>>() + bset.u64s * 8 / 2,
+                                (bset.at + size_of::<Head<bset>>() + bset.u64s * 8 / 2,
                                  "key data")
                             };
 

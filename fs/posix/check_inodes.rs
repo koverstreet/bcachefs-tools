@@ -11,10 +11,13 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
-use crate::c;
+use crate::posix::inode_format::InodeFlags;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::posix::check;
 use crate::errcode::{Errcode, BchError, Found};
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
@@ -30,11 +33,11 @@ use crate::format::{Bpos, Btree, BkeyType};
 struct CheckInodes {
     /// The oldest version the current key sees: every version takes its hash
     /// info from it.
-    snapshot_root: c::bch_inode_unpacked,
+    snapshot_root: bch_inode_unpacked,
 }
 
 /// The dirent @u names must exist and name @u back. Whether @u changed.
-fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpacked) -> Result<bool, BchError> {
+fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut bch_inode_unpacked) -> Result<bool, BchError> {
     let fs = t.fs();
     let pos = spos(0, u.bi_inum, u.bi_snapshot);
 
@@ -43,7 +46,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
     let d = namei::inode_get_dirent(t, &mut dirent_iter, u, &mut snapshot).found()?;
     let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
-    if !points && u.bi_subvol != 0 && u.flag(c::InodeFlags::has_child_snapshot) {
+    if !points && u.bi_subvol != 0 && u.flag(InodeFlags::has_child_snapshot) {
         // An old version of a renamed subvolume root has no dirent, as
         // expected: the rename can't clear arbitrarily many old backpointers
         u.clear_backpointer();
@@ -70,13 +73,13 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 
     if let Some(k) = d {
         if points &&
-           fsck_err_on!(t, u.flag(c::InodeFlags::unlinked), id::inode_unlinked_but_has_dirent,
+           fsck_err_on!(t, u.flag(InodeFlags::unlinked), id::inode_unlinked_but_has_dirent,
                         "inode unlinked but has dirent\n{u}\n{}", k.to_text(fs))? {
             // A dirent points here, so the unlinked flag is wrong, and
             // clearing it is the whole repair: nlink becomes 1 (check_nlinks
             // recounts hardlinks), and the trigger drops the deleted_inodes
             // entry
-            u.set_flag(c::InodeFlags::unlinked, false);
+            u.set_flag(InodeFlags::unlinked, false);
             changed = true;
         }
     }
@@ -91,7 +94,7 @@ fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError
 }
 
 /// What the has_*_acl flags record.
-fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: XattrType)
+fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &bch_inode_unpacked, ty: XattrType)
     -> Result<bool, BchError>
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;
@@ -99,13 +102,13 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: Xattr
     let mut iter = BtreeIter::uninit(t.trans());
 
     Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
-                                              c::subvol_inum { subvol: 0, inum: u.bi_inum },
+                                              subvol_inum { subvol: 0, inum: u.bi_inum },
                                               &key, BtreeIterFlags::empty(), u.bi_snapshot)
        .found()?.is_some())
 }
 
 /// A snapshot node, or that there isn't one, for messages.
-struct MaybeSnapshot<'a>(Option<&'a c::Snapshot>);
+struct MaybeSnapshot<'a>(Option<&'a Snapshot>);
 
 impl fmt::Display for MaybeSnapshot<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -140,7 +143,7 @@ enum SubvolCheck {
 fn check_inode_subvol(
     t:     &TransAttempt<'_, '_>,
     pos:   Bpos,
-    u:     &mut c::bch_inode_unpacked,
+    u:     &mut bch_inode_unpacked,
 ) -> Result<SubvolCheck, BchError> {
     let fs = t.fs();
 
@@ -153,7 +156,7 @@ fn check_inode_subvol(
     // that's a deletion in flight, which reconstructing would revert. Anything
     // else strips the reference, below.
     let snapshot_agrees = snapshot.as_ref().is_some_and(|s| {
-        s.state_decoded() == Some(c::SnapshotState::live) &&
+        s.state_decoded() == Some(SnapshotState::live) &&
             s.subvol.get() == u.bi_subvol
     });
 
@@ -169,7 +172,7 @@ fn check_inode_subvol(
     //
     // Except the root subvolume, which always exists (check_root() recreates
     // it): stripping bi_subvol would reattach the root directory in lost+found.
-    if subvol.is_none() && u.bi_subvol == c::BCACHEFS_ROOT_SUBVOL {
+    if subvol.is_none() && u.bi_subvol == BCACHEFS_ROOT_SUBVOL {
         return Ok(SubvolCheck::Ok);
     }
 
@@ -205,7 +208,7 @@ fn check_inode_subvol(
 fn check_unlinked_dir(
     t:     &TransAttempt<'_, '_>,
     pos:   Bpos,
-    u:     &mut c::bch_inode_unpacked,
+    u:     &mut bch_inode_unpacked,
 ) -> Result<bool, BchError> {
     if u.is_subvolume_root() && subvolume::is_unlinked(t, u.bi_subvol)? {
         return Ok(false);
@@ -222,13 +225,13 @@ fn check_unlinked_dir(
         return Ok(false);
     }
 
-    u.set_flag(c::InodeFlags::unlinked, false);
+    u.set_flag(InodeFlags::unlinked, false);
     Ok(true)
 }
 
 fn write_if_changed(
     t:       &TransAttempt<'_, '_>,
-    u:       &mut c::bch_inode_unpacked,
+    u:       &mut bch_inode_unpacked,
     changed: bool,
 ) -> Result<(), BchError> {
     if !changed {
@@ -277,7 +280,7 @@ fn check_inode<'t>(
     // Before the backpointer check: the dirent is looked up through
     // bi_parent_subvol, and a bogus one makes a good backpointer look broken.
     if fsck_err_on!(t, u.bi_parent_subvol != 0 &&
-                    (u.bi_subvol == 0 || u.bi_subvol == c::BCACHEFS_ROOT_SUBVOL),
+                    (u.bi_subvol == 0 || u.bi_subvol == BCACHEFS_ROOT_SUBVOL),
                     id::inode_bi_parent_nonzero,
                     "inode has nonzero bi_parent_subvol but is not a subvolume root\n{u}")? {
         u.bi_parent_subvol = 0;
@@ -288,7 +291,7 @@ fn check_inode<'t>(
         changed |= check_inode_dirent_inode(t, &mut u)?;
     }
 
-    if u.is_dir() && u.flag(c::InodeFlags::unlinked) {
+    if u.is_dir() && u.flag(InodeFlags::unlinked) {
         changed |= check_unlinked_dir(t, pos, &mut u)?;
     }
 
@@ -299,19 +302,19 @@ fn check_inode<'t>(
     }
 
     let has_child = inode::has_child_snapshots(t, pos)?;
-    if fsck_err_on!(t, has_child != u.flag(c::InodeFlags::has_child_snapshot),
+    if fsck_err_on!(t, has_child != u.flag(InodeFlags::has_child_snapshot),
                     id::inode_has_child_snapshots_wrong,
                     "inode has_child_snapshots flag wrong (should be {})\n{u}", has_child as u32)? {
-        u.set_flag(c::InodeFlags::has_child_snapshot, has_child);
+        u.set_flag(InodeFlags::has_child_snapshot, has_child);
         changed = true;
     }
 
     // An unlinked subvolume root is the subvolume path's to delete -
     // check_subvols() resumes it - not the inode reaper's
-    if u.flag(c::InodeFlags::unlinked) &&
+    if u.flag(InodeFlags::unlinked) &&
        !u.is_subvolume_root() &&
-       !u.flag(c::InodeFlags::has_child_snapshot) {
-        if !fs.flags.get(c::FsFlag::started) {
+       !u.flag(InodeFlags::has_child_snapshot) {
+        if !fs.flags.get(FsFlag::started) {
             // Offline, only make sure it's on the deleted list: a logged
             // operation may still refer to it - a crash mid-truncate of an open
             // unlinked file - so delete_dead_inodes runs after logged ops
@@ -332,10 +335,10 @@ fn check_inode<'t>(
     }
 
     let has_opts = u.has_opts();
-    if fsck_err_on!(t, u.flag(c::InodeFlags::has_inode_opts) != has_opts,
+    if fsck_err_on!(t, u.flag(InodeFlags::has_inode_opts) != has_opts,
                     id::inode_has_inode_opts_flag_wrong,
                     "inode has_inode_opts flag wrong, should be {}\n{u}", has_opts as u32)? {
-        u.set_flag(c::InodeFlags::has_inode_opts, has_opts);
+        u.set_flag(InodeFlags::has_inode_opts, has_opts);
         changed = true;
     }
 

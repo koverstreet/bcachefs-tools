@@ -43,9 +43,12 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c::{self, CompressionOpt as opts, Errcode as e};
+use crate::c;
+use crate::data::extents::bch_extent_crc_unpacked;
+use crate::format::CompressionOpt as opts;
+use crate::errcode::Errcode as e;
 use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
-use crate::errcode::BchError;
+use crate::errcode::{BchError, ZSTD_ERRS};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
@@ -57,7 +60,7 @@ use crate::os::compress::{lz4, zlib, zstd};
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
 use cstruct_macros::bitfield;
-use crate::format::{Bpos, CompressionType, SbFeatures};
+use crate::format::{Bpos, CompressionType, SbFeatures, CompressionOpt_arms};
 
 /// A compression option's value: a type, and a level - 0 for the type's
 /// default.
@@ -79,7 +82,7 @@ impl bch_compression_opt {
                 }
             };
         }
-        c::CompressionOpt_arms!(map)
+        CompressionOpt_arms!(map)
     }
 
     /// A type there is, and a level only with one.
@@ -129,7 +132,7 @@ fn opt_feature(t: usize) -> SbFeatures {
             }
         };
     }
-    c::CompressionOpt_arms!(map)
+    CompressionOpt_arms!(map)
 }
 
 fn zstd_errcode(code: u32) -> e {
@@ -141,7 +144,7 @@ fn zstd_errcode(code: u32) -> e {
             }
         } };
     }
-    c::ZSTD_ERRS!(map)
+    ZSTD_ERRS!(map)
 }
 
 fn extent_max(fs: &Fs) -> usize {
@@ -258,7 +261,7 @@ pub(crate) fn map_or_alloc<'a>(fs: &'a Fs, r: BioRange<'a>) -> Dst<'a> {
 // ── Decompression ────────────────────────────────────────────────────────
 
 /// @src decompressed in @dst: all of its uncompressed_size, or an error.
-pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, crc: &c::bch_extent_crc_unpacked)
+pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, crc: &bch_extent_crc_unpacked)
     -> Result<VolatileSlice<'a>, BchError>
 {
     let t = crc.compression_type.get();
@@ -356,7 +359,7 @@ pub(crate) fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), B
 }
 
 /// @src, the compressed extent, decompressed into @dst.
-pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: c::bch_extent_crc_unpacked)
+pub fn bio_uncompress(fs: &Fs, src: BioRange<'_>, dst: BioRange<'_>, crc: bch_extent_crc_unpacked)
     -> Result<(), BchError>
 {
     let dst_len = (crc.uncompressed_size as usize) << 9;
@@ -551,7 +554,7 @@ fn compress<'a>(fs: &Fs, dst: Out<'a>, src: &[u8], src_len: &mut usize,
 
 fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: Bpos) -> bool {
     let src_len = src.len();
-    let crc = c::bch_extent_crc_unpacked {
+    let crc = bch_extent_crc_unpacked {
         compressed_size:   (dst.len() >> 9) as u32,
         uncompressed_size: (src_len >> 9) as u32,
         compression_type:  t.into(),

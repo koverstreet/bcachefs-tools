@@ -6,7 +6,7 @@
 use core::ffi::CStr;
 use core::mem::{offset_of, size_of};
 
-use crate::c;
+use crate::sb::counters_format::PersistentCounter_arms;
 use crate::os::tracepoint::{EventClass, Field, TraceSeq};
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use cstruct_macros::Plain;
@@ -75,7 +75,7 @@ macro_rules! tracepoints {
         $( crate::tracepoint!(pub(super) FsStr, $name); )*
     };
 }
-c::PersistentCounter_arms!(tracepoints);
+PersistentCounter_arms!(tracepoints);
 super::BCH_NOCOUNTER_TRACEPOINTS!(tracepoints);
 #[cfg(CONFIG_BCACHEFS_PATH_TRACEPOINTS)]
 super::BCH_PATH_TRACEPOINTS!(tracepoints);

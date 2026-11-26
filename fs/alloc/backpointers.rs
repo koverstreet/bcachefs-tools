@@ -34,7 +34,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::RecoveryPass;
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::fs::Dev;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
@@ -44,7 +44,11 @@ use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbFlush;
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::btree::bbpos::bbpos;
+use crate::data::extents::extent_ptr_decoded;
+use crate::data::reconcile::format::ReconcileWorkId;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
@@ -63,7 +67,8 @@ use crate::util::vstructs::{plain_bytes, Unvalidated};
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::ops::{ControlFlow, RangeInclusive};
-use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion};
+use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion, Backpointer, BackpointerFlags,
+    BTREE_MAX_DEPTH, Deleted};
 
 /// A backpointer btree position, ordered as the bpos it's encoded in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -115,20 +120,20 @@ impl BackpointerPos {
 
 // ── The key type ─────────────────────────────────────────────────────────
 
-impl BkeyOps for c::Backpointer {
+impl BkeyOps for Backpointer {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let bp = v.k.arm::<c::Backpointer>().expect("a backpointer");
+        let bp = v.k.arm::<Backpointer>().expect("a backpointer");
         let level = bp.v().level;
 
-        bkey_fsck_err_on!(v, u32::from(level) > c::BTREE_MAX_DEPTH, id::backpointer_level_bad,
-                          "backpointer level bad: {level} >= {}", c::BTREE_MAX_DEPTH)?;
-        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(c::BCH_SB_MEMBER_INVALID), id::backpointer_dev_bad,
+        bkey_fsck_err_on!(v, u32::from(level) > BTREE_MAX_DEPTH, id::backpointer_level_bad,
+                          "backpointer level bad: {level} >= {}", BTREE_MAX_DEPTH)?;
+        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(BCH_SB_MEMBER_INVALID), id::backpointer_dev_bad,
                           "backpointer for BCH_SB_MEMBER_INVALID")
     }
 
     #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let bp = k.arm::<c::Backpointer>().expect("a backpointer");
+        let bp = k.arm::<Backpointer>().expect("a backpointer");
         let p = bp.k.p;
         let v = bp.v();
 
@@ -154,7 +159,7 @@ impl BkeyOps for c::Backpointer {
         }
         prt!(out, "{}", { v.pos });
 
-        if v.reconcile_phys() != c::ReconcileWorkId::none {
+        if v.reconcile_phys() != ReconcileWorkId::none {
             prt!(out, " reconcile_phys={}", v.reconcile_phys());
         }
         if v.erasure_coded() {
@@ -166,10 +171,10 @@ impl BkeyOps for c::Backpointer {
     }
 
     fn swab(_fs: Option<&Fs>, k: BkeyS<'_>) {
-        let mut bp = k.arm::<c::Backpointer>().expect("a backpointer");
+        let mut bp = k.arm::<Backpointer>().expect("a backpointer");
         let v = bp.v_mut();
 
-        v.flags = c::BackpointerFlags::from_bits(v.flags.into_bits().swap_bytes());
+        v.flags = BackpointerFlags::from_bits(v.flags.into_bits().swap_bytes());
         v.bucket_len = { v.bucket_len }.swap_bytes();
         let mut pos = v.pos;
         pos.swab();
@@ -179,7 +184,7 @@ impl BkeyOps for c::Backpointer {
 
 // ── An extent pointer's backpointer ──────────────────────────────────────
 
-impl c::Backpointer {
+impl Backpointer {
     /// The btree it's in - not the one it points into, target()'s: stripe
     /// blocks on removed devices have a btree of their own.
     pub fn bp_btree(&self) -> Btree {
@@ -187,25 +192,25 @@ impl c::Backpointer {
     }
 
     /// What it points to.
-    pub fn target(&self) -> c::bbpos {
-        c::bbpos { btree: Btree(self.btree_id.into()), pos: self.pos }
+    pub fn target(&self) -> bbpos {
+        bbpos { btree: Btree(self.btree_id.into()), pos: self.pos }
     }
 }
 
 /// All but the reconcile phys bits: a cache of the extent's pending work, which
 /// goes stale when a device's rotational flag flips - check_reconcile_work's to
 /// repair, not a mismatch.
-pub fn backpointers_match(l: &c::Backpointer, r: &c::Backpointer) -> bool {
+pub fn backpointers_match(l: &Backpointer, r: &Backpointer) -> bool {
     let (mut l, mut r) = (*l, *r);
-    l.set_reconcile_phys(c::ReconcileWorkId::none);
-    r.set_reconcile_phys(c::ReconcileWorkId::none);
+    l.set_reconcile_phys(ReconcileWorkId::none);
+    r.set_reconcile_phys(ReconcileWorkId::none);
     plain_bytes(&l) == plain_bytes(&r)
 }
 
 /// Pending work isn't tracked by bucket.
-pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::ReconcileWorkId {
+pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> ReconcileWorkId {
     if level != 0 || !fs.dev_rotational(dev) {
-        return c::ReconcileWorkId::none;
+        return ReconcileWorkId::none;
     }
     k.reconcile_work_id(fs).phys()
 }
@@ -215,11 +220,11 @@ pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::Rec
 /// old stripe's block both reference it, and without the index, deleting the
 /// old stripe deletes the new one's backpointer. Stripe indices are below
 /// U32_MAX, so they fit.
-fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> Bpos {
+fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &extent_ptr_decoded) -> Bpos {
     let shift = fs.sb.extent_bp_shift.get();
     let dev = u64::from(p.ptr.dev());
 
-    if let Some(s) = k.arm::<c::Stripe>() {
+    if let Some(s) = k.arm::<Stripe>() {
         // 1.40's, with inline data's checksums
         let snapshot = if fs.version() >= MetadataVersion::inline_data_csum {
             s.k.p.offset as u32
@@ -230,20 +235,20 @@ fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> Bp
     }
 
     let mut ret = pos(dev, (p.ptr.offset() << shift) + u64::from(p.crc.offset));
-    if u32::from(p.ptr.dev()) == c::BCH_SB_MEMBER_INVALID && p.has_ec {
+    if u32::from(p.ptr.dev()) == BCH_SB_MEMBER_INVALID && p.has_ec {
         ret.inode = BackpointerPos::ec_removed_dev(p.ec.idx(), p.ec.block().into());
     }
     ret
 }
 
 pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &DecodedPtr<'_>)
-    -> BkeyI<c::Backpointer>
+    -> BkeyI<Backpointer>
 {
     let dev = u32::from(d.p.ptr.dev());
     let sectors = if level != 0 { fs.btree_sectors().into() } else { k.k.size.into() };
 
-    let mut bp = BkeyI::<c::Backpointer>::at(extent_ptr_to_bp_pos(fs, k, &d.p));
-    bp.v = c::Backpointer {
+    let mut bp = BkeyI::<Backpointer>::at(extent_ptr_to_bp_pos(fs, k, &d.p));
+    bp.v = Backpointer {
         btree_id:   btree.0 as u8,
         level:      level as u8,
         data_type:  ptr_data_type(fs, k, d).0 as u8,
@@ -254,7 +259,7 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &De
     };
     bp.v.set_reconcile_phys(bp_reconcile_phys(fs, level, dev, k));
     bp.v.set_erasure_coded(d.p.has_ec);
-    bp.v.set_stripe_ptr(d.p.has_ec && dev == c::BCH_SB_MEMBER_INVALID);
+    bp.v.set_stripe_ptr(d.p.has_ec && dev == BCH_SB_MEMBER_INVALID);
     bp
 }
 
@@ -262,7 +267,7 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &De
 
 /// check_extents_to_backpointers repairs this: schedule it, if it isn't going to run.
 #[cold]
-fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &BkeyI<c::Backpointer>,
+fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &BkeyI<Backpointer>,
                        found_bp: BkeySC<'_>, insert: bool) -> Result<(), BchError> {
     let fs = t.fs();
     let pass = RecoveryPass::check_extents_to_backpointers;
@@ -271,7 +276,7 @@ fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &Bk
         return Ok(());
     }
 
-    let new_bp = BkeySC::<c::Backpointer>::from(new_bp);
+    let new_bp = BkeySC::<Backpointer>::from(new_bp);
     let mut msg = LogMsg::new(fs);
     if insert {
         prt!(&mut msg, "existing backpointer found when inserting {}\n", new_bp.to_text(fs));
@@ -286,11 +291,11 @@ fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &Bk
         prt!(&mut out, "for {}", orig_k.to_text(fs));
     }
 
-    passes::run_explicit(fs, &mut msg, pass, c::RunRecoveryPassFlags::from_bits_retain(0))
+    passes::run_explicit(fs, &mut msg, pass, RunRecoveryPassFlags::from_bits_retain(0))
 }
 
 fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>,
-                                        bp: &mut BkeyI<c::Backpointer>, insert: bool)
+                                        bp: &mut BkeyI<Backpointer>, insert: bool)
     -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(t, bp.v.bp_btree(), bp.k.p, BtreeIterFlags::INTENT);
@@ -299,7 +304,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
     let wrong = if insert {
         k.k.key_type() != BkeyType::deleted
     } else {
-        k.arm::<c::Backpointer>().is_none_or(|found| !backpointers_match(found.v(), &bp.v))
+        k.arm::<Backpointer>().is_none_or(|found| !backpointers_match(found.v(), &bp.v))
     };
     if wrong {
         backpointer_mod_err(t, orig_k, bp, k, insert)?;
@@ -316,10 +321,10 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
 }
 
 /// Also its reconcile phys btree entry. Deleting turns @bp into a deletion.
-pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
+pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: &mut BkeyI<Backpointer>,
                               insert: bool) -> Result<(), BchError> {
     let phys = bp.v.reconcile_phys();
-    if phys != c::ReconcileWorkId::none {
+    if phys != ReconcileWorkId::none {
         let btree = phys.phys_btree().expect("phys bits that are never pending: bp_reconcile_phys()'s");
         t.bit_mod_buffered(btree, bp.k.p, insert)?;
     }
@@ -339,7 +344,7 @@ pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: 
 // ── What a backpointer points to ─────────────────────────────────────────
 
 fn extent_matches_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>,
-                     bp: BkeySC<'_, c::Backpointer>) -> bool {
+                     bp: BkeySC<'_, Backpointer>) -> bool {
     let Some(kp) = k.arm::<Ptrs>() else { return false };
 
     let matches = kp.ptrs_decoded(fs).any(|d| {
@@ -368,7 +373,7 @@ pub(super) fn backpointers_maybe_flush(t: &TransAttempt<'_, '_>, visiting_k: Bke
 }
 
 /// Reported, and on repair deleted - a commit, and with @commit another.
-fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>,
+fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, Backpointer>,
                                 target: BkeySC<'_>, last_flushed: Option<WbFlush<'_>>,
                                 commit: bool) -> Result<(), BchError> {
     let fs = t.fs();
@@ -390,7 +395,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
     if let Some(kp) = target.arm::<Ptrs>() {
         for d in kp.ptrs_decoded(fs).filter(|d| u64::from(d.p.ptr.dev()) == bp.k.p.inode) {
             let bp2 = extent_ptr_to_bp(fs, Btree(v.btree_id.into()), v.level.into(), target, &d);
-            prt!(&mut buf, "\nwant:  {}", BkeySC::<c::Backpointer>::from(&bp2).to_text(fs));
+            prt!(&mut buf, "\nwant:  {}", BkeySC::<Backpointer>::from(&bp2).to_text(fs));
         }
     }
 
@@ -417,7 +422,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
 }
 
 /// None if it isn't there, which is reported.
-fn get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>, iter: &mut BtreeIter<'t>,
+fn get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, Backpointer>, iter: &mut BtreeIter<'t>,
                 last_flushed: Option<WbFlush<'_>>, commit: bool) -> Result<Option<BtreeNodeRef>, BchError>
 {
     let fs = t.fs();
@@ -430,8 +435,8 @@ fn get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>, iter: 
     let node_k = {
         let Some(n) = iter.peek_node(t)? else {
             // Backpointer for nonexistent tree depth:
-            let hole = BkeyI::<c::Deleted>::at(v.pos);
-            backpointer_target_not_found(t, bp, BkeySC::<c::Deleted>::from(&hole).untyped(), last_flushed, commit)?;
+            let hole = BkeyI::<Deleted>::at(v.pos);
+            backpointer_target_not_found(t, bp, BkeySC::<Deleted>::from(&hole).untyped(), last_flushed, commit)?;
             return Ok(None);
         };
         let b = n.node();
@@ -455,7 +460,7 @@ fn get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>, iter: 
 }
 
 /// None if it isn't there, which is reported, or is a node not yet reachable.
-pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
+pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, Backpointer>,
                    iter: &'i mut BtreeIter<'t>, flags: BtreeIterFlags,
                    last_flushed: Option<WbFlush<'_>>, commit: bool)
     -> Result<Option<BkeySC<'i>>, BchError>
@@ -472,8 +477,8 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
 
     // peek_slot() doesn't normally return None - except when we ask for a
     // key at a btree level that doesn't exist:
-    let hole = BkeyI::<c::Deleted>::at(v.pos);
-    let k = iter.peek_slot(t)?.unwrap_or_else(|| BkeySC::<c::Deleted>::from(&hole).untyped());
+    let hole = BkeyI::<Deleted>::at(v.pos);
+    let k = iter.peek_slot(t)?.unwrap_or_else(|| BkeySC::<Deleted>::from(&hole).untyped());
 
     if extent_matches_bp(fs, btree, v.level.into(), k, bp) {
         // SAFETY: returned, ending this function's use of @iter
@@ -496,7 +501,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
 /// What @bp points to, and @iter, there - at its level, or for a btree node
 /// pointer at the node below: None if there's nothing, reported, and the
 /// backpointer maybe deleted, committing.
-pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
+pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, Backpointer>,
                                    iter: &'i mut BtreeIter<'t>, flags: BtreeIterFlags,
                                    last_flushed: WbFlush<'_>)
     -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
@@ -506,7 +511,7 @@ pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c
     Ok(k.map(|k| (&*iter, k)))
 }
 
-pub(crate) fn backpointer_get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
+pub(crate) fn backpointer_get_node<'t>(t: &TransAttempt<'t, '_>, bp: BkeySC<'_, Backpointer>,
                                 iter: &mut BtreeIter<'t>, last_flushed: WbFlush<'_>)
     -> Result<Option<BtreeNodeRef>, BchError>
 {
@@ -529,7 +534,7 @@ pub struct BpScanIter<'p> {
     pos:        Bpos,
     nr_flushes: u64,
     progress:   Option<&'p Progress<'p>>,
-    batch:      Vec<BkeyI<c::Backpointer>>,
+    batch:      Vec<BkeyI<Backpointer>>,
     /* a refill found nothing: the scan's at its end */
     done:       bool,
 }
@@ -538,7 +543,7 @@ impl BpScanIter<'_> {
     /// The next backpointer, or None past @end: in the caller's attempt @t,
     /// which a refill ends - see BpScanIter.
     fn peek(&mut self, t: &TransAttempt<'_, '_>, end: Bpos, last_flushed: &WbFlush<'_>)
-        -> Result<Option<BkeySC<'_, c::Backpointer>>, BchError>
+        -> Result<Option<BkeySC<'_, Backpointer>>, BchError>
     {
         if self.nr_flushes != last_flushed.nr_flushes() {
             if let Some(pos) = self.batch.last().map(|bp| bp.k.p) {
@@ -568,13 +573,13 @@ impl BpScanIter<'_> {
     /// doubling. When it can't grow, the batch is what's been read - unless
     /// that's nothing.
     fn refill(&mut self, trans: &TransGuard<'_>, end: Bpos) -> Result<(), BchError> {
-        let bp_size = size_of::<BkeyI<c::Backpointer>>();
+        let bp_size = size_of::<BkeyI<Backpointer>>();
         let max = totalram_bytes() / 16 / bp_size;
         let progress = self.progress;
 
         let mut iter = BtreeIter::new(trans, self.btree, self.pos, BtreeIterFlags::PREFETCH);
         iter.for_each_max(trans, end, |t, iter, k| {
-            let Some(bp) = BkeyI::<c::Backpointer>::from_key(k) else {
+            let Some(bp) = BkeyI::<Backpointer>::from_key(k) else {
                 return Ok(ControlFlow::Continue(()));
             };
             if self.batch.len() >= max {
@@ -623,7 +628,7 @@ impl<'p> BpScanIter<'p> {
     pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, end: Bpos,
                        mut last_flushed: WbFlush<'_>, mut f: F) -> Result<(), BchError>
     where
-        F: for<'a> FnMut(&TransAttempt<'a, '_>, BkeySC<'_, c::Backpointer>, WbFlush<'_>)
+        F: for<'a> FnMut(&TransAttempt<'a, '_>, BkeySC<'_, Backpointer>, WbFlush<'_>)
             -> Result<(), BchError>,
     {
         while lockrestart_do(trans, |t| {

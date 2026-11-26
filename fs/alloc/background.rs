@@ -473,7 +473,7 @@
 #![allow(non_camel_case_types)]
 
 
-use crate::fs::Dev;
+use crate::fs::{Dev, FsFlag};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::alloc::accounting;
 use crate::alloc::check::need_discard_or_freespace_err;
@@ -483,8 +483,10 @@ use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyVal, BkeyWhole
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
                          UpdateTriggerFlags};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::c;
-use crate::c::Errcode;
+use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BCH_ALLOC_V4_U64s,
+    BCH_ALLOC_V4_U64s_V0, BucketGens, BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
+use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
+use crate::errcode::Errcode;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -500,7 +502,8 @@ use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
-use crate::format::{Bpos, Btree, DataType, MetadataVersion};
+use crate::format::{Bpos, Btree, DataType, MetadataVersion, Backpointer, bkey, BKEY_U64s,
+    JSET_KEYS_U64s};
 
 /// How far a bucket's generation may get past its oldest pointer's before
 /// it has to be gc'd: the gen is a u8, compared wrapping.
@@ -547,7 +550,7 @@ macro_rules! alloc_unpacked {
         }
     };
 }
-c::BCH_ALLOC_FIELDS_V2!(alloc_unpacked);
+BCH_ALLOC_FIELDS_V2!(alloc_unpacked);
 
 macro_rules! alloc_v1_fields {
     ($(($name:ident, $bits:tt)),* $(,)?) => {
@@ -578,15 +581,15 @@ macro_rules! alloc_v1_fields {
         }
     };
 }
-c::BCH_ALLOC_FIELDS_V1!(alloc_v1_fields);
+BCH_ALLOC_FIELDS_V1!(alloc_v1_fields);
 
 impl AllocUnpacked {
-    fn v1(a: BkeySC<'_, c::Alloc<Unvalidated>>) -> Self {
+    fn v1(a: BkeySC<'_, Alloc<Unvalidated>>) -> Self {
         let v = a.v();
         Self { generation: v.generation, ..Default::default() }.v1_fields(v.fields, &v.data)
     }
 
-    fn v2(a: BkeySC<'_, c::AllocV2<Unvalidated>>) -> Option<Self> {
+    fn v2(a: BkeySC<'_, AllocV2<Unvalidated>>) -> Option<Self> {
         let v = a.v();
         Self {
             generation: v.generation,
@@ -596,7 +599,7 @@ impl AllocUnpacked {
         }.varint_fields(&v.data, v.nr_fields)
     }
 
-    fn v3(a: BkeySC<'_, c::AllocV3<Unvalidated>>) -> Option<Self> {
+    fn v3(a: BkeySC<'_, AllocV3<Unvalidated>>) -> Option<Self> {
         let v = a.v();
         Self {
             journal_seq:  v.journal_seq.get(),
@@ -611,11 +614,11 @@ impl AllocUnpacked {
     /// @k, an alloc key before v4 - zeroed, if it isn't one: bch2_alloc_unpack().
     /// Validate has seen v2 and v3 unpack.
     fn new(k: AnyKeySC<'_, Unvalidated>) -> Self {
-        if let Some(a) = k.arm::<c::Alloc>() {
+        if let Some(a) = k.arm::<Alloc>() {
             Self::v1(a)
-        } else if let Some(a) = k.arm::<c::AllocV2>() {
+        } else if let Some(a) = k.arm::<AllocV2>() {
             Self::v2(a).unwrap_or_default()
-        } else if let Some(a) = k.arm::<c::AllocV3>() {
+        } else if let Some(a) = k.arm::<AllocV3>() {
             Self::v3(a).unwrap_or_default()
         } else {
             Self::default()
@@ -625,12 +628,12 @@ impl AllocUnpacked {
 
 /// v1's value size, in u64s, by the fields it says it has:
 /// bch_alloc_v1_val_u64s().
-fn alloc_v1_val_u64s(a: &c::Alloc<Unvalidated>) -> usize {
+fn alloc_v1_val_u64s(a: &Alloc<Unvalidated>) -> usize {
     let fields: usize = ALLOC_V1_FIELD_BYTES.iter().enumerate()
         .filter(|&(i, _)| a.fields & 1 << i != 0)
         .map(|(_, &bytes)| bytes)
         .sum();
-    (offset_of!(c::Alloc, repr.data) + fields).div_ceil(size_of::<u64>())
+    (offset_of!(Alloc, repr.data) + fields).div_ceil(size_of::<u64>())
 }
 
 // ── Alloc keys as v4 ─────────────────────────────────────────────────────
@@ -638,14 +641,14 @@ fn alloc_v1_val_u64s(a: &c::Alloc<Unvalidated>) -> usize {
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
 /// alloc key, the slot of a bucket without one, as a zeroed one:
 /// bch2_alloc_to_v4().
-pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> c::AllocV4 {
+pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> AllocV4 {
     let k = k.as_read();
     // A v4 by its length: fields past it are zero, as written before they
     // existed. Not by BACKPOINTERS_START - a key widened without updating
     // it has fields written past it since
-    let mut a = c::AllocV4::val_copy_pad(k).unwrap_or_else(|| {
+    let mut a = AllocV4::val_copy_pad(k).unwrap_or_else(|| {
         let u = AllocUnpacked::new(k);
-        let mut a = c::AllocV4::default();
+        let mut a = AllocV4::default();
         a.journal_seq_nonempty = u.journal_seq;
         a.set_need_discard(u.need_discard);
         a.generation           = u.generation;
@@ -657,7 +660,7 @@ pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> c::AllocV4 {
         a.stripe_refcount      = (u.stripe != 0).into();
         a
     });
-    a.set_backpointers_start(c::BCH_ALLOC_V4_U64s as u8);
+    a.set_backpointers_start(BCH_ALLOC_V4_U64s as u8);
     a
 }
 
@@ -665,7 +668,7 @@ impl Fs {
     /// The io clock for @rw, as a bucket's io_time holds it - never 0, which
     /// is none: bch2_current_io_time().
     pub fn current_io_time(&self, rw: usize) -> u64 {
-        (self.io_clock[rw].now.load(Ordering::Relaxed) as u64 & c::LRU_TIME_MAX).max(1)
+        (self.io_clock[rw].now.load(Ordering::Relaxed) as u64 & LRU_TIME_MAX).max(1)
     }
 }
 
@@ -673,17 +676,17 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// alloc_to_v4(), as a key in transaction memory to edit and update with
     /// - not queued as an update: bch2_alloc_to_v4_mut(). A v4 is grown to
     /// all of today's struct, or kept as long as it was if that's longer.
-    pub fn alloc_to_v4_mut(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't, c::AllocV4>, BchError> {
-        if let Some(a) = k.arm::<c::AllocV4>() {
+    pub fn alloc_to_v4_mut(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't, AllocV4>, BchError> {
+        if let Some(a) = k.arm::<AllocV4>() {
             let mut a = self.bkey_make_mut_noupdate(a)?;
             // Widened to all of today's struct: say so, for a kernel that
             // reads by BACKPOINTERS_START - one from before it read by length
             // would drop what's written past an older start
-            a.v_mut().set_backpointers_start(c::BCH_ALLOC_V4_U64s as u8);
+            a.v_mut().set_backpointers_start(BCH_ALLOC_V4_U64s as u8);
             return Ok(a);
         }
 
-        let mut a = self.bkey_alloc_typed::<c::AllocV4>()?;
+        let mut a = self.bkey_alloc_typed::<AllocV4>()?;
         a.k_mut().p = k.k.p;
         *a.v_mut() = alloc_to_v4(k);
         Ok(a)
@@ -696,18 +699,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
         &self,
         pos:   Bpos,
         flags: UpdateTriggerFlags,
-        edit:  impl FnOnce(&mut TransBkey<'a, 't, c::AllocV4>) -> Result<R, BchError>,
+        edit:  impl FnOnce(&mut TransBkey<'a, 't, AllocV4>) -> Result<R, BchError>,
     ) -> Result<R, BchError> {
         let mut iter = BtreeIter::new(self, Btree::alloc, pos,
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         let k = iter.peek_slot(self)?.expect("a slot always has a key");
 
         if self.in_mem(k.v.cast()) {
-            let a = k.arm::<c::AllocV4>().expect("an alloc update, as alloc_to_v4_mut() makes one");
+            let a = k.arm::<AllocV4>().expect("an alloc update, as alloc_to_v4_mut() makes one");
             // alloc_to_v4_mut() made it, all of an alloc_v4 or longer; by its
             // value, as C's container_of(): the header @k has may be a copy
-            let u64s = u32::from(a.k.u64s).max((size_of::<BkeyI<c::AllocV4>>() / size_of::<u64>()) as u32);
-            let key = k.v.cast::<u8>().wrapping_sub(size_of::<c::bkey>()).cast_mut();
+            let u64s = u32::from(a.k.u64s).max((size_of::<BkeyI<AllocV4>>() / size_of::<u64>()) as u32);
+            let key = k.v.cast::<u8>().wrapping_sub(size_of::<bkey>()).cast_mut();
             // SAFETY: a key in our memory, its value at @k.v, with @u64s u64s of room
             let a = unsafe { TransBkey::from_raw_room(self, key.cast(), u64s) };
             // SAFETY: all of an alloc_v4
@@ -722,7 +725,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 // ── Alloc keys: validate, swab, to_text ──────────────────────────────────
 
 fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let a = v.k.arm::<c::Alloc>().expect("an alloc key");
+    let a = v.k.arm::<Alloc>().expect("an alloc key");
     let (have, want) = (v.k.k.val_u64s(), alloc_v1_val_u64s(a.v()));
 
     // allow for unknown fields
@@ -731,7 +734,7 @@ fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
-    let a = c::AllocV4::val_copy_pad(v.k).expect("an alloc_v4");
+    let a = AllocV4::val_copy_pad(v.k).expect("an alloc_v4");
     let (want, have) = (a.u64s_noerror(), v.k.k.val_u64s());
 
     bkey_fsck_err_on!(v, want > have, id::alloc_v4_val_size_bad, "bad val size ({want} > {have})")?;
@@ -750,8 +753,8 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                       "invalid data type (got {} should be {})", a.data_type().0, data_type.0)?;
 
     for (rw, name) in [(READ, "read"), (WRITE, "write")] {
-        bkey_fsck_err_on!(v, a.io_time[rw] > c::LRU_TIME_MAX, id::alloc_key_io_time_bad,
-                          "invalid io_time[{name}]: {}, max {}", a.io_time[rw], c::LRU_TIME_MAX)?;
+        bkey_fsck_err_on!(v, a.io_time[rw] > LRU_TIME_MAX, id::alloc_key_io_time_bad,
+                          "invalid io_time[{name}]: {}, max {}", a.io_time[rw], LRU_TIME_MAX)?;
     }
 
     let (stripe, dirty, cached, refcount) = (a.stripe_sectors, a.dirty_sectors, a.cached_sectors, a.stripe_refcount);
@@ -775,7 +778,7 @@ fn alloc_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidate
     alloc_v4_to_text(out, fs, k, &alloc_to_v4(k));
 }
 
-impl BkeyOps for c::Alloc {
+impl BkeyOps for Alloc {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         alloc_v1_validate(v)
     }
@@ -787,9 +790,9 @@ impl BkeyOps for c::Alloc {
     const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
 }
 
-impl BkeyOps for c::AllocV2 {
+impl BkeyOps for AllocV2 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let a = v.k.arm::<c::AllocV2>().expect("an alloc_v2");
+        let a = v.k.arm::<AllocV2>().expect("an alloc_v2");
         bkey_fsck_err_on!(v, AllocUnpacked::v2(a).is_none(), id::alloc_v2_unpack_error, "unpack error")
     }
 
@@ -800,9 +803,9 @@ impl BkeyOps for c::AllocV2 {
     const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
 }
 
-impl BkeyOps for c::AllocV3 {
+impl BkeyOps for AllocV3 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let a = v.k.arm::<c::AllocV3>().expect("an alloc_v3");
+        let a = v.k.arm::<AllocV3>().expect("an alloc_v3");
         bkey_fsck_err_on!(v, AllocUnpacked::v3(a).is_none(), id::alloc_v3_unpack_error, "unpack error")
     }
 
@@ -813,14 +816,14 @@ impl BkeyOps for c::AllocV3 {
     const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
 }
 
-impl BkeyOps for c::AllocV4 {
+impl BkeyOps for AllocV4 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         alloc_v4_validate(v)
     }
 
     #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let a = c::AllocV4::val_copy_pad(k).expect("an alloc_v4");
+        let a = AllocV4::val_copy_pad(k).expect("an alloc_v4");
         alloc_v4_to_text(out, fs, k, &a);
     }
 
@@ -834,16 +837,16 @@ impl BkeyOps for c::AllocV4 {
         }
         let v = k.val_bytes_mut();
 
-        swab::<8>(v, offset_of!(c::AllocV4, repr.journal_seq_nonempty));
-        swab::<8>(v, offset_of!(c::AllocV4, repr.journal_seq_empty));
-        swab::<4>(v, offset_of!(c::AllocV4, repr.flags));
-        swab::<4>(v, offset_of!(c::AllocV4, repr.dirty_sectors));
-        swab::<4>(v, offset_of!(c::AllocV4, repr.cached_sectors));
-        swab::<8>(v, offset_of!(c::AllocV4, repr.io_time));
-        swab::<8>(v, offset_of!(c::AllocV4, repr.io_time) + size_of::<u64>());
-        swab::<4>(v, offset_of!(c::AllocV4, repr.stripe_refcount));
-        swab::<4>(v, offset_of!(c::AllocV4, repr.nr_external_backpointers));
-        swab::<4>(v, offset_of!(c::AllocV4, repr.stripe_sectors));
+        swab::<8>(v, offset_of!(AllocV4, repr.journal_seq_nonempty));
+        swab::<8>(v, offset_of!(AllocV4, repr.journal_seq_empty));
+        swab::<4>(v, offset_of!(AllocV4, repr.flags));
+        swab::<4>(v, offset_of!(AllocV4, repr.dirty_sectors));
+        swab::<4>(v, offset_of!(AllocV4, repr.cached_sectors));
+        swab::<8>(v, offset_of!(AllocV4, repr.io_time));
+        swab::<8>(v, offset_of!(AllocV4, repr.io_time) + size_of::<u64>());
+        swab::<4>(v, offset_of!(AllocV4, repr.stripe_refcount));
+        swab::<4>(v, offset_of!(AllocV4, repr.nr_external_backpointers));
+        swab::<4>(v, offset_of!(AllocV4, repr.stripe_sectors));
     }
 
     const TRIGGER: Option<&'static Trigger> = Some(&ALLOC);
@@ -851,20 +854,20 @@ impl BkeyOps for c::AllocV4 {
 
 /// @a, read from alloc key @k: what's printed of a v4's later fields depends
 /// on @k's length, whatever its version.
-fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>, a: &c::AllocV4) {
+fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>, a: &AllocV4) {
     let has = |at: usize, len: usize| k.k.val_bytes() >= at + len;
     let ca = fs.and_then(|fs| fs.dev_get(k.k.p.inode as u32));
 
     prt!(out, "\ngen {} oldest_gen {} data_type ", a.generation, a.oldest_gen);
     a.data_type().to_text(out);
     prt!(out, "\njournal_seq_nonempty {}\n", { a.journal_seq_nonempty });
-    if has(offset_of!(c::AllocV4, repr.journal_seq_empty), size_of::<u64>()) {
+    if has(offset_of!(AllocV4, repr.journal_seq_empty), size_of::<u64>()) {
         prt!(out, "journal_seq_empty    {}\n", { a.journal_seq_empty });
     }
     prt!(out, "need_discard         {}\n", u8::from(a.need_discard()));
     prt!(out, "need_inc_gen         {}\n", u8::from(a.need_inc_gen()));
     prt!(out, "dirty_sectors        {}\n", { a.dirty_sectors });
-    if has(offset_of!(c::AllocV4, repr.stripe_sectors), size_of::<u32>()) {
+    if has(offset_of!(AllocV4, repr.stripe_sectors), size_of::<u32>()) {
         prt!(out, "stripe_sectors       {}\n", { a.stripe_sectors });
     }
     prt!(out, "cached_sectors       {}\n", { a.cached_sectors });
@@ -877,7 +880,7 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalid
     prt!(out, "bp_start          {}\n", a.backpointers_start());
 }
 
-impl c::AllocV4 {
+impl AllocV4 {
     pub(crate) fn data_type(&self) -> DataType {
         self.data_type.get()
     }
@@ -916,7 +919,7 @@ impl c::AllocV4 {
     /// in it: alloc_lru_idx_read().
     pub fn lru_idx_read(&self) -> u64 {
         if self.data_type() == DataType::cached {
-            self.io_time[READ] & c::LRU_TIME_MAX
+            self.io_time[READ] & LRU_TIME_MAX
         } else {
             0
         }
@@ -926,7 +929,7 @@ impl c::AllocV4 {
     /// fraction of 1 << 31, for movable data with room it isn't using:
     /// alloc_lru_idx_fragmentation().
     pub fn lru_idx_fragmentation(&self, ca: &Dev) -> u64 {
-        if self.data_type().0 >= c::DataType::NR ||
+        if self.data_type().0 >= DataType::NR ||
            !self.data_type().is_movable() ||
            self.sectors_fragmented(ca) == 0 {
             return 0;
@@ -943,10 +946,10 @@ impl c::AllocV4 {
     /// inline: alloc_v4_u64s_noerror().
     fn u64s_noerror(&self) -> usize {
         let start = match self.backpointers_start() {
-            0 => c::BCH_ALLOC_V4_U64s_V0 as usize,
+            0 => BCH_ALLOC_V4_U64s_V0 as usize,
             s => s.into(),
         };
-        start + usize::from(self.nr_backpointers()) * (size_of::<c::Backpointer>() / size_of::<u64>())
+        start + usize::from(self.nr_backpointers()) * (size_of::<Backpointer>() / size_of::<u64>())
     }
 
     /// How far its generation is past its oldest pointer's, wrapping:
@@ -968,7 +971,7 @@ impl c::AllocV4 {
             DataType::cached
         } else if t == DataType::need_discard {
             DataType::need_discard
-        } else if u32::from(self.gc_gen()) >= c::BUCKET_GC_GEN_MAX {
+        } else if u32::from(self.gc_gen()) >= BUCKET_GC_GEN_MAX {
             DataType::need_gc_gens
         } else {
             DataType::free
@@ -998,7 +1001,7 @@ pub struct NeedDiscardPos {
 
 impl NeedDiscardPos {
     /// Where bucket @bucket, alloc key @a, belongs.
-    pub fn new(bucket: Bpos, a: &c::AllocV4) -> Self {
+    pub fn new(bucket: Bpos, a: &AllocV4) -> Self {
         Self { journal_seq_empty: a.journal_seq_empty, bucket }
     }
 
@@ -1030,7 +1033,7 @@ pub struct FreespacePos {
 
 impl FreespacePos {
     /// Where bucket @bucket, alloc key @a, belongs.
-    pub fn new(bucket: Bpos, a: &c::AllocV4) -> Self {
+    pub fn new(bucket: Bpos, a: &AllocV4) -> Self {
         Self { bucket, genbits: a.gc_gen() >> 4 }
     }
 
@@ -1059,34 +1062,34 @@ pub struct BucketGensPos {
 impl BucketGensPos {
     pub fn new(bucket: Bpos) -> Self {
         Self {
-            key: pos(bucket.inode, bucket.offset >> c::BucketGens::BITS),
-            idx: (bucket.offset & c::BucketGens::MASK) as usize,
+            key: pos(bucket.inode, bucket.offset >> BucketGens::BITS),
+            idx: (bucket.offset & BucketGens::MASK) as usize,
         }
     }
 
     /// The bucket it's the gen of: bucket_gens_pos_to_alloc().
     pub fn bucket(self) -> Bpos {
-        pos(self.key.inode, self.key.offset << c::BucketGens::BITS | self.idx as u64)
+        pos(self.key.inode, self.key.offset << BucketGens::BITS | self.idx as u64)
     }
 
     /// The bucket's gen in @k, its bucket_gens key - 0 if it hasn't one:
     /// alloc_gen().
     pub fn bucket_gen(self, k: BkeySC<'_>) -> u8 {
-        k.arm::<c::BucketGens>().map_or(0, |g| g.v().gens[self.idx])
+        k.arm::<BucketGens>().map_or(0, |g| g.v().gens[self.idx])
     }
 }
 
 // ── bucket_gens keys ─────────────────────────────────────────────────────
 
-impl BkeyOps for c::BucketGens {
+impl BkeyOps for BucketGens {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let (have, want) = (v.k.k.val_bytes(), size_of::<c::BucketGens>());
+        let (have, want) = (v.k.k.val_bytes(), size_of::<BucketGens>());
         bkey_fsck_err_on!(v, have != want, id::bucket_gens_val_size_bad, "bad val size ({have} != {want})")
     }
 
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        if let Some(g) = k.arm::<c::BucketGens>() {
+        if let Some(g) = k.arm::<BucketGens>() {
             prt!(out, "{}", Join(" ", g.v().gens.iter()));
         }
     }
@@ -1097,10 +1100,10 @@ impl BkeyOps for c::BucketGens {
 fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     // the key being filled, and its position
-    let mut g: Option<(Bpos, c::BucketGens)> = None;
+    let mut g: Option<(Bpos, BucketGens)> = None;
 
-    fn insert(t: &TransAttempt<'_, '_>, (p, gens): (Bpos, c::BucketGens)) -> Result<(), BchError> {
-        let mut k = t.bkey_alloc_typed::<c::BucketGens>()?;
+    fn insert(t: &TransAttempt<'_, '_>, (p, gens): (Bpos, BucketGens)) -> Result<(), BchError> {
+        let mut k = t.bkey_alloc_typed::<BucketGens>()?;
         k.k_mut().p = p;
         *k.v_mut() = gens;
         t.insert(Btree::bucket_gens, k, UpdateTriggerFlags::empty())
@@ -1121,7 +1124,7 @@ fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
             g = None;
         }
 
-        let (_, gens) = g.get_or_insert_with(|| (gens_pos.key, ::pin_init::zeroed::<c::BucketGens>()));
+        let (_, gens) = g.get_or_insert_with(|| (gens_pos.key, ::pin_init::zeroed::<BucketGens>()));
         gens.gens[gens_pos.idx] = alloc_to_v4(k).generation;
         Ok(())
     })?;
@@ -1145,7 +1148,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
     if ver >= MetadataVersion::bucket_gens {
         let mut iter = BtreeIter::new(&trans, Btree::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |_, _, k| {
-            let Some(g) = k.arm::<c::BucketGens>() else { return Ok(LoopFlow::Continue) };
+            let Some(g) = k.arm::<BucketGens>() else { return Ok(LoopFlow::Continue) };
 
             // Not a fsck error: check_bucket_gens_key(), later, checks it
             fs.dev_iterate(&mut ca, k.k.p.inode as u32);
@@ -1156,7 +1159,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
             let rcu = read_lock();
             for b in start.max(ca.mi.get().first_bucket.into())..end.min(ca.mi.get().nbuckets) {
                 ca.bucket_gen_ref(b, &rcu).expect("one of the device's buckets")
-                    .store(g.v().gens[(b & c::BucketGens::MASK) as usize], Ordering::Relaxed);
+                    .store(g.v().gens[(b & BucketGens::MASK) as usize], Ordering::Relaxed);
             }
             Ok(LoopFlow::Continue)
         })
@@ -1249,7 +1252,7 @@ mod tests {
 // the btree, of whatever version, and only reads them; a deletion is
 // worked through as an empty bucket's state, which goes nowhere.
 
-impl c::AllocV4 {
+impl AllocV4 {
     /// bch2_bucket_sectors_total(): u32s added as C's, wrapping.
     fn sectors_total(&self) -> i64 {
         i64::from(self.stripe_sectors.wrapping_add(self.dirty_sectors).wrapping_add(self.cached_sectors))
@@ -1262,45 +1265,45 @@ impl c::AllocV4 {
 }
 
 /// @f holds of @new and didn't of @old.
-fn became(f: impl Fn(&c::AllocV4) -> bool, old: &c::AllocV4, new: &c::AllocV4) -> bool {
+fn became(f: impl Fn(&AllocV4) -> bool, old: &AllocV4, new: &AllocV4) -> bool {
     !f(old) && f(new)
 }
 
 /// @f held of @old and doesn't of @new.
-fn ceased(f: impl Fn(&c::AllocV4) -> bool, old: &c::AllocV4, new: &c::AllocV4) -> bool {
+fn ceased(f: impl Fn(&AllocV4) -> bool, old: &AllocV4, new: &AllocV4) -> bool {
     f(old) && !f(new)
 }
 
-fn changed(f: impl Fn(&c::AllocV4) -> bool, old: &c::AllocV4, new: &c::AllocV4) -> bool {
+fn changed(f: impl Fn(&AllocV4) -> bool, old: &AllocV4, new: &AllocV4) -> bool {
     f(old) != f(new)
 }
 
-fn nonempty(a: &c::AllocV4) -> bool {
+fn nonempty(a: &AllocV4) -> bool {
     !a.data_type().is_empty()
 }
 
-fn is(t: DataType) -> impl Fn(&c::AllocV4) -> bool {
+fn is(t: DataType) -> impl Fn(&AllocV4) -> bool {
     move |a| a.data_type() == t
 }
 
 /// @k's value, all of today's alloc_v4, to edit - None if it's another
 /// type, or a v4 shorter than today's.
-fn alloc_v4_whole_mut(k: BkeyS<'_>) -> Option<&mut c::AllocV4> {
-    if !k.k.key_type().is::<c::AllocV4>() {
+fn alloc_v4_whole_mut(k: BkeyS<'_>) -> Option<&mut AllocV4> {
+    if !k.k.key_type().is::<AllocV4>() {
         return None;
     }
-    <c::AllocV4 as ArmRef>::arm_mut(k.into_val_bytes_mut())
+    <AllocV4 as ArmRef>::arm_mut(k.into_val_bytes_mut())
 }
 
 /// A copy of the trigger's new key as it's been edited, header @k and value
 /// @a, for what reads it whole - to print it, or find its place.
-fn alloc_key(k: &c::bkey, a: &c::AllocV4) -> BkeyI<c::AllocV4> {
+fn alloc_key(k: &bkey, a: &AllocV4) -> BkeyI<AllocV4> {
     BkeyI { k: *k, v: *a }
 }
 
 /// @k, as a key of any type.
-fn as_sc(k: &BkeyI<c::AllocV4>) -> BkeySC<'_> {
-    BkeySC::<c::AllocV4>::from(k).untyped()
+fn as_sc(k: &BkeyI<AllocV4>) -> BkeySC<'_> {
+    BkeySC::<AllocV4>::from(k).untyped()
 }
 
 /// A transition a trigger shouldn't have seen: @what, the keys going out and
@@ -1318,7 +1321,7 @@ fn transition_text(fs: &Fs, what: core::fmt::Arguments<'_>, old: BkeySC<'_>, new
 /// as a v4 - set, or cleared: reported, and left, if it's already as @set
 /// says. Not free, it has none.
 pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &Dev, alloc_k: BkeySC<'_>,
-                                        a: &c::AllocV4, set: bool) -> Result<(), BchError> {
+                                        a: &AllocV4, set: bool) -> Result<(), BchError> {
     if a.data_type() != DataType::free {
         return Ok(());
     }
@@ -1337,7 +1340,7 @@ pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &Dev, allo
 /// Bucket @bucket's need_discard entry, through the write buffer: from the
 /// atomic phase, as its position - the journal seq the bucket went empty at
 /// - is the commit's.
-fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: Bpos, a: &c::AllocV4, set: bool)
+fn bucket_do_discard_index(t: &TransAttempt<'_, '_>, bucket: Bpos, a: &AllocV4, set: bool)
     -> Result<(), BchError>
 {
     if a.data_type() != DataType::need_discard {
@@ -1352,10 +1355,10 @@ fn bucket_gen_update(t: &TransAttempt<'_, '_>, bucket: Bpos, generation: u8) -> 
     let mut iter = BtreeIter::new(t, Btree::bucket_gens, pos.key, BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
-    let mut g = match k.arm::<c::BucketGens>() {
+    let mut g = match k.arm::<BucketGens>() {
         Some(k) => t.bkey_make_mut_noupdate(k)?,
         None => {
-            let mut g = t.bkey_alloc_typed::<c::BucketGens>()?;
+            let mut g = t.bkey_alloc_typed::<BucketGens>()?;
             g.k_mut().p = iter.pos();
             g
         }
@@ -1372,7 +1375,7 @@ fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &Dev, data_type: D
 impl TransAttempt<'_, '_> {
     /// Device @ca's bucket counts and sectors, for a bucket going from @old
     /// to @new: bch2_alloc_key_to_dev_counters().
-    pub fn alloc_key_to_dev_counters(&self, ca: &Dev, old: &c::AllocV4, new: &c::AllocV4,
+    pub fn alloc_key_to_dev_counters(&self, ca: &Dev, old: &AllocV4, new: &AllocV4,
                                      flags: UpdateTriggerFlags) -> Result<(), BchError> {
         let gc = flags.contains(UpdateTriggerFlags::GC);
         let (old_sectors, new_sectors) = (old.sectors(), new.sectors());
@@ -1453,7 +1456,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
     // A copy, for gc, which only reads it - its keys are the btree's, of any
     // version - and for a deletion. Otherwise it's edited in place
     let mut copy;
-    let new_a: &mut c::AllocV4 = if hdr.key_type().is_deleted() || !flags.intersects(F::TRANSACTIONAL | F::ATOMIC) {
+    let new_a: &mut AllocV4 = if hdr.key_type().is_deleted() || !flags.intersects(F::TRANSACTIONAL | F::ATOMIC) {
         copy = alloc_to_v4(BkeySC::from(&op.new));
         &mut copy
     } else {
@@ -1468,7 +1471,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
             }
         }
     };
-    let new_key = |a: &c::AllocV4| alloc_key(&hdr, a);
+    let new_key = |a: &AllocV4| alloc_key(&hdr, a);
 
     if flags.contains(F::TRANSACTIONAL) {
         new_a.set_data_type(new_a.data_type());
@@ -1503,7 +1506,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         // re-establishes bucket state from the stripes and backpointers, and
         // makes these transitions itself - need_discard to parity, re-marking
         // a stripe's parity bucket - so not while it runs
-        let in_fsck = fs.flags.get(c::FsFlag::in_fsck);
+        let in_fsck = fs.flags.get(FsFlag::in_fsck);
 
         if !in_fsck && unlikely(old_a.stripe_refcount != 0 && new_a.stripe_refcount == 0) {
             let new = new_key(new_a);
@@ -1567,7 +1570,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         // through the write buffer: a key's jset_u64s(), twice
         if changed(is(DataType::need_discard), &old_a, new_a) ||
            (old_a.data_type() == DataType::need_discard && old_a.journal_seq_empty != new_a.journal_seq_empty) {
-            t.reserve_extra_journal_u64s(2 * (c::BKEY_U64s + c::JSET_KEYS_U64s) as u32);
+            t.reserve_extra_journal_u64s(2 * (BKEY_U64s + JSET_KEYS_U64s) as u32);
         }
 
         if new_a.data_type() == DataType::cached && new_a.io_time[READ] == 0 {
@@ -1578,7 +1581,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         // bucket_fragmentation_lru()'s
         lru_change(t, LruId::from(p.inode as u16), bucket_to_u64(p),
                    old_a.lru_idx_read(), new_a.lru_idx_read())?;
-        lru_change(t, LruId::from((c::BCH_LRU_BUCKET_FRAGMENTATION_START + dev) as u16), bucket_to_u64(p),
+        lru_change(t, LruId::from((BCH_LRU_BUCKET_FRAGMENTATION_START + dev) as u16), bucket_to_u64(p),
                    old_a.lru_idx_fragmentation(&ca), new_a.lru_idx_fragmentation(&ca))?;
 
         if old_a.generation != new_a.generation {

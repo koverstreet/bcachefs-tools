@@ -10,10 +10,11 @@ use pin_init::pin_data;
 use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts, TransAttempt};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
-use crate::c::FsFlag as Flag;
+use crate::data::write::WriteFlags;
+use crate::fs::FsFlag as Flag;
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Registration};
-use crate::errcode::BchError;
-use crate::format::{Bpos, Btree};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes::RecoveryPass;
 use crate::locking::{Locked, MemallocFlags, Mutex};
@@ -86,16 +87,16 @@ impl Op {
          * and ops parked during recovery may not run until long after.
          */
         let flags = if self.op == AsyncBtreeOp::MergeNoRead { BtreeIterFlags::NOFILL } else { BtreeIterFlags::empty() };
-        let mut iter = BtreeNodeIter::new(t, btree, pos, c::BTREE_MAX_DEPTH, level, flags);
+        let mut iter = BtreeNodeIter::new(t, btree, pos, BTREE_MAX_DEPTH, level, flags);
         let Some(b) = iter.peek(t)?.and_then(|n| {
             let b = n.node();
             (b.contents().data().keys.seq.get() == self.seq).then(|| BtreeNodeRef::from(b))
         }) else {
-            return t.fs().throw(c::Errcode::ENOENT_async_op_node_gone);
+            return t.fs().throw(Errcode::ENOENT_async_op_node_gone);
         };
 
         if self.op == AsyncBtreeOp::Rewrite {
-            t.btree_node_rewrite(iter.iter(), b, 0, CommitOpts::new(), c::WriteFlags::empty())
+            t.btree_node_rewrite(iter.iter(), b, 0, CommitOpts::new(), WriteFlags::empty())
         } else {
             let trans = t.trans();
             super::interior::foreground_maybe_merge(t, &mut trans.paths(), iter.iter().path, level as usize,
@@ -142,7 +143,7 @@ async fn task(fs: &Fs, a: OpBox) {
     let trans = crate::btree_trans!(fs);
     if let Err(e) = lockrestart_do(&trans, |t| a.run(t)) {
         if !e.matches(c::ENOENT) && !e.matches(c::EROFS) &&
-           !e.matches(c::Errcode::no_btree_node_nofill) {
+           !e.matches(Errcode::no_btree_node_nofill) {
             crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
         }
     }

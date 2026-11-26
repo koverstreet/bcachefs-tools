@@ -1,7 +1,9 @@
 
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::BkeyI;
-use bcachefs_kernel::c;
+use bcachefs_kernel::btree::bbpos::bbpos;
+use bcachefs_kernel::btree::journal_overlay::journal_replay;
+use bcachefs_kernel::opts::FsckErrOpt;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::read::{
     entry_type, entry_btree_id, entry_log_str_eq,
@@ -16,16 +18,16 @@ use clap::Parser;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::util::read_flag_list;
 use crate::wrappers::journal::JournalReplays;
-use bcachefs_kernel::format::Btree;
+use bcachefs_kernel::format::{Btree, DegradedAction, ErrorAction, jset, jset_entry};
 
 // ---- entry classification ----
 
-fn entry_is_transaction_start(entry: &c::jset_entry) -> bool {
+fn entry_is_transaction_start(entry: &jset_entry) -> bool {
     entry_type(entry) == JsetEntryType::log
         && entry.level == 0
 }
 
-fn entry_is_log_msg(entry: &c::jset_entry) -> bool {
+fn entry_is_log_msg(entry: &jset_entry) -> bool {
     if !(entry_type(entry) == JsetEntryType::log
         && entry.level != 0)
     {
@@ -44,7 +46,7 @@ fn entry_is_log_msg(entry: &c::jset_entry) -> bool {
     true
 }
 
-fn entry_is_print_key(entry: &c::jset_entry) -> bool {
+fn entry_is_print_key(entry: &jset_entry) -> bool {
     matches!(
         entry_type(entry),
         JsetEntryType::btree_root
@@ -54,7 +56,7 @@ fn entry_is_print_key(entry: &c::jset_entry) -> bool {
     )
 }
 
-fn entry_is_non_transaction(entry: &c::jset_entry) -> bool {
+fn entry_is_non_transaction(entry: &jset_entry) -> bool {
     matches!(
         entry_type(entry),
         JsetEntryType::btree_root
@@ -118,7 +120,7 @@ impl Default for JournalFilter {
 
 // ---- filter logic ----
 
-fn entry_matches_btree_filter(f: &JournalFilter, entry: &c::jset_entry) -> bool {
+fn entry_matches_btree_filter(f: &JournalFilter, entry: &jset_entry) -> bool {
     f.btree_filter == !0u64
         || (entry.level == 0
             && entry_type(entry) != JsetEntryType::btree_root
@@ -128,7 +130,7 @@ fn entry_matches_btree_filter(f: &JournalFilter, entry: &c::jset_entry) -> bool 
 /// Check if any entry in the transaction (from start+1 to end) matches btree filter.
 fn transaction_matches_btree_filter(
     f: &JournalFilter,
-    entries: &[&c::jset_entry],
+    entries: &[&jset_entry],
 ) -> bool {
     entries.iter().skip(1).any(|e| {
         entry_is_print_key(e) && entry_matches_btree_filter(f, e)
@@ -136,7 +138,7 @@ fn transaction_matches_btree_filter(
 }
 
 fn bkey_matches_range(
-    entry: &c::jset_entry,
+    entry: &jset_entry,
     k: &BkeyI,
     range: &BbposRange,
 ) -> bool {
@@ -144,7 +146,7 @@ fn bkey_matches_range(
 
     // Match the C code: always point comparison on the key's position
     // (it reads `true || !k.k.size`, so the extent start pos is unused)
-    let mut pos = c::bbpos {
+    let mut pos = bbpos {
         btree,
         pos: k.k.p,
     };
@@ -157,7 +159,7 @@ fn bkey_matches_range(
 }
 
 fn entry_matches_range(
-    entry: &c::jset_entry,
+    entry: &jset_entry,
     range: &BbposRange,
 ) -> bool {
     if entry.level != 0 {
@@ -175,7 +177,7 @@ fn entry_matches_range(
 
 fn transaction_matches_transaction_filter(
     f: &TransactionKeyFilter,
-    entries: &[&c::jset_entry],
+    entries: &[&jset_entry],
 ) -> bool {
     let has_positive = f.ranges.iter().any(|(sign, _)| *sign >= 0);
     let has_negative = f.ranges.iter().any(|(sign, _)| *sign < 0);
@@ -202,11 +204,11 @@ fn transaction_matches_transaction_filter(
     true
 }
 
-fn entry_matches_msg_filter(f: &TransactionMsgFilter, entry: &c::jset_entry) -> bool {
+fn entry_matches_msg_filter(f: &TransactionMsgFilter, entry: &jset_entry) -> bool {
     f.patterns.iter().any(|p| entry_log_str_eq(entry, p))
 }
 
-fn entry_is_log_only(entries: &[&c::jset_entry]) -> bool {
+fn entry_is_log_only(entries: &[&jset_entry]) -> bool {
     let mut have_log = false;
     for e in entries.iter().skip(1) {
         if e.u64s() != 0 && !entry_is_log_msg(e) {
@@ -217,13 +219,13 @@ fn entry_is_log_only(entries: &[&c::jset_entry]) -> bool {
     have_log
 }
 
-fn entry_has_log(entries: &[&c::jset_entry]) -> bool {
+fn entry_has_log(entries: &[&jset_entry]) -> bool {
     entries.iter().skip(1).any(|e| entry_is_log_msg(e))
 }
 
 fn should_print_transaction(
     f: &JournalFilter,
-    entries: &[&c::jset_entry],
+    entries: &[&jset_entry],
 ) -> bool {
     debug_assert!(entry_type(entries[0]) == JsetEntryType::log);
 
@@ -279,8 +281,8 @@ fn star_start_of_lines(s: &str) -> String {
 fn journal_entry_header_to_text(
     out: &mut Printbuf,
     fs: &Fs,
-    p: &c::journal_replay,
-    j: &c::jset,
+    p: &journal_replay,
+    j: &jset,
     blacklisted: bool,
 ) {
     write!(
@@ -305,7 +307,7 @@ fn journal_entry_header_to_text(
     out.newline();
 }
 
-fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
+fn journal_entry_indent(entry: &jset_entry) -> u32 {
     if entry_is_transaction_start(entry)
         || matches!(entry_type(entry),
             JsetEntryType::btree_root
@@ -318,7 +320,7 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
     }
 }
 
-fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
+fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &jset_entry) {
     for k in entry.keys().into_iter().flatten() {
         let t = entry_type(entry);
         t.to_text(out);
@@ -338,8 +340,8 @@ fn print_one_entry(
     out: &mut Printbuf,
     fs: &Fs,
     f: &JournalFilter,
-    p: &c::journal_replay,
-    entry: &c::jset_entry,
+    p: &journal_replay,
+    entry: &jset_entry,
 ) {
     if entry_is_print_key(entry) && entry.u64s() == 0 {
         return;
@@ -379,8 +381,8 @@ fn print_one_entry(
     }
 }
 
-fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &c::journal_replay,
-                        j: &c::jset) {
+fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &journal_replay,
+                        j: &jset) {
     let mut buf = Printbuf::new();
     let seq = p.j.seq.get();
     let blacklisted = p.ignore_blacklisted
@@ -408,7 +410,7 @@ fn journal_replay_print(fs: &Fs, f: &JournalFilter, p: &c::journal_replay,
     }
 
     // Collect all entries for this jset
-    let all_entries: Vec<&c::jset_entry> = j.entries().collect();
+    let all_entries: Vec<&jset_entry> = j.entries().collect();
 
     if !f.filtering {
         journal_entry_header_to_text(&mut buf, fs, p, j, blacklisted);
@@ -620,9 +622,9 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
     opts.set_nochanges(true);
     opts.set_norecovery(true);
     opts.set_read_only(true);
-    opts.set_degraded(c::DegradedAction::very);
-    opts.set_errors(c::ErrorAction::continue_);
-    opts.set_fix_errors(c::FsckErrOpt::yes as u8);
+    opts.set_degraded(DegradedAction::very);
+    opts.set_errors(ErrorAction::continue_);
+    opts.set_fix_errors(FsckErrOpt::yes as u8);
     opts.set_retain_recovery_info(true);
     opts.set_read_journal_only(true);
     opts.set_read_entire_journal(true);

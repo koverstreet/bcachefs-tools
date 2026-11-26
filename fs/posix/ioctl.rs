@@ -17,6 +17,19 @@ use crate::btree::bkey::{self, BkeySC};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree_trans;
 use crate::c;
+use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
+use crate::bcachefs_ioctl::{bch_ioctl_get_damage, bch_ioctl_readdir_flags, bch_ioctl_snapshot_node,
+    bch_ioctl_snapshot_node_v2, bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
+    bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path, bch_ioctl_unpoison, BCH_READDIR_damaged,
+    BCH_READDIR_recursive, BCH_READDIR_subvolumes_only, bch_ioctl_readdir_entry_head,
+    bch_ioctl_subvol_dirent_head};
+use crate::data::extents_format::{bch_extent_flags, ExtentFlags};
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::data::reflink_format::ReflinkP;
+use crate::opts::bch_inode_opts;
+use crate::posix::dirent_format::DT_SUBVOL;
+use crate::snapshots::format::{SnapshotState, SnapshotTree, SubvolumeState};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::data::ptrs::{BkeyVPtrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::posix::dirent::{self, Dirent};
@@ -38,7 +51,7 @@ use crate::format::{Btree, BkeyType, MetadataVersion};
 /// FS_IOC_GETFSLABEL's: the label, without its NUL - and if it fills its
 /// field, without its last byte, as C had it.
 pub fn get_label(fs: &Fs, user: UserArg<[u8; c::FSLABEL_MAX as usize]>) -> Result<(), BchError> {
-    const LABEL_SIZE: usize = c::BCH_SB_LABEL_SIZE as usize;
+    const LABEL_SIZE: usize = BCH_SB_LABEL_SIZE as usize;
     const { assert!(LABEL_SIZE < c::FSLABEL_MAX as usize) };
 
     let label = fs.sb_lock().sb().label;
@@ -112,7 +125,7 @@ impl Entries {
 
 /// BCHFS_IOC_GET_DAMAGE's: inode @inum's damage, as its subvolume sees it.
 /// The count is the true one, however few entries the caller had room for.
-pub fn get_damage(fs: &Fs, inum: c::subvol_inum, user: UserVstruct<c::bch_ioctl_get_damage>)
+pub fn get_damage(fs: &Fs, inum: subvol_inum, user: UserVstruct<bch_ioctl_get_damage>)
     -> Result<(), BchError>
 {
     let mut arg = user.head()?;
@@ -154,15 +167,15 @@ pub fn get_damage(fs: &Fs, inum: c::subvol_inum, user: UserVstruct<c::bch_ioctl_
  */
 
 const READDIR_FLAGS_ALL: u32 =
-    c::BCH_READDIR_recursive | c::BCH_READDIR_damaged | c::BCH_READDIR_subvolumes_only;
+    BCH_READDIR_recursive | BCH_READDIR_damaged | BCH_READDIR_subvolumes_only;
 
 /// Whether @flags' filter keeps dirent @d, in @dir - whose snapshot is @view
 /// - pointing at @target.
-fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: c::subvol_inum, view: u32,
-                  d: Dirent<'_>, target: c::subvol_inum) -> Result<bool, BchError> {
-    match flags & !c::BCH_READDIR_recursive {
+fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: subvol_inum, view: u32,
+                  d: Dirent<'_>, target: subvol_inum) -> Result<bool, BchError> {
+    match flags & !BCH_READDIR_recursive {
         0 => Ok(true),
-        c::BCH_READDIR_damaged => {
+        BCH_READDIR_damaged => {
             // a subvolume's root is in its own snapshot
             let snapshot = if target.subvol != dir.subvol {
                 subvolume::get_snapshot(t, target.subvol as u32)?
@@ -171,12 +184,12 @@ fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: c::subvol_inum, vie
             };
             damage::inode_has_damage(t, target.inum, snapshot)
         }
-        c::BCH_READDIR_subvolumes_only => Ok(u32::from(d.d_type()) == c::DT_SUBVOL),
+        BCH_READDIR_subvolumes_only => Ok(u32::from(d.d_type()) == DT_SUBVOL),
         _ => t.fs().throw(Errcode::EINVAL_readdir_filter_flags),
     }
 }
 
-fn readdir_plain(fs: &Fs, dir: c::subvol_inum, flags: u32, out: &mut Entries, pos: u64)
+fn readdir_plain(fs: &Fs, dir: subvol_inum, flags: u32, out: &mut Entries, pos: u64)
     -> Result<u64, BchError>
 {
     let trans = btree_trans!(fs);
@@ -192,7 +205,7 @@ fn readdir_plain(fs: &Fs, dir: c::subvol_inum, flags: u32, out: &mut Entries, po
         let next = k.k.p.offset + 1;
 
         if readdir_filter(t, flags, dir, view, d, target)? &&
-           !out.emit(t, d.name().as_bytes(), |reclen| c::bch_ioctl_readdir_entry_head {
+           !out.emit(t, d.name().as_bytes(), |reclen| bch_ioctl_readdir_entry_head {
                reclen, d_type: d.d_type(), inum: target.inum, ..Default::default()
            })? {
             return Ok(ControlFlow::Break(()));
@@ -206,7 +219,7 @@ fn readdir_plain(fs: &Fs, dir: c::subvol_inum, flags: u32, out: &mut Entries, po
 /// A recursive listing: the directory, its path, and what qualifies a
 /// candidate.
 struct Recursive<A> {
-    dir:        c::subvol_inum,
+    dir:        subvol_inum,
     dir_path:   Printbuf,
     path:       Printbuf,
     accessible: A,
@@ -221,11 +234,11 @@ enum Emitted {
 
 impl<A> Recursive<A>
 where
-    A: FnMut(&TransAttempt<'_, '_>, c::subvol_inum) -> Result<bool, BchError>,
+    A: FnMut(&TransAttempt<'_, '_>, subvol_inum) -> Result<bool, BchError>,
 {
     /// Qualify @n and emit it, named by its path from the directory: not the
     /// directory itself, whose path from itself is empty.
-    fn emit(&mut self, t: &TransAttempt<'_, '_>, n: c::subvol_inum, d_type: u8)
+    fn emit(&mut self, t: &TransAttempt<'_, '_>, n: subvol_inum, d_type: u8)
         -> Result<Emitted, BchError>
     {
         if !namei::inum_is_descendant(t, n, self.dir)? {
@@ -248,7 +261,7 @@ where
             return Ok(Emitted::Skipped);
         }
 
-        let hdr = |reclen| c::bch_ioctl_readdir_entry_head { reclen, d_type, inum: n.inum, ..Default::default() };
+        let hdr = |reclen| bch_ioctl_readdir_entry_head { reclen, d_type, inum: n.inum, ..Default::default() };
         Ok(if self.out.emit(t, name, hdr)? { Emitted::Yes } else { Emitted::Full })
     }
 
@@ -278,7 +291,7 @@ where
                 if k.k.key_type() != BkeyType::damage {
                     last_handled = inum;
                 } else {
-                    let n = c::subvol_inum { subvol: self.dir.subvol, inum };
+                    let n = subvol_inum { subvol: self.dir.subvol, inum };
                     match self.emit(t, n, c::DT_UNKNOWN as u8)? {
                         Emitted::Full    => return Ok(ControlFlow::Break(())),
                         Emitted::Yes     => last_handled = inum,
@@ -313,9 +326,9 @@ where
             let subvol = k.k.p.offset;
 
             if let Some(s) = subvolume::val(k) {
-                if s.state_decoded() == Some(c::SubvolumeState::live) {
-                    let n = c::subvol_inum { subvol, inum: s.inode.get() };
-                    if let Emitted::Full = self.emit(t, n, c::DT_SUBVOL as u8)? {
+                if s.state_decoded() == Some(SubvolumeState::live) {
+                    let n = subvol_inum { subvol, inum: s.inode.get() };
+                    if let Emitted::Full = self.emit(t, n, DT_SUBVOL as u8)? {
                         return Ok(ControlFlow::Break(()));
                     }
                 }
@@ -330,10 +343,10 @@ where
 /// BCHFS_IOC_READDIR_FLAGS's: see above. @dir is the directory - ENOTDIR if
 /// @is_dir says it isn't one - and @accessible whether the caller may see
 /// what a recursive listing found.
-pub fn readdir_flags<A>(fs: &Fs, dir: c::subvol_inum, is_dir: bool, accessible: A,
-                        user: UserArg<c::bch_ioctl_readdir_flags>) -> Result<(), BchError>
+pub fn readdir_flags<A>(fs: &Fs, dir: subvol_inum, is_dir: bool, accessible: A,
+                        user: UserArg<bch_ioctl_readdir_flags>) -> Result<(), BchError>
 where
-    A: FnMut(&TransAttempt<'_, '_>, c::subvol_inum) -> Result<bool, BchError>,
+    A: FnMut(&TransAttempt<'_, '_>, subvol_inum) -> Result<bool, BchError>,
 {
     let arg = user.read()?;
     if arg.pad != 0 || arg.used != 0 || arg.flags & !READDIR_FLAGS_ALL != 0 {
@@ -343,11 +356,11 @@ where
         return fs.throw(Errcode::ENOTDIR_readdir_flags);
     }
 
-    type Q = c::bch_ioctl_readdir_flags;
+    type Q = bch_ioctl_readdir_flags;
     let mut out = Entries::new(arg.buf, arg.buf_size);
 
     // only what the call moved: an unrecursive cursor is one word
-    if arg.flags & c::BCH_READDIR_recursive == 0 {
+    if arg.flags & BCH_READDIR_recursive == 0 {
         let pos = readdir_plain(fs, dir, arg.flags, &mut out, arg.pos[0])?;
         out.check_room()?;
         user.write_at(offset_of!(Q, pos), &pos)?;
@@ -355,9 +368,9 @@ where
     }
 
     let mut r = Recursive { dir, dir_path: Printbuf::new(), path: Printbuf::new(), accessible, out };
-    let pos = match arg.flags & !c::BCH_READDIR_recursive {
-        c::BCH_READDIR_damaged         => r.damaged(fs, arg.pos)?,
-        c::BCH_READDIR_subvolumes_only => [r.subvols(fs, arg.pos[0])?, 0],
+    let pos = match arg.flags & !BCH_READDIR_recursive {
+        BCH_READDIR_damaged         => r.damaged(fs, arg.pos)?,
+        BCH_READDIR_subvolumes_only => [r.subvols(fs, arg.pos[0])?, 0],
         // unfiltered: an honest tree walk, not yet
         _ => return fs.throw(Errcode::EOPNOTSUPP_readdir_flags_unfiltered),
     };
@@ -382,11 +395,11 @@ fn relative(path: &[u8]) -> &[u8] {
 /// id; a subvolume whose path can't be found is skipped. ERANGE if the next
 /// entry wouldn't fit even an empty buffer: a path's length has no limit.
 pub fn subvolume_list<A>(fs: &Fs, parent: u32, mut accessible: A,
-                         user: UserArg<c::bch_ioctl_subvol_readdir>) -> Result<(), BchError>
+                         user: UserArg<bch_ioctl_subvol_readdir>) -> Result<(), BchError>
 where
-    A: FnMut(&TransAttempt<'_, '_>, c::subvol_inum, u32) -> Result<bool, BchError>,
+    A: FnMut(&TransAttempt<'_, '_>, subvol_inum, u32) -> Result<bool, BchError>,
 {
-    type Q = c::bch_ioctl_subvol_readdir;
+    type Q = bch_ioctl_subvol_readdir;
     let arg = user.read()?;
     if arg.pad != 0 {
         return fs.throw(Errcode::EINVAL_subvol_readdir_pad);
@@ -405,7 +418,7 @@ where
             }
             let child = k.k.p.offset as u32;
             let s = subvolume::get(t, child, true)?;
-            let root = c::subvol_inum { subvol: child.into(), inum: s.inode.get() };
+            let root = subvol_inum { subvol: child.into(), inum: s.inode.get() };
 
             let found = accessible(t, root, parent)? && {
                 path.reset();
@@ -417,7 +430,7 @@ where
 
             if found {
                 let otime = fs.time_to_timespec(s.otime.lo.get() as i64);
-                let hdr = |reclen| c::bch_ioctl_subvol_dirent_head {
+                let hdr = |reclen| bch_ioctl_subvol_dirent_head {
                     reclen,
                     subvolid:        child,
                     flags:           s.flags.into_bits().get(),
@@ -442,7 +455,7 @@ where
 
 /// BCH_IOCTL_SUBVOLUME_TO_PATH's: subvolume @subvolid's path from the
 /// filesystem's root, with its NUL; ERANGE if the buffer won't hold it.
-pub fn subvolume_to_path(fs: &Fs, user: UserArg<c::bch_ioctl_subvol_to_path>) -> Result<(), BchError> {
+pub fn subvolume_to_path(fs: &Fs, user: UserArg<bch_ioctl_subvol_to_path>) -> Result<(), BchError> {
     let arg = user.read()?;
     if arg.buf_size == 0 {
         return fs.throw(Errcode::EINVAL_subvol_to_path_no_buf);
@@ -454,7 +467,7 @@ pub fn subvolume_to_path(fs: &Fs, user: UserArg<c::bch_ioctl_subvol_to_path>) ->
         lockrestart_do(&trans, |t| {
             path.reset();
             let s = subvolume::get(t, arg.subvolid, false)?;
-            let root = c::subvol_inum { subvol: arg.subvolid.into(), inum: s.inode.get() };
+            let root = subvol_inum { subvol: arg.subvolid.into(), inum: s.inode.get() };
             namei::inum_to_path(t, root, &mut path)
         })?;
     }
@@ -472,7 +485,7 @@ pub fn subvolume_to_path(fs: &Fs, user: UserArg<c::bch_ioctl_subvol_to_path>) ->
 /// What a snapshot tree query answers besides its nodes: the tree, and how
 /// many nodes it has and were returned.
 struct SnapshotTreeReply {
-    tree:  c::SnapshotTree,
+    tree:  SnapshotTree,
     nr:    u32,
     total: u32,
 }
@@ -515,12 +528,12 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
                                       BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |t, _, k| {
             let Some(s) = snapshot::val(k) else { return Ok(()) };
-            if s.tree() != tree_id || s.state_compat() == c::SnapshotState::deleted {
+            if s.tree() != tree_id || s.state_compat() == SnapshotState::deleted {
                 return Ok(());
             }
 
             let id = k.k.p.offset as u32;
-            let mut node = c::bch_ioctl_snapshot_node_v2 {
+            let mut node = bch_ioctl_snapshot_node_v2 {
                 id,
                 parent:   s.parent(),
                 children: s.children(),
@@ -553,11 +566,11 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
 }
 
 /// BCH_IOCTL_SNAPSHOT_TREE's: see snapshot_tree().
-pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapshot_tree_query>)
+pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<bch_ioctl_snapshot_tree_query>)
     -> Result<(), BchError>
 {
-    type Q = c::bch_ioctl_snapshot_tree_query;
-    const NODE: usize = size_of::<c::bch_ioctl_snapshot_node>();
+    type Q = bch_ioctl_snapshot_tree_query;
+    const NODE: usize = size_of::<bch_ioctl_snapshot_node>();
 
     let arg = user.read()?;
     if arg.pad != 0 {
@@ -577,11 +590,11 @@ pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapsho
 /// BCH_IOCTL_SNAPSHOT_TREE_v2's: see snapshot_tree().
 /// The node size is negotiated: the smaller of the caller's and ours, and
 /// ours returned first.
-pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapshot_tree_query_v2>)
+pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<bch_ioctl_snapshot_tree_query_v2>)
     -> Result<(), BchError>
 {
-    type Q = c::bch_ioctl_snapshot_tree_query_v2;
-    const NODE: usize = size_of::<c::bch_ioctl_snapshot_node_v2>();
+    type Q = bch_ioctl_snapshot_tree_query_v2;
+    const NODE: usize = size_of::<bch_ioctl_snapshot_node_v2>();
 
     let arg = user.read()?;
     // a caller that doesn't say its node size can't be given nodes: we'd
@@ -620,7 +633,7 @@ pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapsho
 
 /// Bring the indirect extents in @range of the reflink btree in line with
 /// @opts: their reconcile state, each commit its own.
-fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_opts, range: Range<u64>)
+fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &bch_inode_opts, range: Range<u64>)
     -> Result<(), BchError>
 {
     let res = DiskReservation::new(fs);
@@ -632,13 +645,13 @@ fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_o
             return Err(Errcode::fc_break.into());
         }
         update_reconcile_opts(t, None, opts, iter, 0, k,
-                              c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change)
+                              SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change)
     })
 }
 
 /// BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS's: set may_update_options on
 /// @inum's reflink_ps, an admin's to do, and propagate their options.
-pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
+pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
         return fs.throw(Errcode::EPERM_non_admin);
     }
@@ -651,7 +664,7 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<()
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(inum.inum, u64::MAX),
                                                   inum.subvol as u32, flags, |t, iter, k| {
         res.put();
-        let Some(p) = k.arm::<c::ReflinkP>() else { return Ok(()) };
+        let Some(p) = k.arm::<ReflinkP>() else { return Ok(()) };
         if p.v().may_update_options() {
             return Ok(());
         }
@@ -670,13 +683,13 @@ pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<()
 /// BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS's: propagate the options of @inum's
 /// reflink_ps - all of them, which may update. A reflink_p that may not is
 /// skipped for an admin, and an error otherwise.
-pub fn reflink_p_propagate_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
+pub fn reflink_p_propagate_opts(fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
     let trans = btree_trans!(fs);
     let flags = BtreeIterFlags::TRIM;
     let mut iter = BtreeIter::new(&trans, Btree::extents, bkey::pos(inum.inum, 0), flags);
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(inum.inum, u64::MAX),
                                                   inum.subvol as u32, flags, |t, _, k| {
-        let Some(p) = k.arm::<c::ReflinkP>() else { return Ok(()) };
+        let Some(p) = k.arm::<ReflinkP>() else { return Ok(()) };
         if !p.v().may_update_options() {
             return if capable(Capability::SysAdmin) {
                 Ok(())
@@ -695,20 +708,20 @@ fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>
     let fs = t.fs();
     let Some(k) = k.arm::<PtrsMut>() else { return Ok(()) };
     let flags = k.extent_flags(fs);
-    if !flags.contains(c::ExtentFlags::poisoned) {
+    if !flags.contains(ExtentFlags::poisoned) {
         return Ok(());
     }
     fs.request_incompat_feature(MetadataVersion::extent_flags)?;
 
     // room for a flags entry, if it has none
-    let room = (usize::from(k.k.u64s) + size_of::<c::bch_extent_flags>() / size_of::<u64>()) * size_of::<u64>();
+    let room = (usize::from(k.k.u64s) + size_of::<bch_extent_flags>() / size_of::<u64>()) * size_of::<u64>();
     let mut n = t.bkey_reassemble_room(k, room)?;
-    n.extent_flags_set(fs, flags - c::ExtentFlags::poisoned).expect("room for a flags entry: reassembled with it");
+    n.extent_flags_set(fs, flags - ExtentFlags::poisoned).expect("room for a flags entry: reassembled with it");
     t.update(iter, n, UpdateTriggerFlags::empty())
 }
 
 /// unpoison_extent() each indirect extent reflink_p @p maps.
-fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>) -> Result<(), BchError> {
+fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, ReflinkP>) -> Result<(), BchError> {
     let live = p.live();
     let mut iter = BtreeIter::new(t, Btree::reflink, bkey::pos(0, live.start), BtreeIterFlags::INTENT);
     iter.for_each_norestart(t, |iter, k| {
@@ -726,7 +739,7 @@ fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>) -> Res
 /// argument's checked. no_enospc: it's a recovery path, and a full
 /// filesystem mustn't be why the owner can't get at data that's still
 /// there.
-pub fn unpoison(fs: &Fs, inum: c::subvol_inum, owner: impl FnOnce() -> bool, arg: c::bch_ioctl_unpoison)
+pub fn unpoison(fs: &Fs, inum: subvol_inum, owner: impl FnOnce() -> bool, arg: bch_ioctl_unpoison)
     -> Result<(), BchError>
 {
     if arg.flags != 0 || arg.pad != 0 {
@@ -748,7 +761,7 @@ pub fn unpoison(fs: &Fs, inum: c::subvol_inum, owner: impl FnOnce() -> bool, arg
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, end, inum.subvol as u32,
                                                   BtreeIterFlags::INTENT, |t, iter, k| {
         res.put();
-        match k.arm::<c::ReflinkP>() {
+        match k.arm::<ReflinkP>() {
             Some(p) => unpoison_reflink(t, p)?,
             None    => unpoison_extent(t, iter, k)?,
         }

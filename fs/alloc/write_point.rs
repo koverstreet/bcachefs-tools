@@ -24,7 +24,8 @@
 
 use crate::fs::Dev;
 use crate::btree::iter::TransAttempt;
-use crate::c;
+use crate::alloc::dev_select::dev_stripe_state;
+use crate::alloc::foreground::{bch_fs_allocator, open_buckets};
 use crate::data::ec::head::stripe_heads_stop;
 use crate::fs::Fs;
 use crate::locking::{ByteLock, ExclusiveGuard, Lockdep};
@@ -78,8 +79,8 @@ pub struct WritePointLocked {
     pub sectors_free: c_uint,
     pub prev_sectors_free: c_uint,
 
-    pub ptrs: c::open_buckets,
-    pub stripe: c::dev_stripe_state,
+    pub ptrs: open_buckets,
+    pub stripe: dev_stripe_state,
 
     pub sectors_allocated: u64,
 }
@@ -140,25 +141,25 @@ published! {
     #[derive(MaybeZeroable)]
     pub struct WritePointsHash {
         pub write_points_nr: Volatile<c_uint>,
-        pub write_points_hash: [Volatile<Option<WritePointIdx>>; c::WRITE_POINT_HASH_NR as usize],
+        pub write_points_hash: [Volatile<Option<WritePointIdx>>; WRITE_POINT_HASH_NR as usize],
     }
 }
 
 
 /// write_points_hash_lock, held.
-type HashGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, (), c::WritePointsHash>;
+type HashGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, (), WritePointsHash>;
 
 /// A write point's lock, held.
-pub(crate) type WritePointGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, c::WritePointLocked, c::WritePointId>;
+pub(crate) type WritePointGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, WritePointLocked, WritePointId>;
 
 /// A write point, as a write names it.
 #[derive(Clone, Copy)]
 pub(crate) enum WritePointSpec<'a> {
-    Named(&'a c::write_point),
+    Named(&'a write_point),
     Hashed(c_ulong),
 }
 
-impl c::write_point_specifier {
+impl write_point_specifier {
     /// The filesystem's own write points, by name.
     pub const BTREE: Self     = Self { v: 2 };
     pub const COPYGC: Self    = Self { v: 4 };
@@ -183,14 +184,14 @@ impl c::write_point_specifier {
 
 // ── The hash ─────────────────────────────────────────────────────────────
 
-impl c::bch_fs_allocator {
+impl bch_fs_allocator {
     fn wp_hash_slot(write_point: c_ulong) -> usize {
-        hash_64(write_point as u64, c::WRITE_POINT_HASH_NR.ilog2()) as usize
+        hash_64(write_point as u64, WRITE_POINT_HASH_NR.ilog2()) as usize
     }
 
     /// The write point last used for @write_point, if a walk without the
     /// lock finds it: one may be missed, or moved since.
-    fn wp_hash_find(&self, write_point: c_ulong) -> Option<&c::write_point> {
+    fn wp_hash_find(&self, write_point: c_ulong) -> Option<&write_point> {
         let mut i = self.write_points_hash_lock.write_points_hash[Self::wp_hash_slot(write_point)].get();
         // bounded: a link followed racing a move may lead anywhere
         for _ in 0..self.write_points.len() {
@@ -204,7 +205,7 @@ impl c::bch_fs_allocator {
     }
 
     /// Write point @i into the hash, by its specifier.
-    fn wp_hash_add(&self, g: &mut HashGuard<'_>, i: c::WritePointIdx) {
+    fn wp_hash_add(&self, g: &mut HashGuard<'_>, i: WritePointIdx) {
         let wp = &self.write_points[i.get()];
         let head = &g.published().write_points_hash[Self::wp_hash_slot(wp.alloc.lock.write_point.get())];
         wp.alloc.hash_next.set(head.get());
@@ -213,7 +214,7 @@ impl c::bch_fs_allocator {
 
     /// Write point @i out of the hash. Its own link stays: a walk on it
     /// carries on.
-    fn wp_hash_del(&self, g: &mut HashGuard<'_>, i: c::WritePointIdx) {
+    fn wp_hash_del(&self, g: &mut HashGuard<'_>, i: WritePointIdx) {
         let wp = &self.write_points[i.get()];
         let head = &g.published().write_points_hash[Self::wp_hash_slot(wp.alloc.lock.write_point.get())];
         if head.get() == Some(i) {
@@ -254,7 +255,7 @@ impl Fs {
         }
 
         g.published().write_points_nr.set(nr + 1);
-        a.wp_hash_add(g, c::WritePointIdx::new(nr as usize));
+        a.wp_hash_add(g, WritePointIdx::new(nr as usize));
         true
     }
 
@@ -275,7 +276,7 @@ impl Fs {
             }
 
             g.published().write_points_nr.set(nr - 1);
-            let i = c::WritePointIdx::new(nr as usize - 1);
+            let i = WritePointIdx::new(nr as usize - 1);
             a.wp_hash_del(&mut g, i);
             &a.write_points[i.get()]
         };
@@ -290,7 +291,7 @@ impl Fs {
     /// used, given it, the write points in use grown first if they may be.
     /// Waiting for its lock may drop the btree locks: the caller relocks.
     pub(crate) fn writepoint_find<'a>(&'a self, t: &TransAttempt<'_, '_>, spec: WritePointSpec<'a>)
-        -> (&'a c::write_point, WritePointGuard<'a>)
+        -> (&'a write_point, WritePointGuard<'a>)
     {
         let a = &self.allocator;
         let write_point = match spec {
@@ -327,7 +328,7 @@ impl Fs {
                 continue;
             }
 
-            let i = c::WritePointIdx::new(oldest_idx);
+            let i = WritePointIdx::new(oldest_idx);
             a.wp_hash_del(&mut hg, i);
             og.published().write_point.set(write_point);
             a.wp_hash_add(&mut hg, i);
@@ -344,9 +345,9 @@ impl Fs {
 
 impl Fs {
     /// @wp's buckets that go - see open_bucket_should_drop() - put.
-    fn writepoint_stop(&self, wp: &c::write_point, ca: Option<&Dev>, ec: bool) {
+    fn writepoint_stop(&self, wp: &write_point, ca: Option<&Dev>, ec: bool) {
         let mut g = wp.alloc.lock.lock();
-        let mut keep = c::open_buckets::default();
+        let mut keep = open_buckets::default();
         for ob in g.ptrs.drain(self) {
             if !self.open_bucket_should_drop(&ob, ca, ec) {
                 keep.push(ob);
@@ -383,7 +384,7 @@ impl Fs {
 impl Fs {
     /// Every write point: the hashed ones, and copygc's, reconcile's and the
     /// btree's.
-    fn write_points_all(&self) -> impl Iterator<Item = &c::write_point> {
+    fn write_points_all(&self) -> impl Iterator<Item = &write_point> {
         let a = &self.allocator;
         a.write_points.iter().chain([&self.copygc.write_point, &a.reconcile_write_point, &a.btree_write_point])
     }
@@ -413,7 +414,7 @@ impl Fs {
             let mut hg = a.write_points_hash_lock.lock();
             g.published().last_used.set(local_clock());
             g.published().write_point.set(core::ptr::from_ref(wp) as c_ulong);
-            a.wp_hash_add(&mut hg, c::WritePointIdx::new(i));
+            a.wp_hash_add(&mut hg, WritePointIdx::new(i));
         }
     }
 }
@@ -422,7 +423,7 @@ impl Fs {
 
 impl Fs {
     #[cold]
-    fn write_point_to_text(&self, out: &mut Printbuf, wp: &c::write_point) {
+    fn write_point_to_text(&self, out: &mut Printbuf, wp: &write_point) {
         let g = wp.alloc.lock.lock();
 
         prt!(out, "{}: {} last wrote: {}", wp.alloc.lock.write_point.get(),

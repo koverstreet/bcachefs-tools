@@ -5,10 +5,9 @@
 use super::bset::BsetTree;
 use super::keys::Keys;
 use super::{check_lookups, BtreeNode, NodeContents};
-use crate::btree::bkey::{BkeyP, BkeySC, BkeyV};
-use crate::c;
-use crate::cstructs::c as cs;
-use crate::format::Bpos;
+use crate::btree::bkey::{BkeyP, BkeySC, BkeyV, bkey_packed_padded, BkeyPackPosRet};
+use crate::btree::node::bset::MAX_BSETS;
+use crate::format::{Bpos, bkey};
 use crate::fs::Fs;
 use crate::prt;
 use crate::debug::trace::events;
@@ -28,10 +27,10 @@ pub struct KeyIterSet {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct KeyIter {
-    pub data: [KeyIterSet; cs::MAX_BSETS as usize],
+    pub data: [KeyIterSet; MAX_BSETS as usize],
 }
 
-const NR: usize = cs::MAX_BSETS as usize;
+const NR: usize = MAX_BSETS as usize;
 
 #[inline(always)]
 fn prefetch_four_cachelines(p: *const u64) {
@@ -220,7 +219,7 @@ impl KeyIter {
      */
     pub fn init(&mut self, fs: &Fs, keys: &Keys<'_>, search: &Bpos) {
         let b = keys.contents();
-        let mut p = ::pin_init::zeroed::<c::bkey_packed_padded>();
+        let mut p = ::pin_init::zeroed::<bkey_packed_padded>();
         let mut k = [0u16; NR];
 
         ebug_assert!(*search >= keys.min_key());
@@ -231,9 +230,9 @@ impl KeyIter {
 
         let (buf, at) = p.as_buf_mut();
         let exact = match b.pack_pos_lossy(buf, at, *search) {
-            c::BkeyPackPosRet::BKEY_PACK_POS_EXACT   => true,
-            c::BkeyPackPosRet::BKEY_PACK_POS_SMALLER => false,
-            c::BkeyPackPosRet::BKEY_PACK_POS_FAIL    => {
+            BkeyPackPosRet::BKEY_PACK_POS_EXACT   => true,
+            BkeyPackPosRet::BKEY_PACK_POS_SMALLER => false,
+            BkeyPackPosRet::BKEY_PACK_POS_FAIL    => {
                 self.init_pack_failed(fs, keys, search);
                 return;
             }
@@ -409,7 +408,7 @@ impl KeyIter {
         }
     }
 
-    pub fn peek_unpack<'u>(&mut self, keys: &Keys<'u>, u: &'u mut c::bkey) -> Option<BkeySC<'u>> {
+    pub fn peek_unpack<'u>(&mut self, keys: &Keys<'u>, u: &'u mut bkey) -> Option<BkeySC<'u>> {
         let k = self.peek(keys)?;
 
         Some(keys.disassemble(k, u))

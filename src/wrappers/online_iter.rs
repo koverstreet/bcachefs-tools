@@ -15,7 +15,9 @@
 use std::ops::ControlFlow;
 
 use anyhow::anyhow;
-use bcachefs_kernel::c;
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_query_btree_keys,
+    BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots, BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts,
+    BCH_IOCTL_QUERY_BTREE_KEYS_prev, BCH_IOCTL_QUERY_BTREE_KEYS_slots};
 use bcachefs_kernel::btree::bkey::{AnyKey, AnyKeySC, BkeySC};
 use bcachefs_kernel::util::vstructs::{from_bytes, plain_bytes, Unvalidated};
 
@@ -28,11 +30,11 @@ use bcachefs_kernel::format::{Bpos, Btree};
 pub struct OnlineIterFlags(pub u32);
 
 impl OnlineIterFlags {
-    pub const SLOTS: Self         = Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_slots);
-    pub const PREV: Self          = Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_prev);
-    pub const ALL_SNAPSHOTS: Self = Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots);
+    pub const SLOTS: Self         = Self(BCH_IOCTL_QUERY_BTREE_KEYS_slots);
+    pub const PREV: Self          = Self(BCH_IOCTL_QUERY_BTREE_KEYS_prev);
+    pub const ALL_SNAPSHOTS: Self = Self(BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots);
     pub const NOFILTER_WHITEOUTS: Self =
-        Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts);
+        Self(BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts);
 }
 
 impl std::ops::BitOr for OnlineIterFlags {
@@ -44,7 +46,7 @@ impl std::ops::BitOr for OnlineIterFlags {
 
 pub struct OnlineBtreeIter<'h> {
     fs:   &'h BcachefsHandle,
-    arg:  c::bch_ioctl_query_btree_keys,
+    arg:  bch_ioctl_query_btree_keys,
     /// u64s: the kernel writes each key at a multiple of 8 from the start,
     /// aligned for one if the buffer is
     buf:  Vec<u64>,
@@ -76,7 +78,7 @@ impl<'h> OnlineBtreeIter<'h> {
 			 buf_size: usize) -> Self {
         OnlineBtreeIter {
             fs,
-            arg: c::bch_ioctl_query_btree_keys {
+            arg: bch_ioctl_query_btree_keys {
                 btree: btree.into(),
                 level,
                 flags: flags.0,

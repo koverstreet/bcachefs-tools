@@ -33,11 +33,14 @@ use crate::btree::bkey::{bkey_le, BkeyFamily, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, LoopFlow, TransAttempt,
                          TransBkey, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
-use crate::c;
-use crate::c::Errcode;
+use crate::alloc::buckets::ReservationFlags;
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::data::write::bch_write_op;
+use crate::opts::bch_inode_opts;
+use crate::errcode::Errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
 use crate::data::extents::{BkeyVExtents, Extents};
-use crate::data::update::ptr_bits_to_text;
+use crate::data::update::{ptr_bits_to_text, data_update, data_update_index};
 use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::plan::{offline_devs, park, ParkReason};
 use crate::errcode::BchError;
@@ -52,11 +55,11 @@ use crate::{bch_err_fn, log_msg_ratelimited};
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::sync::atomic::{fence, Ordering};
-use crate::format::{Bpos, BkeyType};
+use crate::format::{Bpos, BkeyType, BCH_REPLICAS_MAX};
 
 /// Room past a key for set_needs_reconcile(): an entry, and a padding pointer
 /// per replica.
-const RECONCILE_ROOM: usize = (1 + c::BCH_REPLICAS_MAX as usize) * size_of::<u64>();
+const RECONCILE_ROOM: usize = (1 + BCH_REPLICAS_MAX as usize) * size_of::<u64>();
 
 // The update's keys, narrowed to what they're known to be: of an extents
 // btree, and once one matched @old, of its type - with pointers. One that
@@ -103,7 +106,7 @@ pub(crate) fn remap_bits(fs: &Fs, old: BkeySC<'_>, bits: u32, new: BkeySC<'_>) -
 /// that went wrong: @new, the key in the btree, @wrote, what the write wrote,
 /// cut to it, @insert, what was going in.
 #[cold]
-fn key_to_text(out: &mut Printbuf, fs: &Fs, op: &c::bch_write_op, u: &c::data_update_index, new: BkeySC<'_>,
+fn key_to_text(out: &mut Printbuf, fs: &Fs, op: &bch_write_op, u: &data_update_index, new: BkeySC<'_>,
                wrote: BkeySC<'_>, insert: BkeySC<'_>) {
     let old = BkeySC::from(u.k.as_ref());
 
@@ -121,7 +124,7 @@ fn key_to_text(out: &mut Printbuf, fs: &Fs, op: &c::bch_write_op, u: &c::data_up
 /// A key the update skipped, counted in its stats and traced.
 #[cold]
 #[inline(never)]
-fn count_key_fail(fs: &Fs, op: &c::bch_write_op, u: &c::data_update_index, new: BkeySC<'_>, wrote: BkeySC<'_>,
+fn count_key_fail(fs: &Fs, op: &bch_write_op, u: &data_update_index, new: BkeySC<'_>, wrote: BkeySC<'_>,
                   insert: BkeySC<'_>, msg: &str) {
     if let Some(stats) = u.moving().map(|m| m.stats()) {
         stats.keys_raced.fetch_add(1, Ordering::Relaxed);
@@ -140,10 +143,10 @@ fn count_key_fail(fs: &Fs, op: &c::bch_write_op, u: &c::data_update_index, new: 
 /// iterators and decoded pointers aren't needed in the frame the update's
 /// commit runs under.
 #[inline(never)]
-fn merge_ptrs<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::data_update_index, old: BkeySC<'_, Ptrs>,
+fn merge_ptrs<'t>(t: &TransAttempt<'_, 't>, op: &bch_write_op, u: &data_update_index, old: BkeySC<'_, Ptrs>,
                   k: BkeySC<'_>, front: BkeySC<'_>, new: &mut TransBkey<'_, 't>, insert: &mut TransBkey<'_, 't>,
                   next_pos: Bpos)
-    -> Result<ControlFlow<Bpos, c::bch_inode_opts>, BchError>
+    -> Result<ControlFlow<Bpos, bch_inode_opts>, BchError>
 {
     let fs = t.fs();
 
@@ -268,7 +271,7 @@ fn merge_ptrs<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::data_up
 
 /// The update of @k, the slot at @iter, by the front of @u's keylist; where
 /// the walk goes on from.
-fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::data_update_index, iter: &BtreeIter<'t>,
+fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &bch_write_op, u: &data_update_index, iter: &BtreeIter<'t>,
                         k: BkeySC<'_>)
     -> Result<Bpos, BchError>
 {
@@ -314,8 +317,8 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::d
     let res = &op.res;
     if s.disk_sectors_delta > res.sectors() as i64 {
         res.add_physical((s.disk_sectors_delta - res.sectors() as i64) as u64, s.new_nr_replicas,
-                         if s.usage_increasing { c::ReservationFlags::empty() }
-                         else { c::ReservationFlags::nofail })?;
+                         if s.usage_increasing { ReservationFlags::empty() }
+                         else { ReservationFlags::nofail })?;
     }
 
     t.log_str(u.opts.type_.name().as_bytes())?;
@@ -330,7 +333,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::d
      * incorrectly written data due to needs_rb already being set on the
      * existing extent
      */
-    new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
+    new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                             op.opts.change_cookie)?;
 
     if op.opts.change_cookie == fs.opt_change_cookie.get() {
@@ -355,7 +358,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &c::bch_write_op, u: &c::d
     }
 
     /* This is the real set_needs_reconcile() call */
-    insert.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
+    insert.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                                op.opts.change_cookie)?;
 
     let traced = <events::data_update_key as TraceEvent>::trace_enabled()
@@ -393,7 +396,7 @@ fn insert_is_extent(fs: &Fs, insert: &BkeyI) -> bool {
 
 /// @op's keys, its update's - @u's - new pointers, put into the extent it
 /// rewrote.
-pub(crate) fn index_update(trans: &BtreeTrans<'_>, op: &mut c::bch_write_op, u: &c::data_update_index)
+pub(crate) fn index_update(trans: &BtreeTrans<'_>, op: &mut bch_write_op, u: &data_update_index)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -425,7 +428,7 @@ pub(crate) fn index_update(trans: &BtreeTrans<'_>, op: &mut c::bch_write_op, u: 
 }
 
 /// @f on each slot @u's extent covered, an attempt and a commit each.
-fn for_each_old_slot<'t, F>(trans: &'t TransGuard<'t>, u: &c::data_update_index, res: Option<&DiskReservation<'_>>,
+fn for_each_old_slot<'t, F>(trans: &'t TransGuard<'t>, u: &data_update_index, res: Option<&DiskReservation<'_>>,
                             mut f: F) -> Result<(), BchError>
 where
     F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, BkeySC<'k>) -> Result<(), BchError>,
@@ -444,7 +447,7 @@ where
 
 /// The index update for a data update whose write didn't happen, because the
 /// read failed on every replica: drops its ptrs_kill, and logs it.
-pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -> Result<(), BchError> {
+pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &data_update) -> Result<(), BchError> {
     let fs = trans.fs();
     let old = BkeySC::from(u.index.k.as_ref());
     let old_p = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));
@@ -478,7 +481,7 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
         let mut new: TransBkey<'_, '_> = new.into();
 
         let opts = get_io_opts(t, None, k)?;
-        new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
+        new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                                 u.op.opts.change_cookie.wrapping_sub(1))?;
         write!(msg, "new: {}", new.as_sc().to_text(fs));
         msg.newline();
@@ -490,7 +493,7 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &c::data_update) -
 /// @u's extent parked for @why, so reconcile retries it from the pending list
 /// instead of the main scan: whether it was - not if it was rewritten or
 /// deleted while the update was in flight.
-fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError> {
+fn park_update(u: &data_update, why: ParkReason<'_>) -> Result<bool, BchError> {
     let fs = u.op.fs();
     let trans = crate::btree_trans!(fs);
     let old = BkeySC::from(u.index.k.as_ref());
@@ -511,7 +514,7 @@ fn park_update(u: &c::data_update, why: ParkReason<'_>) -> Result<bool, BchError
 /// EC allocation failed, @err - the write never happened, but the extent still
 /// needs erasure coding. Mark it pending so reconcile retries from the pending
 /// list instead of the main scan. The error the update ends with is returned.
-pub(crate) fn ec_alloc_failed(u: &c::data_update, err: BchError) -> BchError {
+pub(crate) fn ec_alloc_failed(u: &data_update, err: BchError) -> BchError {
     let fs = u.op.fs();
     let parked = park_update(u, ParkReason::UpdateFailed { err, opts: &u.op.opts, data_opts: &u.index.opts });
 
@@ -530,7 +533,7 @@ pub(crate) fn ec_alloc_failed(u: &c::data_update, err: BchError) -> BchError {
 /// The read had no device to read from: one the extent's on is offline, and
 /// no retry can move it till that device is back. Parked till then - unless
 /// it's back already, and the next try can read it.
-pub(crate) fn no_device_to_read_from(u: &c::data_update) {
+pub(crate) fn no_device_to_read_from(u: &data_update) {
     let fs = u.op.fs();
     let devs = offline_devs(fs, BkeySC::from(u.index.k.as_ref()));
     if !devs.d.is_empty() {

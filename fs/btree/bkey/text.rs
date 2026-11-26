@@ -2,7 +2,6 @@
 //! ToText for a key's header, and BkeySCToText for a key with its value.
 
 use super::{AllTypes, BkeySC, BkeyVal, FamilyVal};
-use crate::c;
 use crate::fs::Fs;
 use crate::util::{Printbuf, ToText};
 use core::fmt;
@@ -12,7 +11,7 @@ use core::str::FromStr;
 use crate::errcode::{Errcode, BchError};
 #[cfg(feature = "std")]
 use super::{POS_MAX, POS_MIN, SPOS_MAX};
-use crate::format::Bpos;
+use crate::format::{Bpos, bkey};
 
 /// As Display.
 impl fmt::Debug for Bpos {
@@ -95,9 +94,9 @@ impl<V: ?Sized + BkeyVal> ToText for BkeySCToText<'_, '_, V> {
 crate::display_via_to_text!(impl[V: ?Sized + BkeyVal] BkeySCToText<'_, '_, V>);
 
 /// Without its value.
-impl ToText for c::bkey {
+impl ToText for bkey {
     fn to_text(&self, out: &mut Printbuf) {
         crate::btree::bkey::bkey_to_text(out, self)
     }
 }
-crate::display_via_to_text!(c::bkey);
+crate::display_via_to_text!(bkey);

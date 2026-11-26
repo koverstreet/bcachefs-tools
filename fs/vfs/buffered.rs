@@ -30,7 +30,7 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::read::{self, Rbio};
 use crate::errcode::{Errcode as err, BchError};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, CompressionType, CsumType};
 use crate::fs::Fs;
 use crate::init::error::bch2_inum_offset_err_msg_trans;
 use crate::posix::inode_opts::get_inode;
@@ -48,8 +48,11 @@ use crate::util::task::{exclusive_size, waiter, TaskSlot, WaitSync};
 use crate::{btree_trans, c, log_msg_ratelimited};
 use core::pin::Pin;
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
+use crate::data::extents::ReadFlags;
+use crate::opts::bch_inode_opts;
+use crate::vfs::inode::PagecacheAdd;
 
-type F = c::ReadFlags;
+type F = ReadFlags;
 /// A single folio's read: its caller waits for each extent's
 type Single = Gather<Result<(), BchError>, waiter::Sync>;
 type SingleRef = GatherRef<'static, Result<(), BchError>, waiter::Sync>;
@@ -233,7 +236,7 @@ pub fn pools_exit(q: &Quiesced<'_>) {
 struct PagecacheRead<'a> {
     fs:       &'a Fs,
     inode:    &'a InodeInfo,
-    opts:     c::bch_inode_opts,
+    opts:     bch_inode_opts,
     /// The readahead window: past this is the speculative extension
     orig_end: u64,
     extend:   bool,
@@ -242,8 +245,8 @@ struct PagecacheRead<'a> {
 
 /// Whether reading part of @k reads all of it.
 fn encoded(fs: &Fs, k: BkeySC<'_>) -> bool {
-    k.arm::<Ptrs>().is_some_and(|kp| kp.crcs(fs).any(|crc| crc.csum_type != c::CsumType::none ||
-                                                         crc.compression_type != c::CompressionType::none))
+    k.arm::<Ptrs>().is_some_and(|kp| kp.crcs(fs).any(|crc| crc.csum_type != CsumType::none ||
+                                                         crc.compression_type != CompressionType::none))
 }
 
 /// The extent at @read_pos, of @k, read into @iter from where it is: a bio of
@@ -339,7 +342,7 @@ pub(crate) fn readahead(mut ra: Readahead<'_>) {
      */
     plugged(|| {
         /* the folios not taken, read_pages() gives up */
-        let Some(_add) = inode.ei_pagecache_lock.try_lock::<c::PagecacheAdd>() else { return };
+        let Some(_add) = inode.ei_pagecache_lock.try_lock::<PagecacheAdd>() else { return };
         let Ok(mut iter) = ReadaheadIter::take(&mut ra) else { return };
 
         let w = PagecacheRead { fs, inode, opts, orig_end: iter.end, extend: true, single: None };

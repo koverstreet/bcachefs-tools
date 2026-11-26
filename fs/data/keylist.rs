@@ -15,7 +15,7 @@
 
 use crate::btree::bkey::{AnyKey, BkeyI, BkeySC, BkeyV, BKEY_U64S};
 use crate::btree::iter::NoRoom;
-use crate::c;
+use crate::format::bkey;
 use crate::data_structures::dst_room::{DstRoom, Storage};
 use crate::data_structures::inline_vec::InlineVec;
 use crate::locking::MemallocFlags;
@@ -177,7 +177,7 @@ where
     pub fn init(&mut self) -> &mut Self {
         let have_u64s = self.elems().len();
         assert!(have_u64s >= BKEY_U64S, "room of {have_u64s} u64s, short of a key's header");
-        plain_bytes_mut(&mut self.elems_mut()[..BKEY_U64S]).copy_from_slice(plain_bytes(&c::bkey::new()));
+        plain_bytes_mut(&mut self.elems_mut()[..BKEY_U64S]).copy_from_slice(plain_bytes(&bkey::new()));
         self
     }
 
@@ -234,7 +234,7 @@ where
 /// A key - header @k, value @val - copied into @room: one copy of the code for
 /// every key type and room size.
 #[inline(never)]
-fn key_set(room: &mut [u64], k: &c::bkey, val: &[u8]) {
+fn key_set(room: &mut [u64], k: &bkey, val: &[u8]) {
     let u64s = usize::from(k.u64s);
     assert!(u64s <= room.len(), "a key of {u64s} u64s in a room of {}", room.len());
     crate::btree::bkey_buf::copy_key(room, k, val)

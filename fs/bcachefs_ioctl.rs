@@ -2,13 +2,15 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::sb::errors_format::bch_sb_field_error_entry_v2;
+use crate::alloc::accounting_format::Accounting;
+use crate::alloc::replicas_format::bch_replicas_entry_v1;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, ioctl, counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, __uuid_t, BCH_REPLICAS_MAX};
 
 /*
  * Flags common to multiple ioctls:
@@ -19,11 +21,11 @@ pub const BCH_FORCE_IF_DATA_DEGRADED: u32 = 1 << 2;
 pub const BCH_FORCE_IF_METADATA_DEGRADED: u32 = 1 << 3;
 
 pub const BCH_FORCE_IF_LOST: u32 =
-    c::BCH_FORCE_IF_DATA_LOST |
-    c::BCH_FORCE_IF_METADATA_LOST;
+    BCH_FORCE_IF_DATA_LOST |
+    BCH_FORCE_IF_METADATA_LOST;
 pub const BCH_FORCE_IF_DEGRADED: u32 =
-    c::BCH_FORCE_IF_DATA_DEGRADED |
-    c::BCH_FORCE_IF_METADATA_DEGRADED;
+    BCH_FORCE_IF_DATA_DEGRADED |
+    BCH_FORCE_IF_METADATA_DEGRADED;
 
 /*
  * If cleared, ioctl that refer to a device pass it as a pointer to a pathname
@@ -41,46 +43,46 @@ pub const BCH_READ_DEV: u32 = 1 << 5;
 ioctl! {
     /* filesystem ioctls: */
 
-    BCH_IOCTL_QUERY_UUID		= _IOR(0xbc,	1,  c::bch_ioctl_query_uuid),
+    BCH_IOCTL_QUERY_UUID		= _IOR(0xbc,	1,  bch_ioctl_query_uuid),
 
-    BCH_IOCTL_DISK_ADD			= _IOW(0xbc,	4,  c::bch_ioctl_disk),
-    BCH_IOCTL_DISK_ADD_v2		= _IOW(0xbc,	23, c::bch_ioctl_disk_v2),
-    BCH_IOCTL_DISK_REMOVE		= _IOW(0xbc,	5,  c::bch_ioctl_disk),
-    BCH_IOCTL_DISK_REMOVE_v2		= _IOW(0xbc,	24, c::bch_ioctl_disk_v2),
-    BCH_IOCTL_DISK_ONLINE		= _IOW(0xbc,	6,  c::bch_ioctl_disk),
-    BCH_IOCTL_DISK_ONLINE_v2		= _IOW(0xbc,	25, c::bch_ioctl_disk_v2),
-    BCH_IOCTL_DISK_OFFLINE		= _IOW(0xbc,	7,  c::bch_ioctl_disk),
-    BCH_IOCTL_DISK_OFFLINE_v2		= _IOW(0xbc,	26, c::bch_ioctl_disk_v2),
-    BCH_IOCTL_DISK_SET_STATE		= _IOW(0xbc,	8,  c::bch_ioctl_disk_set_state),
-    BCH_IOCTL_DISK_SET_STATE_v2		= _IOW(0xbc,	22, c::bch_ioctl_disk_set_state_v2),
-    BCH_IOCTL_DATA			= _IOW(0xbc,	10, c::bch_ioctl_data),
-    BCH_IOCTL_FS_USAGE			= _IOWR(0xbc,	11, c::bch_ioctl_fs_usage),
-    BCH_IOCTL_DEV_USAGE			= _IOWR(0xbc,	11, c::bch_ioctl_dev_usage),
-    BCH_IOCTL_READ_SUPER		= _IOW(0xbc,	12, c::bch_ioctl_read_super),
-    BCH_IOCTL_DISK_GET_IDX		= _IOW(0xbc,	13, c::bch_ioctl_disk_get_idx),
-    BCH_IOCTL_DISK_RESIZE		= _IOW(0xbc,	14, c::bch_ioctl_disk_resize),
-    BCH_IOCTL_DISK_RESIZE_v2		= _IOW(0xbc,	27, c::bch_ioctl_disk_resize_v2),
-    BCH_IOCTL_DISK_RESIZE_JOURNAL	= _IOW(0xbc,	15, c::bch_ioctl_disk_resize_journal),
-    BCH_IOCTL_DISK_RESIZE_JOURNAL_v2	= _IOW(0xbc,	28, c::bch_ioctl_disk_resize_journal_v2),
+    BCH_IOCTL_DISK_ADD			= _IOW(0xbc,	4,  bch_ioctl_disk),
+    BCH_IOCTL_DISK_ADD_v2		= _IOW(0xbc,	23, bch_ioctl_disk_v2),
+    BCH_IOCTL_DISK_REMOVE		= _IOW(0xbc,	5,  bch_ioctl_disk),
+    BCH_IOCTL_DISK_REMOVE_v2		= _IOW(0xbc,	24, bch_ioctl_disk_v2),
+    BCH_IOCTL_DISK_ONLINE		= _IOW(0xbc,	6,  bch_ioctl_disk),
+    BCH_IOCTL_DISK_ONLINE_v2		= _IOW(0xbc,	25, bch_ioctl_disk_v2),
+    BCH_IOCTL_DISK_OFFLINE		= _IOW(0xbc,	7,  bch_ioctl_disk),
+    BCH_IOCTL_DISK_OFFLINE_v2		= _IOW(0xbc,	26, bch_ioctl_disk_v2),
+    BCH_IOCTL_DISK_SET_STATE		= _IOW(0xbc,	8,  bch_ioctl_disk_set_state),
+    BCH_IOCTL_DISK_SET_STATE_v2		= _IOW(0xbc,	22, bch_ioctl_disk_set_state_v2),
+    BCH_IOCTL_DATA			= _IOW(0xbc,	10, bch_ioctl_data),
+    BCH_IOCTL_FS_USAGE			= _IOWR(0xbc,	11, bch_ioctl_fs_usage),
+    BCH_IOCTL_DEV_USAGE			= _IOWR(0xbc,	11, bch_ioctl_dev_usage),
+    BCH_IOCTL_READ_SUPER		= _IOW(0xbc,	12, bch_ioctl_read_super),
+    BCH_IOCTL_DISK_GET_IDX		= _IOW(0xbc,	13, bch_ioctl_disk_get_idx),
+    BCH_IOCTL_DISK_RESIZE		= _IOW(0xbc,	14, bch_ioctl_disk_resize),
+    BCH_IOCTL_DISK_RESIZE_v2		= _IOW(0xbc,	27, bch_ioctl_disk_resize_v2),
+    BCH_IOCTL_DISK_RESIZE_JOURNAL	= _IOW(0xbc,	15, bch_ioctl_disk_resize_journal),
+    BCH_IOCTL_DISK_RESIZE_JOURNAL_v2	= _IOW(0xbc,	28, bch_ioctl_disk_resize_journal_v2),
 
-    BCH_IOCTL_SUBVOLUME_CREATE		= _IOW(0xbc,	16, c::bch_ioctl_subvolume),
-    BCH_IOCTL_SUBVOLUME_CREATE_v2	= _IOW(0xbc,	29, c::bch_ioctl_subvolume_v2),
-    BCH_IOCTL_SUBVOLUME_DESTROY		= _IOW(0xbc,	17, c::bch_ioctl_subvolume),
-    BCH_IOCTL_SUBVOLUME_DESTROY_v2	= _IOW(0xbc,	30, c::bch_ioctl_subvolume_v2),
+    BCH_IOCTL_SUBVOLUME_CREATE		= _IOW(0xbc,	16, bch_ioctl_subvolume),
+    BCH_IOCTL_SUBVOLUME_CREATE_v2	= _IOW(0xbc,	29, bch_ioctl_subvolume_v2),
+    BCH_IOCTL_SUBVOLUME_DESTROY		= _IOW(0xbc,	17, bch_ioctl_subvolume),
+    BCH_IOCTL_SUBVOLUME_DESTROY_v2	= _IOW(0xbc,	30, bch_ioctl_subvolume_v2),
 
-    BCH_IOCTL_DEV_USAGE_V2		= _IOWR(0xbc,	18, Head<c::bch_ioctl_dev_usage_v2>),
+    BCH_IOCTL_DEV_USAGE_V2		= _IOWR(0xbc,	18, Head<bch_ioctl_dev_usage_v2>),
 
-    BCH_IOCTL_FSCK_OFFLINE		= _IOW(0xbc,	19, Head<c::bch_ioctl_fsck_offline>),
-    BCH_IOCTL_FSCK_ONLINE		= _IOW(0xbc,	20, c::bch_ioctl_fsck_online),
-    BCH_IOCTL_QUERY_ACCOUNTING		= _IOW(0xbc,	21, c::bch_ioctl_query_accounting),
-    BCH_IOCTL_QUERY_COUNTERS		= _IOW(0xbc,	21, Head<c::bch_ioctl_query_counters>),
-    BCH_IOCTL_SUBVOLUME_LIST		= _IOWR(0xbc,	31, c::bch_ioctl_subvol_readdir),
-    BCH_IOCTL_SUBVOLUME_TO_PATH		= _IOWR(0xbc,	32, c::bch_ioctl_subvol_to_path),
-    BCH_IOCTL_SNAPSHOT_TREE		= _IOWR(0xbc,	33, c::bch_ioctl_snapshot_tree_query),
-    BCH_IOCTL_QUERY_BTREE_KEYS		= _IOWR(0xbc,	34, c::bch_ioctl_query_btree_keys),
-    BCH_IOCTL_SNAPSHOT_TREE_v2		= _IOWR(0xbc,	35, c::bch_ioctl_snapshot_tree_query_v2),
-    BCH_IOCTL_RECOVERY_STATUS		= _IOR(0xbc,	36, c::bch_ioctl_recovery_status),
-    BCH_IOCTL_QUERY_ACCOUNTING_v2	= _IOW(0xbc,	37, c::bch_ioctl_query_accounting_v2),
+    BCH_IOCTL_FSCK_OFFLINE		= _IOW(0xbc,	19, Head<bch_ioctl_fsck_offline>),
+    BCH_IOCTL_FSCK_ONLINE		= _IOW(0xbc,	20, bch_ioctl_fsck_online),
+    BCH_IOCTL_QUERY_ACCOUNTING		= _IOW(0xbc,	21, bch_ioctl_query_accounting),
+    BCH_IOCTL_QUERY_COUNTERS		= _IOW(0xbc,	21, Head<bch_ioctl_query_counters>),
+    BCH_IOCTL_SUBVOLUME_LIST		= _IOWR(0xbc,	31, bch_ioctl_subvol_readdir),
+    BCH_IOCTL_SUBVOLUME_TO_PATH		= _IOWR(0xbc,	32, bch_ioctl_subvol_to_path),
+    BCH_IOCTL_SNAPSHOT_TREE		= _IOWR(0xbc,	33, bch_ioctl_snapshot_tree_query),
+    BCH_IOCTL_QUERY_BTREE_KEYS		= _IOWR(0xbc,	34, bch_ioctl_query_btree_keys),
+    BCH_IOCTL_SNAPSHOT_TREE_v2		= _IOWR(0xbc,	35, bch_ioctl_snapshot_tree_query_v2),
+    BCH_IOCTL_RECOVERY_STATUS		= _IOR(0xbc,	36, bch_ioctl_recovery_status),
+    BCH_IOCTL_QUERY_ACCOUNTING_v2	= _IOW(0xbc,	37, bch_ioctl_query_accounting_v2),
 }
 
 /* FS_IOC_GOINGDOWN's: */
@@ -94,17 +96,17 @@ ioctl! {
     BCHFS_IOC_REINHERIT_ATTRS		= _IOR(0xbc, 64, *const c_char),
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS = _IO(0xbc, 65),
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	= _IO(0xbc, 66),
-    BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, c::bch_ioctl_pread_raw),
-    BCHFS_IOC_UNPOISON			= _IOW(0xbc, 68, c::bch_ioctl_unpoison),
+    BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, bch_ioctl_pread_raw),
+    BCHFS_IOC_UNPOISON			= _IOW(0xbc, 68, bch_ioctl_unpoison),
 
     /*
      * XFS's number, which other filesystems answer too: _IOR as XFS has it,
      * though it's the flags, FSOP_GOING_FLAGS_*, that the kernel reads.
      */
     FS_IOC_GOINGDOWN			= _IOR(0x58, 125, u32),
-    BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Head<c::bch_ioctl_get_damage>),
+    BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Head<bch_ioctl_get_damage>),
     /* 69: retired - READDIR_FLAGS before its entries had a reclen */
-    BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 72, c::bch_ioctl_readdir_flags),
+    BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 72, bch_ioctl_readdir_flags),
 
     /*
      * BCHFS_IOC_CLEAR_DAMAGE: clear the file's damage record, in the calling
@@ -137,7 +139,7 @@ pub struct bch_ioctl_get_damage {
     /* in: capacity; out: the true count, which may be more */
     pub nr_entries: u32,
     pub pad: u32,
-    pub entries: [c::bch_sb_field_error_entry_v2; 0],
+    pub entries: [bch_sb_field_error_entry_v2; 0],
 }
 
 #[allow(non_upper_case_globals)]
@@ -219,7 +221,7 @@ pub struct bch_ioctl_err_msg {
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_query_uuid {
-    pub uuid: c::__uuid_t,
+    pub uuid: __uuid_t,
 }
 
 /*
@@ -283,7 +285,7 @@ pub struct bch_ioctl_disk_v2 {
     pub flags: u32,
     pub pad: u32,
     pub dev: u64,
-    pub err: c::bch_ioctl_err_msg,
+    pub err: bch_ioctl_err_msg,
 }
 
 /*
@@ -312,7 +314,7 @@ pub struct bch_ioctl_disk_set_state_v2 {
     pub new_state: u8,
     pub pad: [u8; 3],
     pub dev: u64,
-    pub err: c::bch_ioctl_err_msg,
+    pub err: bch_ioctl_err_msg,
 }
 
 #[bch_enum(open)]
@@ -441,7 +443,7 @@ nest! {
         pub pad: [u8; 6],
         #>[repr(C)]
         pub payload: pub union bch_ioctl_data_event_payload {
-            pub p: c::bch_ioctl_data_progress,
+            pub p: bch_ioctl_data_progress,
             pub pad2: [u64; 15],
         },
     }
@@ -452,7 +454,7 @@ nest! {
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_replicas_usage {
     pub sectors: u64,
-    pub r: Head<c::bch_replicas_entry_v1>,
+    pub r: Head<bch_replicas_entry_v1>,
 }
 
 /* Obsolete */
@@ -475,12 +477,12 @@ pub struct bch_ioctl_fs_usage {
     pub capacity: u64,
     pub used: u64,
     pub online_reserved: u64,
-    pub persistent_reserved: [u64; c::BCH_REPLICAS_MAX as usize],
+    pub persistent_reserved: [u64; BCH_REPLICAS_MAX as usize],
 
     pub replica_entries_bytes: u32,
     pub pad: u32,
 
-    pub replicas: [Head<c::bch_replicas_usage>; 0],
+    pub replicas: [Head<bch_replicas_usage>; 0],
 }
 
 #[repr(C)]
@@ -511,7 +513,7 @@ pub struct bch_ioctl_dev_usage {
 
     pub buckets_ec: u64,
 
-    pub d: [c::bch_ioctl_dev_usage_type; 10],
+    pub d: [bch_ioctl_dev_usage_type; 10],
 }
 
 /* Obsolete */
@@ -528,7 +530,7 @@ pub struct bch_ioctl_dev_usage_v2 {
     pub bucket_size: u32,
     pub nr_buckets: u64,
 
-    pub d: [c::bch_ioctl_dev_usage_type; 0],
+    pub d: [bch_ioctl_dev_usage_type; 0],
 }
 
 /*
@@ -589,7 +591,7 @@ pub struct bch_ioctl_disk_resize_v2 {
     pub pad: u32,
     pub dev: u64,
     pub nbuckets: u64,
-    pub err: c::bch_ioctl_err_msg,
+    pub err: bch_ioctl_err_msg,
 }
 
 /*
@@ -614,7 +616,7 @@ pub struct bch_ioctl_disk_resize_journal_v2 {
     pub pad: u32,
     pub dev: u64,
     pub nbuckets: u64,
-    pub err: c::bch_ioctl_err_msg,
+    pub err: bch_ioctl_err_msg,
 }
 
 #[repr(C)]
@@ -637,7 +639,7 @@ pub struct bch_ioctl_subvolume_v2 {
     pub pad: [u16; 3],
     pub dst_ptr: u64,
     pub src_ptr: u64,
-    pub err: c::bch_ioctl_err_msg,
+    pub err: bch_ioctl_err_msg,
 }
 
 pub const BCH_SUBVOL_SNAPSHOT_CREATE: u32 = 1 << 0;
@@ -697,7 +699,7 @@ pub struct bch_ioctl_query_accounting {
     pub accounting_types_mask: u32, /* input parameter */
 
     /* C's typed keys: an accounting value's header, sized, its counters after */
-    pub accounting: [BkeyI<c::Accounting>; 0],
+    pub accounting: [BkeyI<Accounting>; 0],
 }
 
 pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
@@ -728,14 +730,14 @@ pub struct bch_ioctl_query_accounting_v2 {
     pub capacity: u64,
     pub used: u64,
     pub online_reserved: u64,
-    pub free: [u64; c::BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize],
-    pub free_now: [u64; c::BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize],
+    pub free: [u64; BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize],
+    pub free_now: [u64; BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize],
 
     pub accounting_u64s: u32, /* input parameter */
     pub accounting_types_mask: u32, /* input parameter */
 
     /* C's typed keys: an accounting value's header, sized, its counters after */
-    pub accounting: [BkeyI<c::Accounting>; 0],
+    pub accounting: [BkeyI<Accounting>; 0],
 }
 
 pub const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u32 = 1 << 0;
@@ -856,7 +858,7 @@ pub struct bch_ioctl_snapshot_tree_query {
     pub nr: u32, /* in: capacity; out: returned */
     pub total: u32, /* out: total nodes */
     pub pad: u32,
-    pub nodes: [c::bch_ioctl_snapshot_node; 0],
+    pub nodes: [bch_ioctl_snapshot_node; 0],
 }
 
 /*
@@ -892,7 +894,7 @@ pub struct bch_ioctl_snapshot_tree_query_v2 {
     pub nr: u32, /* in: capacity; out: returned */
     pub total: u32, /* out: total nodes */
     pub node_size: u32, /* in: caller's sizeof; out: ours */
-    pub nodes: [c::bch_ioctl_snapshot_node_v2; 0],
+    pub nodes: [bch_ioctl_snapshot_node_v2; 0],
 }
 
 /*
@@ -948,10 +950,10 @@ pub struct bch_recovery_pass_mask {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_ioctl_recovery_status {
-    pub passes_scheduled_sb: c::bch_recovery_pass_mask,
-    pub passes_scheduled_ephemeral: c::bch_recovery_pass_mask,
-    pub passes_complete: c::bch_recovery_pass_mask,
-    pub passes_remaining: c::bch_recovery_pass_mask,
+    pub passes_scheduled_sb: bch_recovery_pass_mask,
+    pub passes_scheduled_ephemeral: bch_recovery_pass_mask,
+    pub passes_complete: bch_recovery_pass_mask,
+    pub passes_remaining: bch_recovery_pass_mask,
 
     pub pass: u32, /* enum bch_recovery_pass, 0 = idle */
     pub units: u32, /* enum ProgressUnit */
@@ -989,7 +991,7 @@ pub struct bch_ioctl_pread_raw {
     pub buf: u64, /* userspace data buffer */
     pub flags: u32, /* BCH_PREAD_RAW_* input flags */
     pub errors: u32, /* output: BCH_PREAD_RAW_ERR_* */
-    pub err: c::bch_ioctl_err_msg,
+    pub err: bch_ioctl_err_msg,
 }
 
 /*

@@ -24,6 +24,7 @@
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
+use crate::data::ec::format::Stripe;
 use crate::data::ec::buf::{blocks_in, StripeBuf};
 use crate::data::ec::open::{OpenStripe, StripeClaim};
 use crate::data::ec::repair::StripeBlocks;
@@ -69,7 +70,7 @@ pub(crate) enum OldRead {
 impl Reuse {
     /// @old, held open by @open: nothing of it read yet - or the claim
     /// back, for the caller to put, if it can't be allocated.
-    pub(crate) fn new(old: BkeySC<'_, c::Stripe<Validated>>, open: StripeClaim)
+    pub(crate) fn new(old: BkeySC<'_, Stripe<Validated>>, open: StripeClaim)
         -> Result<KBox<Self>, StripeClaim>
     {
         // the initializer runs only once there's memory for it: until then
@@ -103,7 +104,7 @@ impl Reuse {
 /// algorithm, redundancy and size; room for one new block past its live ones;
 /// and, the devices of the blocks it would carry taken out of @s's, more
 /// devices left than parity blocks. may_reuse_stripe().
-fn may_reuse_stripe(s: &Internal, old: &c::Stripe<Validated>, b: StripeBlocks) -> bool {
+fn may_reuse_stripe(s: &Internal, old: &Stripe<Validated>, b: StripeBlocks) -> bool {
     let new = s.new_stripe.stripe().v();
     if old.disk_label != new.disk_label ||
        old.bits.algorithm() != new.bits.algorithm() ||
@@ -135,7 +136,7 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
     let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOPRESERVE);
     let (iter, k) = iter.peek_slot_shared(t)?;
-    let Some(old) = k.arm::<c::Stripe>() else { return Ok(None) };
+    let Some(old) = k.arm::<Stripe>() else { return Ok(None) };
     let v = old.v();
 
     if v.fragmentation_lru_pos() == STRIPE_LRU_POS_EMPTY {

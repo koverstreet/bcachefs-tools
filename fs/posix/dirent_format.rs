@@ -22,11 +22,11 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
 use crate::util::vstructs::{cast_plain, plain_bytes, Unvalidated};
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BkeySC, BkeyVal, ValidateFlags};
+use crate::btree::bkey::{BkeySC, BkeyVal, ValidateFlags, BkeyValidateFrom};
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
-use crate::c;
-use crate::cstructs::c as cs;
+use crate::format::bch_val;
+use crate::posix::str_hash::bch_hash_info;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -56,7 +56,7 @@ nest! {
     #[derive(SizedVal, BitfieldMembers)]
     #[repr(C, align(8))]
     pub struct Dirent {
-        pub v: cs::bch_val,
+        pub v: bch_val,
 
         /* Target inode number: */
         #>[repr(C)]
@@ -120,7 +120,7 @@ pub enum DirentTarget {
     Subvol { child: u32, parent: u32 },
 }
 
-impl c::Dirent {
+impl Dirent {
     /// The inode number the dirent points at. Meaningless for a DT_SUBVOL
     /// dirent, which keeps subvolume IDs in the same space.
     pub fn d_inum(&self) -> u64 {
@@ -129,8 +129,8 @@ impl c::Dirent {
 
     /// The target, read through the half of the union d_type says is live.
     pub fn target(&self) -> DirentTarget {
-        if self.d_type() as u32 == c::DT_SUBVOL {
-            let s = cast_plain::<c::bch_dirent_subvol>(plain_bytes(&self.target)).expect("an arm of the union");
+        if self.d_type() as u32 == DT_SUBVOL {
+            let s = cast_plain::<bch_dirent_subvol>(plain_bytes(&self.target)).expect("an arm of the union");
             DirentTarget::Subvol {
                 child:  s.d_child_subvol.get(),
                 parent: s.d_parent_subvol.get(),
@@ -142,7 +142,7 @@ impl c::Dirent {
 
     /// Set the subvolume a DT_SUBVOL dirent lives in.
     pub fn set_parent_subvol(&mut self, subvol: u32) {
-        assert_eq!(self.d_type() as u32, c::DT_SUBVOL);
+        assert_eq!(self.d_type() as u32, DT_SUBVOL);
         self.target.subvol.d_parent_subvol = subvol.into();
     }
 }
@@ -178,9 +178,9 @@ impl<'k> DirentName<'k> {
 
 /// Where the name block starts: d_name, or for a casefolded dirent
 /// d_cf_name_block.d_names, past the lengths.
-pub(super) const D_NAME_OFFSET:  usize = offset_of!(c::Dirent, name_block);
+pub(super) const D_NAME_OFFSET:  usize = offset_of!(Dirent, name_block);
 pub(super) const D_NAMES_OFFSET: usize = D_NAME_OFFSET +
-    offset_of!(c::bch_dirent_cf_name_block, d_names);
+    offset_of!(bch_dirent_cf_name_block, d_names);
 
 /// A dirent's name block as an unvalidated value describes it, for validate
 /// and to_text - see the top of the file. The lengths are as stored, and
@@ -202,7 +202,7 @@ impl<'k> RawNames<'k> {
     /// check before calling the type's.
     pub fn new<V: ?Sized + BkeyVal>(k: BkeySC<'k, V>) -> Self {
         let k = k.as_read();
-        let d = k.arm::<c::Dirent>().expect("a dirent").v();
+        let d = k.arm::<Dirent>().expect("a dirent").v();
         let v = k.val_bytes();
         let casefold = d.d_casefold() != 0;
 
@@ -215,7 +215,7 @@ impl<'k> RawNames<'k> {
         let block_len = block.len().saturating_sub(padding);
 
         let (name_len, cf_len) = if casefold {
-            let cf = cast_plain::<c::bch_dirent_cf_name_block>(&v[D_NAME_OFFSET..]).expect("a dirent's name block");
+            let cf = cast_plain::<bch_dirent_cf_name_block>(&v[D_NAME_OFFSET..]).expect("a dirent's name block");
             (cf.d_name_len.get() as usize, cf.d_cf_name_len.get() as usize)
         } else {
             (block_len, 0)
@@ -254,7 +254,7 @@ impl<'k> RawNames<'k> {
 /// @k, a dirent, as text: as bch2_dirent_to_text(). @k may not have passed
 /// validate - a name that overruns the value is said to, not printed.
 pub fn to_text(out: &mut Printbuf, k: AnyKeySC<'_, Unvalidated>) {
-    let d = k.arm::<c::Dirent>().expect("a dirent").v();
+    let d = k.arm::<Dirent>().expect("a dirent").v();
     let raw = RawNames::new(k);
 
     let Some(name) = raw.name() else {
@@ -306,7 +306,7 @@ impl crate::btree::bkey::BkeyOps for Dirent {
 /// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
 pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let d = v.k.arm::<c::Dirent>().expect("a dirent").v();
+    let d = v.k.arm::<Dirent>().expect("a dirent").v();
     let raw = RawNames::new(v.k);
 
     bkey_fsck_err_on!(v, raw.name_len == 0, id::dirent_empty_name,
@@ -321,9 +321,9 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let name = names.name().as_bytes();
 
     bkey_fsck_err_on!(v, v.from.flags().contains(ValidateFlags::commit) &&
-                      name.len() > c::BCH_NAME_MAX as usize,
+                      name.len() > BCH_NAME_MAX as usize,
                       id::dirent_name_too_long,
-                      "dirent name too big ({} > {})", name.len(), c::BCH_NAME_MAX)?;
+                      "dirent name too big ({} > {})", name.len(), BCH_NAME_MAX)?;
 
     bkey_fsck_err_on!(v, name.contains(&0), id::dirent_name_embedded_nul,
                       "dirent has stray data after name's NUL")?;
@@ -334,16 +334,16 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, name.contains(&b'/'), id::dirent_name_has_slash,
                       "name with /")?;
 
-    bkey_fsck_err_on!(v, d.d_type() as u32 != c::DT_SUBVOL && d.d_inum() == v.k.k.p.inode,
+    bkey_fsck_err_on!(v, d.d_type() as u32 != DT_SUBVOL && d.d_inum() == v.k.k.p.inode,
                       id::dirent_to_itself,
                       "dirent points to own directory")?;
 
     if let DirentName::Casefolded { cf, .. } = names {
         let cf = cf.as_bytes();
-        bkey_fsck_err_on!(v, v.from.from() == c::BkeyValidateFrom::commit &&
-                          cf.len() > c::BCH_NAME_MAX as usize,
+        bkey_fsck_err_on!(v, v.from.from() == BkeyValidateFrom::commit &&
+                          cf.len() > BCH_NAME_MAX as usize,
                           id::dirent_cf_name_too_big,
-                          "dirent w/ cf name too big ({} > {})", cf.len(), c::BCH_NAME_MAX)?;
+                          "dirent w/ cf name too big ({} > {})", cf.len(), BCH_NAME_MAX)?;
 
         bkey_fsck_err_on!(v, cf.contains(&0), id::dirent_stray_data_after_cf_name,
                           "dirent has stray data after cf name's NUL")?;
@@ -380,7 +380,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
     }
 
     let v = bkey_methods::parse_val(k.k().type_, field, val)?;
-    let d = k.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
+    let d = k.as_mut().arm::<Dirent>().expect("a dirent").v_mut();
 
     match field {
         "d_type" => {
@@ -406,7 +406,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
 }
 
 fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), SetError<'p>> {
-    if val.is_empty() || val.len() > c::BCH_NAME_MAX as usize {
+    if val.is_empty() || val.len() > BCH_NAME_MAX as usize {
         return Err(SetError::BadName { val });
     }
 
@@ -416,8 +416,8 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
     k.k_mut().u64s = have_u64s.min(u8::MAX as usize) as u8;
 
     // Only cf_encoding is read, and None means not casefolded:
-    let hash_info = ::pin_init::zeroed::<c::bch_hash_info>();
-    let k = k.as_mut().arm::<c::Dirent>().expect("a dirent");
+    let hash_info = ::pin_init::zeroed::<bch_hash_info>();
+    let k = k.as_mut().arm::<Dirent>().expect("a dirent");
     super::dirent::init_name(fs, k, &hash_info, OsStr::from_bytes(val.as_bytes()), None)
         .map_err(|_| SetError::BadName { val })
 }

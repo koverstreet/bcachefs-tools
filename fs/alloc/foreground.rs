@@ -56,16 +56,22 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
+use crate::fs::{Dev, FsFlag};
 use crate::alloc::discard::fast_discard_bucket_add;
 use crate::alloc::disk_groups::Target;
 use crate::data::ec::stripe_new::{IoRef, StripeNew};
 use crate::btree::iter::TransAttempt;
-use crate::c;
-use crate::c::Errcode;
+use crate::alloc::buckets::bch_dev_usage;
+use crate::data::extents::bch_io_failures;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::data::write::WriteFlags;
+use crate::init::dev::{AtomicDevsMask, bch_devs_list, bch_devs_mask, DevsMask};
+use crate::sb::members_format::{BCH_SB_MEMBER_INVALID, BCH_SB_MEMBERS_MAX};
+use crate::util::time_stats::TimeStat;
+use crate::errcode::Errcode;
 use crate::data::copygc::can_make_progress;
 use crate::errcode::{ret_to_c, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, BCH_BKEY_PTRS_MAX};
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, SpinLockIrq};
 use crate::opts::data_type_str;
@@ -92,7 +98,7 @@ use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, BitfieldMembers};
 use nestify::nest;
 use crate::locking::{ByteLock, Locked, Lockdep};
-use crate::alloc::write_point::WritePointsHash;
+use crate::alloc::write_point::{WritePointsHash, write_point, WRITE_POINT_MAX};
 use crate::new_lock;
 use crate::published;
 use crate::util::refcount::RefSlot;
@@ -116,7 +122,7 @@ pub enum Watermark {
 }
 
 pub const BCH_WATERMARK_BITS: u32 = 3;
-pub const BCH_WATERMARK_MASK: u32 = !(!0 << c::BCH_WATERMARK_BITS);
+pub const BCH_WATERMARK_MASK: u32 = !(!0 << BCH_WATERMARK_BITS);
 
 pub const OPEN_BUCKETS_COUNT: u32 = 4096;
 
@@ -132,7 +138,7 @@ pub type open_bucket_idx_t = u16;
 /// open_bucket_idx_t.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, NonZeroWord)]
-pub struct OpenBucketIdx(core::num::NonZero<c::open_bucket_idx_t>);
+pub struct OpenBucketIdx(core::num::NonZero<open_bucket_idx_t>);
 
 // SAFETY: None is all zeroes, as an Option of a NonZero is
 unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
@@ -142,7 +148,7 @@ unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
 
 impl OpenBucketIdx {
     /// Slot @idx's index - None for 0, the sentinel's.
-    pub fn new(idx: c::open_bucket_idx_t) -> Option<Self> {
+    pub fn new(idx: open_bucket_idx_t) -> Option<Self> {
         core::num::NonZero::new(idx).map(OpenBucketIdx)
     }
 
@@ -221,7 +227,7 @@ nest! {
     /// place's: placed last, the fields before it ordered so that it fills
     /// what would be tail padding. Raw, not an OpenBucketIdx: slot 0, the
     /// sentinel, has one too.
-    #[placed(bch_fs_allocator.open_buckets[], index = idx: c::open_bucket_idx_t)]
+    #[placed(bch_fs_allocator.open_buckets[], index = idx: open_bucket_idx_t)]
     #[pin_data]
     #[repr(C)]
     #[derive(MaybeZeroable, Init)]
@@ -273,8 +279,8 @@ published! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct open_buckets {
-    pub nr: c::open_bucket_idx_t,
-    pub v: [Option<OpenBucketIdx>; c::BCH_BKEY_PTRS_MAX as usize],
+    pub nr: open_bucket_idx_t,
+    pub v: [Option<OpenBucketIdx>; BCH_BKEY_PTRS_MAX as usize],
 }
 
 #[placed(Fs.allocator)]
@@ -282,7 +288,7 @@ pub struct open_buckets {
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_allocator {
-    pub rw_devs: [c::AtomicDevsMask; c::DataType::NR as usize],
+    pub rw_devs: [AtomicDevsMask; DataType::NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
      * read without it */
     pub rw_devs_change_count: crate::util::projections::Volatile<c_ulong>,
@@ -300,23 +306,23 @@ pub struct bch_fs_allocator {
 
     pub open_buckets_events: EventCount,
     #[pin]
-    pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
-    pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],
+    pub open_buckets: [open_bucket; OPEN_BUCKETS_COUNT as usize],
+    pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; OPEN_BUCKETS_COUNT as usize],
 
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| c::write_point::init(DataType::user)))]
-    pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
+    #[init(::pin_init::pin_init_array_from_fn(|_| write_point::init(DataType::user)))]
+    pub write_points: [write_point; WRITE_POINT_MAX as usize],
     /* the write point hash's writers, and write_points_nr's */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
     pub write_points_hash_lock: Locked<Lockdep<ByteLock>, (), WritePointsHash>,
 
     #[pin]
-    #[init(c::write_point::init(DataType::btree))]
-    pub btree_write_point: c::write_point,
+    #[init(write_point::init(DataType::btree))]
+    pub btree_write_point: write_point,
     #[pin]
-    #[init(c::write_point::init(DataType::user))]
-    pub reconcile_write_point: c::write_point,
+    #[init(write_point::init(DataType::user))]
+    pub reconcile_write_point: write_point,
 }
 
 /* freelist_lock's: the open buckets not in use, and the partial list */
@@ -324,7 +330,7 @@ pub struct bch_fs_allocator {
 #[derive(MaybeZeroable)]
 pub struct OpenBucketsFree {
     pub open_buckets_freelist: Option<OpenBucketIdx>,
-    pub open_buckets_partial: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
+    pub open_buckets_partial: [Option<OpenBucketIdx>; OPEN_BUCKETS_COUNT as usize],
 }
 
 published! {
@@ -333,8 +339,8 @@ published! {
     /// taking the lock for.
     #[derive(MaybeZeroable)]
     pub struct OpenBucketsFreeNr {
-        pub open_buckets_nr_free: Volatile<c::open_bucket_idx_t>,
-        pub open_buckets_partial_nr: Volatile<c::open_bucket_idx_t>,
+        pub open_buckets_nr_free: Volatile<open_bucket_idx_t>,
+        pub open_buckets_partial_nr: Volatile<open_bucket_idx_t>,
     }
 }
 
@@ -343,7 +349,7 @@ published! {
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct dev_alloc_list {
     pub nr: c_uint,
-    pub data: [u8; c::BCH_SB_MEMBERS_MAX as usize],
+    pub data: [u8; BCH_SB_MEMBERS_MAX as usize],
 }
 
 nest! {
@@ -370,7 +376,7 @@ nest! {
 
 /// alloc_request's trace: room for 16 attempts in the request itself, as
 /// C's DARRAY_PREALLOCATED(, 16) had.
-pub(crate) type AllocTrace = InlineVec<c::alloc_trace_entry, 16>;
+pub(crate) type AllocTrace = InlineVec<alloc_trace_entry, 16>;
 
 /*
  * alloc_request.btree_bitmap: whether the bucket must be in a region the
@@ -428,8 +434,8 @@ impl Blocked {
             }
             _ => self.events(fs).wait_async_timeout(seen, timeout, at).await.is_err(),
         };
-        if fs.flags.get(c::FsFlag::emergency_ro) {
-            return fs.throw(c::Errcode::emergency_ro);
+        if fs.flags.get(FsFlag::emergency_ro) {
+            return fs.throw(Errcode::emergency_ro);
         }
         Ok(stuck)
     }
@@ -455,31 +461,31 @@ nest! {
             /* failure domains are a hard requirement, not a preference (erasure coding): */
             failure_domains_required:  bool,
         },
-        pub watermark: c::Watermark,
-        pub flags: c::WriteFlags,
+        pub watermark: Watermark,
+        pub flags: WriteFlags,
         pub data_type: DataType,
-        pub devs_have: Option<&'r c::bch_devs_list>,
-        pub wp: Option<&'f c::write_point>,
+        pub devs_have: Option<&'r bch_devs_list>,
+        pub wp: Option<&'f write_point>,
 
         /* These fields are used primarily by open_bucket_add_buckets */
-        pub ptrs: c::open_buckets,
+        pub ptrs: open_buckets,
         pub nr_effective: c_uint, /* sum of @ptrs durability */
-        pub devs_may_alloc: c::bch_devs_mask,
+        pub devs_may_alloc: bch_devs_mask,
 
         /*
          * Devices already holding a replica of what we're allocating for -
          * devs_have plus buckets allocated so far - for spreading replicas
          * across failure domains, see bch2_dev_domain_key():
          */
-        pub devs_chosen: c::bch_devs_mask,
+        pub devs_chosen: bch_devs_mask,
 
         /* devices this allocation should use first, see dev_alloc_required() */
-        pub devs_required: Option<&'f Volatile<c::DevsMask>>,
+        pub devs_required: Option<&'f Volatile<DevsMask>>,
 
         /* bch2_bucket_alloc_set_trans(): */
-        pub devs_sorted: c::dev_alloc_list,
-        pub domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
-        pub usage: c::bch_dev_usage,
+        pub devs_sorted: dev_alloc_list,
+        pub domain_keys: [u64; BCH_SB_MEMBERS_MAX as usize],
+        pub usage: bch_dev_usage,
 
         /*
          * Allocate the free bucket nearest this device position (a 32.32
@@ -493,7 +499,7 @@ nest! {
          */
         pub target_frac: u64,
 
-        pub btree_bitmap: c::AllocBtreeBitmap,
+        pub btree_bitmap: AllocBtreeBitmap,
 
         #>[derive(Clone, Copy, Default)]
         pub counters: pub struct alloc_request_counters {
@@ -506,14 +512,14 @@ nest! {
             pub skipped_mi_btree_bitmap: u64,
         },
 
-        pub scratch_ptrs: c::open_buckets,
+        pub scratch_ptrs: open_buckets,
 
         /* Allocation attempt trace — dumped on allocator stuck */
         pub(crate) trace: AllocTrace,
     }
 }
 
-const _: () = assert!(c::OPEN_BUCKETS_COUNT.is_power_of_two());
+const _: () = assert!(OPEN_BUCKETS_COUNT.is_power_of_two());
 
 // ── Open buckets ─────────────────────────────────────────────────────────
 
@@ -521,19 +527,19 @@ const _: () = assert!(c::OPEN_BUCKETS_COUNT.is_power_of_two());
 /// Every field written meanwhile - by C, or another's Rust - is an atomic, a
 /// Volatile, or its lock; what's read when is open_bucket's (alloc/types.rs).
 #[repr(transparent)]
-pub struct OpenBucketRef(c::open_bucket);
+pub struct OpenBucketRef(open_bucket);
 
 impl OpenBucketRef {
     /// # Safety
     /// @ob is open, and held open for 'a.
-    pub unsafe fn from_c<'a>(ob: *const c::open_bucket) -> &'a Self {
+    pub unsafe fn from_c<'a>(ob: *const open_bucket) -> &'a Self {
         // SAFETY: a transparent open_bucket; the caller's
         unsafe { &*ob.cast() }
     }
 
     /// # Safety
     /// Open bucket @idx is open, and held open for 'a.
-    pub unsafe fn from_idx<'a>(fs: &'a Fs, idx: c::OpenBucketIdx) -> &'a Self {
+    pub unsafe fn from_idx<'a>(fs: &'a Fs, idx: OpenBucketIdx) -> &'a Self {
         // SAFETY: the caller's
         unsafe { Self::from_c(&fs.allocator.open_buckets[idx.get()]) }
     }
@@ -551,11 +557,11 @@ impl OpenBucketRef {
     }
 
     /// Where its free space starts.
-    pub fn ptr(&self) -> c::bch_extent_ptr {
+    pub fn ptr(&self) -> bch_extent_ptr {
         let id = self.id();
         let ca = self.ca();
 
-        c::bch_extent_ptr::new()
+        bch_extent_ptr::new()
             .with_generation(id.generation())
             .with_dev(id.dev())
             .with_offset(ca.bucket_to_sector(id.bucket()) + u64::from(ca.mi.get().bucket_size) -
@@ -564,9 +570,9 @@ impl OpenBucketRef {
 }
 
 impl Deref for OpenBucketRef {
-    type Target = c::open_bucket;
+    type Target = open_bucket;
 
-    fn deref(&self) -> &c::open_bucket {
+    fn deref(&self) -> &open_bucket {
         &self.0
     }
 }
@@ -598,12 +604,12 @@ pub type OpenBucket = RefGuard<OpenBucketRef>;
 impl RefGuard<OpenBucketRef> {
     /// # Safety
     /// The caller holds a pin on open bucket @idx, and hands it over.
-    pub unsafe fn from_idx(fs: &Fs, idx: c::OpenBucketIdx) -> Self {
+    pub unsafe fn from_idx(fs: &Fs, idx: OpenBucketIdx) -> Self {
         // SAFETY: the caller's
         unsafe { RefGuard::adopt(OpenBucketRef::from_idx(fs, idx)) }
     }
 
-    pub fn into_idx(self) -> c::OpenBucketIdx {
+    pub fn into_idx(self) -> OpenBucketIdx {
         let idx = self.idx();
         self.leak();
         idx
@@ -626,7 +632,7 @@ impl RefGuard<OpenBucketRef> {
 /// past its last pin, and closed when it's dropped - once the stripe's done
 /// with it.
 pub struct EcOpenBucket {
-    ob: NonNull<c::open_bucket>,
+    ob: NonNull<open_bucket>,
 }
 
 // SAFETY: as OpenBucket's: closing it takes the allocator's locks, and what's
@@ -645,7 +651,7 @@ impl Deref for EcOpenBucket {
 
 impl Drop for EcOpenBucket {
     fn drop(&mut self) {
-        let ob: &c::open_bucket = self;
+        let ob: &open_bucket = self;
         assert_eq!(ob.pin.load(SeqCst), 0,
                    "closing open bucket {}, claimed by a writer still holding its pin", self.idx().get());
         // open only for its stripe, which this ends
@@ -654,7 +660,7 @@ impl Drop for EcOpenBucket {
     }
 }
 
-impl c::open_buckets {
+impl open_buckets {
     /// Its buckets, borrowed: the list's pins keep them open while it is.
     pub fn iter<'a>(&'a self, fs: &'a Fs) -> impl Iterator<Item = RefBorrow<'a, OpenBucketRef>> + 'a {
         self.v[..usize::from(self.nr)].iter().map(move |&i| {
@@ -695,7 +701,7 @@ impl c::open_buckets {
 /// open_buckets::drain()'s: pins the list no longer has.
 pub struct OpenBucketsDrain<'f, 'l> {
     fs:   &'f Fs,
-    idxs: core::slice::Iter<'l, Option<c::OpenBucketIdx>>,
+    idxs: core::slice::Iter<'l, Option<OpenBucketIdx>>,
 }
 
 impl<'f> Iterator for OpenBucketsDrain<'f, '_> {
@@ -715,17 +721,17 @@ impl Drop for OpenBucketsDrain<'_, '_> {
 }
 
 /// freelist_lock, held.
-pub(crate) type FreelistGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, c::OpenBucketsFree, c::OpenBucketsFreeNr>;
+pub(crate) type FreelistGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, OpenBucketsFree, OpenBucketsFreeNr>;
 
 /// An open bucket's lock, held.
-pub(crate) type ObGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, (), c::OpenBucketIdentity>;
+pub(crate) type ObGuard<'a> = ExclusiveGuard<'a, SpinLockIrq, (), OpenBucketIdentity>;
 
-impl c::open_bucket {
+impl open_bucket {
     pub const ON_PARTIAL_LIST: u8  = 1 << 0;
     pub const DO_DISCARDS_FAST: u8 = 1 << 1;
 
     /// Which bucket it is, and whether it's open: read whole.
-    pub fn id(&self) -> c::OpenBucketId {
+    pub fn id(&self) -> OpenBucketId {
         self.lock.id.get()
     }
 
@@ -740,8 +746,8 @@ impl c::open_bucket {
     }
 
     /// Its index, which the hash and the lists link it by.
-    pub fn idx(&self) -> c::OpenBucketIdx {
-        c::OpenBucketIdx::new(self.idx.get()).expect("an open bucket, not the sentinel")
+    pub fn idx(&self) -> OpenBucketIdx {
+        OpenBucketIdx::new(self.idx.get()).expect("an open bucket, not the sentinel")
     }
 
     /// The bucket, if it's open: valid, under its lock, which the close
@@ -754,13 +760,13 @@ impl c::open_bucket {
 
 // ── The hash ─────────────────────────────────────────────────────────────
 
-impl c::bch_fs_allocator {
-    fn hash_slot(&self, dev: u32, bucket: u64) -> &Volatile<Option<c::OpenBucketIdx>> {
+impl bch_fs_allocator {
+    fn hash_slot(&self, dev: u32, bucket: u64) -> &Volatile<Option<OpenBucketIdx>> {
         &self.open_buckets_hash[open_bucket_hash(dev, bucket)]
     }
 
     /// @ob into the hash, at its chain's head.
-    fn hash_add(&self, _g: &FreelistGuard<'_>, ob: &c::open_bucket) {
+    fn hash_add(&self, _g: &FreelistGuard<'_>, ob: &open_bucket) {
         let id = ob.id();
         let slot = self.hash_slot(id.dev().into(), id.bucket());
         ob.hash.set(slot.get());
@@ -768,7 +774,7 @@ impl c::bch_fs_allocator {
     }
 
     /// @ob out of the hash: its chain walked to the link to it.
-    fn hash_remove(&self, _g: &FreelistGuard<'_>, ob: &c::open_bucket) {
+    fn hash_remove(&self, _g: &FreelistGuard<'_>, ob: &open_bucket) {
         let me = Some(ob.idx());
         let id = ob.id();
         let mut slot = self.hash_slot(id.dev().into(), id.bucket());
@@ -784,7 +790,7 @@ impl Fs {
     /// The open bucket @dev's @bucket is, if it's open - found racing the
     /// allocator, so to be relied on only under freelist_lock, which opening
     /// and closing hold.
-    pub fn open_bucket(&self, dev: u32, bucket: u64) -> Option<&c::open_bucket> {
+    pub fn open_bucket(&self, dev: u32, bucket: u64) -> Option<&open_bucket> {
         let a = &self.allocator;
         let mut i = a.hash_slot(dev, bucket).get();
         while let Some(idx) = i {
@@ -813,7 +819,7 @@ impl Fs {
         if u32::from(id.dev()) != dev || id.bucket() != bucket {
             return false;
         }
-        ob.set_flag(c::open_bucket::DO_DISCARDS_FAST, true);
+        ob.set_flag(open_bucket::DO_DISCARDS_FAST, true);
         true
     }
 
@@ -831,18 +837,18 @@ impl Fs {
 
 /// The open buckets kept back from allocations at @watermark: more, the lower
 /// it is, so what frees open buckets can still get them.
-pub(crate) fn open_buckets_reserved(watermark: c::Watermark) -> u32 {
-    use c::Watermark as w;
+pub(crate) fn open_buckets_reserved(watermark: Watermark) -> u32 {
+    use self::Watermark as w;
     match watermark {
         w::interior_updates        => 0,
-        w::reclaim                 => c::OPEN_BUCKETS_COUNT / 6,
-        w::btree | w::btree_copygc => c::OPEN_BUCKETS_COUNT / 4,
-        w::copygc                  => c::OPEN_BUCKETS_COUNT / 3,
-        _                          => c::OPEN_BUCKETS_COUNT / 2,
+        w::reclaim                 => OPEN_BUCKETS_COUNT / 6,
+        w::btree | w::btree_copygc => OPEN_BUCKETS_COUNT / 4,
+        w::copygc                  => OPEN_BUCKETS_COUNT / 3,
+        _                          => OPEN_BUCKETS_COUNT / 2,
     }
 }
 
-impl c::bch_fs_allocator {
+impl bch_fs_allocator {
     /// The partial list's buckets, its pins held while @g is.
     pub(crate) fn partial<'a>(&'a self, g: &'a FreelistGuard<'_>)
         -> impl DoubleEndedIterator<Item = &'a OpenBucketRef> + ExactSizeIterator + 'a
@@ -860,24 +866,24 @@ impl Fs {
     /// isn't starved: one short of the top, to leave interior updates a way.
     pub(crate) fn open_buckets_starved_watermark(&self) -> u32 {
         let nr_free = u32::from(self.allocator.freelist_lock.open_buckets_nr_free.get());
-        (0..c::Watermark::NR - 1).find(|&w| nr_free >= open_buckets_reserved(c::Watermark::from_bits(w)))
-            .unwrap_or(c::Watermark::NR - 1)
+        (0..Watermark::NR - 1).find(|&w| nr_free >= open_buckets_reserved(Watermark::from_bits(w)))
+            .unwrap_or(Watermark::NR - 1)
     }
 
     /// Bucket @bucket of @ca, of generation @generation, opened: None if it's
     /// open already. Err with the pool down to @req's watermark's reserve -
     /// blocked, on open_buckets_events.
-    pub(crate) fn try_alloc_bucket_locked(&self, ca: &Dev, req: &mut c::alloc_request, bucket: u64,
+    pub(crate) fn try_alloc_bucket_locked(&self, ca: &Dev, req: &mut alloc_request, bucket: u64,
                                           generation: u8) -> Result<Option<OpenBucket>, BchError>
     {
         let a = &self.allocator;
-        let times = |t: c::TimeStat| self.times.get(t as usize);
+        let times = |t: TimeStat| self.times.get(t as usize);
         let dev = ca.dev_idx;
 
         let mut g = a.freelist_lock.lock();
 
         if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
-            times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(true);
+            times(TimeStat::blocked_allocate_open_bucket).track_event_change(true);
             return Err(self.err(match req.block_on(self, Blocked::OpenBuckets) {
                 true  => Errcode::open_bucket_alloc_blocked,
                 false => Errcode::open_buckets_empty,
@@ -901,7 +907,7 @@ impl Fs {
             let mut l = ob.lock.lock();
             ob.sectors_free.set(ca.mi.get().bucket_size.into());
             ob.free_uncounted.set(false);
-            l.published().id.set(c::OpenBucketId::new()
+            l.published().id.set(OpenBucketId::new()
                 .with_valid(true)
                 .with_dev(dev)
                 .with_generation(generation)
@@ -911,8 +917,8 @@ impl Fs {
         ca.nr_open_buckets.set(ca.nr_open_buckets.get().wrapping_add(1));
         a.hash_add(&g, ob);
 
-        times(c::TimeStat::blocked_allocate_open_bucket).track_event_change(false);
-        times(c::TimeStat::blocked_allocate).track_event_change(false);
+        times(TimeStat::blocked_allocate_open_bucket).track_event_change(false);
+        times(TimeStat::blocked_allocate).track_event_change(false);
         // SAFETY: the pin just taken, ours
         Ok(Some(unsafe { OpenBucket::from_idx(self, ob.idx()) }))
     }
@@ -925,7 +931,7 @@ impl Fs {
             return;
         }
 
-        let o: &c::open_bucket = ob;
+        let o: &open_bucket = ob;
         {
             let mut l = o.lock.lock();
             l.published().id.set(o.id().with_valid(false));
@@ -933,7 +939,7 @@ impl Fs {
         }
 
         let ca = ob.ca();
-        if o.set_flag(c::open_bucket::DO_DISCARDS_FAST, false) {
+        if o.set_flag(open_bucket::DO_DISCARDS_FAST, false) {
             fast_discard_bucket_add(ca, ob.id().bucket());
         }
 
@@ -972,7 +978,7 @@ impl Fs {
 
             let ca = ob.ca();
             ca.nr_partial_buckets.set(ca.nr_partial_buckets.get() + 1);
-            ob.set_flag(c::open_bucket::ON_PARTIAL_LIST, true);
+            ob.set_flag(open_bucket::ON_PARTIAL_LIST, true);
             free.open_buckets_partial[n] = Some(ob.into_idx());
             *nr.open_buckets_partial_nr.place() += 1;
         }
@@ -993,7 +999,7 @@ impl Fs {
 
         // SAFETY: the partial list's pin, which it no longer has
         let ob = unsafe { OpenBucket::from_idx(self, idx) };
-        ob.set_flag(c::open_bucket::ON_PARTIAL_LIST, false);
+        ob.set_flag(open_bucket::ON_PARTIAL_LIST, false);
         let ca = ob.ca();
         ca.nr_partial_buckets.set(ca.nr_partial_buckets.get() - 1);
         ob
@@ -1070,44 +1076,44 @@ impl Fs {
 
 /// An allocation request, in transaction memory - an attempt's - its trace
 /// emptied when it's dropped.
-pub struct AllocRequest<'a, 'f>(&'a mut c::alloc_request<'a, 'f>);
+pub struct AllocRequest<'a, 'f>(&'a mut alloc_request<'a, 'f>);
 
 impl<'a, 't> TransAttempt<'a, 't> {
     /// A request for @nr_replicas copies - or erasure coded, if
     /// @erasure_code and @ec_replicas is 2 or more - in the attempt's memory,
     /// its trace emptied when it's dropped.
     #[allow(clippy::too_many_arguments)]
-    pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a c::bch_devs_list>,
-                         nr_replicas: u32, ec_replicas: u32, watermark: c::Watermark,
-                         flags: c::WriteFlags, wait: AllocWait)
+    pub fn alloc_request(&self, target: u32, erasure_code: bool, devs_have: Option<&'a bch_devs_list>,
+                         nr_replicas: u32, ec_replicas: u32, watermark: Watermark,
+                         flags: WriteFlags, wait: AllocWait)
         -> Result<AllocRequest<'a, 't>, BchError>
     {
-        let req = c::alloc_request::new(self.fs(), target, erasure_code, devs_have, nr_replicas, ec_replicas,
-                                        watermark, flags, wait);
+        let req = alloc_request::new(self.fs(), target, erasure_code, devs_have, nr_replicas, ec_replicas,
+                                     watermark, flags, wait);
         Ok(AllocRequest(self.alloc_init(req)?))
     }
 
     /// After @req's allocation failed with @err: asleep until there's reason
     /// to retry - if it blocked - then Ok, for the caller to retry, unless
     /// the filesystem's gone emergency read-only, which won't allocate again.
-    pub fn wait_on_allocator(&self, req: &mut c::alloc_request, err: BchError) -> Result<(), BchError> {
+    pub fn wait_on_allocator(&self, req: &mut alloc_request, err: BchError) -> Result<(), BchError> {
         if let AllocWait::Sync(Some((on, seen))) = req.wait {
             req.wait = AllocWait::Sync(None);
             self.sleep_on_allocator(req, err, on, seen);
         }
         let fs = self.fs();
-        if fs.flags.get(c::FsFlag::emergency_ro) {
-            return fs.throw(crate::c::Errcode::emergency_ro);
+        if fs.flags.get(FsFlag::emergency_ro) {
+            return fs.throw(Errcode::emergency_ro);
         }
         Ok(())
     }
 }
 
-impl<'r, 'f> c::alloc_request<'r, 'f> {
+impl<'r, 'f> alloc_request<'r, 'f> {
     /// alloc_request_get()'s: zeroed, but for what it's given, and its trace.
     #[allow(clippy::too_many_arguments)]
-    fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r c::bch_devs_list>, nr_replicas: u32,
-           ec_replicas: u32, watermark: c::Watermark, flags: c::WriteFlags,
+    fn new(fs: &Fs, target: u32, erasure_code: bool, devs_have: Option<&'r bch_devs_list>, nr_replicas: u32,
+           ec_replicas: u32, watermark: Watermark, flags: WriteFlags,
            wait: AllocWait)
         -> impl ::pin_init::Init<Self, Infallible>
     {
@@ -1121,7 +1127,7 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
                 (&raw mut (*slot).wake_all_counter_snapshot).write(fs.allocator.wake_all_counter.load(Relaxed) as u32);
                 (&raw mut (*slot).nr_replicas).write(nr_replicas as u8);
                 (&raw mut (*slot).ec_replicas).write(ec_replicas as u8);
-                (&raw mut (*slot).bits).write(c::alloc_request_bits::new().with_ec(erasure_code && ec_replicas >= 2));
+                (&raw mut (*slot).bits).write(alloc_request_bits::new().with_ec(erasure_code && ec_replicas >= 2));
                 (&raw mut (*slot).target).write(target);
                 (&raw mut (*slot).watermark).write(watermark);
                 (&raw mut (*slot).flags).write(flags);
@@ -1145,9 +1151,9 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
     pub fn trace_add(&mut self, dev: u8, err: Option<BchError>, wake_counter_snapshot: u32, free_buckets: u64,
                      copygc_can_make_progress: bool) {
         let b = self.bits;
-        let e = c::alloc_trace_entry {
+        let e = alloc_trace_entry {
             dev,
-            bits: c::alloc_trace_entry_bits::new()
+            bits: alloc_trace_entry_bits::new()
                 .with_new_stripe_alloc(b.new_stripe_alloc())
                 .with_will_retry_all_devices(b.will_retry_all_devices())
                 .with_will_retry_target_devices(b.will_retry_target_devices())
@@ -1213,15 +1219,15 @@ impl<'r, 'f> c::alloc_request<'r, 'f> {
 }
 
 impl<'a, 'f> core::ops::Deref for AllocRequest<'a, 'f> {
-    type Target = c::alloc_request<'a, 'f>;
+    type Target = alloc_request<'a, 'f>;
 
-    fn deref(&self) -> &c::alloc_request<'a, 'f> {
+    fn deref(&self) -> &alloc_request<'a, 'f> {
         self.0
     }
 }
 
 impl<'a, 'f> core::ops::DerefMut for AllocRequest<'a, 'f> {
-    fn deref_mut(&mut self) -> &mut c::alloc_request<'a, 'f> {
+    fn deref_mut(&mut self) -> &mut alloc_request<'a, 'f> {
         self.0
     }
 }
@@ -1240,7 +1246,7 @@ impl Fs {
     /// it failed on gone - or woken with buckets now free, or nothing copygc
     /// can do to free more. Woken with neither, copygc's kicked, and it
     /// waits again.
-    fn alloc_wait_advanced(&self, req: &mut c::alloc_request) -> bool {
+    fn alloc_wait_advanced(&self, req: &mut alloc_request) -> bool {
         if self.allocator.wake_all_counter.load(Relaxed) as u32 != req.wake_all_counter_snapshot ||
            req.bits.trace_alloc_failed() {
             return true;
@@ -1250,7 +1256,7 @@ impl Fs {
         let rcu = read_lock();
         let mut found = false;
 
-        for e in req.trace.iter().filter(|e| e.err != 0 && u32::from(e.dev) != c::BCH_SB_MEMBER_INVALID) {
+        for e in req.trace.iter().filter(|e| e.err != 0 && u32::from(e.dev) != BCH_SB_MEMBER_INVALID) {
             found = true;
 
             let Some(ca) = self.dev_rcu(e.dev.into(), &rcu) else { return true };
@@ -1268,8 +1274,8 @@ impl Fs {
 
     /// Whether @req could allocate from @ca: a device in its target, if it may
     /// only use those, read-write, online, and taking its data type.
-    fn dev_may_alloc(&self, ca: &Dev, req: &c::alloc_request) -> bool {
-        if req.flags.contains(c::WriteFlags::only_specified_devs) && req.target != 0 &&
+    fn dev_may_alloc(&self, ca: &Dev, req: &alloc_request) -> bool {
+        if req.flags.contains(WriteFlags::only_specified_devs) && req.target != 0 &&
            !self.dev_in_target(ca.dev_idx.into(), Target::decode(req.target), &read_lock()) {
             return false;
         }
@@ -1277,7 +1283,7 @@ impl Fs {
     }
 
     #[cold]
-    fn alloc_request_to_text(&self, out: &mut Printbuf, req: &c::alloc_request) {
+    fn alloc_request_to_text(&self, out: &mut Printbuf, req: &alloc_request) {
         let b = req.bits;
         write!(out, "nr_replicas:\t{}\n", req.nr_replicas);
         write!(out, "target:\t");
@@ -1335,7 +1341,7 @@ impl Fs {
     /// journal, if it's throttled.
     #[cold]
     #[inline(never)]
-    fn print_allocator_stuck(&self, req: &c::alloc_request, err: BchError) {
+    fn print_allocator_stuck(&self, req: &alloc_request, err: BchError) {
         let mut buf = Printbuf::new();
         let out = &mut buf;
 
@@ -1370,7 +1376,7 @@ impl Fs {
                     let sectors = u64::from(ca.mi.get().bucket_size);
                     need_discard += sectors * u.buckets[DataType::need_discard];
                     free         += sectors * u.buckets[DataType::free];
-                    reserve      += sectors * ca.buckets_reserved(c::Watermark::stripe);
+                    reserve      += sectors * ca.buckets_reserved(Watermark::stripe);
                 }
             }
 
@@ -1388,7 +1394,7 @@ impl Fs {
             self.fs_open_buckets_to_text(out);
         }
 
-        if self.journal.watermark() != c::Watermark::stripe {
+        if self.journal.watermark() != Watermark::stripe {
             write!(out, "Journal debug:\n");
             self.journal.to_text(&mut out.indent(2));
         }
@@ -1403,7 +1409,7 @@ impl TransAttempt<'_, '_> {
     /// or for any wait but the freelist's, woken at all. Past
     /// allocator_stuck_timeout it's counted, and dumped - once in two minutes,
     /// by whichever waiter claims the dump. Its locks dropped first.
-    fn sleep_on_allocator(&self, req: &mut c::alloc_request, err: BchError, on: Blocked, seen: u32) {
+    fn sleep_on_allocator(&self, req: &mut alloc_request, err: BchError, on: Blocked, seen: u32) {
         let fs = self.fs();
         let ev = on.events(fs);
 
@@ -1411,8 +1417,8 @@ impl TransAttempt<'_, '_> {
         // for it, and it waits again - unless going emergency read-only, when
         // a draining device may never have buckets free, and waiting could
         // block read_only_work forever
-        let retry = |req: &mut c::alloc_request| match on {
-            Blocked::Freelist => (fs.flags.get(c::FsFlag::emergency_ro) || fs.alloc_wait_advanced(req)).then_some(()),
+        let retry = |req: &mut alloc_request| match on {
+            Blocked::Freelist => (fs.flags.get(FsFlag::emergency_ro) || fs.alloc_wait_advanced(req)).then_some(()),
             _                 => (ev.snapshot() != seen).then_some(()),
         };
 
@@ -1433,7 +1439,7 @@ impl TransAttempt<'_, '_> {
 impl Fs {
     /// @req's allocation, blocked with @err for allocator_stuck_timeout:
     /// counted, and dumped - once in two minutes.
-    pub fn allocator_stuck(&self, req: &c::alloc_request, err: BchError) {
+    pub fn allocator_stuck(&self, req: &alloc_request, err: BchError) {
         // every one, though the dump below is one in two minutes
         self.event_inc_trace(events::allocator_stuck, |out| {
             write!(out, "err {err}\n");
@@ -1469,7 +1475,7 @@ impl Fs {
         }
 
         let a = &self.allocator;
-        let mut nr = [0u32; c::DataType::NR as usize];
+        let mut nr = [0u32; DataType::NR as usize];
         for ob in a.open_buckets.iter().filter(|ob| ob.pin.load(Relaxed) != 0) {
             if let Some(n) = nr.get_mut(usize::from(ob.data_type.get())) {
                 *n += 1;
@@ -1477,8 +1483,8 @@ impl Fs {
         }
 
         write!(out, "open buckets allocated\t{}\n",
-               c::OPEN_BUCKETS_COUNT - u32::from(a.freelist_lock.open_buckets_nr_free.get()));
-        write!(out, "open buckets total\t{}\n", c::OPEN_BUCKETS_COUNT);
+               OPEN_BUCKETS_COUNT - u32::from(a.freelist_lock.open_buckets_nr_free.get()));
+        write!(out, "open buckets total\t{}\n", OPEN_BUCKETS_COUNT);
         for (i, n) in nr.into_iter().enumerate().filter(|&(_, n)| n != 0) {
             write!(out, "open_buckets {}:\t{n}\n", data_type_str(DataType(i as u32)));
         }
@@ -1532,7 +1538,7 @@ impl Dev {
         writeln!(out);
 
         write!(out, "reserves:\n");
-        for w in (0..c::Watermark::NR).map(c::Watermark::from_bits) {
+        for w in (0..Watermark::NR).map(Watermark::from_bits) {
             write!(out, "{w}\t{}\r\n", self.buckets_reserved(w));
         }
         writeln!(out);
@@ -1571,7 +1577,7 @@ impl ToText for OpenBucketRef {
         if let Some(s) = self.stripe() {
             write!(out, " ec idx {}", s.idx.load(Relaxed));
         }
-        if self.flag(c::open_bucket::ON_PARTIAL_LIST) {
+        if self.flag(open_bucket::ON_PARTIAL_LIST) {
             write!(out, " partial");
         }
         writeln!(out);
@@ -1597,10 +1603,10 @@ pub fn allocator_foreground_init(fs: &Fs) {
     fs.write_points_init();
 }
 
-impl c::open_buckets {
+impl open_buckets {
     /// The stripes its buckets on each device of @failed are blocks of,
     /// cancelled with its error: the writes to it failed.
-    pub fn write_errors(&self, fs: &Fs, failed: &c::bch_io_failures) {
+    pub fn write_errors(&self, fs: &Fs, failed: &bch_io_failures) {
         for f in failed.devs() {
             let err = if f.errcode != 0 {
                 BchError::from_raw(f.errcode.into())
@@ -1615,5 +1621,5 @@ impl c::open_buckets {
 
 /// @dev's @bucket's slot in the open buckets' hash.
 fn open_bucket_hash(dev: c_uint, bucket: u64) -> usize {
-    hash_64(Fold::of(&(dev, bucket)), c::OPEN_BUCKETS_COUNT.ilog2()) as usize
+    hash_64(Fold::of(&(dev, bucket)), OPEN_BUCKETS_COUNT.ilog2()) as usize
 }

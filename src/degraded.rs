@@ -27,9 +27,9 @@ use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, Wa
 
 use anyhow::Result;
 use bcachefs_kernel::errcode::{BchError, Errcode};
-use bcachefs_kernel::c;
-use c::bch_opts;
-use c::bch_sb_handle;
+use bcachefs_kernel::format::DegradedAction;
+use bcachefs_kernel::opts::{bch_opts, OptId};
+use bcachefs_kernel::init::dev::bch_sb_handle;
 use log::{info, warn};
 use uuid::Uuid;
 
@@ -43,15 +43,15 @@ fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
 
 /// What the filesystem says to do about a missing device, unless the caller
 /// said otherwise on the command line.
-fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> c::DegradedAction {
-    if cli_opts.defined(c::OptId::degraded) {
+fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> DegradedAction {
+    if cli_opts.defined(OptId::degraded) {
         return cli_opts.degraded();
     }
 
     sbs.first()
         .map(|(_, sb)| sb_opts(sb))
         .map(|o| o.degraded_or_default())
-        .unwrap_or(c::DegradedAction::ask)
+        .unwrap_or(DegradedAction::ask)
 }
 
 /// Which refusal we are answering, and so what is at stake.
@@ -169,7 +169,7 @@ impl Ask {
         let present  = device_scan::present_devices(sbs).len();
 
         if present >= expected
-            || degraded_action(sbs, cli_opts) != c::DegradedAction::ask
+            || degraded_action(sbs, cli_opts) != DegradedAction::ask
         {
             return None;
         }
@@ -268,6 +268,7 @@ pub fn append_opt(fs_opts: Option<String>, opt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bcachefs_kernel::c;
     use bcachefs_kernel::util::Printbuf;
 
     fn q(prompt: &str) -> Question<'_, Answer> {
@@ -372,7 +373,7 @@ mod tests {
             // errcode parent-chain walk BUG_ON()s rather than bounds-checking,
             // so what's being asserted here is as much "doesn't abort" as
             // "doesn't match".
-            BchError::from_raw(c::Errcode::MAX.0 as i32 + 1),
+            BchError::from_raw(Errcode::MAX.0 as i32 + 1),
         ] {
             assert_eq!(Situation::of(&e), None, "{e:?}");
         }

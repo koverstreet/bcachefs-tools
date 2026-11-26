@@ -1,6 +1,7 @@
 
 use anyhow::Result;
-use bcachefs_kernel::c;
+use bcachefs_kernel::format::bch_sb_field_ext;
+use bcachefs_kernel::opts::bch_opts;
 use bcachefs_kernel::init::passes;
 use clap::Parser;
 
@@ -44,7 +45,7 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
 
     let devs: Vec<std::path::PathBuf> = cli.devices.iter().map(|d| d.as_str().into()).collect();
 
-    let mut fs_opts = c::bch_opts::default();
+    let mut fs_opts = bch_opts::default();
     fs_opts.set_nostart(true);
     fs_opts.set_will_not_start(true);
 
@@ -53,9 +54,9 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
     let scheduled = {
         let mut sb = fs.sb_lock();
 
-        let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+        let ext_u64s = (std::mem::size_of::<bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
         let mut disk_sb = fs.sb_resize(&mut sb);
-        let ext = disk_sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s)
+        let ext = disk_sb.field_get_minsize::<bch_sb_field_ext>(ext_u64s)
             .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 
         let r = &mut ext.recovery_passes_required[0];

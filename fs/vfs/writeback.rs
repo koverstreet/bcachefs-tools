@@ -9,7 +9,13 @@
 
 use crate::btree::bkey::pos;
 use crate::c;
-use crate::data::write::{write, WriteBio, WriteFor};
+use crate::alloc::foreground::{OPEN_BUCKETS_COUNT, Watermark};
+use crate::alloc::write_point::write_point_specifier;
+use crate::opts::bch_inode_opts;
+use crate::util::time_stats::TimeStat;
+use crate::vfs::inode::InodeInfoFlag;
+use crate::vfs::pagecache::bch_folio_sector;
+use crate::data::write::{write, WriteBio, WriteFor, bch_write_op};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::posix::inode_opts;
@@ -27,8 +33,8 @@ use crate::os::ops::from_raw;
 use crate::os::folio::Wbc;
 use super::folio::{Folio, FolioGuard, FolioSpan, Mapping};
 use crate::vfs::folio::Writeback;
-use c::FolioSectorState as SectorState;
-use c::WriteFlags as w;
+use crate::vfs::pagecache::FolioSectorState as SectorState;
+use crate::data::write::WriteFlags as w;
 use core::ffi::c_int;
 use core::pin::Pin;
 use cstruct_macros::in_place;
@@ -38,7 +44,7 @@ use pin_init::{pin_data, pin_init};
 struct Io {
     mapping: Mapping,
     #[pin]
-    op:      c::bch_write_op,
+    op:      bch_write_op,
     #[pin]
     wbio:    Bio<Holds<Writeback>>,
 }
@@ -63,7 +69,7 @@ pub fn pools_exit(q: &Quiesced<'_>) {
 
 struct WritepageState {
     io:   Option<IoSlot>,
-    opts: c::bch_inode_opts,
+    opts: bch_inode_opts,
 }
 
 /// Its io, not started: ours to fill.
@@ -104,7 +110,7 @@ fn writepage_io_done(io: &mut Io) {
     let inode = mapping.inode();
 
     if io.op.error != 0 {
-        inode.ei_flags.set(c::InodeInfoFlag::EI_INODE_ERROR, true);
+        inode.ei_flags.set(InodeInfoFlag::EI_INODE_ERROR, true);
 
         folios_clear_replicas(io, |folio| {
             folio.mapping().expect("a folio in writeback with no mapping").set_error(-(c::EIO as c_int))
@@ -166,7 +172,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mappi
                                             c::req_op_REQ_OP_WRITE, |b| {
         pin_init!(Io {
             mapping,
-            op   <- c::bch_write_op::init(fs, opts),
+            op   <- bch_write_op::init(fs, opts),
             wbio <- b.init::<BchError, _>(),
         }? BchError)
     }).expect("a writepage io's box: its pool waits for an element, and an op's init can't fail");
@@ -177,7 +183,7 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mappi
     op.target          = opts.foreground_target;
     op.bits.set_nr_replicas(nr_replicas as u8);
     op.res.nr_replicas.set(res_nr_replicas);
-    op.write_point     = c::write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
+    op.write_point     = write_point_specifier::hashed(inode.ei_last_dirtied.get() as usize);
     op.subvol          = inode.inum().subvol as u32;
     op.pos             = pos(inode.inum().inum, sector);
     io.wbio.set_sector(sector);
@@ -187,15 +193,15 @@ fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mappi
 }
 
 fn throttle_writes(fs: &Fs) {
-    let reserved = c::OPEN_BUCKETS_COUNT -
-        (c::OPEN_BUCKETS_COUNT - crate::alloc::foreground::open_buckets_reserved(c::Watermark::normal)) / 2;
+    let reserved = OPEN_BUCKETS_COUNT -
+        (OPEN_BUCKETS_COUNT - crate::alloc::foreground::open_buckets_reserved(Watermark::normal)) / 2;
 
     let mut start = 0;
     loop {
         let open_buckets_seen = fs.allocator.open_buckets_events.snapshot();
         let journal_seen = fs.journal.async_wait.snapshot();
         let open_buckets_low = unlikely(u32::from(fs.allocator.freelist_lock.open_buckets_nr_free.get()) <= reserved);
-        let journal_low = (c::Watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok();
+        let journal_low = (Watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok();
         if !open_buckets_low && !journal_low {
             break;
         }
@@ -212,11 +218,11 @@ fn throttle_writes(fs: &Fs) {
     }
 
     if start != 0 {
-        fs.times.get(c::TimeStat::blocked_writeback_throttle as usize).update(start);
+        fs.times.get(TimeStat::blocked_writeback_throttle as usize).update(start);
     }
 }
 
-fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [c::bch_folio_sector]) -> c_int {
+fn writepage(folio: FolioGuard<'_>, wbc: &Wbc, w: &mut WritepageState, tmp: &mut [bch_folio_sector]) -> c_int {
     let mapping = folio.mapping().expect("a folio in writeback with no mapping");
     let inode = mapping.inode();
     let fs = inode.fs();
@@ -342,8 +348,8 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> c_int {
     let pool = &fs.vfs.writepage_buf_pool;
     let tmp = {
         let _noio = MemallocFlags::noio();
-        Box::<[c::bch_folio_sector], _>::try_new_zeroed_slice_in(
-            pool.element_size() / size_of::<c::bch_folio_sector>(), &**pool)
+        Box::<[bch_folio_sector], _>::try_new_zeroed_slice_in(
+            pool.element_size() / size_of::<bch_folio_sector>(), &**pool)
     }.expect("a pool's allocation: it waits for an element");
     // zeroed is a bch_folio_sector
     let mut tmp = unsafe { tmp.assume_init() };

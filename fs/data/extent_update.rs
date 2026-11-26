@@ -23,7 +23,12 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, bkey_gt, pos, spos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, Typed};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::update::extent_whiteout_type;
-use crate::c;
+use crate::posix::inode_format::InodeFlags;
+use crate::alloc::buckets::ReservationFlags;
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::data::reflink_format::ReflinkP;
+use crate::opts::bch_inode_opts;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::journal::flush_wait::Flush;
 use crate::data::extents::{BkeyVExtents, Extents};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
@@ -91,7 +96,7 @@ impl<'t> TransAttempt<'_, 't> {
                 n.stop_at(k.k.p);
             }
             BkeyType::reflink_p => {
-                let idx = k.arm::<c::ReflinkP>().expect("a reflink_p").v().idx();
+                let idx = k.arm::<ReflinkP>().expect("a reflink_p").v().idx();
                 let sectors = n.end.min(k.k.p).offset - k.k.start_offset();
                 let mut iter = BtreeIter::new(self, Btree::reflink, pos(0, idx + offset),
                                               BtreeIterFlags::SLOTS);
@@ -281,7 +286,7 @@ impl<'t> TransAttempt<'_, 't> {
     /// to @new_i_size, i_sectors by @i_sectors_delta, at @extent_iter's
     /// snapshot. Its io options in @opts.
     pub(crate) fn extent_update_i_size_sectors(&self, extent_iter: &BtreeIter<'t>, new_i_size: u64,
-                                    mut i_sectors_delta: i64, opts: &mut c::bch_inode_opts)
+                                    mut i_sectors_delta: i64, opts: &mut bch_inode_opts)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -311,7 +316,7 @@ impl<'t> TransAttempt<'_, 't> {
              * existing inodes by the upgrade's scheduled passes; version upgrades
              * always run, so by the time we're doing io the flags are trustworthy:
              */
-            *opts = if likely(!inode.v().flags().contains(c::InodeFlags::has_inode_opts)) {
+            *opts = if likely(!inode.v().flags().contains(InodeFlags::has_inode_opts)) {
                 inode_opts::get_fs(fs, false)
             } else {
                 let k = k.arm::<inode::Inodes>().expect("an inode: to_v3() is ENOENT for anything else");
@@ -368,7 +373,7 @@ impl<'t> TransAttempt<'_, 't> {
     /// what it overwrites doesn't give back. @flush, if given, waits on the
     /// commit's journal flush - unless @k was cut, the commit not the last.
     #[allow(clippy::too_many_arguments)]
-    pub fn extent_update<V: ?Sized>(&self, _inum: c::subvol_inum, iter: &mut BtreeIter<'t>,
+    pub fn extent_update<V: ?Sized>(&self, _inum: subvol_inum, iter: &mut BtreeIter<'t>,
                                     k: &mut TransBkey<'_, 't, V>, disk_res: &DiskReservation<'_>,
                                     new_i_size: u64, i_sectors_delta_total: Option<&mut i64>,
                                     check_enospc: bool, change_cookie: u32,
@@ -400,17 +405,17 @@ impl<'t> TransAttempt<'_, 't> {
         if s.disk_sectors_delta > disk_res.sectors() as i64 {
             disk_res.add_physical((s.disk_sectors_delta - disk_res.sectors() as i64) as u64, s.new_nr_replicas,
                                   if !check_enospc || !s.usage_increasing {
-                                      c::ReservationFlags::nofail
+                                      ReservationFlags::nofail
                                   } else {
-                                      c::ReservationFlags::empty()
+                                      ReservationFlags::empty()
                                   })?;
         }
 
-        let mut opts = c::bch_inode_opts::default();
+        let mut opts = bch_inode_opts::default();
         self.extent_update_i_size_sectors(iter, (k.k().p.offset << 9).min(new_i_size),
                                           s.i_sectors_delta, &mut opts)?;
 
-        k.set_needs_reconcile(self, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
+        k.set_needs_reconcile(self, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                               change_cookie)?;
         self.update(iter, k, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
 

@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::format::bch_val;
 use crate::types::{Le32, Le64};
 use cstruct_macros::{bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
@@ -34,8 +34,8 @@ pub struct bch_quota_counter {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Quota {
-    pub v: c::bch_val,
-    pub c: [c::bch_quota_counter; c::QuotaCounter::NR as usize],
+    pub v: bch_val,
+    pub c: [bch_quota_counter; QuotaCounter::NR as usize],
 }
 
 /* BCH_SB_FIELD_quota: */
@@ -50,12 +50,12 @@ pub struct bch_sb_quota_counter {
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_quota_type {
     pub flags: Le64,
-    pub c: [c::bch_sb_quota_counter; c::QuotaCounter::NR as usize],
+    pub c: [bch_sb_quota_counter; QuotaCounter::NR as usize],
 }
 
 #[whole]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_quota {
-    pub q: [c::bch_sb_quota_type; c::QuotaType::NR as usize],
+    pub q: [bch_sb_quota_type; QuotaType::NR as usize],
 }

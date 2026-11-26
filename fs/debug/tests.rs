@@ -19,6 +19,8 @@ use crate::util::par::{self, Backend};
 use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
+use crate::alloc::buckets::ReservationFlags;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 
 use crate::util::alloc::{kbox_pin_init, KBox, Vec};
 use crate::util::place::{Container, PlacedInit};
@@ -30,7 +32,7 @@ use pin_init::{pin_data, pinned_drop};
 
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;
-use crate::format::{Btree, BkeyType};
+use crate::format::{Btree, BkeyType, bkey, Cookie};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 mod cuckoo;
@@ -67,7 +69,7 @@ fn delete_test_keys(fs: &Fs) -> TestRet {
     )
 }
 
-fn insert_cookie(fs: &Fs, btree: Btree, k: &mut BkeyI<c::Cookie>) -> TestRet {
+fn insert_cookie(fs: &Fs, btree: Btree, k: &mut BkeyI<Cookie>) -> TestRet {
     /*
      * A cookie has no pointers, so nothing can charge trans->extra_disk_res
      * for it - but an extents leaf update is required to have somewhere to
@@ -86,8 +88,8 @@ fn insert_cookie(fs: &Fs, btree: Btree, k: &mut BkeyI<c::Cookie>) -> TestRet {
 
 fn trans_cookie_alloc<'a, 't>(
     t: &TransAttempt<'a, 't>,
-) -> Result<crate::btree::iter::TransBkey<'a, 't, c::Cookie>, BchError> {
-    t.bkey_alloc_typed::<c::Cookie>()
+) -> Result<crate::btree::iter::TransBkey<'a, 't, Cookie>, BchError> {
+    t.bkey_alloc_typed::<Cookie>()
 }
 
 fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
@@ -146,7 +148,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in 0..nr {
-        let mut k = BkeyI::<c::Cookie>::new();
+        let mut k = BkeyI::<Cookie>::new();
         k.k.p.offset = i;
         k.k.p.snapshot = u32::MAX;
         insert_cookie(fs, Btree::xattrs, &mut k)?;
@@ -176,7 +178,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(8) {
-        let mut k = BkeyI::<c::Cookie>::new();
+        let mut k = BkeyI::<Cookie>::new();
         k.k.p.offset = i + 8;
         k.k.p.snapshot = u32::MAX;
         k.k.size = 8;
@@ -209,7 +211,7 @@ fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(8) {
-        let mut k = BkeyI::<c::Cookie>::new();
+        let mut k = BkeyI::<Cookie>::new();
         k.k.p.offset = i + 8;
         k.k.p.snapshot = u32::MAX;
         k.k.size = 8;
@@ -281,7 +283,7 @@ fn test_peek_extent_past_leaf(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(8) {
-        let mut k = BkeyI::<c::Cookie>::new();
+        let mut k = BkeyI::<Cookie>::new();
         k.k.p.offset = i + 8;
         k.k.p.snapshot = u32::MAX;
         k.k.size = 8;
@@ -300,7 +302,7 @@ fn test_peek_extent_past_leaf(fs: &Fs, nr: u64) -> TestRet {
 
     // Over the leaf's end: in the next leaf, as it ends there; this one keeps
     // nothing ending past leaf_end - 4 but the overwritten key's whiteout
-    let mut k = BkeyI::<c::Cookie>::new();
+    let mut k = BkeyI::<Cookie>::new();
     k.k.p.offset = leaf_end + 4;
     k.k.p.snapshot = u32::MAX;
     k.k.size = 8;
@@ -324,7 +326,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in 0..nr {
-        let mut k = BkeyI::<c::Cookie>::new();
+        let mut k = BkeyI::<Cookie>::new();
         k.k.p.offset = i * 2;
         k.k.p.snapshot = u32::MAX;
         insert_cookie(fs, Btree::xattrs, &mut k)?;
@@ -358,7 +360,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(16) {
-        let mut k = BkeyI::<c::Cookie>::new();
+        let mut k = BkeyI::<Cookie>::new();
         k.k.p.offset = i + 16;
         k.k.p.snapshot = u32::MAX;
         k.k.size = 8;
@@ -416,7 +418,7 @@ fn test_peek_end_extents(fs: &Fs, _nr: u64) -> TestRet {
 static TEST_VERSION: AtomicU64 = AtomicU64::new(0);
 
 fn insert_test_extent(fs: &Fs, start: u64, end: u64) -> TestRet {
-    let mut k = BkeyI::<c::Cookie>::new();
+    let mut k = BkeyI::<Cookie>::new();
     k.k.p.offset = end;
     k.k.p.snapshot = u32::MAX;
     k.k.size = (end - start) as u32;
@@ -497,7 +499,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
 
         if size as u64 > res.sectors() {
             // durability 1: single_device.ktest formats one device
-            res.add(size as u64 - res.sectors(), 1, c::ReservationFlags::from_bits_retain(0))?;
+            res.add(size as u64 - res.sectors(), 1, ReservationFlags::from_bits_retain(0))?;
         }
 
         t.insert_nonextent(Btree::extents, dup, INTERNAL_SNAPSHOT_NODE)
@@ -527,7 +529,7 @@ fn test_btree_ptr_stale_dirty_key(
 
     let mut updated = false;
     for ptr_entry in update.ptrs_mut(t.fs()) {
-        if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
+        if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
             ptr_entry.update_generation(|g| g.wrapping_sub(1));
@@ -706,7 +708,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 }
 
 fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
-    let mut cookie = BkeyI::<c::Cookie>::new();
+    let mut cookie = BkeyI::<Cookie>::new();
     cookie.k.p.snapshot = snapid_hi;
     insert_cookie(fs, Btree::xattrs, &mut cookie)?;
 
@@ -722,7 +724,7 @@ fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
 }
 
 fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
-    let mut cookie = BkeyI::<c::Cookie>::new();
+    let mut cookie = BkeyI::<Cookie>::new();
     cookie.k.p.snapshot = u32::MAX;
     insert_cookie(fs, Btree::xattrs, &mut cookie)?;
 
@@ -747,7 +749,7 @@ fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
         *v = seed + i as u64;
     }
 
-    let mut h = c::bkey::new();
+    let mut h = bkey::new();
     h.u64s = u64s as u8;
     h.p.offset = seed;
 

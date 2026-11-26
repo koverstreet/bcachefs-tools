@@ -29,7 +29,9 @@ pub mod super_block;
 pub mod ioctl;
 pub mod writeback;
 
-use crate::cstructs::c;
+use crate::data_structures::fast_list::fast_list;
+use crate::errcode::Errcode;
+use crate::vfs::pagecache::BCH_WRITEPAGE_BUF_BYTES;
 use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::os::bio::BioSet;
 use crate::util::{late::Late, mempool::Mempool};
@@ -41,8 +43,8 @@ use pin_init::pin_data;
 #[derive(MaybeZeroable, TypeInfo, Init, Late)]
 pub struct bch_fs_vfs {
     #[pin]
-    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_other_alloc))]
-    pub inodes: c::fast_list,
+    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_fs_other_alloc))]
+    pub inodes: fast_list,
     /* every VFS inode of ours, and which subvolumes hold an inode number */
     #[pin]
     #[init(crate::vfs::inode_cache::InodeCache::default())]
@@ -50,7 +52,7 @@ pub struct bch_fs_vfs {
 
     #[late(BioSet::new(1), ENOMEM_nocow_flush_bioset_init)]
     pub nocow_flush_bioset: Late<BioSet<crate::data::dev_bio::DevBio>>,
-    #[late(Mempool::new(4, c::BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
+    #[late(Mempool::new(4, BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
     pub writepage_buf_pool: Late<Mempool>,
     #[late(Workqueue::new(c"bcachefs_vfs_writeback",
                           WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE | WqFlags::UNBOUND, 1),

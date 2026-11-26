@@ -42,10 +42,10 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
-use crate::fs::Dev;
+use crate::fs::{Dev, FsFlag};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
-use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
+use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket, bch_dev_usage};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
 use crate::alloc::lru::LruPos;
@@ -57,7 +57,10 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
-use crate::c::Errcode;
+use crate::alloc::format::AllocV4;
+use crate::alloc::lru_format::LRU_TIME_MAX;
+use crate::util::time_stats::TimeStat;
+use crate::errcode::Errcode;
 use crate::data::ptrs::Ptrs;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -65,7 +68,7 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::locking::{MemallocFlags, SeqLock};
 use crate::debug::trace::events;
-use crate::sb::members::DevIoRef;
+use crate::sb::members::{DevIoRef, DevWriteRefKind};
 use crate::util::alloc::Vec;
 use crate::util::atomic::try_update;
 use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev};
@@ -83,7 +86,7 @@ use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::pin::Pin;
 use core::sync::atomic::Ordering;
 use pin_init::{pin_data, pin_init, stack_pin_init};
-use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason};
+use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason, Backpointer};
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::os::bio::BioSet;
@@ -156,7 +159,7 @@ pub(crate) struct DiscardRelease {
 /// in c->discards.in_flight, released when it's dropped, and its device's
 /// write io ref.
 pub(crate) struct Discard {
-    ca:         DevIoRef<c::DevWriteRefKind>,
+    ca:         DevIoRef<DevWriteRefKind>,
     dev_bucket: u64,
 }
 
@@ -292,14 +295,14 @@ fn dev_bucket_nouse(fs: &Fs, bucket: Bpos) -> bool {
 /// Discards on, for @ca: the mount option, if it was given, or the device's
 /// own.
 pub(crate) fn discard_opt_enabled(fs: &Fs, ca: &Dev) -> bool {
-    if fs.flags.get(c::FsFlag::discard_mount_opt_set) {
+    if fs.flags.get(FsFlag::discard_mount_opt_set) {
         fs.opts.discard.get() != 0
     } else {
         ca.mi.get().discard
     }
 }
 
-impl c::bch_fs_discards {
+impl bch_fs_discards {
     /// Whether a discard of @bucket could be issued, with none in flight for
     /// it and room on its device.
     fn check(&self, bucket: Bpos, fastpath: bool) -> Result<(), NotAdded> {
@@ -358,7 +361,7 @@ impl Dev {
 impl Discard {
     /// @bucket claimed for a discard by @ca, and a slot on it - unless one's
     /// in flight for it, or @ca has as many as it may.
-    fn claim(ca: DevIoRef<c::DevWriteRefKind>, bucket: Bpos, fastpath: bool) -> Result<Self, NotAdded> {
+    fn claim(ca: DevIoRef<DevWriteRefKind>, bucket: Bpos, fastpath: bool) -> Result<Self, NotAdded> {
         let fs = ca.fs();
         let dev_bucket = bucket_to_u64(bucket);
         let mut claimed = fs.discards.in_flight.lock();
@@ -475,7 +478,7 @@ impl<'a> Worker<'a> {
             return Ok(());
         }
 
-        let Some(ca) = fs.dev_get_ioref::<c::DevWriteRefKind>(bucket.inode as u32) else {
+        let Some(ca) = fs.dev_get_ioref::<DevWriteRefKind>(bucket.inode as u32) else {
             self.s.write(|s| s.not_rw += bucket_size);
             return Ok(());
         };
@@ -503,7 +506,7 @@ impl<'a> Worker<'a> {
 
     /// @a, its bucket discarded or on a device that doesn't discard, committed
     /// free - the one path a bucket takes to free from need_discard.
-    fn mark_free_key<'b, 't>(&self, t: &TransAttempt<'b, 't>, iter: &BtreeIter<'b>, mut a: TransBkey<'b, 't, c::AllocV4>)
+    fn mark_free_key<'b, 't>(&self, t: &TransAttempt<'b, 't>, iter: &BtreeIter<'b>, mut a: TransBkey<'b, 't, AllocV4>)
         -> Result<(), BchError>
     {
         let fs = t.fs();
@@ -597,7 +600,7 @@ fn calculate_discard_sectors_to_release(trans: &TransGuard<'_>, s: &DiscardState
 
             let pending  = sectors * buckets(DataType::need_discard);
             let free     = sectors * buckets(DataType::free);
-            let reserve  = sectors * ca.buckets_reserved(c::Watermark::stripe);
+            let reserve  = sectors * ca.buckets_reserved(Watermark::stripe);
             let capacity = sectors * ca.mi.get().nbuckets;
             let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent.get()) / 100;
             let buffer_clamped = (buffer as i64).min((free as i64 - reserve as i64 * 4).max(0));
@@ -689,7 +692,7 @@ fn do_discards(fs: &Fs) {
                 // restarts too: this bucket again
                 Err(e) => return Err(e),
             };
-            let ca = full.then(|| fs.dev_get_ioref::<c::DevWriteRefKind>(bucket.inode as u32)).flatten();
+            let ca = full.then(|| fs.dev_get_ioref::<DevWriteRefKind>(bucket.inode as u32)).flatten();
 
             // Reaped as we go: each holds its claim, and its io ref, till its
             // bucket's marked free
@@ -720,7 +723,7 @@ fn do_discards(fs: &Fs) {
         let mut again = false;
         if r.flush_journal {
             trans.unlock_long();
-            let ret = fs.times.get(c::TimeStat::blocked_discard_journal_flush as usize).time(|| fs.journal_flush());
+            let ret = fs.times.get(TimeStat::blocked_discard_journal_flush as usize).time(|| fs.journal_flush());
             if let Err(e) = ret {
                 break Err(e);
             }
@@ -759,7 +762,7 @@ fn do_discards(fs: &Fs) {
     }
 }
 
-pub(crate) fn do_discards_work(d: &c::bch_fs_discards) {
+pub(crate) fn do_discards_work(d: &bch_fs_discards) {
     do_discards(d.container())
 }
 
@@ -776,7 +779,7 @@ impl Fs {
         let must = self.rw_devs_rcu(&read_lock()).any(|ca| {
             let u = ca.usage_read_fast();
             u.buckets[DataType::free] <
-                ca.buckets_reserved(c::Watermark::stripe) * 4 &&
+                ca.buckets_reserved(Watermark::stripe) * 4 &&
             u.buckets[DataType::need_discard] != 0
         });
         if must {
@@ -853,9 +856,9 @@ fn dev_is_rw(ca: &Dev) -> bool {
 /// moved: stopping short of reserved_sectors leaves no space writable now,
 /// with cached buckets sitting unreclaimed.
 impl Dev {
-    pub fn should_invalidate_buckets(&self, u: &c::bch_dev_usage) -> u64 {
+    pub fn should_invalidate_buckets(&self, u: &bch_dev_usage) -> u64 {
         let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
-            .max(self.buckets_reserved(c::Watermark::stripe));
+            .max(self.buckets_reserved(Watermark::stripe));
         let want_free = reserved + (self.mi.get().nbuckets >> 5);
         let free = u.buckets[DataType::free];
         let cached = u.buckets[DataType::cached] as i64;
@@ -865,7 +868,7 @@ impl Dev {
 
 /// Drop @ca's pointers from what backpointer @bp points to - its data's lost,
 /// recorded, if that leaves it unreadable.
-fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, c::Backpointer>,
+fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &Dev, bp: BkeySC<'_, Backpointer>,
                      last_flushed: WbFlush<'_>) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -903,7 +906,7 @@ fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &Dev, bucket: Bpos, 
         .for_each_max_commit(trans, *bp_range.end(), BtreeIterFlags::empty(), Some(&res),
                              CommitOpts::new().watermark(Watermark::btree_copygc).flags(CommitFlags::NO_ENOSPC),
                              |t, _, k| {
-            let Some(bp) = k.arm::<c::Backpointer>() else { return Ok(()) };
+            let Some(bp) = k.arm::<Backpointer>() else { return Ok(()) };
             if bp.v().bucket_gen != generation {
                 return Ok(());
             }
@@ -973,8 +976,8 @@ pub(crate) fn do_invalidates_work(ca: &Dev) {
 
         let mut nr = ca.should_invalidate_buckets(&ca.usage_read_fast()) as i64;
         let dev = u16::from(ca.dev_idx);
-        let end = LruPos::new(dev, c::LRU_TIME_MAX, u64::MAX).to_bpos();
-        let now = (fs.current_io_time(READ) + u64::from(u32::MAX)) & c::LRU_TIME_MAX;
+        let end = LruPos::new(dev, LRU_TIME_MAX, u64::MAX).to_bpos();
+        let now = (fs.current_io_time(READ) + u64::from(u32::MAX)) & LRU_TIME_MAX;
 
         // from now, then round once from the start
         for start in [now, 0] {

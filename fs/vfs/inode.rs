@@ -45,14 +45,21 @@ use core::sync::atomic::{fence, Ordering::SeqCst};
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
 use crate::c;
+use crate::init::dev::AtomicDevsMask;
+use crate::posix::inode::{bch_inode_unpacked, VolatileInodeUnpacked};
+use crate::posix::inode_format::InodeOptId;
+use crate::posix::quota_format::QuotaType;
+use crate::snapshots::format::Subvolume;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::posix::inode;
-use crate::posix::inode_opts::InodeOpt;
-use crate::locking::{ExclusiveGuard, Locked, Mutex, SpinLock, SpinLockIrq};
+use crate::posix::inode_opts::{InodeOpt, inode_opt_change};
+use crate::locking::{ExclusiveGuard, Locked, Mutex, SpinLock, SpinLockIrq, two_state_lock_t,
+    TwoState, TwoStateGuard};
 use crate::published;
-use crate::posix::quota::{QuotaAcctMode, QuotaWarnings};
+use crate::posix::quota::{QuotaAcctMode, QuotaWarnings, bch_qid};
 use crate::posix::quota;
 use crate::snapshots::subvolume;
 use crate::prt;
@@ -87,19 +94,19 @@ pub struct InodeInfo<St = Live> {
     #[pin]
     pub v: VfsInode<crate::fs::Fs, St>,
     /* the inode cache's key: set before it's in, unchanged while it is */
-    pub ei_inum: c::subvol_inum,
+    pub ei_inum: subvol_inum,
 
     #[pin]
     pub ei_reserved: Locked<SpinLockIrq, InodeReserved, InodeReservedRange>,
 
     pub ei_inodes_idx: c_uint,
-    pub ei_flags: AtomicBitflags<c::InodeInfoFlag>,
+    pub ei_flags: AtomicBitflags<InodeInfoFlag>,
 
     #[pin]
     pub ei_update_lock: Locked<Mutex>,
     pub ei_last_dirtied: Volatile<c_ulong>,
     #[pin]
-    pub ei_pagecache_lock: c::two_state_lock_t,
+    pub ei_pagecache_lock: two_state_lock_t,
 
     /*
      * The quota the inode's usage is charged to: i_blocks + ei_quota_reserved
@@ -119,14 +126,14 @@ pub struct InodeInfo<St = Live> {
      * incremented when we isusue a cache flush, and track here the sequence
      * number that needs flushing.
      */
-    pub ei_devs_need_flush: c::AtomicDevsMask,
+    pub ei_devs_need_flush: AtomicDevsMask,
 
     /*
      * copy of inode in btree: written after a commit, the inode's btree
      * position still locked - which serializes its writers, not
      * ei_update_lock - and read without a lock
      */
-    pub ei_inode: c::VolatileInodeUnpacked,
+    pub ei_inode: VolatileInodeUnpacked,
 
     #[pin]
     pub ei_writeback_timer: RawDelayedWork,
@@ -184,7 +191,7 @@ published! {
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo)]
 pub struct InodeQuota {
-    pub ei_qid: c::bch_qid,
+    pub ei_qid: bch_qid,
     /// sectors reserved for writes, charged to ei_qid ahead of i_blocks
     pub ei_quota_reserved: u64,
 }
@@ -193,11 +200,11 @@ pub struct InodeQuota {
 pub enum PagecacheAdd {}
 pub enum PagecacheBlock {}
 
-impl c::TwoState for PagecacheAdd {
+impl TwoState for PagecacheAdd {
     const S: bool = false;
 }
 
-impl c::TwoState for PagecacheBlock {
+impl TwoState for PagecacheBlock {
     const S: bool = true;
 }
 
@@ -222,12 +229,12 @@ impl InodeInfo {
     }
 
     /// @inum's, looked up in @t, the inode cache first.
-    pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
+    pub fn get_trans(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<InodeRef, BchError> {
         Self::get_in(t, inum, Some(crate::here!()))
     }
 
     /// get_trans(), logging as @warn if it isn't there.
-    fn get_in(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, warn: Option<&CStr>) -> Result<InodeRef, BchError> {
+    fn get_in(t: &TransAttempt<'_, '_>, inum: subvol_inum, warn: Option<&CStr>) -> Result<InodeRef, BchError> {
         if let Some(inode) = t.fs().vfs.inode_cache.find(Some(t), inum)? {
             return Ok(inode);
         }
@@ -238,18 +245,18 @@ impl InodeInfo {
 
     /// @inum's, the inode cache first, in a transaction of its own - and no
     /// warning if it isn't there, as a file handle's may not be.
-    pub(crate) fn get(fs: &Fs, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
+    pub(crate) fn get(fs: &Fs, inum: subvol_inum) -> Result<InodeRef, BchError> {
         Self::get_outside(fs, inum, None)
     }
 
     /// As get(), warning as @func if it isn't there: one that has to be, the
     /// root at mount.
-    pub(crate) fn get_warn(fs: &Fs, inum: c::subvol_inum, func: &CStr) -> Result<InodeRef, BchError> {
+    pub(crate) fn get_warn(fs: &Fs, inum: subvol_inum, func: &CStr) -> Result<InodeRef, BchError> {
         Self::get_outside(fs, inum, Some(func))
     }
 
     /// The cache, then a transaction.
-    fn get_outside(fs: &Fs, inum: c::subvol_inum, warn: Option<&CStr>) -> Result<InodeRef, BchError> {
+    fn get_outside(fs: &Fs, inum: subvol_inum, warn: Option<&CStr>) -> Result<InodeRef, BchError> {
         if let Some(inode) = fs.vfs.inode_cache.find(None, inum)? {
             return Ok(inode);
         }
@@ -263,8 +270,8 @@ impl InodeInfo {
     /// or the one already there, if another lookup got there first. No
     /// restart is taken from here on but in allocating the inode, and nothing
     /// after: commit what the caller has first.
-    pub(crate) fn cache_insert(t: &TransAttempt<'_, '_>, inum: c::subvol_inum,
-                               bi: &c::bch_inode_unpacked, subvol: &c::Subvolume)
+    pub(crate) fn cache_insert(t: &TransAttempt<'_, '_>, inum: subvol_inum,
+                               bi: &bch_inode_unpacked, subvol: &Subvolume)
         -> Result<InodeRef, BchError>
     {
         let mut inode = NewInode::new_trans(t)?;
@@ -309,7 +316,7 @@ impl InodeInfo {
                 self.ei_inum.subvol, self.ei_inum.inum);
 
         if delete {
-            if !self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
+            if !self.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
                 let w = &mut QuotaWarnings::new(fs);
                 let _ = quota::acct(fs, qid, quota::Q_SPC, -(v.blocks() as i64), QuotaAcctMode::WARN, w);
                 let _ = quota::acct(fs, qid, quota::Q_INO, -1, QuotaAcctMode::WARN, w);
@@ -328,7 +335,7 @@ impl InodeInfo {
         fence(SeqCst);
     }
 
-    pub fn raw(&self) -> *mut c::InodeInfo {
+    pub fn raw(&self) -> *mut InodeInfo {
         core::ptr::from_ref(self).cast_mut()
     }
 }
@@ -343,19 +350,19 @@ impl<St> InodeInfo<St> {
         &self.v
     }
 
-    pub fn inum(&self) -> c::subvol_inum {
+    pub fn inum(&self) -> subvol_inum {
         self.ei_inum
     }
 
     /// A copy of ei_inode.
-    pub fn inode(&self) -> c::bch_inode_unpacked {
+    pub fn inode(&self) -> bch_inode_unpacked {
         self.ei_inode.get()
     }
 
     /// Update the VFS inode to @bi, just committed in @trans - which still
     /// holds the inode's btree position locked. @fields: the ATTR_* that
     /// changed.
-    pub fn update_after_write(&self, trans: &BtreeTrans<'_>, bi: &c::bch_inode_unpacked, fields: u32) {
+    pub fn update_after_write(&self, trans: &BtreeTrans<'_>, bi: &bch_inode_unpacked, fields: u32) {
         assert_eq!(bi.bi_inum, self.inum().inum, "updating the VFS inode {} to inode {}",
                    self.inum().inum, bi.bi_inum);
         trans.assert_pos_locked(Btree::inodes, pos(0, bi.bi_inum));
@@ -380,7 +387,7 @@ impl<St> InodeInfo<St> {
             v.set_ctime(fs.time_to_timespec(bi.bi_ctime as i64));
         }
 
-        use c::InodeFlags as F;
+        use crate::posix::inode_format::InodeFlags as F;
         for (on, flag) in [(bi.flag(F::sync),      c::S_SYNC),
                            (bi.flag(F::immutable), c::S_IMMUTABLE),
                            (bi.flag(F::append),    c::S_APPEND),
@@ -395,7 +402,7 @@ impl<St> InodeInfo<St> {
 
 impl InodeInfo {
     /// @bi, about to be written, with the VFS's times: see the file comment.
-    pub(crate) fn fold_times(&self, bi: &mut c::bch_inode_unpacked) {
+    pub(crate) fn fold_times(&self, bi: &mut bch_inode_unpacked) {
         let (fs, v) = (self.fs(), self.vfs());
         bi.bi_atime = fs.timespec_to_time(v.atime()) as u64;
         bi.bi_mtime = fs.timespec_to_time(v.mtime()) as u64;
@@ -443,7 +450,7 @@ impl InodeInfo {
 
     /// Block page cache adds to @inodes, together, in lock_order().
     pub fn pagecache_block_all<const N: usize>(inodes: [&InodeInfo; N])
-        -> ArrayVec<c::TwoStateGuard<'_, c::PagecacheBlock>, N>
+        -> ArrayVec<TwoStateGuard<'_, PagecacheBlock>, N>
     {
         lock_order(inodes).map(|(_, inode)| inode.ei_pagecache_lock.lock()).collect()
     }
@@ -541,7 +548,7 @@ impl<'i> UpdateLock<'i> {
     /// Move the inode's quota charges - its usage, i_blocks +
     /// ei_quota_reserved, and the inode itself - to @qid, in the quota types
     /// of @qtypes that are accounted.
-    pub fn quota_transfer(&self, qid: c::bch_qid, qtypes: u32, mode: QuotaAcctMode)
+    pub fn quota_transfer(&self, qid: bch_qid, qtypes: u32, mode: QuotaAcctMode)
         -> Result<(), BchError>
     {
         let inode = self.inode;
@@ -559,7 +566,7 @@ impl<'i> UpdateLock<'i> {
         }
 
         // Quotas don't count snapshot inodes: only the qid changes.
-        if !inode.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
+        if !inode.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
             // blocks(): stable, under ei_quota_lock
             quota::transfer(fs, qtypes, qid, q.ei_qid, inode.vfs().blocks() + q.ei_quota_reserved, mode, w)?;
         }
@@ -573,21 +580,21 @@ impl<'i> UpdateLock<'i> {
     /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
         let mut qid = self.inode.ei_quota.lock().ei_qid;
-        qid.q[c::QuotaType::QTYP_PRJ] = projid;
+        qid.q[QuotaType::QTYP_PRJ] = projid;
 
-        self.quota_transfer(qid, 1 << c::QuotaType::QTYP_PRJ.0, QuotaAcctMode::PREALLOC)
+        self.quota_transfer(qid, 1 << QuotaType::QTYP_PRJ.0, QuotaAcctMode::PREALLOC)
     }
 
     /// Move the inode to @dir's project, if moving it into @dir would: it has
     /// no project of its own, and @dir's is different.
     pub fn inherit_project(&self, dir: &InodeInfo) -> Result<(), BchError> {
-        let project = InodeOpt::of(c::InodeOptId::project);
+        let project = InodeOpt::of(InodeOptId::project);
         let (bi, dir_bi) = (self.inode.inode(), dir.inode());
         if project.is_own(&bi) || project.get(&dir_bi) == project.get(&bi) {
             return Ok(());
         }
         // dir's quota lock dropped before ours is taken: the same class, either order
-        let projid = dir.ei_quota.lock().ei_qid.q[c::QuotaType::QTYP_PRJ];
+        let projid = dir.ei_quota.lock().ei_qid.q[QuotaType::QTYP_PRJ];
         self.set_projid(projid)
     }
 
@@ -597,7 +604,7 @@ impl<'i> UpdateLock<'i> {
     /// its times the VFS's.
     pub fn write_inode<F>(&self, fields: u32, mut set: F) -> Result<(), BchError>
     where
-        F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<(), BchError>,
+        F: FnMut(&TransAttempt<'_, '_>, &mut bch_inode_unpacked) -> Result<(), BchError>,
     {
         self.write_inode_if(fields, |t, bi| set(t, bi).map(|()| true)).map(|_| ())
     }
@@ -606,17 +613,17 @@ impl<'i> UpdateLock<'i> {
     /// not, nothing's written or updated. Whether it wrote.
     pub fn write_inode_if<F>(&self, fields: u32, mut set: F) -> Result<bool, BchError>
     where
-        F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<bool, BchError>,
+        F: FnMut(&TransAttempt<'_, '_>, &mut bch_inode_unpacked) -> Result<bool, BchError>,
     {
         let inode = self.inode;
         let fs = inode.fs();
         let trans = crate::btree_trans!(fs);
         // Outside the attempt: the propagate it starts is finished after the
         // commit
-        let mut opt_change = c::inode_opt_change::new();
+        let mut opt_change = inode_opt_change::new();
 
         let wrote = lockrestart_do(&trans, |t| {
-            opt_change = c::inode_opt_change::new();
+            opt_change = inode_opt_change::new();
 
             let mut iter = BtreeIter::uninit(t.trans());
             let mut bi = inode::__peek(t, &mut iter, inode.inum(), BtreeIterFlags::INTENT,
@@ -678,7 +685,7 @@ struct IBlocksUnderflow {
 impl InodeInfo {
     /// i_blocks changed by @sectors, and the quota charged - from @quota_res
     /// for an allocation it reserved.
-    fn i_sectors_acct_locked(&self, q: &mut c::InodeQuota, quota_res: Option<&mut c::quota_res>,
+    fn i_sectors_acct_locked(&self, q: &mut InodeQuota, quota_res: Option<&mut quota_res>,
                              mut sectors: i64, w: &mut QuotaWarnings<'_>) -> Option<IBlocksUnderflow> {
         let blocks = self.vfs().blocks();
         let underflow = ((blocks as i64) + sectors < 0).then(|| {
@@ -689,7 +696,7 @@ impl InodeInfo {
 
         self.vfs().set_blocks(blocks.wrapping_add_signed(sectors));
 
-        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
             return underflow;
         }
 
@@ -711,7 +718,7 @@ impl InodeInfo {
         underflow
     }
 
-    pub fn i_sectors_acct(&self, quota_res: Option<&mut c::quota_res>, sectors: i64) {
+    pub fn i_sectors_acct(&self, quota_res: Option<&mut quota_res>, sectors: i64) {
         if sectors != 0 {
             let w = &mut QuotaWarnings::new(self.fs());
             let underflow = self.i_sectors_acct_locked(&mut self.ei_quota.lock(), quota_res, sectors, w);
@@ -736,10 +743,10 @@ impl InodeInfo {
         msg.set_suppressed(!log);
     }
 
-    pub(crate) fn quota_reservation_add(&self, res: &mut c::quota_res, sectors: u64, check_enospc: bool)
+    pub(crate) fn quota_reservation_add(&self, res: &mut quota_res, sectors: u64, check_enospc: bool)
         -> Result<(), BchError>
     {
-        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(c::InodeInfoFlag::EI_INODE_SNAPSHOT) {
+        if !cfg!(CONFIG_BCACHEFS_QUOTA) || self.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
             return Ok(());
         }
 
@@ -757,7 +764,7 @@ impl InodeInfo {
         Ok(())
     }
 
-    fn quota_reservation_put_locked(&self, q: &mut c::InodeQuota, res: &mut c::quota_res,
+    fn quota_reservation_put_locked(&self, q: &mut InodeQuota, res: &mut quota_res,
                                     w: &mut QuotaWarnings<'_>) {
         if !cfg!(CONFIG_BCACHEFS_QUOTA) {
             return;
@@ -773,7 +780,7 @@ impl InodeInfo {
         res.sectors = 0;
     }
 
-    pub(crate) fn quota_reservation_put(&self, res: &mut c::quota_res) {
+    pub(crate) fn quota_reservation_put(&self, res: &mut quota_res) {
         if cfg!(CONFIG_BCACHEFS_QUOTA) && res.sectors != 0 {
             let w = &mut QuotaWarnings::new(self.fs());
             self.quota_reservation_put_locked(&mut self.ei_quota.lock(), res, w);
@@ -782,7 +789,7 @@ impl InodeInfo {
 
     /// i_sectors_acct() from @res, and what's left of it put, under one hold
     /// of the quota lock: a DIO write's, as each of its bios is written.
-    pub(crate) fn i_sectors_acct_put(&self, res: &mut c::quota_res, sectors: i64) {
+    pub(crate) fn i_sectors_acct_put(&self, res: &mut quota_res, sectors: i64) {
         let w = &mut QuotaWarnings::new(self.fs());
         let underflow = {
             let mut q = self.ei_quota.lock();
@@ -799,13 +806,13 @@ impl InodeInfo {
     /// till the DioStarted is dropped.
     pub(crate) fn dio_start(&self) -> DioStarted {
         unsafe { c::inode_dio_begin(self.v.as_ptr()) };
-        self.ei_pagecache_lock.lock_raw(<c::PagecacheBlock as c::TwoState>::S);
+        self.ei_pagecache_lock.lock_raw(<PagecacheBlock as TwoState>::S);
         DioStarted(NonNull::from(self))
     }
 
     /// An empty quota reservation of @self's: added to, and put when dropped.
     pub fn quota_reservation(&self) -> QuotaReservation<'_> {
-        QuotaReservation { inode: self, res: c::quota_res::default() }
+        QuotaReservation { inode: self, res: quota_res::default() }
     }
 }
 
@@ -827,7 +834,7 @@ impl DioStarted {
 impl Drop for DioStarted {
     fn drop(&mut self) {
         let inode = self.inode();
-        inode.ei_pagecache_lock.unlock_raw(<c::PagecacheBlock as c::TwoState>::S);
+        inode.ei_pagecache_lock.unlock_raw(<PagecacheBlock as TwoState>::S);
         /* the count is our ref on the inode: last */
         unsafe { c::inode_dio_end(inode.v.as_ptr()) };
     }
@@ -835,7 +842,7 @@ impl Drop for DioStarted {
 
 pub struct QuotaReservation<'i> {
     inode: &'i InodeInfo,
-    res:   c::quota_res,
+    res:   quota_res,
 }
 
 impl<'i> QuotaReservation<'i> {
@@ -849,15 +856,15 @@ impl<'i> QuotaReservation<'i> {
 }
 
 impl Deref for QuotaReservation<'_> {
-    type Target = c::quota_res;
+    type Target = quota_res;
 
-    fn deref(&self) -> &c::quota_res {
+    fn deref(&self) -> &quota_res {
         &self.res
     }
 }
 
 impl DerefMut for QuotaReservation<'_> {
-    fn deref_mut(&mut self) -> &mut c::quota_res {
+    fn deref_mut(&mut self) -> &mut quota_res {
         &mut self.res
     }
 }

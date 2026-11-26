@@ -4,11 +4,15 @@
 
 use core::sync::atomic::Ordering::Relaxed;
 
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::c;
 use crate::alloc::replicas::DevlistEntry;
 use crate::util::alloc::Flags;
 use crate::btree::bkey::prelude::*;
-use crate::c;
-use crate::c::JournalFlag as Journal;
+use crate::journal::journal::{journal, JOURNAL_ENTRY_SIZE_MIN, journal_res_state_bits,
+    JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK, JOURNAL_STATE_BUF_NR};
+use crate::journal::write::jset_buf_alloc;
+use crate::journal::journal::JournalFlag as Journal;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::fifo::FifoRead;
 use crate::locking::Guard as _;
@@ -58,7 +62,7 @@ pub struct journal_start_info {
 }
 
 
-impl c::journal {
+impl journal {
     /* startup/shutdown: */
 
     fn writing_to_device(&self, dev_idx: u32) -> bool {
@@ -129,13 +133,13 @@ impl c::journal {
         }
     }
 
-    pub fn start(&self, info: c::journal_start_info) -> Result<(), BchError> {
+    pub fn start(&self, info: journal_start_info) -> Result<(), BchError> {
         let fs = self.fs();
 
         /* Don't reuse sequence numbers that are blacklisted */
         let cur_seq = info.cur_seq.max(fs.journal_seq_blacklist.last_blacklisted() + 1);
 
-        if cur_seq >= c::JOURNAL_SEQ_MAX {
+        if cur_seq >= JOURNAL_SEQ_MAX {
             bch_err!(fs, "cannot start: journal seq overflow");
             return fs.throw(Errcode::EINVAL_journal_seq_overflow);
         }
@@ -210,8 +214,8 @@ impl c::journal {
 
             g.last_flush_write = jiffies();
             let r = &self.lock.hot.reservations;
-            let mut s = c::journal_res_state_bits::from_bits(r.load(Relaxed));
-            s.set_idx((fs.journal_cur_seq() & c::JOURNAL_STATE_BUF_MASK as u64) as u8);
+            let mut s = journal_res_state_bits::from_bits(r.load(Relaxed));
+            s.set_idx((fs.journal_cur_seq() & JOURNAL_STATE_BUF_MASK as u64) as u8);
             r.store(s.into_bits(), Relaxed);
         }
 
@@ -236,9 +240,9 @@ impl c::journal {
     pub fn init_rw(&self) -> Result<(), BchError> {
         let fs = self.fs();
         let enomem = || fs.err(Errcode::ENOMEM_journal_buf);
-        let size = c::JOURNAL_ENTRY_SIZE_MIN;
+        let size = JOURNAL_ENTRY_SIZE_MIN;
 
-        let (buf, write) = c::jset_buf_alloc(size, Flags::empty()).map_err(|_| enomem())?;
+        let (buf, write) = jset_buf_alloc(size, Flags::empty()).map_err(|_| enomem())?;
 
         /* the old ones freed outside the lock: kvfree can sleep */
         let old = {
@@ -259,7 +263,7 @@ impl Dev {
          * fastpath ring (the effective parallel-write ceiling for hot-path
          * allocations).
          */
-        self.journal.bio_set.init(state, || BioSet::new(c::JOURNAL_STATE_BUF_NR))
+        self.journal.bio_set.init(state, || BioSet::new(JOURNAL_STATE_BUF_NR))
             .map_err(|_| self.fs().err(Errcode::ENOMEM_dev_journal_init))
     }
 }

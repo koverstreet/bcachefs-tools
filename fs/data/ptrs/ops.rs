@@ -8,22 +8,23 @@ use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
 use crate::data::durability::BkeyVDurability;
-use crate::btree::bkey::{AnyKeySC, BkeyOps, ValidateFlags};
+use crate::btree::bkey::{AnyKeySC, BkeyOps, ValidateFlags, BkeyValidateFrom};
 use crate::util::vstructs::Unvalidated;
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::rcu::ReadGuard;
 use crate::util::{Printbuf, ToText};
-use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion};
+use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion, BCH_BKEY_PTRS_MAX,
+    BCH_REPLICAS_MAX};
 
 // ── validate ─────────────────────────────────────────────────────────────
 
 /// A pointer, against the rest of the key and its device: extent_ptr_validate().
 /// One to a device that isn't there passes - check_fix_ptrs() repairs it.
 fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTypes, Unvalidated>>,
-                       ptr: &c::bch_extent_ptr,
+                       ptr: &bch_extent_ptr,
                        size_ondisk: u32) -> Result<(), BchError> {
-    if u32::from(ptr.dev()) == c::BCH_SB_MEMBER_INVALID {
+    if u32::from(ptr.dev()) == BCH_SB_MEMBER_INVALID {
         return Ok(());
     }
 
@@ -56,7 +57,7 @@ fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTyp
 
 /// The entry types a btree node pointer may have.
 fn btree_ptr_entry_type_allowed(ty: u32) -> bool {
-    use c::ExtentEntryType as t;
+    use crate::data::extents_format::ExtentEntryType as t;
     [t::ptr, t::reconcile, t::reconcile_bp]
         .iter().any(|a| a.0 == ty)
 }
@@ -92,7 +93,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 (bytes.as_ptr() as usize - entries_start) / 8, entries_u64s));
         }
 
-        bkey_fsck_err_on!(v, is_btree_ptr && ty < c::ExtentEntryType::NR && !btree_ptr_entry_type_allowed(ty),
+        bkey_fsck_err_on!(v, is_btree_ptr && ty < ExtentEntryType::NR && !btree_ptr_entry_type_allowed(ty),
                           id::btree_ptr_has_non_ptr, "has non allowed field")?;
 
         match e {
@@ -102,7 +103,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 bkey_fsck_err_on!(v, ptr.cached() != 0 && have_ec, id::ptr_cached_and_erasure_coded,
                                   "cached, erasure coded ptr")?;
 
-                let real_dev = u32::from(ptr.dev()) != c::BCH_SB_MEMBER_INVALID;
+                let real_dev = u32::from(ptr.dev()) != BCH_SB_MEMBER_INVALID;
                 if real_dev {
                     if ptr.unwritten() == 0 {
                         have_written = true;
@@ -172,8 +173,8 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     }
 
     bkey_fsck_err_on!(v, nr_ptrs == 0, id::extent_ptrs_no_ptrs, "no ptrs")?;
-    bkey_fsck_err_on!(v, nr_ptrs > c::BCH_BKEY_PTRS_MAX, id::extent_ptrs_too_many_ptrs,
-                      "too many ptrs: {} > {}", nr_ptrs, c::BCH_BKEY_PTRS_MAX)?;
+    bkey_fsck_err_on!(v, nr_ptrs > BCH_BKEY_PTRS_MAX, id::extent_ptrs_too_many_ptrs,
+                      "too many ptrs: {} > {}", nr_ptrs, BCH_BKEY_PTRS_MAX)?;
     bkey_fsck_err_on!(v, have_written && have_unwritten, id::extent_ptrs_written_and_unwritten,
                       "extent with unwritten and written ptrs")?;
     bkey_fsck_err_on!(v, k.k.key_type() != BkeyType::extent && have_unwritten,
@@ -186,7 +187,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     if !is_btree_ptr {
         bkey_fsck_err_on!(v, !have_non_inval_dev_ptrs, id::extent_ptrs_all_invalid,
                           "extent without valid pointers")?;
-        bkey_fsck_err_on!(v, v.from.from() == c::BkeyValidateFrom::commit &&
+        bkey_fsck_err_on!(v, v.from.from() == BkeyValidateFrom::commit &&
                              !have_non_inval_dev_ptrs_dirty,
                           id::extent_ptrs_all_invalid, "extent without valid dirty pointers")?;
     }
@@ -198,7 +199,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 /// A pointer: its device, bucket and offset, if the device is there, and how
 /// stale it is once bucket gens are valid - on a new filesystem, or after
 /// alloc_read; before, the table is zeroes.
-pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &c::bch_extent_ptr,
+pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &bch_extent_ptr,
                                  rcu: &ReadGuard) {
     match fs.and_then(|fs| Some((fs, fs.dev_rcu(ptr.dev().into(), rcu)?))) {
         None => write!(out, "{}:{} gen {}", ptr.dev(), ptr.offset(), ptr.generation()),
@@ -210,7 +211,7 @@ pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &c::b
                 write!(out, " d={}", ca.mi.get().durability);
             }
 
-            let gens_valid = fs.flags.get(c::FsFlag::new_fs) ||
+            let gens_valid = fs.flags.get(FsFlag::new_fs) ||
                 fs.recovery.runner.passes_complete.get() & (1 << RecoveryPass::alloc_read as u32) != 0;
             // dev_ptr_stale_rcu()'s -1 for a bucket the device doesn't have
             let stale = if gens_valid { ca.ptr_stale(ptr, rcu).map_or(-1, i32::from) } else { 0 };
@@ -233,7 +234,7 @@ fn csum_word_raw(w: Le64) -> u64 {
     u64::from_ne_bytes(w.get().to_le_bytes())
 }
 
-fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
+fn crc_unpacked_to_text(out: &mut Printbuf, crc: &bch_extent_crc_unpacked) {
     write!(out, "c_size {} size {} offset {} nonce {} csum {} {:x}:{:x}  compress ",
            crc.compressed_size, crc.uncompressed_size, crc.offset, crc.nonce,
            crc.csum_type.get(),
@@ -317,13 +318,18 @@ macro_rules! ptrs_ops {
     };
 }
 pub(crate) use ptrs_ops;
+use crate::data::extents::bch_extent_crc_unpacked;
+use crate::data::extents_format::{bch_extent_ptr, BKEY_BTREE_PTR_VAL_U64s_MAX, BtreePtr, BtreePtrV2,
+    Extent, ExtentEntryType};
+use crate::fs::FsFlag;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 
-impl BkeyOps for c::BtreePtr {
+impl BkeyOps for BtreePtr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let val_u64s = v.k.val_bytes().len() / 8;
 
-        bkey_fsck_err_on!(v, val_u64s > c::BCH_REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
-                          "value too big ({} > {})", val_u64s, c::BCH_REPLICAS_MAX)?;
+        bkey_fsck_err_on!(v, val_u64s > BCH_REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
+                          "value too big ({} > {})", val_u64s, BCH_REPLICAS_MAX)?;
 
         bkey_ptrs_validate(v)
     }
@@ -338,13 +344,13 @@ impl BkeyOps for c::BtreePtr {
     const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::EXTENT);
 }
 
-impl BkeyOps for c::BtreePtrV2 {
+impl BkeyOps for BtreePtrV2 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let bp = v.k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2");
+        let bp = v.k.arm::<BtreePtrV2>().expect("a btree_ptr_v2");
         let val_u64s = v.k.val_bytes().len() / 8;
 
-        bkey_fsck_err_on!(v, val_u64s > c::BKEY_BTREE_PTR_VAL_U64s_MAX, id::btree_ptr_v2_val_too_big,
-                          "value too big ({} > {})", val_u64s, c::BKEY_BTREE_PTR_VAL_U64s_MAX)?;
+        bkey_fsck_err_on!(v, val_u64s > BKEY_BTREE_PTR_VAL_U64s_MAX, id::btree_ptr_v2_val_too_big,
+                          "value too big ({} > {})", val_u64s, BKEY_BTREE_PTR_VAL_U64s_MAX)?;
 
         bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, id::btree_ptr_v2_min_key_bad,
                           "min_key > key")?;
@@ -362,7 +368,7 @@ impl BkeyOps for c::BtreePtrV2 {
     /// A btree_ptr_v2: its node's seq, how much of it is written and its
     /// min_key, then its pointers.
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let bp = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v();
+        let bp = k.arm::<BtreePtrV2>().expect("a btree_ptr_v2").v();
 
         crate::prt!(out, "\nseq {:x} written {} min_key {}{} ",
                     bp.seq.get(), bp.sectors_written.get(),
@@ -378,8 +384,8 @@ impl BkeyOps for c::BtreePtrV2 {
     /// XXX: as ptr_swab() - this should take an Unvalidated key.
     fn compat(_btree: Btree, _version: MetadataVersion, big_endian: bool,
                                _write: bool, k: BkeyS<'_>) {
-        let Some(mut bp) = k.arm::<c::BtreePtrV2>() else { return };
-        let Some(v) = <c::BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };
+        let Some(mut bp) = k.arm::<BtreePtrV2>() else { return };
+        let Some(v) = <BtreePtrV2 as ArmRef>::arm_mut(bp.val_bytes_mut()) else { return };
 
         if big_endian != cfg!(target_endian = "big") {
             let mut min_key = v.min_key;
@@ -393,7 +399,7 @@ impl BkeyOps for c::BtreePtrV2 {
     const TRIGGER: Option<&'static Trigger> = Some(&crate::alloc::buckets::EXTENT);
 }
 
-impl BkeyOps for c::Extent {
+impl BkeyOps for Extent {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         bkey_ptrs_validate(v)
     }

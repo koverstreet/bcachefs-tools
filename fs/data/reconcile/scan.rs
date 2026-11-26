@@ -24,11 +24,19 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::btree::bbpos::bbpos;
+use crate::data::reconcile::format::{RECONCILE_SCAN_COOKIE_device, RECONCILE_SCAN_COOKIE_fs,
+    RECONCILE_SCAN_COOKIE_metadata, RECONCILE_SCAN_COOKIE_pending, RECONCILE_SCAN_COOKIE_stripes};
+use crate::data::reconcile::trigger::{per_snapshot_io_opts, SetNeedsReconcileCtx};
+use crate::data::reconcile::work::ReconcileScan;
+use crate::data::reflink_format::ReflinkP;
+use crate::opts::bch_inode_opts;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::data::ec::stripe::WidenCache;
 use crate::data::moving::{key_sectors, MovingCtxt};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::posix::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
 use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
@@ -37,17 +45,17 @@ use crate::os::kthread::Kthread;
 use crate::util::Printbuf;
 use crate::{bch_err, SPOS_MAX};
 use core::ops::Range;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, Backpointer, BTREE_MAX_DEPTH, Cookie};
 
-impl c::ReconcileScan {
+impl ReconcileScan {
     /// Its cookie's offset in its position: the encoding.
     fn cookie(&self) -> u64 {
         match *self {
-            Self::fs       => c::RECONCILE_SCAN_COOKIE_fs.into(),
-            Self::metadata => c::RECONCILE_SCAN_COOKIE_metadata.into(),
-            Self::pending  => c::RECONCILE_SCAN_COOKIE_pending.into(),
-            Self::stripes  => c::RECONCILE_SCAN_COOKIE_stripes.into(),
-            Self::device(d) => u64::from(c::RECONCILE_SCAN_COOKIE_device + d),
+            Self::fs       => RECONCILE_SCAN_COOKIE_fs.into(),
+            Self::metadata => RECONCILE_SCAN_COOKIE_metadata.into(),
+            Self::pending  => RECONCILE_SCAN_COOKIE_pending.into(),
+            Self::stripes  => RECONCILE_SCAN_COOKIE_stripes.into(),
+            Self::device(d) => u64::from(RECONCILE_SCAN_COOKIE_device + d),
             Self::inum(i)  => i,
         }
     }
@@ -61,13 +69,13 @@ impl c::ReconcileScan {
     /// doesn't know.
     pub fn from_cookie(cookie: u64) -> Option<Self> {
         Some(match cookie {
-            v if v >= c::BCACHEFS_ROOT_INO.into() => Self::inum(v),
-            v if v >= c::RECONCILE_SCAN_COOKIE_device.into() =>
-                Self::device((v - u64::from(c::RECONCILE_SCAN_COOKIE_device)) as u32),
-            v if v == c::RECONCILE_SCAN_COOKIE_pending.into()  => Self::pending,
-            v if v == c::RECONCILE_SCAN_COOKIE_stripes.into()  => Self::stripes,
-            v if v == c::RECONCILE_SCAN_COOKIE_metadata.into() => Self::metadata,
-            v if v == c::RECONCILE_SCAN_COOKIE_fs.into()       => Self::fs,
+            v if v >= BCACHEFS_ROOT_INO.into() => Self::inum(v),
+            v if v >= RECONCILE_SCAN_COOKIE_device.into() =>
+                Self::device((v - u64::from(RECONCILE_SCAN_COOKIE_device)) as u32),
+            v if v == RECONCILE_SCAN_COOKIE_pending.into()  => Self::pending,
+            v if v == RECONCILE_SCAN_COOKIE_stripes.into()  => Self::stripes,
+            v if v == RECONCILE_SCAN_COOKIE_metadata.into() => Self::metadata,
+            v if v == RECONCILE_SCAN_COOKIE_fs.into()       => Self::fs,
             _ => return None,
         })
     }
@@ -107,27 +115,27 @@ impl c::ReconcileScan {
 
 impl TransAttempt<'_, '_> {
     /// Request @scan: its cookie's generation bumped, queued in the attempt.
-    pub fn request_scan(&self, scan: c::ReconcileScan) -> Result<(), BchError> {
+    pub fn request_scan(&self, scan: ReconcileScan) -> Result<(), BchError> {
         let p = scan.cookie_pos();
         let mut iter = BtreeIter::new(self, Btree::reconcile_scan, p, BtreeIterFlags::INTENT);
         let k = iter.peek_slot(self)?.expect("a slot");
 
-        let mut n = BkeyI::<c::Cookie>::at(p);
+        let mut n = BkeyI::<Cookie>::at(p);
         n.v.cookie = (cookie_generation(k) + 1).into();
         let n = self.bkey_copy(n.as_ref())?;
         self.update(&iter, n, UpdateTriggerFlags::empty())
     }
 
     /// Whether @scan is requested: its cookie's there.
-    pub fn scan_requested(&self, scan: c::ReconcileScan) -> Result<bool, BchError> {
+    pub fn scan_requested(&self, scan: ReconcileScan) -> Result<bool, BchError> {
         let mut iter = BtreeIter::new(self, Btree::reconcile_scan, scan.cookie_pos(), BtreeIterFlags::empty());
-        Ok(iter.peek_slot(self)?.expect("a slot").arm::<c::Cookie>().is_some())
+        Ok(iter.peek_slot(self)?.expect("a slot").arm::<Cookie>().is_some())
     }
 }
 
 impl Fs {
     /// Request @scan, committed - and kick reconcile, if @wakeup.
-    pub fn request_scan(&self, scan: c::ReconcileScan, wakeup: bool) -> Result<(), BchError> {
+    pub fn request_scan(&self, scan: ReconcileScan, wakeup: bool) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
         commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan))?;
         if wakeup {
@@ -139,14 +147,14 @@ impl Fs {
 
 /// A cookie's generation: 0 for none.
 fn cookie_generation(k: BkeySC<'_>) -> u64 {
-    k.arm::<c::Cookie>().map_or(0, |c| c.v().cookie.get())
+    k.arm::<Cookie>().map_or(0, |c| c.v().cookie.get())
 }
 
 /// A requested scan as the reconcile thread found it: its cookie, at the
 /// generation it was then.
 #[derive(Clone, Copy)]
 pub struct ScanCookie {
-    pub scan:   c::ReconcileScan,
+    pub scan:   ReconcileScan,
     pos:        Bpos,
     generation: u64,
 }
@@ -154,8 +162,8 @@ pub struct ScanCookie {
 impl ScanCookie {
     /// Cookie key @k's - None for a key that isn't one.
     pub fn from_key(fs: &Fs, k: BkeySC<'_>) -> Option<Self> {
-        let generation = k.arm::<c::Cookie>()?.v().cookie.get();
-        Some(ScanCookie { scan: c::ReconcileScan::at_cookie(fs, k.k.p.offset), pos: k.k.p, generation })
+        let generation = k.arm::<Cookie>()?.v().cookie.get();
+        Some(ScanCookie { scan: ReconcileScan::at_cookie(fs, k.k.p.offset), pos: k.k.p, generation })
     }
 
     /// The scan's done: delete its cookie, unless it's been requested again
@@ -216,7 +224,7 @@ impl Fs {
     /// An option change is about to change what @scan covers: registered,
     /// then requested, so writers re-derive against the new option as it
     /// lands.
-    pub fn opt_change_scan_pre(&self, scan: c::ReconcileScan) -> Result<(), BchError> {
+    pub fn opt_change_scan_pre(&self, scan: ReconcileScan) -> Result<(), BchError> {
         self.opt_change_lock.assert_held();
         {
             let mut s = self.reconcile.opt_change_scans.lock();
@@ -232,7 +240,7 @@ impl Fs {
     /// The option change has landed: @scan requested again, now against the
     /// new option, and reconcile kicked - even if the request failed. Its
     /// registration is dropped with the change, not here.
-    pub fn opt_change_scan_post(&self, scan: c::ReconcileScan) -> Result<(), BchError> {
+    pub fn opt_change_scan_post(&self, scan: ReconcileScan) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
         let ret = commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan));
         self.reconcile_wakeup();
@@ -268,7 +276,7 @@ const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 
 fn stop(fs: &Fs) -> Result<(), BchError> {
     if Kthread::should_stop() || !fs.reconcile_enabled() {
-        return Err(c::Errcode::reconcile_scan_stop.into());
+        return Err(Errcode::reconcile_scan_stop.into());
     }
     Ok(())
 }
@@ -285,7 +293,7 @@ impl ScanCookie {
     pub fn run<'f>(self, ctxt: &MovingCtxt<'f>, s: &mut PerSnapshotIoOpts, last_flushed: &mut WbMaybeFlush)
         -> Result<u64, BchError>
     {
-        use c::ReconcileScan as S;
+        use crate::data::reconcile::work::ReconcileScan as S;
         let fs: &'f Fs = ctxt.trans().fs();
 
         if fs.scan_in_flight(self.pos.offset) {
@@ -315,7 +323,7 @@ impl ScanCookie {
 
 /// Every btree's node pointers, and with @metadata unset the extents' and
 /// reflink btrees' leaves.
-fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, s: &mut PerSnapshotIoOpts, metadata: bool)
+fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &ReconcileScan, s: &mut PerSnapshotIoOpts, metadata: bool)
     -> Result<(), BchError>
 {
     let fs = ctxt.trans().fs();
@@ -327,7 +335,7 @@ fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, s: &mut PerSnapshotIo
         }
         let btree = Btree(btree);
         let leaves = !metadata && (btree == Btree::extents || btree == Btree::reflink);
-        scan_btree(ctxt, scan, s, btree, u32::from(!leaves)..c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX)?;
+        scan_btree(ctxt, scan, s, btree, u32::from(!leaves)..BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX)?;
     }
     Ok(())
 }
@@ -335,7 +343,7 @@ fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, s: &mut PerSnapshotIo
 /// @btree's keys at @levels, from @start to @end. An inode's - a scan of the
 /// extents from a nonzero inode - follows its reflink pointers that may
 /// update options, to the indirect extents they share.
-fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, s: &mut PerSnapshotIoOpts, btree: Btree,
+fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &ReconcileScan, s: &mut PerSnapshotIoOpts, btree: Btree,
               levels: Range<u32>, start: Bpos, end: Bpos) -> Result<(), BchError>
 {
     let trans = ctxt.trans();
@@ -351,7 +359,7 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, s: &mut PerSnapsho
         let opts = get_io_opts(t, Some(&mut **s), k)?;
         update_opts(t, Some(&mut **s), &opts, iter, level, k, scan)?;
 
-        if let Some(refs) = k.arm::<c::ReflinkP>()
+        if let Some(refs) = k.arm::<ReflinkP>()
             .filter(|p| start.inode != 0 && p.v().may_update_options())
             .map(|p| p.refd()) {
             t.ignore_restarts(|trans| scan_indirect(trans, scan, &res, refs, s, &opts))?;
@@ -362,14 +370,14 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, s: &mut PerSnapsho
 
 /// The indirect extents a reflink pointer holds references on, @refs, given
 /// @opts - its inode's: do_reconcile_scan_indirect().
-fn scan_indirect(trans: &TransGuard<'_>, scan: &c::ReconcileScan, res: &DiskReservation<'_>, refs: Range<u64>,
-                 s: &mut PerSnapshotIoOpts, opts: &c::bch_inode_opts) -> Result<(), BchError>
+fn scan_indirect(trans: &TransGuard<'_>, scan: &ReconcileScan, res: &DiskReservation<'_>, refs: Range<u64>,
+                 s: &mut PerSnapshotIoOpts, opts: &bch_inode_opts) -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(trans, Btree::reflink, pos(0, refs.start),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
     iter.for_each_commit(trans, Some(res), NO_ENOSPC, |t, iter, k| {
         if k.k.start_pos() >= pos(0, refs.end) {
-            return Err(c::Errcode::fc_break.into());
+            return Err(Errcode::fc_break.into());
         }
         res.put();
         update_opts(t, Some(&mut **s), opts, iter, 0, k, scan)
@@ -378,7 +386,7 @@ fn scan_indirect(trans: &TransGuard<'_>, scan: &c::ReconcileScan, res: &DiskRese
 
 /// Device @dev's data, through its backpointers: what a change to its state
 /// or durability changes.
-fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, dev: u32, last_flushed: &mut WbMaybeFlush)
+fn scan_device(ctxt: &MovingCtxt<'_>, scan: &ReconcileScan, dev: u32, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
 {
     let trans = ctxt.trans();
@@ -386,7 +394,7 @@ fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, dev: u32, last_fl
     let mut bps = BpScanIter::new(Btree::backpointers, pos(dev.into(), 0), None);
 
     bps.for_each(trans, pos(dev.into(), u64::MAX), last_flushed.borrow(), |t, bp, last_flushed| {
-        ctxt.stats().set_pos(c::bbpos { btree: Btree::backpointers, pos: bp.k.p });
+        ctxt.stats().set_pos(bbpos { btree: Btree::backpointers, pos: bp.k.p });
         stop(fs)?;
         scan_bp(t, scan, bp, last_flushed)?;
         t.commit(Some(&DiskReservation::new(fs)), NO_ENOSPC)
@@ -395,7 +403,7 @@ fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::ReconcileScan, dev: u32, last_fl
 
 /// What backpointer @bp points to - not an erasure coded extent: it's
 /// handled at its stripe.
-fn scan_bp(t: &TransAttempt<'_, '_>, scan: &c::ReconcileScan, bp: BkeySC<'_, c::Backpointer>,
+fn scan_bp(t: &TransAttempt<'_, '_>, scan: &ReconcileScan, bp: BkeySC<'_, Backpointer>,
            last_flushed: WbFlush<'_>) -> Result<(), BchError>
 {
     if bp.v().erasure_coded() {
@@ -428,7 +436,7 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
         fs.reconcile.progress.update(t, iter)?;
         stop(fs)?;
 
-        let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
+        let Some(s) = k.arm::<Stripe>() else { return Ok(()) };
         let want = cache.can_widen(fs, s.v())?;
         if s.v().can_widen() != want {
             t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty(),
@@ -439,14 +447,14 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
 }
 
 /// update_reconcile_opts(), for a scan: traced as the scan's.
-fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>, opts: &c::bch_inode_opts,
-               iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, scan: &c::ReconcileScan) -> Result<(), BchError>
+fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut per_snapshot_io_opts>, opts: &bch_inode_opts,
+               iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, scan: &ReconcileScan) -> Result<(), BchError>
 {
     let fs = t.fs();
     let sectors = if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() };
     let msg = |out: &mut Printbuf| write!(out, "{}", k.to_text(fs));
 
-    use c::ReconcileScan as S;
+    use crate::data::reconcile::work::ReconcileScan as S;
     match scan {
         S::fs        => fs.event_add_trace(events::reconcile_scan_fs, sectors, msg),
         S::metadata  => fs.event_add_trace(events::reconcile_scan_metadata, sectors, msg),
@@ -456,9 +464,9 @@ fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>
         S::inum(_)   => fs.event_add_trace(events::reconcile_scan_inum, sectors, msg),
     }
 
-    update_reconcile_opts(t, s, opts, iter, level, k, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change)
+    update_reconcile_opts(t, s, opts, iter, level, k, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change)
 }
 
 // The set_fs_needs_reconcile recovery pass, once, upgrading from
 // rebalance_work: an fs scan, which gives every extent its reconcile state.
-crate::recovery_pass!(set_fs_needs_reconcile => |fs: &Fs| fs.request_scan(c::ReconcileScan::fs, true));
+crate::recovery_pass!(set_fs_needs_reconcile => |fs: &Fs| fs.request_scan(ReconcileScan::fs, true));

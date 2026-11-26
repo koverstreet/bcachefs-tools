@@ -20,11 +20,19 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
 use crate::util::vstructs::Unvalidated;
 use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::AllocWait;
+use crate::alloc::foreground::{AllocWait, open_buckets, Watermark};
 use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::c;
+use crate::alloc::buckets::ReservationFlags;
+use crate::alloc::write_point::write_point_specifier;
+use crate::data::extents_format::{BKEY_EXTENT_U64s_MAX, Reservation};
+use crate::data::reflink_format::ReflinkP;
+use crate::data::write::WriteFlags;
+use crate::init::dev::bch_devs_list;
+use crate::opts::bch_inode_opts;
+use crate::posix::logged_ops_format::{LoggedOpFinsert, LoggedOpTruncate};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::data::extents::Extents;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::reflink;
@@ -36,7 +44,7 @@ use crate::util::log::should_print_err;
 use crate::util::{max_of, Printbuf};
 use crate::{bch_err_fn, bch_err_ratelimited};
 use crate::posix::{inode, logged_ops};
-use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
+use crate::format::{Bpos, Btree, MetadataVersion, SbFeature, Deleted};
 
 // ── fallocate ────────────────────────────────────────────────────────────
 
@@ -44,9 +52,9 @@ use crate::format::{Bpos, Btree, MetadataVersion, SbFeature};
 /// there cut to @sectors - as a reservation, or unwritten extents of space
 /// allocated now; @i_sectors_delta has what it added, @iter's past it after.
 /// Space short of a block per replica is ENOSPC.
-pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter: &mut BtreeIter<'t>,
-                            sectors: u64, opts: &c::bch_inode_opts, i_sectors_delta: &mut i64,
-                            write_point: c::write_point_specifier) -> Result<(), BchError> {
+pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: subvol_inum, iter: &mut BtreeIter<'t>,
+                            sectors: u64, opts: &bch_inode_opts, i_sectors_delta: &mut i64,
+                            write_point: write_point_specifier) -> Result<(), BchError> {
     let fs = t.fs();
     let unwritten = opts.nocow != 0 &&
         fs.version() >= MetadataVersion::unwritten_extents;
@@ -65,7 +73,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
     // cut to what's reserved, rounded down to a block.
     let new_replicas = u32::from(opts.data_replicas).saturating_sub(nr_overwritable.into());
     let res = DiskReservation::new(fs);
-    let _ = res.add(sectors, new_replicas, c::ReservationFlags::partial);
+    let _ = res.add(sectors, new_replicas, ReservationFlags::partial);
     if res.sectors() == 0 && new_replicas != 0 {
         return Err(fs.err(Errcode::ENOSPC_disk_reservation));
     }
@@ -79,22 +87,22 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: c::subvol_inum, iter
         }
     }
 
-    let mut obs = c::open_buckets::default();
+    let mut obs = open_buckets::default();
     let mut sectors_allocated = 0;
 
     let ret = (|| {
         if !unwritten {
-            let mut r = t.bkey_alloc_init::<c::Reservation>(1, iter.pos())?;
+            let mut r = t.bkey_alloc_init::<Reservation>(1, iter.pos())?;
             r.k_mut().resize(sectors as u32);
             r.v_mut().nr_replicas = nr_replicas as u8;
             return t.extent_update(inum, iter, &mut r, &res, 0, Some(&mut *i_sectors_delta), true, 0, None);
         }
 
-        let mut e = t.bkey_alloc(c::BKEY_EXTENT_U64s_MAX as u32)?;
-        let devs_have = c::bch_devs_list::default();
+        let mut e = t.bkey_alloc(BKEY_EXTENT_U64s_MAX as u32)?;
+        let devs_have = bch_devs_list::default();
         let mut req = t.alloc_request(opts.foreground_target.into(), false, Some(&devs_have),
-                                      nr_replicas, nr_replicas, c::Watermark::normal,
-                                      c::WriteFlags::empty(), AllocWait::Sync(None))?;
+                                      nr_replicas, nr_replicas, Watermark::normal,
+                                      WriteFlags::empty(), AllocWait::Sync(None))?;
         let wp = match t.alloc_sectors(&mut req, write_point) {
             Ok(wp) => wp,
             Err(e) if e.matches(Errcode::operation_blocked) => {
@@ -140,7 +148,7 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: Bpos, end: Bpos) -> Result
 
     iter.for_each_max_commit(trans, end, BtreeIterFlags::empty(), Some(&res), CommitFlags::NO_ENOSPC,
                              |t, iter, _| {
-        let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
+        let mut delete = t.bkey_alloc_init::<Deleted>(0, iter.pos())?;
 
         /* create the biggest key we can */
         let max_sectors = max_of(&delete.k().size) & (!0 << fs.block_bits());
@@ -159,7 +167,7 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: Bpos, end: Bpos) -> Result
 pub fn fpunch_one<'t>(
     t:               &TransAttempt<'_, 't>,
     iter:            &mut BtreeIter<'t>,
-    inum:            c::subvol_inum,
+    inum:            subvol_inum,
     end:             u64,
     i_sectors_delta: Option<&mut i64>,
 ) -> Result<bool, BchError> {
@@ -184,7 +192,7 @@ pub fn fpunch_one<'t>(
     };
     iter.set_pos(start);
 
-    let mut delete = t.bkey_alloc_init::<c::Deleted>(0, start)?;
+    let mut delete = t.bkey_alloc_init::<Deleted>(0, start)?;
     delete.k_mut().resize(sectors);
 
     t.extent_update(inum, iter, &mut delete, &res, 0, i_sectors_delta, false, 0, None)?;
@@ -195,7 +203,7 @@ pub fn fpunch_one<'t>(
 pub fn fpunch_at<'t>(
     trans:               &'t BtreeTrans<'t>,
     iter:                &mut BtreeIter<'t>,
-    inum:                c::subvol_inum,
+    inum:                subvol_inum,
     end:                 u64,
     mut i_sectors_delta: Option<&mut i64>,
 ) -> Result<(), BchError> {
@@ -204,7 +212,7 @@ pub fn fpunch_at<'t>(
 }
 
 /// Delete @inum's extents from @start to @end.
-pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_delta: &mut i64)
+pub fn fpunch(fs: &Fs, inum: subvol_inum, start: u64, end: u64, i_sectors_delta: &mut i64)
     -> Result<(), BchError>
 {
     let trans = crate::btree_trans!(fs);
@@ -215,10 +223,10 @@ pub fn fpunch(fs: &Fs, inum: c::subvol_inum, start: u64, end: u64, i_sectors_del
 
 // ── truncate ─────────────────────────────────────────────────────────────
 
-impl BkeyOps for c::LoggedOpTruncate {
+impl BkeyOps for LoggedOpTruncate {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let op = c::LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
+        let op = LoggedOpTruncate::val_copy_pad(k).expect("a truncate op");
 
         write!(out, "subvol={}", op.subvol.get());
         write!(out, " inum={}", op.inum.get());
@@ -226,7 +234,7 @@ impl BkeyOps for c::LoggedOpTruncate {
     }
 }
 
-fn truncate_set_isize(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, new_i_size: u64, warn: bool)
+fn truncate_set_isize(t: &TransAttempt<'_, '_>, inum: subvol_inum, new_i_size: u64, warn: bool)
     -> Result<(), BchError>
 {
     let mut iter = BtreeIter::uninit(t.trans());
@@ -240,11 +248,11 @@ fn truncate_set_isize(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, new_i_size
 /// Errors are reported when there's @i_sectors_delta: not on resume.
 fn __resume_truncate(
     trans:           &BtreeTrans<'_>,
-    op:              &BkeyI<c::LoggedOpTruncate>,
+    op:              &BkeyI<LoggedOpTruncate>,
     i_sectors_delta: Option<&mut i64>,
 ) -> Result<(), BchError> {
     let fs = trans.fs();
-    let inum = c::subvol_inum { subvol: op.v.subvol.get() as u64, inum: op.v.inum.get() };
+    let inum = subvol_inum { subvol: op.v.subvol.get() as u64, inum: op.v.inum.get() };
     let new_i_size = op.v.new_i_size.get();
     let warn_errors = i_sectors_delta.is_some();
 
@@ -269,14 +277,14 @@ fn __resume_truncate(
 
 /// For recovery's logged ops table.
 pub fn resume_truncate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), BchError> {
-    __resume_truncate(trans, op_k.arm::<c::LoggedOpTruncate>().expect("a truncate op"), None)
+    __resume_truncate(trans, op_k.arm::<LoggedOpTruncate>().expect("a truncate op"), None)
 }
 
 /// Set @inum's i_size to @new_i_size and delete its extents past that block.
-pub fn truncate(fs: &Fs, inum: c::subvol_inum, new_i_size: u64, i_sectors_delta: &mut i64)
+pub fn truncate(fs: &Fs, inum: subvol_inum, new_i_size: u64, i_sectors_delta: &mut i64)
     -> Result<(), BchError>
 {
-    let mut op = BkeyI::<c::LoggedOpTruncate>::new();
+    let mut op = BkeyI::<LoggedOpTruncate>::new();
     op.v.subvol     = (inum.subvol as u32).into();
     op.v.inum       = inum.inum.into();
     op.v.new_i_size = new_i_size.into();
@@ -291,10 +299,10 @@ pub fn truncate(fs: &Fs, inum: c::subvol_inum, new_i_size: u64, i_sectors_delta:
 
 // ── finsert/fcollapse ────────────────────────────────────────────────────
 
-impl BkeyOps for c::LoggedOpFinsert {
+impl BkeyOps for LoggedOpFinsert {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let op = c::LoggedOpFinsert::val_copy_pad(k).expect("a finsert op");
+        let op = LoggedOpFinsert::val_copy_pad(k).expect("a finsert op");
 
         write!(out, "subvol={}", op.subvol.get());
         write!(out, " inum={}", op.inum.get());
@@ -303,7 +311,7 @@ impl BkeyOps for c::LoggedOpFinsert {
     }
 }
 
-fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, len: i64, warn: bool)
+fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: subvol_inum, offset: u64, len: i64, warn: bool)
     -> Result<(), BchError>
 {
     let offset = offset << 9;
@@ -363,11 +371,11 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
     src_iter.traverse(t)?;
 
     /* Made a reflink_p in place: a one pointer extent's value is smaller */
-    let orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<c::ReflinkP>())?;
+    let orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<ReflinkP>())?;
 
     /* the ancestor's reflink_p, queued as its update */
     let r_p = reflink::make_extent_indirect(t, &src_iter, orig, reflink_p_may_update_opts)?;
-    t.bkey_make_mut_noupdate(BkeySC::<c::ReflinkP>::from(&r_p).untyped())
+    t.bkey_make_mut_noupdate(BkeySC::<ReflinkP>::from(&r_p).untyped())
 }
 
 /*
@@ -380,7 +388,7 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
 fn finsert_ancestor_unwritten<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
     -> Result<TransBkey<'a, 't>, BchError>
 {
-    let mut r = t.bkey_alloc_init::<c::Reservation>(1, k.k.p)?;
+    let mut r = t.bkey_alloc_init::<Reservation>(1, k.k.p)?;
     r.k_mut().size = k.k.size;
     r.v_mut().nr_replicas = k.durability_safe(t.fs()).total as u8;
     Ok(r.into())
@@ -389,13 +397,13 @@ fn finsert_ancestor_unwritten<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
 /// Errors are reported when there's @i_sectors_delta: not on resume.
 fn __resume_finsert(
     trans:               &BtreeTrans<'_>,
-    op:                  &mut BkeyI<c::LoggedOpFinsert>,
+    op:                  &mut BkeyI<LoggedOpFinsert>,
     mut i_sectors_delta: Option<&mut i64>,
 ) -> Result<(), BchError> {
-    use c::LoggedOpFinsertState as S;
+    use crate::posix::logged_ops_format::LoggedOpFinsertState as S;
 
     let fs = trans.fs();
-    let inum = c::subvol_inum { subvol: op.v.subvol.get() as u64, inum: op.v.inum.get() };
+    let inum = subvol_inum { subvol: op.v.subvol.get() as u64, inum: op.v.inum.get() };
     let dst_offset = op.v.dst_offset.get();
     let src_offset = op.v.src_offset.get();
     let shift = dst_offset.wrapping_sub(src_offset) as i64;
@@ -478,7 +486,7 @@ fn __resume_finsert(
                  * already ours and only a split adds anything.
                  */
                 if from_ancestor && !shared_data {
-                    disk_res.add(copy.k().size as u64, nr_replicas, c::ReservationFlags::empty())?;
+                    disk_res.add(copy.k().size as u64, nr_replicas, ReservationFlags::empty())?;
                 }
 
                 if bkey_lt(k_start, src_pos) {
@@ -488,11 +496,11 @@ fn __resume_finsert(
                     /* Splitting compressed extent? */
                     if snapshot == k_snapshot {
                         let _ = disk_res.add(copy.k().size as u64, nr_replicas,
-                                             c::ReservationFlags::nofail);
+                                             ReservationFlags::nofail);
                     }
                 }
 
-                let mut delete = t.bkey_alloc_init::<c::Deleted>(0, Bpos { snapshot, ..copy.k().p })?;
+                let mut delete = t.bkey_alloc_init::<Deleted>(0, Bpos { snapshot, ..copy.k().p })?;
                 delete.k_mut().size = copy.k().size;
 
                 let p = &mut copy.k_mut().p;
@@ -535,14 +543,14 @@ fn __resume_finsert(
 
 /// For recovery's logged ops table.
 pub fn resume_finsert(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), BchError> {
-    __resume_finsert(trans, op_k.arm::<c::LoggedOpFinsert>().expect("a finsert op"), None)
+    __resume_finsert(trans, op_k.arm::<LoggedOpFinsert>().expect("a finsert op"), None)
 }
 
 /// Insert @len sectors of hole into @inum at @offset, shifting what's after
 /// up - or, not @insert, collapse them out, shifting it down.
 pub fn fcollapse_finsert(
     fs:              &Fs,
-    inum:            c::subvol_inum,
+    inum:            subvol_inum,
     offset:          u64,
     len:             u64,
     insert:          bool,
@@ -550,7 +558,7 @@ pub fn fcollapse_finsert(
 ) -> Result<(), BchError> {
     let shift = if insert { len as i64 } else { (len as i64).wrapping_neg() };
 
-    let mut op = BkeyI::<c::LoggedOpFinsert>::new();
+    let mut op = BkeyI::<LoggedOpFinsert>::new();
     op.v.subvol     = (inum.subvol as u32).into();
     op.v.inum       = inum.inum.into();
     op.v.dst_offset = offset.wrapping_add_signed(shift).into();

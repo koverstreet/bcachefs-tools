@@ -48,22 +48,24 @@ use bcachefs_kernel::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
     TransBkey, UpdateTriggerFlags,
 };
-use bcachefs_kernel::c;
+use bcachefs_kernel::data::write::WriteFlags;
+use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::posix::inode::bch_inode_unpacked;
 use bcachefs_kernel::errcode::{Errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::posix::inode;
 use bcachefs_kernel::typeinfo::{self, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::{Head, Unvalidated};
-use bcachefs_kernel::c::DegradedAction;
+use bcachefs_kernel::format::DegradedAction;
 use clap::Parser;
 
 use crate::device_scan::OpenedFs;
 use crate::logging;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
-use bcachefs_kernel::format::{Bpos, Btree, BkeyType};
+use bcachefs_kernel::format::{Bpos, Btree, BkeyType, bch_sb, bkey, Deleted, ErrorAction};
 
-const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
+const BKEY_U64S: usize = size_of::<bkey>() / size_of::<u64>();
 
 // The canonical kvdb documentation: this constant is the --help long text,
 // and docgen extracts it into the Principles of Operation (doc/generated/
@@ -322,9 +324,9 @@ fn render_key(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, key_only: bool) -> String {
 fn render_key_fields(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, paths: &[&str]) -> Result<String> {
     if let Some(i) = k.arm::<inode::Inodes>() {
         let u = inode::unpack(fs, i);
-        let mut bytes = [0u8; size_of::<c::bch_inode_unpacked>()];
+        let mut bytes = [0u8; size_of::<bch_inode_unpacked>()];
         typeinfo::field_bytes(&u, &mut bytes);
-        return render_fields(&bytes, <c::bch_inode_unpacked as TypeInfo>::INFO, paths);
+        return render_fields(&bytes, <bch_inode_unpacked as TypeInfo>::INFO, paths);
     }
 
     render_raw_fields(k, paths)
@@ -809,7 +811,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, level: u32, assigns
 fn cmd_rewrite(fs: &Fs, btree: Btree, pos: Bpos, level: u32) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
-        t.btree_node_rewrite_pos(btree, level, pos, 0, CommitFlags::NO_ENOSPC, c::WriteFlags::empty())
+        t.btree_node_rewrite_pos(btree, level, pos, 0, CommitFlags::NO_ENOSPC, WriteFlags::empty())
     })
     .map_err(|e| anyhow!("rewriting the node the level {level} pointer of {btree} at {pos} points to: {e}"))?;
     Ok(String::new())
@@ -847,7 +849,7 @@ fn cmd_set(
                     }
                 }
 
-                let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<c::Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
+                let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
                 new.k_mut().set_key_type(ty);
                 new.k_mut().u64s = (BKEY_U64S + info.size.div_ceil(8)) as u8;
                 set_fields(fs, &mut new, assigns, true, &mut user_err)?;
@@ -881,7 +883,7 @@ fn cmd_set(
             // can grow it into - vartail elements (damage errors[n]) lie
             // beyond the struct:
             // of the type the user named: erased, then retyped
-            let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<c::Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
+            let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
             new.k_mut().set_key_type(ty);
             new.k_mut().u64s = (BKEY_U64S + info.size.div_ceil(8)) as u8;
 
@@ -903,7 +905,7 @@ fn cmd_set(
 // bch2_write_super so the csum is recomputed and every sb copy updated.
 
 fn sb_field(field: &str) -> Result<typeinfo::FieldRef> {
-    typeinfo::resolve_with_bits(<Head<c::bch_sb> as typeinfo::TypeInfo>::INFO, field)
+    typeinfo::resolve_with_bits(<Head<bch_sb> as typeinfo::TypeInfo>::INFO, field)
         .map_err(|e| anyhow!("{e}"))
 }
 
@@ -1458,7 +1460,7 @@ fn run_line(repl: &mut Repl, line: &str) -> Result<ControlFlow<()>> {
 fn kvdb(cli: Cli) -> Result<()> {
     logging::setup(cli.verbose, cli.colorize);
 
-    let mut fs_opts = c::bch_opts::default();
+    let mut fs_opts = bch_opts::default();
     fs_opts.set_degraded(DegradedAction::very);
     // An injection tool must not consume its own injections: background
     // workers in *this* fs instance would otherwise act on the state under
@@ -1474,7 +1476,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // against: commit-only validation (invalid state codewords, subvolume ->
     // interior node references) stays off in this instance.
     fs_opts.set_no_commit_validate(true);
-    fs_opts.set_errors(c::ErrorAction::continue_);
+    fs_opts.set_errors(ErrorAction::continue_);
     if cli.verbose > 0 {
         fs_opts.set_verbose(true);
     }

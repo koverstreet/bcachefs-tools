@@ -25,8 +25,8 @@
 use crate::fs::Dev;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::TransAttempt;
-use crate::c;
-use crate::c::Errcode;
+use crate::util::time_stats::TimeStat;
+use crate::errcode::Errcode;
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::BchError;
@@ -43,18 +43,18 @@ use crate::warn_on_once;
 use crate::data_structures::array_vec::ArrayVec;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use crate::format::Bpos;
+use crate::format::{Bpos, BCH_BKEY_PTRS_MAX};
 
 pub const BUCKET_NOCOW_LOCKS_BITS: u32 = 10;
-pub const BUCKET_NOCOW_LOCKS: u32 = 1 << c::BUCKET_NOCOW_LOCKS_BITS;
+pub const BUCKET_NOCOW_LOCKS: u32 = 1 << BUCKET_NOCOW_LOCKS_BITS;
 
 pub const NOCOW_LOCK_BUCKET_SIZE: u32 = 6;
 
-const NR_SLOTS: usize = c::NOCOW_LOCK_BUCKET_SIZE as usize;
-const NR_BUCKETS: usize = c::BUCKET_NOCOW_LOCKS as usize;
+const NR_SLOTS: usize = NOCOW_LOCK_BUCKET_SIZE as usize;
+const NR_BUCKETS: usize = BUCKET_NOCOW_LOCKS as usize;
 
 /// A key's buckets: one per pointer, at most.
-type Buckets = ArrayVec<u64, { c::BCH_BKEY_PTRS_MAX as usize }>;
+type Buckets = ArrayVec<u64, { BCH_BKEY_PTRS_MAX as usize }>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NocowKind {
@@ -184,7 +184,7 @@ impl NocowLocks {
     }
 
     fn bucket(&self, dev_bucket: u64) -> &NocowLockBucket {
-        &self.l[hash_64(dev_bucket, c::BUCKET_NOCOW_LOCKS_BITS) as usize & (NR_BUCKETS - 1)]
+        &self.l[hash_64(dev_bucket, BUCKET_NOCOW_LOCKS_BITS) as usize & (NR_BUCKETS - 1)]
     }
 
     pub fn is_locked(&self, bucket: Bpos) -> bool {
@@ -219,7 +219,7 @@ impl NocowLocks {
         }
 
         // in hash bucket order: we never wait holding what another waits for
-        let mut order: ArrayVec<(u64, &NocowLockBucket), { c::BCH_BKEY_PTRS_MAX as usize }> =
+        let mut order: ArrayVec<(u64, &NocowLockBucket), { BCH_BKEY_PTRS_MAX as usize }> =
             buckets.iter().map(|&b| (b, self.bucket(b))).collect();
         order.sort_unstable_by_key(|&(_, l)| core::ptr::from_ref(l) as usize);
         warn_on_once!(order.len() > NR_SLOTS);
@@ -231,7 +231,7 @@ impl NocowLocks {
                     continue;
                 }
 
-                let _contended = fs.times.get(c::TimeStat::nocow_lock_contended as usize).timer();
+                let _contended = fs.times.get(TimeStat::nocow_lock_contended as usize).timer();
                 if ret.as_ref().is_err_and(is_contended) {
                     ret = l.wait_until(trans, || {
                         let r = l.trylock(fs, b, kind);

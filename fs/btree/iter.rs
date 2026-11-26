@@ -147,7 +147,7 @@ use crate::btree::cache::cached_node;
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, PathIdx, Paths};
-use crate::c;
+use crate::btree::update::TransCommitFlags;
 use crate::data::extents::{bch2_cut_back_s, bch2_cut_front_s};
 use crate::debug::params::debug_check_iterators;
 use crate::debug::trace::events;
@@ -164,7 +164,7 @@ use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
 use crate::data::ptrs::BtreePtrs;
 use cstruct_macros::MaybeZeroable;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, bch_val, bkey, bkey_i, BTREE_MAX_DEPTH};
 use core::ffi::c_uint;
 use cstruct_macros::{bch_enum, bitfield, BitfieldMembers};
 use nestify::nest;
@@ -247,9 +247,9 @@ nest! {
     #[derive(BitfieldMembers)]
     pub struct BtreeIter<'t> {
         pub(in crate::btree) trans: &'t BtreeTrans<'t>,
-        pub(in crate::btree) path: c::PathIdx,
-        pub(in crate::btree) update_path: c::PathIdx,
-        pub(in crate::btree) key_cache_path: core::cell::Cell<c::PathIdx>,
+        pub(in crate::btree) path: PathIdx,
+        pub(in crate::btree) update_path: PathIdx,
+        pub(in crate::btree) key_cache_path: core::cell::Cell<PathIdx>,
 
         #[members]
         #>[bitfield(u8)]
@@ -269,7 +269,7 @@ nest! {
          * Current unpacked key - so that advancing the iterator can
          * correctly advance pos.
          */
-        pub(in crate::btree) k: c::bkey,
+        pub(in crate::btree) k: bkey,
 
         /* BTREE_ITER_with_journal: */
         pub(in crate::btree) journal_idx: usize,
@@ -306,33 +306,33 @@ pub struct trans_may_drop_updates {
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BtreeIterFlags: u32 {
-        const SLOTS = c::BtreeIterUpdateTriggerFlags::slots.bits();
-        const PREV = c::BtreeIterUpdateTriggerFlags::prev.bits();
-        const INTENT = c::BtreeIterUpdateTriggerFlags::intent.bits();
-        const PREFETCH = c::BtreeIterUpdateTriggerFlags::prefetch.bits();
-        const IS_EXTENTS = c::BtreeIterUpdateTriggerFlags::is_extents.bits();
-        const NOT_EXTENTS = c::BtreeIterUpdateTriggerFlags::not_extents.bits();
-        const CACHED = c::BtreeIterUpdateTriggerFlags::cached.bits();
-        const KEY_CACHED = c::BtreeIterUpdateTriggerFlags::with_key_cache.bits();
-        const WITH_JOURNAL = c::BtreeIterUpdateTriggerFlags::with_journal.bits();
-        const SNAPSHOT_FIELD = c::BtreeIterUpdateTriggerFlags::snapshot_field.bits();
-        const ALL_SNAPSHOTS = c::BtreeIterUpdateTriggerFlags::all_snapshots.bits();
-        const FILTER_SNAPSHOTS = c::BtreeIterUpdateTriggerFlags::filter_snapshots.bits();
-        const NOFILTER_WHITEOUTS = c::BtreeIterUpdateTriggerFlags::nofilter_whiteouts.bits();
-        const NOPRESERVE = c::BtreeIterUpdateTriggerFlags::nopreserve.bits();
-        const NOFILL = c::BtreeIterUpdateTriggerFlags::nofill.bits();
-        const CACHED_NOFILL = c::BtreeIterUpdateTriggerFlags::cached_nofill.bits();
-        const KEY_CACHE_FILL = c::BtreeIterUpdateTriggerFlags::key_cache_fill.bits();
-        const COMMITTED = c::BtreeIterUpdateTriggerFlags::committed.bits();
+        const SLOTS = BtreeIterUpdateTriggerFlags::slots.bits();
+        const PREV = BtreeIterUpdateTriggerFlags::prev.bits();
+        const INTENT = BtreeIterUpdateTriggerFlags::intent.bits();
+        const PREFETCH = BtreeIterUpdateTriggerFlags::prefetch.bits();
+        const IS_EXTENTS = BtreeIterUpdateTriggerFlags::is_extents.bits();
+        const NOT_EXTENTS = BtreeIterUpdateTriggerFlags::not_extents.bits();
+        const CACHED = BtreeIterUpdateTriggerFlags::cached.bits();
+        const KEY_CACHED = BtreeIterUpdateTriggerFlags::with_key_cache.bits();
+        const WITH_JOURNAL = BtreeIterUpdateTriggerFlags::with_journal.bits();
+        const SNAPSHOT_FIELD = BtreeIterUpdateTriggerFlags::snapshot_field.bits();
+        const ALL_SNAPSHOTS = BtreeIterUpdateTriggerFlags::all_snapshots.bits();
+        const FILTER_SNAPSHOTS = BtreeIterUpdateTriggerFlags::filter_snapshots.bits();
+        const NOFILTER_WHITEOUTS = BtreeIterUpdateTriggerFlags::nofilter_whiteouts.bits();
+        const NOPRESERVE = BtreeIterUpdateTriggerFlags::nopreserve.bits();
+        const NOFILL = BtreeIterUpdateTriggerFlags::nofill.bits();
+        const CACHED_NOFILL = BtreeIterUpdateTriggerFlags::cached_nofill.bits();
+        const KEY_CACHE_FILL = BtreeIterUpdateTriggerFlags::key_cache_fill.bits();
+        const COMMITTED = BtreeIterUpdateTriggerFlags::committed.bits();
         /// Extents: a peek returns its key cut to the window - [position, end),
         /// or backwards [min, position) - the iterator's key with it, so a walk
         /// steps to the window's edge at most, where it ends. An update of
         /// what's returned replaces only the window.
-        const TRIM = c::BtreeIterUpdateTriggerFlags::trim.bits();
+        const TRIM = BtreeIterUpdateTriggerFlags::trim.bits();
         /// A node that failed to read is had, held, as any other - its
         /// level's iterator empty, its keys never looked at: for topology
         /// repair, to evict it through the path that holds it.
-        const READ_ERRORS = c::BtreeIterUpdateTriggerFlags::read_errors.bits();
+        const READ_ERRORS = BtreeIterUpdateTriggerFlags::read_errors.bits();
     }
 }
 
@@ -342,18 +342,18 @@ bitflags! {
     /// triggers it runs.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct UpdateTriggerFlags: u32 {
-        const INTERNAL_SNAPSHOT_NODE   = c::BtreeIterUpdateTriggerFlags::internal_snapshot_node.bits();
-        const NOJOURNAL                = c::BtreeIterUpdateTriggerFlags::nojournal.bits();
-        const KEY_CACHE_RECLAIM        = c::BtreeIterUpdateTriggerFlags::key_cache_reclaim.bits();
-        const OVERWRITE_TRIGGERED      = c::BtreeIterUpdateTriggerFlags::overwrite_triggered.bits();
-        const NORUN                   = c::BtreeIterUpdateTriggerFlags::norun.bits();
-        const TRANSACTIONAL            = c::BtreeIterUpdateTriggerFlags::transactional.bits();
-        const ATOMIC                   = c::BtreeIterUpdateTriggerFlags::atomic.bits();
-        const GC                       = c::BtreeIterUpdateTriggerFlags::gc.bits();
-        const INSERT                   = c::BtreeIterUpdateTriggerFlags::inserting.bits();
-        const OVERWRITE                = c::BtreeIterUpdateTriggerFlags::overwriting.bits();
-        const IS_DISCARD               = c::BtreeIterUpdateTriggerFlags::is_discard.bits();
-        const SET_NEEDS_RECONCILE_DONE = c::BtreeIterUpdateTriggerFlags::set_needs_reconcile_done.bits();
+        const INTERNAL_SNAPSHOT_NODE   = BtreeIterUpdateTriggerFlags::internal_snapshot_node.bits();
+        const NOJOURNAL                = BtreeIterUpdateTriggerFlags::nojournal.bits();
+        const KEY_CACHE_RECLAIM        = BtreeIterUpdateTriggerFlags::key_cache_reclaim.bits();
+        const OVERWRITE_TRIGGERED      = BtreeIterUpdateTriggerFlags::overwrite_triggered.bits();
+        const NORUN                   = BtreeIterUpdateTriggerFlags::norun.bits();
+        const TRANSACTIONAL            = BtreeIterUpdateTriggerFlags::transactional.bits();
+        const ATOMIC                   = BtreeIterUpdateTriggerFlags::atomic.bits();
+        const GC                       = BtreeIterUpdateTriggerFlags::gc.bits();
+        const INSERT                   = BtreeIterUpdateTriggerFlags::inserting.bits();
+        const OVERWRITE                = BtreeIterUpdateTriggerFlags::overwriting.bits();
+        const IS_DISCARD               = BtreeIterUpdateTriggerFlags::is_discard.bits();
+        const SET_NEEDS_RECONCILE_DONE = BtreeIterUpdateTriggerFlags::set_needs_reconcile_done.bits();
     }
 }
 
@@ -361,13 +361,13 @@ bitflags! {
     /// The bits of TransCommitFlags above the watermark.
     #[derive(Clone, Copy)]
     pub struct CommitFlags: u32 {
-        const NO_ENOSPC             = c::TransCommitFlags::no_enospc.bits();
-        const NO_CHECK_RW           = c::TransCommitFlags::no_check_rw.bits();
-        const NO_JOURNAL_RES        = c::TransCommitFlags::no_journal_res.bits();
-        const NO_SKIP_NOOPS         = c::TransCommitFlags::no_skip_noops.bits();
-        const JOURNAL_RECLAIM       = c::TransCommitFlags::journal_reclaim.bits();
-        const JOURNAL_REPLAY        = c::TransCommitFlags::journal_replay.bits();
-        const SKIP_ACCOUNTING_APPLY = c::TransCommitFlags::skip_accounting_apply.bits();
+        const NO_ENOSPC             = TransCommitFlags::no_enospc.bits();
+        const NO_CHECK_RW           = TransCommitFlags::no_check_rw.bits();
+        const NO_JOURNAL_RES        = TransCommitFlags::no_journal_res.bits();
+        const NO_SKIP_NOOPS         = TransCommitFlags::no_skip_noops.bits();
+        const JOURNAL_RECLAIM       = TransCommitFlags::journal_reclaim.bits();
+        const JOURNAL_REPLAY        = TransCommitFlags::journal_replay.bits();
+        const SKIP_ACCOUNTING_APPLY = TransCommitFlags::skip_accounting_apply.bits();
     }
 }
 
@@ -478,7 +478,7 @@ pub(super) type Peeked = Result<Option<KeyVal>, BchError>;
 
 /// # Safety
 /// @v is @k's value - NULL for a hole - valid for 'k.
-unsafe fn key_from_parts<'k>(k: &'k c::bkey, v: *const c::bch_val) -> BkeySC<'k> {
+unsafe fn key_from_parts<'k>(k: &'k bkey, v: *const bch_val) -> BkeySC<'k> {
     BkeySC {
         k,
         // a hole's NULL value: a dangling, aligned one instead, as val_bytes()
@@ -761,7 +761,7 @@ impl<'t> BtreeIter<'t> {
             assert!(max_key >= self.pos, "node ending at {}, before the iterator's position {}", max_key, self.pos);
 
             let min_key = min_key.unwrap_or(self.pos);
-            self.k = c::bkey::new();
+            self.k = bkey::new();
             self.k.p = min_key;
             self.pos = min_key;
 
@@ -969,7 +969,7 @@ impl<'t> BtreeIter<'t> {
             return Err(e);
         }
 
-        let mut u = c::bkey::new();
+        let mut u = bkey::new();
         let Some(k2) = paths[self.key_cache_path.get()].peek_slot(&mut u) else {
             return Ok(());
         };
@@ -1198,7 +1198,7 @@ impl<'t> BtreeIter<'t> {
         }
 
         let trans = self.trans;
-        let t = trans.kmalloc_in(self.k.bytes())?.cast::<c::bkey_i>();
+        let t = trans.kmalloc_in(self.k.bytes())?.cast::<bkey_i>();
 
         let t = unsafe {
             (*t).k = self.k;
@@ -1744,7 +1744,7 @@ impl<'t> BtreeIter<'t> {
                     }
 
                     if bkey_lt(self.pos, next) {
-                        self.k = c::bkey::new();
+                        self.k = bkey::new();
                         self.k.p = self.pos;
 
                         if flags.contains(BtreeIterFlags::IS_EXTENTS) {
@@ -1859,7 +1859,7 @@ impl<'t> BtreeIter<'t> {
         iter.flags = flags.bits();
         iter.snapshot = pos.snapshot;
         iter.pos = pos;
-        iter.k = c::bkey { p: pos, ..c::bkey::new() };
+        iter.k = bkey { p: pos, ..bkey::new() };
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
         {
             iter.ip_allocated = ip;
@@ -1883,7 +1883,7 @@ impl<'t> BtreeIter<'t> {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {
             let path = &paths[iter.path];
-            assert!(u32::from(path.locks_want()) >= locks_want.min(c::BTREE_MAX_DEPTH));
+            assert!(u32::from(path.locks_want()) >= locks_want.min(BTREE_MAX_DEPTH));
             assert!(u32::from(path.level()) == depth);
             assert!(u32::from(iter.min_depth) == depth);
         }
@@ -1935,7 +1935,7 @@ pub fn btree_iter_params_valid(btree: Btree, level: u32, start: Bpos, end: Bpos,
         return false;
     }
 
-    if level >= c::BTREE_MAX_DEPTH {
+    if level >= BTREE_MAX_DEPTH {
         return false;
     }
 
@@ -2055,7 +2055,7 @@ pub fn btree_iter_params_valid(btree: Btree, level: u32, start: Bpos, end: Bpos,
 /// The iterator @k borrows mustn't be touched again before the caller
 /// returns @k - which ends its use of it.
 pub(crate) unsafe fn polonius_key<'i, V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> BkeySC<'i, V> {
-    BkeySC { k: unsafe { &*(k.k as *const c::bkey) }, v: k.v, iter: PhantomData, val: PhantomData }
+    BkeySC { k: unsafe { &*(k.k as *const bkey) }, v: k.v, iter: PhantomData, val: PhantomData }
 }
 
 /// Btrees walked in parallel, by position: each of @iters peeked from where it
@@ -2100,7 +2100,7 @@ impl<'t> BtreeIter<'t> {
             flags:          0,
             snapshot:       0,
             pos:            Default::default(),
-            k:              c::bkey::new(),
+            k:              bkey::new(),
             journal_idx:    0,
             #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
             ip_allocated:   0,
@@ -2138,7 +2138,7 @@ impl<'t> BtreeIter<'t> {
 
     /// The btree's key at the iterator's path's position - not the journal
     /// keys over it, which a peek sees - unpacked into @u if it's packed.
-    pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut c::bkey) -> BkeySC<'k> {
+    pub(crate) fn path_peek_slot<'k>(&'k self, t: &TransAttempt<'_, 't>, u: &'k mut bkey) -> BkeySC<'k> {
         let paths = t.trans().paths();
         let KeyVal(v) = paths[self.path].peek_slot(u).expect("a slot always has a key");
         unsafe { key_from_parts(u, v) }
@@ -2463,7 +2463,7 @@ impl<'t> BtreeNodeIter<'t> {
     pub(crate) fn at_node(t: &TransAttempt<'t, 't>, b: &BtreeNode) -> Result<Self, BchError> {
         let level = usize::from(b.c.level.get());
         let pos = b.key_peek().k.p;
-        let mut iter = BtreeNodeIter::new(t, b.c.btree_id.get(), pos, c::BTREE_MAX_DEPTH, b.c.level.get().into(),
+        let mut iter = BtreeNodeIter::new(t, b.c.btree_id.get(), pos, BTREE_MAX_DEPTH, b.c.level.get().into(),
                                           BtreeIterFlags::INTENT);
         iter.raw.traverse(t)?;
 

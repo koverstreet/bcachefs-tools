@@ -16,11 +16,14 @@
 //! Each check can explain itself into a trace, for reconcile_set_pending.
 
 use crate::alloc::disk_groups::Target;
-use crate::alloc::foreground::AllocWait;
+use crate::alloc::foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark};
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::iter::TransAttempt;
-use crate::c;
-use crate::c::Errcode;
+use crate::data::update::{data_update_opts, DataUpdateType};
+use crate::init::dev::bch_devs_list;
+use crate::opts::bch_inode_opts;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::errcode::Errcode;
 use crate::data::copygc;
 use crate::data::durability::{extent_ptr_durability, BkeyVDurability};
 use crate::data::ec::head::{head_get, stripe_head_put};
@@ -31,7 +34,7 @@ use crate::fs::Fs;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 
-use c::WriteFlags as w;
+use crate::data::write::WriteFlags as w;
 
 #[derive(Clone, Copy, Default)]
 struct Available {
@@ -48,15 +51,15 @@ fn no_room<T>(fs: &Fs, need_copygc: bool) -> Result<T, BchError> {
     })
 }
 
-fn watermark(data_opts: &c::data_update_opts) -> c::Watermark {
-    c::Watermark::from_bits(data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
+fn watermark(data_opts: &data_update_opts) -> Watermark {
+    Watermark::from_bits(data_opts.commit_flags.bits() & BCH_WATERMARK_MASK)
 }
 
 impl Fs {
     /// Durability available to a write to @target, 0 meaning every device. A
     /// cached write counts 1 per device.
-    fn durability_available(&self, data_opts: &c::data_update_opts, data_type: DataType,
-                            target: u32, devs_have: &c::bch_devs_list,
+    fn durability_available(&self, data_opts: &data_update_opts, data_type: DataType,
+                            target: u32, devs_have: &bch_devs_list,
                             mut trace: Option<&mut Printbuf>) -> Available {
         if let Some(out) = trace.as_deref_mut() {
             write!(out, "available to write on target=");
@@ -104,7 +107,7 @@ impl Fs {
         k.ptrs(self)
             .filter(|ptr| ptr.cached() == 0)
             .map(|ptr| u32::from(ptr.dev()))
-            .filter(|&dev| dev != c::BCH_SB_MEMBER_INVALID && devs.d.test(dev as usize))
+            .filter(|&dev| dev != BCH_SB_MEMBER_INVALID && devs.d.test(dev as usize))
             .map(|dev| self.dev_durability(dev, &rcu))
             .sum()
     }
@@ -124,7 +127,7 @@ impl Fs {
     /// "succeeds" off target and requeues forever; and the replacement gets
     /// whatever durability the filesystem has, which trades replicas for
     /// placement if it's less - worth it only to evacuate.
-    fn write_btree_feasible(&self, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
+    fn write_btree_feasible(&self, opts: &bch_inode_opts, data_opts: &data_update_opts,
                             k: BkeySC<'_, BtreePtrs>, mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let evacuating = self.btree_ptr_has_dev_evacuating(k);
         let replicas = u32::from(opts.data_replicas);
@@ -134,7 +137,7 @@ impl Fs {
             return Ok(());
         }
 
-        let none = c::bch_devs_list::default();
+        let none = bch_devs_list::default();
         let btree = DataType::btree;
         let target = data_opts.target.into();
 
@@ -160,11 +163,11 @@ impl Fs {
         if worth_it { Ok(()) } else { no_room(self, need_copygc) }
     }
 
-    pub fn data_update_write_feasible(&self, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
-                                      devs_have: &c::bch_devs_list, k: BkeySC<'_>,
+    pub fn data_update_write_feasible(&self, opts: &bch_inode_opts, data_opts: &data_update_opts,
+                                      devs_have: &bch_devs_list, k: BkeySC<'_>,
                                       mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let btree = k.arm::<BtreePtrs>();
-        if let Some(b) = btree.filter(|_| data_opts.type_ == c::DataUpdateType::reconcile) {
+        if let Some(b) = btree.filter(|_| data_opts.type_ == DataUpdateType::reconcile) {
             return self.write_btree_feasible(opts, data_opts, b, trace);
         }
 
@@ -194,10 +197,10 @@ impl TransAttempt<'_, '_> {
     /// Ok if the update can be done; otherwise why not, a data_update_fail_*
     /// or ec_alloc_failed error, explained into @trace too. Getting a stripe
     /// head takes mutexes, so it can restart.
-    pub fn can_do_data_update(&self, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
+    pub fn can_do_data_update(&self, opts: &bch_inode_opts, data_opts: &data_update_opts,
                               k: BkeySC<'_>, mut trace: Option<&mut Printbuf>) -> Result<(), BchError> {
         let fs = self.fs();
-        let mut devs_have = c::bch_devs_list::default();
+        let mut devs_have = bch_devs_list::default();
         let mut keeping = 0;
 
         if let Some(k) = k.arm::<Ptrs>() {
@@ -205,7 +208,7 @@ impl TransAttempt<'_, '_> {
             for d in k.ptrs_decoded(fs) {
                 let p = &d.p;
                 let dev = u32::from(p.ptr.dev());
-                if dev != c::BCH_SB_MEMBER_INVALID && bit & u32::from(data_opts.ptrs_kill) == 0 {
+                if dev != BCH_SB_MEMBER_INVALID && bit & u32::from(data_opts.ptrs_kill) == 0 {
                     // a pointer only losing its stripe keeps its device's durability
                     keeping += if bit & u32::from(data_opts.ptrs_kill_ec) != 0 {
                         fs.dev_durability(dev, &read_lock())
@@ -238,7 +241,7 @@ impl TransAttempt<'_, '_> {
             // The ec_alloc_failed subtypes park the extent; a restart must
             // stay one, or an extent that only needed a retry is parked
             let mut req = self.alloc_request(data_opts.target.into(), false, None, 0, replicas,
-                                             c::Watermark::normal, w::empty(), AllocWait::Never)?;
+                                             Watermark::normal, w::empty(), AllocWait::Never)?;
             // alloc_request() leaves it to the caller. The write path caps it
             // from the options; this probe runs uncapped
             req.ec_max_data_blocks = 0;

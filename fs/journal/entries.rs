@@ -6,7 +6,7 @@
 
 use core::mem::size_of;
 
-use crate::c;
+use crate::format::{jset_entry, JSET_KEYS_U64s, JsetEntryType};
 use crate::types::ArmOf;
 use crate::util::vstructs::{plain_bytes, Head, Plain};
 use zerocopy::IntoBytes;
@@ -24,14 +24,14 @@ pub struct EntryWriter<'a> {
 /// The u64s of an entry holding an @E, its header and @E: what push_entry()
 /// writes.
 pub const fn entry_u64s<E>() -> usize {
-    c::JSET_KEYS_U64s + size_of::<E>() / size_of::<u64>()
+    JSET_KEYS_U64s + size_of::<E>() / size_of::<u64>()
 }
 
 /// An entry's header, of @ty, for @btree_id at @level, with @u64s of value:
 /// journal_entry_init().
 #[inline(always)]
-fn header(ty: c::JsetEntryType, btree_id: u8, level: u8, u64s: usize) -> u64 {
-    let mut e = Head::<c::jset_entry>::default();
+fn header(ty: JsetEntryType, btree_id: u8, level: u8, u64s: usize) -> u64 {
+    let mut e = Head::<jset_entry>::default();
     e.type_ = ty.0 as u8;
     e.btree_id = btree_id;
     e.level = level;
@@ -72,10 +72,10 @@ impl<'a> EntryWriter<'a> {
     /// and its value for the caller to write all of -
     /// __bch2_journal_add_entry().
     #[inline(always)]
-    pub fn add_entry(&mut self, ty: c::JsetEntryType, btree_id: u8, level: u8, u64s: usize)
+    pub fn add_entry(&mut self, ty: JsetEntryType, btree_id: u8, level: u8, u64s: usize)
         -> Result<&'a mut [u64], NoRoom>
     {
-        let (hdr, v) = self.reserve(c::JSET_KEYS_U64s + u64s)?.split_at_mut(c::JSET_KEYS_U64s);
+        let (hdr, v) = self.reserve(JSET_KEYS_U64s + u64s)?.split_at_mut(JSET_KEYS_U64s);
         hdr[0] = header(ty, btree_id, level, u64s);
         Ok(v)
     }
@@ -84,13 +84,13 @@ impl<'a> EntryWriter<'a> {
     /// what's written uses all of it: bch2_journal_res_put()'s fill.
     pub fn pad(&mut self) {
         if !self.room.is_empty() {
-            core::mem::take(&mut self.room).fill(header(c::JsetEntryType::btree_keys, 0, 0, 0));
+            core::mem::take(&mut self.room).fill(header(JsetEntryType::btree_keys, 0, 0, 0));
         }
     }
 
     /// An entry of @ty, for @btree_id at @level, holding @data, zero padded to
     /// a u64: journal_entry_set().
-    pub fn push_bytes(&mut self, ty: c::JsetEntryType, btree_id: u8, level: u8, data: &[u8])
+    pub fn push_bytes(&mut self, ty: JsetEntryType, btree_id: u8, level: u8, data: &[u8])
         -> Result<(), NoRoom>
     {
         let v = self.add_entry(ty, btree_id, level, data.len().div_ceil(size_of::<u64>()))?.as_mut_bytes();
@@ -108,11 +108,11 @@ impl<'a> EntryWriter<'a> {
 
     /// An entry of @e's type, for @btree_id at @level, holding @e:
     /// jset_entry_init(), filled in.
-    pub fn push_entry<E: Plain + ArmOf<c::jset_entry, Tag = u8>>(&mut self, btree_id: u8, level: u8, e: E)
+    pub fn push_entry<E: Plain + ArmOf<jset_entry, Tag = u8>>(&mut self, btree_id: u8, level: u8, e: E)
         -> Result<(), NoRoom>
     {
         const { assert!(size_of::<E>() % size_of::<u64>() == 0) };
-        let v = self.add_entry(c::JsetEntryType(E::TAG.into()), btree_id, level, size_of::<E>() / size_of::<u64>())?;
+        let v = self.add_entry(JsetEntryType(E::TAG.into()), btree_id, level, size_of::<E>() / size_of::<u64>())?;
         v.as_mut_bytes().copy_from_slice(plain_bytes(&e));
         Ok(())
     }

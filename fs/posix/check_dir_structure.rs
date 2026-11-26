@@ -21,6 +21,7 @@
 //! may be queued on a path that renumbers. Today the walk only reads, and
 //! repairs return before it.
 
+use crate::posix::dirent_format;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -28,6 +29,9 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
 use crate::c;
+use crate::posix::inode_format::InodeFlags;
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -35,7 +39,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::subvolume;
 use crate::posix::dirent::{self, Dirent};
 use crate::posix::{inode, lostfound, namei};
-use crate::posix::inode::Inodes;
+use crate::posix::inode::{Inodes, bch_inode_unpacked};
 use crate::util::alloc::Vec;
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
@@ -46,7 +50,7 @@ use crate::format::Btree;
 fn dirent_points_to_inode(
     fs:    &Fs,
     k:     BkeySC<'_>,
-    inode: &mut c::bch_inode_unpacked,
+    inode: &mut bch_inode_unpacked,
 ) -> Result<(), BchError> {
     let d = Dirent::new(k).expect("dirent lookups only return dirents");
 
@@ -60,7 +64,7 @@ fn dirent_points_to_inode(
 
 fn remove_backpointer(
     t:     &TransAttempt<'_, '_>,
-    inode: &mut c::bch_inode_unpacked,
+    inode: &mut bch_inode_unpacked,
 ) -> Result<(), BchError> {
     if !inode.has_backpointer() {
         return Ok(());
@@ -81,7 +85,7 @@ fn remove_backpointer(
 }
 
 /// @root: the subvolume and its root inode.
-fn reattach_subvol(t: &TransAttempt<'_, '_>, root: c::subvol_inum) -> Result<(), BchError> {
+fn reattach_subvol(t: &TransAttempt<'_, '_>, root: subvol_inum) -> Result<(), BchError> {
     let fs = t.fs();
 
     let mut inode = inode::find_by_inum_trans(t, root, here!())?;
@@ -105,7 +109,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
     // Unlinking zeroes fs_path_parent: a subvolume on its way to deletion has
     // no path by design, and isn't ours to reattach.
-    if start_sv.state_decoded() != Some(c::SubvolumeState::live) {
+    if start_sv.state_decoded() != Some(SubvolumeState::live) {
         return Ok(());
     }
 
@@ -113,7 +117,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
     let mut parent_iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN,
                                          BtreeIterFlags::empty());
 
-    let start = c::subvol_inum {
+    let start = subvol_inum {
         subvol: k.k.p.offset,
         inum:   start_sv.inode.get(),
     };
@@ -126,13 +130,13 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
         let s = BkeySC::from(&cur);
         let sv = subvolume::val(s).expect("cur only ever holds subvolume keys");
 
-        if s.k.p.offset == c::BCACHEFS_ROOT_SUBVOL as u64 {
+        if s.k.p.offset == BCACHEFS_ROOT_SUBVOL as u64 {
             return Ok(());
         }
 
         subvol_path.push(s.k.p.offset as u32)?;
 
-        let root = c::subvol_inum { subvol: s.k.p.offset, inum: sv.inode.get() };
+        let root = subvol_inum { subvol: s.k.p.offset, inum: sv.inode.get() };
 
         inode::find_by_inum_trans(t, root, here!())?;
 
@@ -152,7 +156,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
         parent_iter.set_pos(pos(0, parent as u64));
         match parent_iter.peek_slot(t)? {
-            Some(pk) if pk.arm::<c::Subvolume>().is_some() => {
+            Some(pk) if pk.arm::<Subvolume>().is_some() => {
                 cur.set_key(pk);
             }
             _ => {
@@ -256,7 +260,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Res
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
                                              BtreeIterFlags::empty());
 
-        if let Err(e) = dirent_iter.peek_slot_typed::<c::Dirent>(t) {
+        if let Err(e) = dirent_iter.peek_slot_typed::<dirent_format::Dirent>(t) {
             if !e.matches(c::ENOENT) {
                 return Err(e);
             }
@@ -357,7 +361,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
             // directory but the root of an unlinked subvolume, and a subvolume
             // root ends every walk - so skipping these can't hide a directory
             // loop:
-            if k.flags().contains(c::InodeFlags::unlinked) {
+            if k.flags().contains(InodeFlags::unlinked) {
                 return Ok(());
             }
 

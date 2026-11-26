@@ -8,7 +8,8 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
-use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key};
+use bcachefs_kernel::format::{bch_key, bch_encrypted_key};
+use bcachefs_kernel::init::dev::{bch_sb_handle, bch_sb_buf};
 use bcachefs_kernel::data::checksum::key_description;
 use bcachefs_kernel::os::keyring::request_key;
 use bcachefs_kernel::util::prompt::{read_passphrase, read_secret_line, without_line_ending, Given, Watch};
@@ -21,7 +22,7 @@ use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 /// Check if a superblock has an encrypted passphrase set.
-pub fn sb_is_encrypted(sb: &bcachefs_kernel::c::bch_sb_buf) -> bool {
+pub fn sb_is_encrypted(sb: &bch_sb_buf) -> bool {
     sb.sb()
         .crypt()
         .map(|c| c.key().is_encrypted())
@@ -244,7 +245,7 @@ impl Passphrase {
     /// Returns the encrypted key suitable for writing to crypt->key.
     pub fn encrypt_key(
         &self,
-        sb: &bcachefs_kernel::c::bch_sb_buf,
+        sb: &bch_sb_buf,
         key: bch_key,
     ) -> Result<bch_encrypted_key> {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
@@ -257,7 +258,7 @@ impl Passphrase {
         Ok(new_key)
     }
 
-    pub fn check(&self, sb: &bcachefs_kernel::c::bch_sb_buf) -> Option<PassphraseCorrect> {
+    pub fn check(&self, sb: &bch_sb_buf) -> Option<PassphraseCorrect> {
         let crypt = sb
             .sb()
             .crypt()

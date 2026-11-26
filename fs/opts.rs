@@ -30,6 +30,9 @@
 
 use crate::fs::Dev;
 use crate::c;
+use crate::alloc::accounting_format::DataTypes_bits;
+use crate::init::dev::bch_sb_buf;
+use crate::posix::dirent_format::{BCH_DT_MAX, DT_SUBVOL};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::posix::inode_opts::InodeOpt;
@@ -43,8 +46,11 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::util::printbuf::parse_human_u64;
 use crate::os::sysfs::parse_int;
 use core::ffi::{CStr, c_ulong};
-use crate::cstructs::c::InodeOptId_arms;
-use crate::c::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, MemberState, BCH_REPLICAS_MAX, BCH_SB_SECTOR};
+use crate::posix::inode_format::InodeOptId_arms;
+use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt, WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR,
+    bch_sb, bch_sb_head, bch_sb_field_ext, bch_sb_field_ext_flags0, DegradedAction, ScrubJournalOpt};
+use crate::init::passes_format::RecoveryPass;
+use crate::sb::members_format::{MemberState, bch_member, bch_member_flags};
 use crate::format::DataType;
 use crate::types::bits_to_longs;
 use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
@@ -107,12 +113,12 @@ pub const BCH_OPTS_MAX: u32 = 128;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct bch_opts_mask {
-    pub d: [c_ulong; bits_to_longs(c::BCH_OPTS_MAX as usize)],
+    pub d: [c_ulong; bits_to_longs(BCH_OPTS_MAX as usize)],
 }
 
 /// A bch_opts_mask that changes while it's read: PublishedOpts', and
 /// c->mount_opts.
-pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_to_longs(c::BCH_OPTS_MAX as usize) }>;
+pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_to_longs(BCH_OPTS_MAX as usize) }>;
 
 /*
  * The options, a field each: its #[opt] - its type, when it may be set, its
@@ -328,7 +334,7 @@ pub struct bch_opts {
     #[opt(str(DegradedAction),
           flags = fs | mount,
           sb = bch_sb::degraded_action,
-          default = c::DegradedAction::ask.0)]
+          default = DegradedAction::ask.0)]
     pub degraded: u8,
 
     /// Write fewer copies than asked for rather than returning ENOSPC; the default does so only while a device is missing or not read-write
@@ -432,7 +438,7 @@ pub struct bch_opts {
 
     /// Scrub data written in the last few journal entries during recovery
     #[opt(str(ScrubJournalOpt), flags = fs | mount, sb = bch_sb::scrub_journal,
-          default = c::ScrubJournalOpt::unclean.0)]
+          default = ScrubJournalOpt::unclean.0)]
     pub scrub_recent_journal_entries: u8,
 
     /// Maximum time in seconds the journal scrub will rewind (default 10)
@@ -589,7 +595,7 @@ pub struct bch_opts {
 
     /// Data written to this device will be considered
     /// to have already been replicated n times
-    #[opt(uint(0, c::bch_member_flags::DURABILITY_MAX - 1),
+    #[opt(uint(0, bch_member_flags::DURABILITY_MAX - 1),
           flags = device | runtime | sb_field_one_bias,
           sb = bch_member::durability,
           default = 1,
@@ -597,10 +603,10 @@ pub struct bch_opts {
     pub durability: u8,
 
     /// Allowed data types for this device: journal, btree, and/or user
-    #[opt(bitfield(DataType, c::DataTypes_bits::journal | c::DataTypes_bits::btree | c::DataTypes_bits::user),
+    #[opt(bitfield(DataType, DataTypes_bits::journal | DataTypes_bits::btree | DataTypes_bits::user),
           flags = device | format,
           sb = bch_member::data_allowed,
-          default = c::DataTypes_bits::journal | c::DataTypes_bits::btree | c::DataTypes_bits::user,
+          default = DataTypes_bits::journal | DataTypes_bits::btree | DataTypes_bits::user,
           hint = "types")]
     pub data_allowed: u8,
 
@@ -630,7 +636,7 @@ pub struct bch_opts {
 
     /// Per-device readahead window size; summed across
     ///  all devices to set the filesystem readahead
-    #[opt(uint(0, c::bch_sb_field_ext_flags0::DEV_READAHEAD_MAX << 9),
+    #[opt(uint(0, bch_sb_field_ext_flags0::DEV_READAHEAD_MAX << 9),
           flags = fs | mount | runtime | human_readable | sb_field_sectors,
           sb = bch_sb_field_ext::dev_readahead,
           default = 2 << 20,
@@ -692,10 +698,10 @@ InodeOptId_arms!(__bch_inode_opts_0 [pub __bch_inode_opts_align: [u64; 0],]);
 pub const NR: usize = OptId::NR as usize;
 
 /// By OptId: bch_opts' #[opt]s.
-pub static OPTS: [Opt; NR] = c::bch_opts::TABLE;
+pub static OPTS: [Opt; NR] = bch_opts::TABLE;
 
 /// Each option's default, all defined.
-pub const DEFAULTS: c::bch_opts = c::bch_opts::DEFAULTS;
+pub const DEFAULTS: bch_opts = bch_opts::DEFAULTS;
 
 
 // ── Names ────────────────────────────────────────────────────────────────
@@ -706,8 +712,8 @@ pub fn data_type_str(t: DataType) -> &'static str {
 }
 
 /// The dirent d_types' names, by DT_*.
-pub const D_TYPES: [&str; c::BCH_DT_MAX as usize] = {
-    let mut t = [""; c::BCH_DT_MAX as usize];
+pub const D_TYPES: [&str; BCH_DT_MAX as usize] = {
+    let mut t = [""; BCH_DT_MAX as usize];
     t[c::DT_UNKNOWN as usize] = "unknown";
     t[c::DT_FIFO as usize]    = "fifo";
     t[c::DT_CHR as usize]     = "chr";
@@ -717,7 +723,7 @@ pub const D_TYPES: [&str; c::BCH_DT_MAX as usize] = {
     t[c::DT_LNK as usize]     = "lnk";
     t[c::DT_SOCK as usize]    = "sock";
     t[c::DT_WHT as usize]     = "whiteout";
-    t[c::DT_SUBVOL as usize]  = "subvol";
+    t[DT_SUBVOL as usize]  = "subvol";
     t
 };
 
@@ -730,7 +736,7 @@ pub struct OptFn {
     pub parse:    fn(fs: Option<&Fs>, val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchError>,
     /// Against @fs, or without one @sb: a target's, a label's names are
     /// theirs.
-    pub to_text:  fn(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Unvalidated>>, v: u64),
+    pub to_text:  fn(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&bch_sb<Unvalidated>>, v: u64),
     pub validate: Option<fn(v: u64, err: Option<&mut Printbuf>) -> Result<(), BchError>>,
 }
 
@@ -745,8 +751,8 @@ pub enum OptType {
     /// A string in a member's char[] field, which it's set and shown through:
     /// not a value.
     StrMember {
-        get:     fn(&c::bch_member) -> &[u8],
-        get_mut: fn(&mut c::bch_member) -> &mut [u8],
+        get:     fn(&bch_member) -> &[u8],
+        get_mut: fn(&mut bch_member) -> &mut [u8],
         size:    usize,
     },
 }
@@ -758,7 +764,7 @@ pub(crate) const fn size_of_field<T, F>(_: fn(&T) -> &F) -> usize {
 pub struct Opt {
     pub id:    OptId,
     pub name:  &'static str,
-    pub flags: c::OptFlags,
+    pub flags: OptFlags,
     pub ty:    OptType,
     /// Bounds, inclusive: max 0 is none.
     pub min:   u64,
@@ -775,10 +781,10 @@ pub trait SbOpt: Sync {
     /// A member's: a device option's.
     fn member(&self) -> bool;
     /// None if the struct it's on isn't there: no ext section, no member @dev.
-    fn get(&self, sb: &c::bch_sb<Unvalidated>, dev: u32) -> Option<u64>;
+    fn get(&self, sb: &bch_sb<Unvalidated>, dev: u32) -> Option<u64>;
     /// Whether it changed: None if the struct it's on isn't there, Err if @v
     /// doesn't fit in the field.
-    fn set(&self, sb: &mut c::bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError>;
+    fn set(&self, sb: &mut bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError>;
 }
 
 /// What an option's superblock field is on, found in a superblock: the
@@ -787,28 +793,28 @@ pub trait SbOpt: Sync {
 /// in one that is.
 pub trait OptHost: 'static {
     const MEMBER: bool;
-    fn with<R>(sb: &c::bch_sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R>;
-    fn with_mut<R>(sb: &mut c::bch_sb_buf, dev: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R>;
+    fn with<R>(sb: &bch_sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R>;
+    fn with_mut<R>(sb: &mut bch_sb_buf, dev: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R>;
 }
 
-impl OptHost for c::bch_sb_head {
+impl OptHost for bch_sb_head {
     const MEMBER: bool = false;
 
-    fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
+    fn with<R>(sb: &bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
         Some(f(sb))
     }
 
-    fn with_mut<R>(sb: &mut c::bch_sb_buf, _: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+    fn with_mut<R>(sb: &mut bch_sb_buf, _: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
         cast_plain_mut(bytes_of_mut(sb.sb_mut())).map(f)
     }
 }
 
 /// Read, a copy: a section written before the struct grew has its missing
 /// fields zero, as a validated one's arm reads.
-impl OptHost for c::bch_sb_field_ext {
+impl OptHost for bch_sb_field_ext {
     const MEMBER: bool = false;
 
-    fn with<R>(sb: &c::bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
+    fn with<R>(sb: &bch_sb<Unvalidated>, _: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
         let src = Unvalidated::field::<Self>(sb)?.as_bytes();
         let mut ext = Self::default();
         let dst = plain_bytes_mut(&mut ext);
@@ -817,20 +823,20 @@ impl OptHost for c::bch_sb_field_ext {
         Some(f(&ext))
     }
 
-    fn with_mut<R>(sb: &mut c::bch_sb_buf, _: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+    fn with_mut<R>(sb: &mut bch_sb_buf, _: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
         sb.field_mut::<Self>().and_then(|e| e.whole_mut()).map(f)
     }
 }
 
 /// A member that's alive: bch2_member_exists().
-impl OptHost for c::bch_member {
+impl OptHost for bch_member {
     const MEMBER: bool = true;
 
-    fn with<R>(sb: &c::bch_sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
+    fn with<R>(sb: &bch_sb<Unvalidated>, dev: u32, f: impl FnOnce(&Self) -> R) -> Option<R> {
         members::sb_member(sb, dev).filter(|m| m.alive()).map(|m| f(&m))
     }
 
-    fn with_mut<R>(sb: &mut c::bch_sb_buf, dev: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+    fn with_mut<R>(sb: &mut bch_sb_buf, dev: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
         members::sb_member(sb.sb(), dev).filter(|m| m.alive())?;
         sb.member_mut(dev).map(f)
     }
@@ -848,11 +854,11 @@ impl<T: OptHost + ?Sized> SbOpt for Field<T> {
         T::MEMBER
     }
 
-    fn get(&self, sb: &c::bch_sb<Unvalidated>, dev: u32) -> Option<u64> {
+    fn get(&self, sb: &bch_sb<Unvalidated>, dev: u32) -> Option<u64> {
         T::with(sb, dev, |t| (self.get)(t))
     }
 
-    fn set(&self, sb: &mut c::bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError> {
+    fn set(&self, sb: &mut bch_sb_buf, dev: u32, v: u64) -> Result<Option<bool>, BchError> {
         T::with_mut(sb, dev, |t| {
             let changed = v != (self.get)(t);
             (self.set)(t, v)
@@ -866,9 +872,9 @@ impl<T: OptHost + ?Sized> SbOpt for Field<T> {
 pub(crate) const FIX_ERRORS: OptFn = OptFn {
     parse: |_, val, err| {
         let Some(val) = val else {
-            return Ok((c::FsckErrOpt::yes as u32).into());
+            return Ok((FsckErrOpt::yes as u32).into());
         };
-        let choices: &[&str] = crate::names_by_value!(c::FsckErrOpt);
+        let choices: &[&str] = crate::names_by_value!(FsckErrOpt);
         choices.iter().position(|n| n.as_bytes() == val).map(|v| v as u64).ok_or_else(|| {
             if let Some(err) = err {
                 write!(err, "fix_errors: invalid selection");
@@ -876,7 +882,7 @@ pub(crate) const FIX_ERRORS: OptFn = OptFn {
             Errcode::EINVAL_fix_errors_selection.into()
         })
     },
-    to_text: |out, _, _, v| names::prt_name(out, c::FsckErrOpt::ENTRIES, v),
+    to_text: |out, _, _, v| names::prt_name(out, FsckErrOpt::ENTRIES, v),
     validate: None,
 };
 
@@ -891,7 +897,7 @@ impl OptId {
 }
 
 impl Opt {
-    pub fn has(&self, flag: c::OptFlags) -> bool {
+    pub fn has(&self, flag: OptFlags) -> bool {
         self.flags.intersects(flag)
     }
 
@@ -922,13 +928,13 @@ impl Opt {
     /// Its value from its superblock field's: the field may hold it scaled.
     pub fn from_sb_field(&self, v: u64) -> u64 {
         let mut v = v;
-        if self.has(c::OptFlags::sb_field_one_bias) {
+        if self.has(OptFlags::sb_field_one_bias) {
             v = v.wrapping_sub(1);
         }
-        if self.has(c::OptFlags::sb_field_ilog2) {
+        if self.has(OptFlags::sb_field_ilog2) {
             v = 1u64.checked_shl(v as u32).unwrap_or(0);
         }
-        if self.has(c::OptFlags::sb_field_sectors) {
+        if self.has(OptFlags::sb_field_sectors) {
             v <<= 9;
         }
         v
@@ -937,13 +943,13 @@ impl Opt {
     /// Its superblock field's value for @v: from_sb_field()'s inverse.
     pub fn to_sb_field(&self, v: u64) -> u64 {
         let mut v = v;
-        if self.has(c::OptFlags::sb_field_sectors) {
+        if self.has(OptFlags::sb_field_sectors) {
             v >>= 9;
         }
-        if self.has(c::OptFlags::sb_field_ilog2) {
+        if self.has(OptFlags::sb_field_ilog2) {
             v = v.checked_ilog2().unwrap_or(0).into();
         }
-        if self.has(c::OptFlags::sb_field_one_bias) {
+        if self.has(OptFlags::sb_field_one_bias) {
             v = v.wrapping_add(1);
         }
         v
@@ -951,7 +957,7 @@ impl Opt {
 
     /// A BCH_OPT_STR_MEMBER option's value: the string in member @m's field,
     /// up to a NUL.
-    pub fn member_str<'a>(&self, m: &'a c::bch_member) -> &'a [u8] {
+    pub fn member_str<'a>(&self, m: &'a bch_member) -> &'a [u8] {
         let OptType::StrMember { get, .. } = self.ty else {
             panic!("{}: not a member string option", self.name);
         };
@@ -961,7 +967,7 @@ impl Opt {
 
 // ── bch_opts ─────────────────────────────────────────────────────────────
 
-impl c::bch_opts_mask {
+impl bch_opts_mask {
     pub const fn test(&self, id: OptId) -> bool {
         let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
         self.d[i / bits] >> (i % bits) & 1 != 0
@@ -973,7 +979,7 @@ impl c::bch_opts_mask {
     }
 
     /// A copy of @mask, a word at a time.
-    pub fn load(mask: &c::AtomicOptsMask) -> Self {
+    pub fn load(mask: &AtomicOptsMask) -> Self {
         let words = mask.load();
         Self { d: core::array::from_fn(|i| words.words()[i] as _) }
     }
@@ -1024,10 +1030,10 @@ pub fn opt_validate(opt: &Opt, v: u64, mut err: Option<&mut Printbuf>) -> Result
     if opt.max != 0 && v > opt.max {
         fail!(Errcode::ERANGE_option_too_big, "too big (max {})", opt.max);
     }
-    if opt.has(c::OptFlags::sb_field_sectors) && v & 511 != 0 {
+    if opt.has(OptFlags::sb_field_sectors) && v & 511 != 0 {
         fail!(Errcode::opt_parse_error, "not a multiple of 512");
     }
-    if opt.has(c::OptFlags::must_be_pow_2) && !v.is_power_of_two() {
+    if opt.has(OptFlags::must_be_pow_2) && !v.is_power_of_two() {
         fail!(Errcode::opt_parse_error, "must be a power of two");
     }
     match opt.ty {
@@ -1091,7 +1097,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
             }
             let v = core::str::from_utf8(val)
                 .map_err(|_| BchError::from(Errcode::EINVAL_opt_parse_utf8))
-                .and_then(|s| if opt.has(c::OptFlags::human_readable) {
+                .and_then(|s| if opt.has(OptFlags::human_readable) {
                     parse_human_u64(s)
                 } else {
                     parse_int(s)
@@ -1144,7 +1150,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
 /// One mount option, @name=@val, into @opts if it's given: an unknown
 /// option is skipped, and one that can't be parsed before the filesystem is
 /// open goes into @parse_later, if it's given, to parse then.
-pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
+pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut bch_opts>,
                            parse_later: Option<&mut Printbuf>, name: &[u8], val: Option<&[u8]>,
                            err: &mut Printbuf) -> Result<(), BchError> {
     let name_str = core::str::from_utf8(name).ok();
@@ -1169,7 +1175,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
     }
     let val = val.map(|v| opt_val_synonym(name_str.unwrap_or_default(), v));
 
-    if !opt.has(c::OptFlags::mount | c::OptFlags::mount_old) {
+    if !opt.has(OptFlags::mount | OptFlags::mount_old) {
         return Err(Errcode::option_name.into());
     }
 
@@ -1193,7 +1199,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
         r => r?,
     };
 
-    if opt.has(c::OptFlags::mount_old) {
+    if opt.has(OptFlags::mount_old) {
         log_no_fs(LogLevel::ERR, crate::message!(
             "option {} may no longer be specified at mount time; set via sysfs opts dir", opt.name));
         return Ok(());
@@ -1208,7 +1214,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut c::bch_opts>,
 /// A mount option string, comma separated, into @opts: what can only be
 /// parsed with the filesystem open into @parse_later, as
 /// parse_one_mount_opt().
-pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut c::bch_opts, mut parse_later: Option<&mut Printbuf>,
+pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut bch_opts, mut parse_later: Option<&mut Printbuf>,
                              options: &[u8], ignore_unknown: bool) -> Result<(), BchError> {
     // sys_fsconfig() occasionally hands us a list starting with a comma
     let options = options.strip_prefix(b",").unwrap_or(options);
@@ -1235,14 +1241,14 @@ pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut c::bch_opts, mut parse_
 /// @optstr parsed into fresh options: what can only be parsed on a running
 /// filesystem too, if @fs is given.
 pub fn parse_mount_opts_cstr(fs: Option<&Fs>, optstr: &CStr, ignore_unknown: bool)
-        -> Result<c::bch_opts, BchError> {
+        -> Result<bch_opts, BchError> {
     let mut opts = Default::default();
     parse_mount_opts_into(fs, &mut opts, None, optstr.to_bytes(), ignore_unknown)?;
     Ok(opts)
 }
 
 pub fn parse_mount_opts(fs: Option<&Fs>, optstr: Option<&str>, ignore_unknown: bool)
-        -> Result<c::bch_opts, BchError> {
+        -> Result<bch_opts, BchError> {
     let mut opts = Default::default();
     if let Some(s) = optstr {
         parse_mount_opts_into(fs, &mut opts, None, s.as_bytes(), ignore_unknown)?;
@@ -1251,7 +1257,7 @@ pub fn parse_mount_opts(fs: Option<&Fs>, optstr: Option<&str>, ignore_unknown: b
 }
 
 #[cfg(feature = "std")]
-pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool) -> Result<c::bch_opts, BchError> {
+pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool) -> Result<bch_opts, BchError> {
     parse_mount_opts(None, Some(&opts.join(",")), ignore_unknown)
 }
 
@@ -1260,9 +1266,9 @@ pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool) -> Result<c::
 /// @flags: OPT_SHOW_*. Against @fs, or without one @sb: a target's, a
 /// label's names are theirs.
 #[cold]
-pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Unvalidated>>, opt: &Opt, v: u64,
+pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&bch_sb<Unvalidated>>, opt: &Opt, v: u64,
                    flags: u32) {
-    if flags & c::OPT_SHOW_MOUNT_STYLE != 0 {
+    if flags & OPT_SHOW_MOUNT_STYLE != 0 {
         if let OptType::Bool = opt.ty {
             write!(out, "{}{}", if v != 0 { "" } else { "no" }, opt.name);
             return;
@@ -1271,11 +1277,11 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Un
     }
 
     match opt.ty {
-        OptType::Bool | OptType::Uint if opt.has(c::OptFlags::human_readable) => prt!(out, "{}", HumanReadable(v)),
+        OptType::Bool | OptType::Uint if opt.has(OptFlags::human_readable) => prt!(out, "{}", HumanReadable(v)),
         OptType::Bool | OptType::Uint => write!(out, "{}", v as i64),
         OptType::Str(choices) => match choices.get(v as usize) {
             Some(_) if v < opt.min || v > opt.max => write!(out, "(invalid option {})", v as i64),
-            Some(_) if flags & c::OPT_SHOW_FULL_LIST != 0 => {
+            Some(_) if flags & OPT_SHOW_FULL_LIST != 0 => {
                 for (i, c) in choices.iter().enumerate() {
                     if i as u64 == v {
                         write!(out, "[{c}] ");
@@ -1298,8 +1304,8 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Un
 /// flagged with any of @show_mask and none of @hide_mask, and of @mask if
 /// it's given.
 #[cold]
-pub fn opts_to_text(out: &mut Printbuf, opts: &c::bch_opts, fs: Option<&Fs>, sb: Option<&c::bch_sb<Unvalidated>>,
-                    mask: Option<&c::bch_opts_mask>, show_mask: u32, hide_mask: u32, flags: u32) {
+pub fn opts_to_text(out: &mut Printbuf, opts: &bch_opts, fs: Option<&Fs>, sb: Option<&bch_sb<Unvalidated>>,
+                    mask: Option<&bch_opts_mask>, show_mask: u32, hide_mask: u32, flags: u32) {
     let mut first = true;
 
     for opt in &OPTS {
@@ -1335,7 +1341,7 @@ fn warn_no_member(opt: &Opt, dev: u32) {
 
 /// Option @id as the superblock has it - a device option, as member @dev's:
 /// 0 if it doesn't.
-pub fn opt_from_sb(sb: &c::bch_sb<Unvalidated>, id: OptId, dev: Option<u32>) -> u64 {
+pub fn opt_from_sb(sb: &bch_sb<Unvalidated>, id: OptId, dev: Option<u32>) -> u64 {
     let opt = id.opt();
     let v = match dev {
         None => opt.fs_field().and_then(|f| f.get(sb, 0)).unwrap_or(0),
@@ -1352,7 +1358,7 @@ pub fn opt_from_sb(sb: &c::bch_sb<Unvalidated>, id: OptId, dev: Option<u32>) -> 
 
 /// The filesystem defaults @sb has, into @opts - every one it has,
 /// defined.
-pub fn opts_from_sb(opts: &mut c::bch_opts, sb: &c::bch_sb<Unvalidated>) {
+pub fn opts_from_sb(opts: &mut bch_opts, sb: &bch_sb<Unvalidated>) {
     for opt in OPTS.iter().filter(|o| o.fs_field().is_some()) {
         opts.set(opt.id, opt_from_sb(sb, opt.id, None));
     }
@@ -1360,7 +1366,7 @@ pub fn opts_from_sb(opts: &mut c::bch_opts, sb: &c::bch_sb<Unvalidated>) {
 
 /// Whether the filesystem defaults @sb has are valid, as options: an
 /// invalid one said in @out.
-pub fn opts_validate_sb(sb: &c::bch_sb<Unvalidated>, out: &mut Printbuf) -> Result<(), BchError> {
+pub fn opts_validate_sb(sb: &bch_sb<Unvalidated>, out: &mut Printbuf) -> Result<(), BchError> {
     for opt in OPTS.iter().filter(|o| o.fs_field().is_some()) {
         let mut err = Printbuf::new();
         if let Err(e) = opt_validate(opt, opt_from_sb(sb, opt.id, None), Some(&mut err)) {
@@ -1372,7 +1378,7 @@ pub fn opts_validate_sb(sb: &c::bch_sb<Unvalidated>, out: &mut Printbuf) -> Resu
 }
 
 /// A filesystem's options: @sb's, valid, and the mount's @opts over them
-pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printbuf) -> Result<c::bch_opts, BchError> {
+pub fn fs_opts(sb: &bch_sb<Unvalidated>, opts: &bch_opts, out: &mut Printbuf) -> Result<bch_opts, BchError> {
     opts_validate_sb(sb, out)?;
 
     let mut fs_opts = DEFAULTS;
@@ -1384,17 +1390,17 @@ pub fn fs_opts(sb: &c::bch_sb<Unvalidated>, opts: &c::bch_opts, out: &mut Printb
 /// Set @opt in @sb, to @v - for a device option in member @dev's - @val its
 /// string for a member string option: whether it changed. Err if @v doesn't
 /// fit in its field: options with no max have only the field's.
-pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, val: Option<&[u8]>)
+pub fn opt_set_sb(sb: &mut bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, val: Option<&[u8]>)
     -> Result<bool, BchError>
 {
     let v = opt.to_sb_field(v);
     let mut changed = false;
 
-    if let (true, None, Some(f)) = (opt.has(c::OptFlags::fs), dev, opt.fs_field()) {
+    if let (true, None, Some(f)) = (opt.has(OptFlags::fs), dev, opt.fs_field()) {
         changed = f.set(sb, 0, v)?.unwrap_or(false);
     }
 
-    if let (true, Some(dev), Some(f)) = (opt.has(c::OptFlags::device), dev, opt.member_field()) {
+    if let (true, Some(dev), Some(f)) = (opt.has(OptFlags::device), dev, opt.member_field()) {
         let Some(c) = f.set(sb, dev, v)? else {
             warn_no_member(opt, dev);
             return Ok(false);
@@ -1408,7 +1414,7 @@ pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, v
         }
     }
 
-    if let (OptType::StrMember { get_mut, .. }, true, Some(dev)) = (&opt.ty, opt.has(c::OptFlags::device), dev) {
+    if let (OptType::StrMember { get_mut, .. }, true, Some(dev)) = (&opt.ty, opt.has(OptFlags::device), dev) {
         let m = members::sb_member(sb.sb(), dev).filter(|m| m.alive()).and_then(|_| sb.member_mut(dev));
         let Some(m) = m else {
             warn_no_member(opt, dev);

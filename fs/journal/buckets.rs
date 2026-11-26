@@ -13,19 +13,20 @@
 //! The journal lock's; the list changes with sb_lock held too, as the
 //! superblock does.
 
-use crate::c;
-use crate::c::JournalBucketStage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL_BUCKET_dirty as DIRTY,
+use crate::data::write::WriteFlags;
+use self::JournalBucketStage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL_BUCKET_dirty as DIRTY,
                                      JOURNAL_BUCKET_dirty_ondisk as DIRTY_ONDISK,
                                      JOURNAL_BUCKET_discard as DISCARD};
 
-use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation};
-use crate::alloc::foreground::AllocWait;
+use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation, ReservationFlags};
+use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, SbFeature};
-use crate::fs::{Dev, Fs, SbLockGuard};
+use crate::format::{DataType, SbFeature, BCH_JOURNAL_BUCKETS_MIN, bch_sb, bch_sb_field_journal,
+    bch_sb_field_journal_v2};
+use crate::fs::{Dev, Fs, SbLockGuard, FsFlag};
 use crate::journal::sb::buckets_to_sb;
-use crate::c::JournalGuard;
+use crate::journal::journal::{JournalGuard, journal, JournalLockAt};
 use crate::locking::{Guard as _, LockedBy};
 use crate::util::alloc::Vec;
 use crate::os::kernel::totalram_bytes;
@@ -33,7 +34,7 @@ use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree_trans, prt};
 use crate::data::dev_bio::DevBio;
-use crate::journal::reclaim::discard_work;
+use crate::journal::reclaim::{discard_work, JournalSpaceFrom};
 use crate::locking::{Locked, Mutex};
 use crate::os::bio::BioSet;
 use crate::util::late::Late;
@@ -204,8 +205,8 @@ impl JournalRing {
     }
 
     /// The buckets a journal entry may use, counting @from's as free.
-    pub fn available(&self, from: c::JournalSpaceFrom) -> u32 {
-        use c::JournalSpaceFrom::*;
+    pub fn available(&self, from: JournalSpaceFrom) -> u32 {
+        use crate::journal::reclaim::JournalSpaceFrom::*;
 
         let available = self.free(match from {
             journal_space_discarded     => DISCARD,
@@ -333,7 +334,7 @@ impl Splice {
 }
 
 /* The ring, and its nr for those without the lock */
-pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>, c::JournalLockAt>;
+pub type JournalBuckets = LockedBy<JournalRing, Volatile<u32>, JournalLockAt>;
 
 pub fn new() -> JournalBuckets {
     let ring = JournalRing {
@@ -360,7 +361,7 @@ impl Dev {
     }
 }
 
-impl c::journal {
+impl journal {
     /// Whether @ring's discard cursor should move: not past a retired bucket,
     /// whose removal is queued instead.
     pub(crate) fn should_discard_bucket(&self, ring: &JournalRing) -> bool {
@@ -370,11 +371,11 @@ impl c::journal {
         }
 
         ring.can_advance(DISCARD) &&
-            ring.available(c::JournalSpaceFrom::journal_space_discarded) < (ring.nr() / 2).max(4)
+            ring.available(JournalSpaceFrom::journal_space_discarded) < (ring.nr() / 2).max(4)
     }
 }
 
-impl c::journal_device {
+impl journal_device {
     pub fn nr(&self) -> u32 {
         self.buckets.get()
     }
@@ -385,16 +386,16 @@ fn enomem(fs: &Fs) -> impl Fn(crate::util::alloc::AllocError) -> BchError + '_ {
 }
 
 /* journal_v2's runs, or v1's buckets if there's no v2 */
-fn sb_buckets(sb: &c::bch_sb) -> impl Iterator<Item = u64> + '_ {
-    let v2 = sb.field::<c::bch_sb_field_journal_v2>();
-    let v1 = sb.field::<c::bch_sb_field_journal>().filter(|_| v2.is_none());
+fn sb_buckets(sb: &bch_sb) -> impl Iterator<Item = u64> + '_ {
+    let v2 = sb.field::<bch_sb_field_journal_v2>();
+    let v1 = sb.field::<bch_sb_field_journal>().filter(|_| v2.is_none());
 
     v2.into_iter().flat_map(|j| &j.d).flat_map(|d| d.start.get()..d.start.get() + d.nr.get())
         .chain(v1.into_iter().flat_map(|j| &j.buckets).map(|b| b.get()))
 }
 
 /// @ca's buckets, from its superblock @sb: at device online.
-pub fn load(ca: &Dev, sb: &c::bch_sb) -> Result<(), BchError> {
+pub fn load(ca: &Dev, sb: &bch_sb) -> Result<(), BchError> {
     let fs = ca.fs();
     let enomem = |_| fs.err(Errcode::ENOMEM_dev_journal_init);
     let mut buckets = Vec::from_elem(0, sb_buckets(sb).count()).map_err(enomem)?;
@@ -489,7 +490,7 @@ pub fn add(fs: &Fs, ca: &Dev, new: &[u64]) -> Result<(), BchError> {
 
 /* allocate journal on a device: */
 
-fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark)
+fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: Watermark)
     -> Result<(), BchError>
 {
     let have = ca.journal.nr();
@@ -504,7 +505,7 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark)
             let trans = btree_trans!(fs);
             let first = bu.is_empty();
             let ob = lockrestart_do(&trans, |t| {
-                let mut req = t.alloc_request(0, false, None, 1, 0, watermark, c::WriteFlags::empty(),
+                let mut req = t.alloc_request(0, false, None, 1, 0, watermark, WriteFlags::empty(),
                                               if first { AllocWait::Sync(None) } else { AllocWait::Never })?;
                 req.data_type = DataType::journal;
                 match t.bucket_alloc(&mut req, ca) {
@@ -549,9 +550,9 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: c::Watermark)
 
 fn set_nr_loop(fs: &Fs, ca: &Dev, nr: u32, new_fs: bool) -> Result<(), BchError> {
     let watermark = if new_fs {
-        c::Watermark::btree
+        Watermark::btree
     } else {
-        c::Watermark::normal
+        Watermark::normal
     };
 
     /* don't handle reducing nr of buckets yet: */
@@ -577,7 +578,7 @@ fn set_nr_loop(fs: &Fs, ca: &Dev, nr: u32, new_fs: bool) -> Result<(), BchError>
          */
         let res = DiskReservation::new(fs);
         if !new_fs && ca.has_capacity() {
-            res.add(ca.bucket_to_sector((nr - ca.journal.nr()).into()), 1, c::ReservationFlags::empty())?;
+            res.add(ca.bucket_to_sector((nr - ca.journal.nr()).into()), 1, ReservationFlags::empty())?;
         }
 
         set_nr_iter(fs, ca, nr, watermark)?;
@@ -616,7 +617,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
 
     /* but no more than a quarter of RAM: */
     let ram = (totalram_bytes() as u64 / 4 / ca.bucket_bytes()) as u32;
-    let nr = nr.max(c::BCH_JOURNAL_BUCKETS_MIN).min(ram);
+    let nr = nr.max(BCH_JOURNAL_BUCKETS_MIN).min(ram);
 
     bch_err_fn_dev!(ca, set_nr_loop(fs, ca, nr, new_fs))
 }
@@ -632,7 +633,7 @@ crate::recovery_pass!(fs_journal_alloc => |fs: &Fs| fs.online_members()
 /// Before we're rw: with nothing writing or discarding, its stage doesn't
 /// move under us, and sectors_free - the write path's - is ours to set.
 pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
-    if fs.flags.get(c::FsFlag::may_go_rw) {
+    if fs.flags.get(FsFlag::may_go_rw) {
         return Err(fs.err(Errcode::EBUSY_journal_bucket_retire_rw));
     }
 
@@ -663,7 +664,7 @@ pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
  * ours to discard - out of the ring and the superblock: a worker's, as
  * neither reclaim nor the write path's discards may take sb_lock
  */
-pub(crate) fn drop_retired(j: &c::journal) {
+pub(crate) fn drop_retired(j: &journal) {
     let fs = j.fs();
     for ca in fs.members() {
         while splice(fs, &mut fs.sb_lock(), &ca, 1, &[], |ring| Ok(ring.retired_awaiting_discard()))

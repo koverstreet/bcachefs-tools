@@ -26,11 +26,14 @@
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans};
 use crate::btree::trans::{__bch2_trans_get, TransGuard};
-use crate::c;
-use crate::c::Errcode;
+use crate::alloc::write_point::write_point_specifier;
+use crate::bcachefs_ioctl::IoctlDataEventRet;
+use crate::btree::bbpos::bbpos;
+use crate::data::update::data_update_index;
+use crate::errcode::Errcode;
 use crate::errcode::BchError;
 use crate::format::{Bpos, DataType};
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::util::projections::Volatile;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
@@ -59,12 +62,12 @@ nest! {
     #[derive(Default, MaybeZeroable, TypeInfo)]*
     #[repr(C)]*
     pub struct MoveStats {
-        pub ret: Volatile<c::IoctlDataEventRet>,
+        pub ret: Volatile<IoctlDataEventRet>,
 
         /* Where the walk is: data_type and pos, or for phys, dev and offset */
         pub at: pub struct bch_move_stats_at {
             pub data_type: Volatile<DataType>,
-            pub pos: Volatile<c::bbpos>,
+            pub pos: Volatile<bbpos>,
             pub dev: Volatile<c_uint>,
             pub offset: Volatile<u64>,
         },
@@ -90,9 +93,9 @@ impl MoveStats {
     /// Zeroed - field by field, as a data job's progress may be read
     /// meanwhile.
     pub fn reset(&self) {
-        self.ret.set(c::IoctlDataEventRet(0));
+        self.ret.set(IoctlDataEventRet(0));
         self.at.data_type.set(DataType::user);
-        self.at.pos.set(c::bbpos::default());
+        self.at.pos.set(bbpos::default());
         self.at.dev.set(0);
         self.at.offset.set(0);
 
@@ -115,13 +118,13 @@ impl MoveStats {
     }
 
     /// Where whoever's moving through it is, for a data job's progress.
-    pub fn set_pos(&self, pos: c::bbpos) {
+    pub fn set_pos(&self, pos: bbpos) {
         self.at.pos.set(pos);
     }
 
     /// A walk's progress: at @iter's key, @sectors more seen.
     pub fn walked(&self, iter: &BtreeIter<'_>, sectors: u64) {
-        self.set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
+        self.set_pos(bbpos { btree: iter.btree(), pos: iter.pos() });
         self.add_sectors_seen(sectors);
     }
 }
@@ -169,7 +172,7 @@ pub struct InFlightUpdate {
 pub struct MovingContext {
     trans:          TransGuard<'static>,
     stats:          Cell<NonNull<MoveStats>>,
-    wp:             c::write_point_specifier,
+    wp:             write_point_specifier,
     wait_on_copygc: bool,
 
     /* A ref each for what's in flight - MovingIo's - which drop waits out */
@@ -259,7 +262,7 @@ impl Drop for MovingIo {
 impl<'a> MovingCtxt<'a> {
     /// Moves counted into @stats, written to @wp; with @wait_on_copygc,
     /// ratelimit() waits while copygc runs.
-    pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: c::write_point_specifier, wait_on_copygc: bool)
+    pub fn new(fs: &'a Fs, stats: &'a MoveStats, wp: write_point_specifier, wait_on_copygc: bool)
         -> Result<MovingCtxt<'a>, BchError>
     {
         let init = pin_init!(MovingContext {
@@ -327,7 +330,7 @@ impl<'a> Moving<'a> {
         &self.0.io
     }
 
-    pub(crate) fn write_point(&self) -> c::write_point_specifier {
+    pub(crate) fn write_point(&self) -> write_point_specifier {
         self.0.wp
     }
 
@@ -410,7 +413,7 @@ impl<'a> Moving<'a> {
         if Kthread::should_stop() {
             return fs.throw(Errcode::kthread_cancelled);
         }
-        if fs.flags.get(c::FsFlag::going_ro) {
+        if fs.flags.get(FsFlag::going_ro) {
             return fs.throw(Errcode::erofs_no_writes_moving_ratelimit);
         }
         if Kthread::freezing() {
@@ -492,7 +495,7 @@ impl<'a> Moving<'a> {
     }
 }
 
-impl c::data_update_index {
+impl data_update_index {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
         self.ctxt.as_deref().map(Moving::of)

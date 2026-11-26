@@ -17,11 +17,11 @@ use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::path::{LockedNode, PathIdx, PathsUpdates, Write};
 use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{init_next, node_write, post_write_cleanup, BtreeWriteFlags};
-use crate::c;
+use crate::locking::six::SixLockType;
 use crate::errcode::{BchError, Errcode};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
-use crate::journal::pins::PinHolder;
+use crate::journal::pins::{PinHolder, JournalPinType};
 use crate::types::Le64;
 use crate::os::kernel::unlikely;
 use crate::util::log::LogMsg;
@@ -191,8 +191,8 @@ impl BtreeNode {
     }
 }
 
-fn journal_pin_type_btree(level: u8) -> c::JournalPinType {
-    c::JournalPinType::from_bits(c::JournalPinType::JOURNAL_PIN_TYPE_btree0 as u32 - u32::from(level))
+fn journal_pin_type_btree(level: u8) -> JournalPinType {
+    JournalPinType::from_bits(JournalPinType::JOURNAL_PIN_TYPE_btree0 as u32 - u32::from(level))
 }
 
 impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
@@ -214,7 +214,7 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
         let ret = lockrestart_do(&trans, |t| {
             let trans = t.trans();
             let mut paths = trans.paths();
-            let path_idx = trans.node_lock_with_path(&mut paths, &self.c, c::SixLockType::SIX_LOCK_read, hash_val)?;
+            let path_idx = trans.node_lock_with_path(&mut paths, &self.c, SixLockType::SIX_LOCK_read, hash_val)?;
 
             let _ = self.flags.fetch_update(Relaxed, Relaxed, |f| {
                 (f.dirty() && f.write_idx() as usize == I && self.writes[I].seq() == seq).then(|| {

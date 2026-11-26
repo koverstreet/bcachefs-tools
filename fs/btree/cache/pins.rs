@@ -3,7 +3,8 @@
 use crate::btree::bkey::{POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
 use crate::btree::node::BtreeNode;
-use crate::c;
+use crate::btree::bbpos::bbpos;
+use crate::btree::cache::BtreeNodeCacheState;
 use crate::errcode::BchError;
 use crate::format::Btree;
 use crate::fs::Fs;
@@ -45,7 +46,7 @@ impl BtreeCachePins<'_> {
      * they're just slow paths.
      */
     pub fn pin(&self, trans: &BtreeTrans<'_>, leaf_mask: u64, interior_mask: u64,
-               range: RangeInclusive<c::bbpos>) -> Result<c::bbpos, BchError> {
+               range: RangeInclusive<bbpos>) -> Result<bbpos, BchError> {
         let fs = self.0;
         let (start, end) = range.into_inner();
         let mut mem_may_pin = self.budget() as i64;
@@ -77,7 +78,7 @@ impl BtreeCachePins<'_> {
                 }
                 mem_may_pin -= b.buf_bytes() as i64;
                 if mem_may_pin <= 0 {
-                    pinned_end = c::bbpos { btree: Btree(btree), pos: b.key().k.p };
+                    pinned_end = bbpos { btree: Btree(btree), pos: b.key().k.p };
                     fs.btree.cache.lock.lock().pinned_nodes_end = pinned_end;
                     return Ok(ControlFlow::Break(()));
                 }
@@ -127,8 +128,8 @@ impl Fs {
         b.flags.set_pinned(true);
 
         let dirty = match b.cache_state(&lists) {
-            c::BtreeNodeCacheState::CLEAN => false,
-            c::BtreeNodeCacheState::DIRTY => true,
+            BtreeNodeCacheState::CLEAN => false,
+            BtreeNodeCacheState::DIRTY => true,
             _ => return,
         };
 

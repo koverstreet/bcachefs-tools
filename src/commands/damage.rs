@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bcachefs_kernel::c;
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_get_damage, bch_ioctl_readdir_entry,
+    bch_ioctl_readdir_flags, BCH_READDIR_damaged, BCH_READDIR_recursive};
+use bcachefs_kernel::posix::dirent_format::DT_SUBVOL;
 use bcachefs_kernel::sb::errors::SbErrorId;
 use bcachefs_kernel::util::vstructs::{plain_bytes, Head, UnvalidatedEntries, Unvalidated};
 use clap::{Parser, Subcommand};
@@ -90,7 +93,7 @@ impl DamageEntry {
 fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
     let mut cap = 16u32;
     loop {
-        let mut buf = IoctlBuf::<Head<c::bch_ioctl_get_damage>>::new(cap as usize);
+        let mut buf = IoctlBuf::<Head<bch_ioctl_get_damage>>::new(cap as usize);
         buf.hdr_mut().nr_entries = cap;
         unsafe { ioctl_ptr::<BCHFS_IOC_GET_DAMAGE>(fd, buf.as_mut_ptr())? };
 
@@ -127,7 +130,7 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
     // aligned for one if the buffer is
     let mut buf = vec![0u64; (64 << 10) / 8];
     let arg = loop {
-        let mut arg = c::bch_ioctl_readdir_flags {
+        let mut arg = bch_ioctl_readdir_flags {
             pos: *pos,
             buf: buf.as_mut_ptr() as u64,
             buf_size: u32::try_from(mem::size_of_val(&*buf))
@@ -147,7 +150,7 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
     let reply = plain_bytes(&buf[..]).get(..arg.used as usize)
         .ok_or_else(|| anyhow!("{} bytes used, of {}", arg.used, arg.buf_size))?;
 
-    UnvalidatedEntries::<c::bch_ioctl_readdir_entry<Unvalidated>>::new(reply)
+    UnvalidatedEntries::<bch_ioctl_readdir_entry<Unvalidated>>::new(reply)
         .map(|e| {
             let e = e?;
             let name = CStr::from_bytes_until_nul(&e.name)
@@ -175,7 +178,7 @@ fn entry_errors(dir: &OwnedFd, e: &Entry) -> Option<Vec<DamageEntry>> {
             _ => return None,
         };
     }
-    if d_type != c::DT_REG && d_type != c::DT_DIR && d_type != c::DT_SUBVOL {
+    if d_type != c::DT_REG && d_type != c::DT_DIR && d_type != DT_SUBVOL {
         return None;
     }
 
@@ -187,8 +190,8 @@ fn entry_errors(dir: &OwnedFd, e: &Entry) -> Option<Vec<DamageEntry>> {
 
 fn cmd_ls(path: &Path, recursive: bool) -> Result<()> {
     let dir = open_dir(path)?;
-    let flags = c::BCH_READDIR_damaged |
-        if recursive { c::BCH_READDIR_recursive } else { 0 };
+    let flags = BCH_READDIR_damaged |
+        if recursive { BCH_READDIR_recursive } else { 0 };
 
     let mut pos = [0u64; 2];
     loop {
@@ -250,7 +253,7 @@ fn cmd_clear(path: &Path, recursive: bool) -> Result<()> {
      * (ownership, racing renames) are reported and skipped.
      */
     let dir = open_dir(path)?;
-    let flags = c::BCH_READDIR_damaged | c::BCH_READDIR_recursive;
+    let flags = BCH_READDIR_damaged | BCH_READDIR_recursive;
     let mut failed = 0u64;
 
     let mut pos = [0u64; 2];

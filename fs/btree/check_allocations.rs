@@ -22,13 +22,14 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIte
                          UpdateTriggerFlags};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trigger::{key_trigger, TriggerOp};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::alloc::format::AllocV4;
 use crate::data::reflink::{gc_reflink_add, gc_reflink_done, gc_reflink_free, gc_reflink_start};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BtreeFlags, DataType};
+use crate::format::{Bpos, Btree, BtreeFlags, DataType, BTREE_MAX_DEPTH, Deleted};
 use crate::locking::{Locked, RwSem, SeqLock};
 use crate::new_lock;
-use crate::fs::{Dev, Fs};
+use crate::fs::{Dev, Fs, FsFlag};
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::types::Le16;
@@ -52,7 +53,7 @@ nest! {
         #[members]
         #>[bitfield(u16)]
         pub bits: pub struct gc_pos_bits {
-            #[bits(8)] pub phase: c::GcPhase,
+            #[bits(8)] pub phase: GcPhase,
             #[bits(8)] pub btree: Btree,
         },
         pub level: u16,
@@ -96,14 +97,14 @@ pub fn gc_btree_order(btree: Btree) -> i32 {
  */
 impl gc_pos {
     /* Position of (the start of) a gc phase: */
-    pub fn of_phase(phase: c::GcPhase) -> Self {
-        Self { bits: c::gc_pos_bits::new().with_phase(phase), ..Default::default() }
+    pub fn of_phase(phase: GcPhase) -> Self {
+        Self { bits: gc_pos_bits::new().with_phase(phase), ..Default::default() }
     }
 
     /// gc_pos_btree(): @pos at @level of @btree, in gc's walk of the btrees.
     pub fn in_btree(btree: Btree, level: u16, pos: Bpos) -> Self {
         Self {
-            bits: c::gc_pos_bits::new().with_phase(c::GcPhase::btree).with_btree(btree),
+            bits: gc_pos_bits::new().with_phase(GcPhase::btree).with_btree(btree),
             level,
             pos,
         }
@@ -138,7 +139,7 @@ impl Eq for gc_pos {}
 #[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct bch_fs_gc {
     /// How far gc's walk has got: not_running, when there's none.
-    pub pos: SeqLock<c::gc_pos>,
+    pub pos: SeqLock<gc_pos>,
 
     /*
      * The allocation code needs gc_mark in struct bucket to be correct, but
@@ -150,17 +151,17 @@ pub struct bch_fs_gc {
 }
 
 impl bch_fs_gc {
-    pub fn phase(&self) -> c::GcPhase {
+    pub fn phase(&self) -> GcPhase {
         self.pos.read().bits.phase()
     }
 
     /// Whether gc's walk has got to @pos: gc_visited().
-    pub fn visited(&self, pos: c::gc_pos) -> bool {
+    pub fn visited(&self, pos: gc_pos) -> bool {
         pos <= self.pos.read()
     }
 
     /// gc's walk on to @pos - never back.
-    pub fn set_pos(&self, pos: c::gc_pos) {
+    pub fn set_pos(&self, pos: gc_pos) {
         let cur = self.pos.read();
         assert!(pos >= cur, "gc position going backwards, from phase {} {} level {} {} to phase {} {} level {} {}",
                 cur.bits.phase() as u32, cur.bits.btree(), cur.level, { cur.pos },
@@ -170,7 +171,7 @@ impl bch_fs_gc {
 
     /// gc's walk done: not_running.
     pub fn set_not_running(&self) {
-        self.pos.write(|p| *p = c::gc_pos::default());
+        self.pos.write(|p| *p = gc_pos::default());
     }
 }
 
@@ -207,7 +208,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
         bch_err_fn!(fs, gc_reflink_add(fs, k))?;
     }
 
-    let deleted = BkeyI::<c::Deleted>::at(k.k.p);
+    let deleted = BkeyI::<Deleted>::at(k.k.p);
     let old = BkeySC::from(deleted.as_ref());
     let mut new = t.bkey_reassemble_room(k, 0)?;
     let mut op = TriggerOp::new(btree, level, old, new.reborrow(), UpdateTriggerFlags::GC | UpdateTriggerFlags::INSERT);
@@ -225,7 +226,7 @@ fn gc_btree_root(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(), BchError>
     let key = t.trans().paths()[iter.iter().path].locked_btree_node(level.into()).expect("the node it peeked").key_peek();
 
     let level = u32::from(level) + 1;
-    fs.gc.set_pos(c::gc_pos::in_btree(btree, level as u16, SPOS_MAX));
+    fs.gc.set_pos(gc_pos::in_btree(btree, level as u16, SPOS_MAX));
     gc_mark_key(t, btree, level, iter.iter(), BkeySC::from(&*key))
 }
 
@@ -234,10 +235,10 @@ fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, targe
 {
     let fs = trans.fs();
 
-    for level in target_depth..c::BTREE_MAX_DEPTH as u32 {
+    for level in target_depth..BTREE_MAX_DEPTH as u32 {
         let mut prev = None;
         BtreeIter::new_level(trans, btree, POS_MIN, level, BtreeIterFlags::PREFETCH).for_each(trans, |t, iter, k| {
-            fs.gc.set_pos(c::gc_pos::in_btree(btree, level as u16, k.k.p));
+            fs.gc.set_pos(gc_pos::in_btree(btree, level as u16, k.k.p));
             progress.update(t, iter)?;
 
             let node = {
@@ -263,7 +264,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
     let progress = Progress::recovery_masks(fs, c"check_allocations", !0, !0);
 
     let mut ids: [Btree; Btree::NR as usize] = core::array::from_fn(|i| Btree(i as u32));
-    ids.sort_unstable_by_key(|&b| c::gc_btree_order(b));
+    ids.sort_unstable_by_key(|&b| gc_btree_order(b));
 
     let btrees = ids.into_iter().chain((Btree::NR..fs.btree_id_nr_alive()).map(Btree));
     let ret = btrees.filter(|b| fs.btree_id_root(b.0).is_some()).try_for_each(|btree| {
@@ -284,7 +285,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
          * Otherwise, we can delay the repair to the next
          * mount or offline fsck.
          */
-        if fs.flags.get(c::FsFlag::in_fsck) {
+        if fs.flags.get(FsFlag::in_fsck) {
             target_depth = 0;
         }
 
@@ -295,7 +296,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
 }
 
 fn mark_superblocks(fs: &Fs) -> Result<(), BchError> {
-    fs.gc.set_pos(c::gc_pos::of_phase(c::GcPhase::sb));
+    fs.gc.set_pos(gc_pos::of_phase(GcPhase::sb));
 
     fs.trans_mark_dev_sbs(UpdateTriggerFlags::GC)
 }
@@ -320,7 +321,7 @@ fn gc_start(fs: &Fs) -> Result<(), BchError> {
 }
 
 /* returns true if not equal */
-fn alloc_v4_cmp(l: &c::AllocV4, r: &c::AllocV4) -> bool {
+fn alloc_v4_cmp(l: &AllocV4, r: &AllocV4) -> bool {
     l.generation      != r.generation     ||
     l.oldest_gen      != r.oldest_gen     ||
     l.data_type       != r.data_type      ||
@@ -464,7 +465,7 @@ fn gc_alloc_start(fs: &Fs) -> Result<(), BchError> {
 }
 
 fn gc_write_stripes_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>) -> Result<(), BchError> {
-    let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
+    let Some(s) = k.arm::<Stripe>() else { return Ok(()) };
 
     let fs = t.fs();
     let m = fs.ec.gc_stripe(k.k.p.offset).map(|m| *m.lock.lock());
@@ -521,7 +522,7 @@ fn gc(fs: &Fs) -> Result<(), BchError> {
     gc_alloc_start(fs)?;
     gc_reflink_start(fs);
 
-    fs.gc.set_pos(c::gc_pos::of_phase(c::GcPhase::start));
+    fs.gc.set_pos(gc_pos::of_phase(GcPhase::start));
 
     bch_err_msg!(fs, mark_superblocks(fs), "marking superblocks")?;
 
@@ -576,7 +577,7 @@ fn check_allocations(fs: &Fs) -> Result<(), BchError> {
      */
     fs.alloc_wake_all();
 
-    if ret.is_ok() && !fs.flags.get(c::FsFlag::errors_not_fixed) {
+    if ret.is_ok() && !fs.flags.get(FsFlag::errors_not_fixed) {
         fs.sb_members_clean_deleted();
     }
 

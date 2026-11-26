@@ -6,10 +6,11 @@
 //! starts. The pre-set hooks run at mount too, for every option, with no
 //! change to register: opts_hooks_pre_set().
 
-use crate::format::{MemberState, SbFeature};
-use crate::fs::Dev;
+use crate::format::{MemberState, SbFeature, VersionUpgradeOpt};
+use crate::fs::{Dev, FsFlag};
 use super::{opt_to_text, Opt, OptId, OPTS};
-use crate::c;
+use crate::alloc::disk_groups_format::bch_sb_field_disk_groups;
+use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
 use crate::data::compress;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -30,9 +31,9 @@ impl Fs {
 fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bool)
     -> Result<(), BchError>
 {
-    use c::ReconcileScan as scan;
+    use crate::data::reconcile::work::ReconcileScan as scan;
 
-    if !fs.flags.get(c::FsFlag::started) {
+    if !fs.flags.get(FsFlag::started) {
         return Ok(());
     }
 
@@ -69,7 +70,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
             // the next superblock swap
             if post {
-                let _ = crate::bch_err_fn!(fs, c::bch_sb_field_disk_groups::<crate::util::vstructs::Validated>::to_cpu(fs, &mut fs.sb_lock()));
+                let _ = crate::bch_err_fn!(fs, bch_sb_field_disk_groups::<crate::util::vstructs::Validated>::to_cpu(fs, &mut fs.sb_lock()));
             }
 
             // Only the label is in targets: a failure domain only spreads
@@ -94,7 +95,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
     match id {
         OptId::state => {
             if let Some(ca) = ca {
-                return fs.dev_set_state(ca, MemberState(v as u8), c::BCH_FORCE_IF_DEGRADED, None);
+                return fs.dev_set_state(ca, MemberState(v as u8), BCH_FORCE_IF_DEGRADED, None);
             }
         }
         OptId::compression | OptId::background_compression => {
@@ -108,7 +109,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
         OptId::rotational => {
             // Offline: there's no post hook, and nothing to race with
             if let Some(ca) = ca {
-                if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(c::FsFlag::started) {
+                if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(FsFlag::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }
@@ -139,7 +140,7 @@ pub(crate) fn opts_hooks_pre_set(fs: &Fs) -> Result<(), BchError> {
 /// After setting option @id to @v, as opt_hook_pre_set(): logged, and what
 /// the change starts.
 fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
-    if fs.flags.get(c::FsFlag::started) {
+    if fs.flags.get(FsFlag::started) {
         let mut buf = Printbuf::new();
         write!(buf, "opt change: {}=", id.opt().name);
         opt_to_text(&mut buf, Some(fs), None, id.opt(), v, 0);
@@ -171,7 +172,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
         OptId::durability => {
             let state = fs.state_lock_read();
             if let Some(ca) = ca {
-                if fs.flags.get(c::FsFlag::rw) && ca.is_online() &&
+                if fs.flags.get(FsFlag::rw) && ca.is_online() &&
                    ca.mi.get().state == MemberState::rw {
                     fs.dev_allocator_set_rw(ca.dev_idx.into(), true);
                     state.recalc_capacity();
@@ -181,14 +182,14 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
         // XXX: in the future we'll likely want to do compatible upgrades at
         // runtime as well, but right now there's nothing that does that
         OptId::version_upgrade => {
-            if v == c::VersionUpgradeOpt::incompatible.0.into() {
+            if v == VersionUpgradeOpt::incompatible.0.into() {
                 fs.upgrade_incompat();
             }
         }
         // Online: the new value has to be live before the pass runs
         OptId::rotational => {
             if let Some(ca) = ca {
-                if fs.flags.get(c::FsFlag::started) {
+                if fs.flags.get(FsFlag::started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }

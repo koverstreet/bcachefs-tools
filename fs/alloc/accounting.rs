@@ -56,7 +56,8 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
-use crate::c;
+use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{self, Bpos};
 use crate::fs::Fs;
@@ -74,7 +75,7 @@ use zerocopy::{FromBytes, IntoBytes};
 
 pub use crate::alloc::accounting_format::*;
 pub use crate::format::CompressionType;
-pub use c::ReconcileType;
+pub use crate::data::reconcile::format::ReconcileType;
 
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
 const BPOS_SIZE: usize = core::mem::size_of::<Bpos>();
@@ -124,7 +125,7 @@ impl DevDataType {
     }
 }
 
-pub(crate) fn replicas_entry(pos: &DiskAccountingPos<Unvalidated>) -> Option<&c::bch_replicas_entry_v1> {
+pub(crate) fn replicas_entry(pos: &DiskAccountingPos<Unvalidated>) -> Option<&bch_replicas_entry_v1> {
     match pos.validated().ok()?.get() {
         Ok(DiskAccountingPosRef::replicas(r)) => Some(r),
         _ => None,
@@ -198,7 +199,7 @@ pub(crate) fn accounting_bkey(p: Bpos, nr_counters: usize) -> format::bkey {
 
 /* @acc's replicas entry has more devs than the key has room for: */
 fn replicas_past_end(err: VStructError) -> Option<(usize, usize)> {
-    let hdr = size_of::<Head<c::bch_replicas_entry_v1>>();
+    let hdr = size_of::<Head<bch_replicas_entry_v1>>();
     match err {
         VStructError::Overrun { want, have, .. } => Some((want - hdr, have - hdr)),
         _ => None,
@@ -252,7 +253,7 @@ pub fn key_to_text(out: &mut Printbuf, fs: Option<&Fs>, pos: &DiskAccountingPos<
     }
 }
 
-impl BkeyOps for c::Accounting {
+impl BkeyOps for Accounting {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         use DiskAccountingPosRef as A;
 
@@ -286,7 +287,7 @@ impl BkeyOps for c::Accounting {
             bkey_fsck_err_on!(v, r.nr_required > r.nr_devs || (r.nr_required > 1 && r.nr_required == r.nr_devs),
                               id::accounting_key_replicas_nr_required_bad,
                               "accounting key replicas entry with bad nr_required")?;
-            bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != c::BCH_SB_MEMBER_INVALID && d[0] >= d[1]),
+            bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != BCH_SB_MEMBER_INVALID && d[0] >= d[1]),
                               id::accounting_key_replicas_devs_unsorted,
                               "accounting key replicas entry with unsorted devs")?;
         }

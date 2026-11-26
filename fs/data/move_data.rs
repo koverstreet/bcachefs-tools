@@ -43,14 +43,24 @@ use crate::btree::scrub::btree_node_scrub;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, CommitFlags, CommitOpts, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
-use crate::c::Errcode as err;
+use crate::data::ec::format::Stripe;
+use crate::alloc::foreground::BCH_WATERMARK_MASK;
+use crate::alloc::write_point::write_point_specifier;
+use crate::bcachefs_ioctl::{DataOp, DataProgressDataTypeSpecial, bch_ioctl_data,
+    bch_ioctl_data_scrub};
+use crate::btree::bbpos::bbpos;
+use crate::data::extents::{extent_ptr_decoded, ReadFlags};
+use crate::data::reconcile::trigger::{per_snapshot_io_opts, SetNeedsReconcileCtx};
+use crate::opts::bch_inode_opts;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::errcode::Errcode as err;
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
-use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt};
+use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt, move_bucket_key};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::scrub_journal::BadRef;
-use crate::data::update::{fail_should_trace, is_scrub};
+use crate::data::update::{fail_should_trace, is_scrub, data_update_opts, DataUpdateType};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::posix::inode_opts::{get_io_opts, PerSnapshotIoOpts};
@@ -59,13 +69,13 @@ use crate::os::kernel::current_id;
 use crate::util::Printbuf;
 use crate::{bch_err_msg, warn_once};
 use core::ops::Range;
-use crate::format::{Bpos, Btree, DataType, BkeyType};
+use crate::format::{Bpos, Btree, DataType, BkeyType, Backpointer, CsumType};
 
 /// What to move: of @k, in @btree, with @io_opts, the move's options filled
 /// in, and whether to. In the walk's attempt, so it can look things up - an
 /// error, or a restart, is the walk's.
-pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &c::bch_inode_opts,
-                              &mut c::data_update_opts) -> Result<bool, BchError> + 'p;
+pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &bch_inode_opts,
+                              &mut data_update_opts) -> Result<bool, BchError> + 'p;
 
 // ── Moving a key ─────────────────────────────────────────────────────────
 
@@ -73,7 +83,7 @@ pub type Pred<'p> = dyn FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &c::bch_
 /// move: so a btree node's is traced here. @k is a copy - the rewrite frees
 /// the node the key was in.
 #[cold]
-fn move_btree_node_trace(fs: &Fs, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts, k: BkeySC<'_>,
+fn move_btree_node_trace(fs: &Fs, opts: &bch_inode_opts, data_opts: &data_update_opts, k: BkeySC<'_>,
                          ret: Result<(), BchError>) {
     let sectors = fs.btree_sectors().into();
     let msg = |out: &mut Printbuf| {
@@ -104,8 +114,8 @@ impl<'a> Moving<'a> {
         &self,
         t:         &TransAttempt<'_, 'a>,
         bucket:    Option<&BucketMoves>,
-        opts:      &c::bch_inode_opts,
-        data_opts: &c::data_update_opts,
+        opts:      &bch_inode_opts,
+        data_opts: &data_update_opts,
         iter:      &BtreeIter<'_>,
         level:     u32,
         k:         BkeySC<'_>,
@@ -121,7 +131,7 @@ impl<'a> Moving<'a> {
             moving_update::move_extent(self, t, bucket, iter, k, opts, data_opts, found)
         } else if !is_scrub(data_opts.type_) {
             self.move_btree_node(t, opts, data_opts, iter, level, k)
-        } else if data_opts.type_ == c::DataUpdateType::scrub {
+        } else if data_opts.type_ == DataUpdateType::scrub {
             btree_node_scrub(self, iter.btree(), level, k, data_opts.read_dev)
         } else {
             // scrub_no_repair: node scrub repairs, and the journal scrub
@@ -142,12 +152,12 @@ impl<'a> Moving<'a> {
         }
     }
 
-    fn move_btree_node(&self, t: &TransAttempt<'_, 'a>, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
+    fn move_btree_node(&self, t: &TransAttempt<'_, 'a>, opts: &bch_inode_opts, data_opts: &data_update_opts,
                        iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>) -> Result<(), BchError> {
-        use c::Watermark as wm;
+        use crate::alloc::foreground::Watermark as wm;
         let fs = t.fs();
 
-        if data_opts.type_ != c::DataUpdateType::copygc {
+        if data_opts.type_ != DataUpdateType::copygc {
             if let Err(e) = t.can_do_data_update(opts, data_opts, k, None) {
                 if !is_restart(&e) {
                     move_btree_node_trace(fs, opts, data_opts, k, Err(e));
@@ -159,7 +169,7 @@ impl<'a> Moving<'a> {
         let node_key = BkeyBuf::from_key(k);
 
         let mut flags = CommitOpts::from(data_opts.commit_flags);
-        if data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK == wm::copygc as u32 {
+        if data_opts.commit_flags.bits() & BCH_WATERMARK_MASK == wm::copygc as u32 {
             flags = flags.watermark_hipri();
         }
 
@@ -187,7 +197,7 @@ impl Mover<'_, '_> {
     /// @k moved, if it's data the predicate picks: its io options - cached
     /// across a walk in key order by @s - and reconcile options, committed
     /// first.
-    fn move_key(&mut self, t: &TransAttempt<'_, '_>, mut s: Option<&mut c::per_snapshot_io_opts>,
+    fn move_key(&mut self, t: &TransAttempt<'_, '_>, mut s: Option<&mut per_snapshot_io_opts>,
                 iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>) -> Result<(), BchError> {
         if !k.k.extent_is_direct_data() {
             return Ok(());
@@ -195,10 +205,10 @@ impl Mover<'_, '_> {
 
         let fs = t.fs();
         let opts = get_io_opts(t, s.as_deref_mut(), k)?;
-        update_reconcile_opts(t, s, &opts, iter, level, k, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
+        update_reconcile_opts(t, s, &opts, iter, level, k, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other)?;
         t.commit_lazy(Some(&DiskReservation::new(fs)), CommitFlags::NO_ENOSPC)?;
 
-        let mut data_opts = c::data_update_opts { read_dev: u32::MAX, ..::pin_init::zeroed() };
+        let mut data_opts = data_update_opts { read_dev: u32::MAX, ..::pin_init::zeroed() };
         let ret = (self.pred)(t, iter.btree(), k, &opts, &mut data_opts);
 
         fs.event_add_trace(events::data_update_pred, k.k.size.into(), |out| {
@@ -224,8 +234,8 @@ impl Moving<'_> {
     /// returning once the moves are issued.
     pub fn move_data_btree(&self, btree: Btree, levels: Range<u32>, start: Bpos, end: Bpos,
                            name: &str,
-                           mut pred: impl FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &c::bch_inode_opts,
-                                                &mut c::data_update_opts) -> Result<bool, BchError>)
+                           mut pred: impl FnMut(&TransAttempt<'_, '_>, Btree, BkeySC<'_>, &bch_inode_opts,
+                                                &mut data_update_opts) -> Result<bool, BchError>)
         -> Result<(), BchError>
     {
         let trans = self.trans();
@@ -234,7 +244,7 @@ impl Moving<'_> {
         let mut mover = Mover { moving: self, bucket: None, name, pred: &mut pred };
 
         self.stats().at.data_type.set(DataType::user);
-        self.stats().set_pos(c::bbpos { btree, pos: start });
+        self.stats().set_pos(bbpos { btree, pos: start });
 
         BtreeLevels { btree, levels, start, end }.for_each(trans, |t, iter, level, k| {
             let sectors = key_sectors(fs, k);
@@ -320,7 +330,7 @@ impl PhysWalker<'_, '_> {
     /// ratelimits in, running the moves' index updates.
     #[inline(never)]
     fn bp(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
-        let Some(bp) = BkeyI::<c::Backpointer>::from_key(k) else { return Ok(()) };
+        let Some(bp) = BkeyI::<Backpointer>::from_key(k) else { return Ok(()) };
         let bp = &bp;
         let fs = t.fs();
         let moving = self.mover.moving;
@@ -347,7 +357,7 @@ impl PhysWalker<'_, '_> {
              */
             let scrubbed = &mut self.stripe_scrubbed;
             return Err(t.close(CommitFlags::empty(), |trans| {
-                let s = BkeySC::from(&stripe).arm::<c::Stripe>().expect("a stripe");
+                let s = BkeySC::from(&stripe).arm::<Stripe>().expect("a stripe");
                 let ret = scrub_stripe_block(moving, trans, ca, s, block);
                 if !ret.as_ref().is_err_and(is_restart) {
                     *scrubbed = Some(bp.k.p);
@@ -383,8 +393,8 @@ impl PhysWalker<'_, '_> {
 
 /// The evacuates' predicate: the pointers @kill picks moved, to the
 /// background target.
-fn evacuate_ptrs(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, io_opts: &c::bch_inode_opts,
-                 data_opts: &mut c::data_update_opts, mut kill: impl FnMut(&c::extent_ptr_decoded) -> bool)
+fn evacuate_ptrs(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, io_opts: &bch_inode_opts,
+                 data_opts: &mut data_update_opts, mut kill: impl FnMut(&extent_ptr_decoded) -> bool)
     -> Result<bool, BchError>
 {
     data_opts.target = io_opts.background_target;
@@ -473,7 +483,7 @@ impl Moving<'_> {
         // block's are the ones whose stripe pointer is to it
         self.move_data_phys(None, &w, "evacuate_ec_orphan_pred", &mut |t, _, k, io_opts, d| {
             evacuate_ptrs(t, k, io_opts, d, |p| {
-                u32::from(p.ptr.dev()) == c::BCH_SB_MEMBER_INVALID && p.has_ec &&
+                u32::from(p.ptr.dev()) == BCH_SB_MEMBER_INVALID && p.has_ec &&
                     p.ec.idx() == idx && u32::from(p.ec.block()) == block
             })
         })
@@ -483,7 +493,7 @@ impl Moving<'_> {
     /// generation, as @data_opts say: its backpointers walked, each extent's
     /// move issued - returning once the reads are. Each move holds a ref on
     /// @moves until its update is done.
-    pub fn evacuate_bucket(&self, moves: &BucketMoves, key: c::move_bucket_key, data_opts: c::data_update_opts)
+    pub fn evacuate_bucket(&self, moves: &BucketMoves, key: move_bucket_key, data_opts: data_update_opts)
         -> Result<(), BchError>
     {
         let fs = self.trans().fs();
@@ -528,9 +538,9 @@ impl Moving<'_> {
 
 /// Scrub: one replica on @arg's device read and checked - of a btree node,
 /// any; of an extent, a checksummed one.
-fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(), BchError> {
-    let ctxt = MovingCtxt::new(fs, stats, c::write_point_specifier::hashed(current_id()), false)?;
-    stats.at.data_type.set(DataType(c::DataProgressDataTypeSpecial::DATA_PROGRESS_DATA_TYPE_phys.0));
+fn scrub(fs: &Fs, stats: &MoveStats, arg: bch_ioctl_data_scrub) -> Result<(), BchError> {
+    let ctxt = MovingCtxt::new(fs, stats, write_point_specifier::hashed(current_id()), false)?;
+    stats.at.data_type.set(DataType(DataProgressDataTypeSpecial::DATA_PROGRESS_DATA_TYPE_phys.0));
 
     let _ = ctxt.trans().write_buffer_flush_sync();
 
@@ -544,26 +554,26 @@ fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(),
         if k.k.key_type() != BkeyType::btree_ptr_v2 {
             if let Some(kp) = k.arm::<Ptrs>() {
                 if let Some(d) = kp.ptrs_decoded(t.fs()).find(|d| u32::from(d.p.ptr.dev()) == dev) {
-                    if d.p.crc.csum_type == c::CsumType::none {
+                    if d.p.crc.csum_type == CsumType::none {
                         return Ok(false);
                     }
                 }
             }
         }
 
-        data_opts.type_ = c::DataUpdateType::scrub;
+        data_opts.type_ = DataUpdateType::scrub;
         data_opts.read_dev = dev;
-        data_opts.read_flags = c::ReadFlags::hard_require_read_device;
+        data_opts.read_flags = ReadFlags::hard_require_read_device;
         Ok(true)
     })
 }
 
 /// The ioctl's data job @op, counted into @stats. Scrub is the only op.
-pub fn data_job(fs: &Fs, stats: &MoveStats, op: &c::bch_ioctl_data) -> Result<(), BchError> {
+pub fn data_job(fs: &Fs, stats: &MoveStats, op: &bch_ioctl_data) -> Result<(), BchError> {
     stats.reset();
 
-    match c::DataOp(op.op.into()) {
-        c::DataOp::scrub => {
+    match DataOp(op.op.into()) {
+        DataOp::scrub => {
             // so tests don't fail spuriously: every btree node that needs
             // repair is seen
             fs.btree_interior_updates_flush();

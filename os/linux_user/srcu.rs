@@ -21,7 +21,7 @@ use super::percpu::{CpuGuard, PerCpu};
 use super::rcu::{self, Flavor, GpCookie, SrcuReadGuard};
 use super::workqueue::{Queue, RawWork};
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
 use crate::os::lockdep::LockClass;
@@ -94,7 +94,7 @@ impl Srcu {
         // SAFETY: every field written, @slot pinned from here on
         unsafe {
             pin_init_from_closure(move |slot: *mut Self| {
-                let counts = PerCpu::alloc().map_err(|_| BchError::from(c::Errcode::ENOMEM_srcu_percpu))?;
+                let counts = PerCpu::alloc().map_err(|_| BchError::from(Errcode::ENOMEM_srcu_percpu))?;
                 (&raw mut (*slot).ctr).write(AtomicU64::new(0));
                 (&raw mut (*slot).gp_seq).write(AtomicU64::new(0));
                 (&raw mut (*slot).counts).write(counts);

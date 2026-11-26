@@ -15,7 +15,13 @@ use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVal};
 use crate::btree::trigger::TriggerOp;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::btree::bbpos::bbpos;
+use crate::data::reconcile::format::{bch_extent_rebalance_v1, bch_extent_reconcile,
+    bch_extent_reconcile_bp, ReconcileOpt, ReconcileWorkId};
+use crate::init::dev::bch_devs_mask;
+use crate::opts::bch_inode_opts;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -27,7 +33,7 @@ use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::{bch_enum, MaybeZeroable};
 use crate::util::alloc::Vec;
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, Backpointer};
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -43,7 +49,7 @@ pub enum SetNeedsReconcileCtx {
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct snapshot_io_opts_entry {
     pub snapshot: u32,
-    pub io_opts: c::bch_inode_opts,
+    pub io_opts: bch_inode_opts,
 }
 
 #[derive(Default)]
@@ -52,15 +58,15 @@ pub struct per_snapshot_io_opts {
     pub metadata: bool,
     pub fs_scan_cookie: bool,
     pub inum_scan_cookie: bool,
-    pub dev_cookie: c::bch_devs_mask,
+    pub dev_cookie: bch_devs_mask,
 
-    pub fs_io_opts: c::bch_inode_opts,
-    pub d: Vec<c::snapshot_io_opts_entry>,
+    pub fs_io_opts: bch_inode_opts,
+    pub d: Vec<snapshot_io_opts_entry>,
 }
 
 /// The work btree a key with @r is tracked in: rb_work_id().
-pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::ReconcileWorkId {
-    use c::ReconcileWorkId as w;
+pub fn rb_work_id(r: Option<&bch_extent_reconcile>) -> ReconcileWorkId {
+    use crate::data::reconcile::format::ReconcileWorkId as w;
     match r {
         Some(r) if r.need_rb() != 0 =>
             if r.pending() != 0 { w::pending }
@@ -70,10 +76,10 @@ pub fn rb_work_id(r: Option<&c::bch_extent_reconcile>) -> c::ReconcileWorkId {
     }
 }
 
-impl c::ReconcileWorkId {
+impl ReconcileWorkId {
     /// The btree this work is tracked in, none for none: reconcile_work_btree[].
     pub fn btree(self) -> Option<Btree> {
-        use c::ReconcileWorkId as w;
+        use crate::data::reconcile::format::ReconcileWorkId as w;
         Some(match self {
             w::hipri   => Btree::reconcile_hipri,
             w::normal  => Btree::reconcile_work,
@@ -91,7 +97,7 @@ impl c::ReconcileWorkId {
     /// The phys btree work with this id is tracked in, by bucket position:
     /// reconcile_work_phys_btree[].
     pub fn phys_btree(self) -> Option<Btree> {
-        use c::ReconcileWorkId as w;
+        use crate::data::reconcile::format::ReconcileWorkId as w;
         Some(match self {
             w::hipri  => Btree::reconcile_hipri_phys,
             w::normal => Btree::reconcile_work_phys,
@@ -108,7 +114,7 @@ pub fn data_to_rb_work_pos(btree: Btree, mut p: Bpos) -> Bpos {
         p = p.min(pos(0, u64::MAX));
     }
     if btree == Btree::extents {
-        p = p.max(pos(c::BCACHEFS_ROOT_INO as u64, 0));
+        p = p.max(pos(BCACHEFS_ROOT_INO as u64, 0));
     }
     if btree == Btree::reflink {
         p.inode += 1;
@@ -118,23 +124,23 @@ pub fn data_to_rb_work_pos(btree: Btree, mut p: Bpos) -> Bpos {
 
 /// The data btree position at @p in the work btrees: rb_work_to_data_pos(),
 /// data_to_rb_work_pos() backwards.
-pub fn rb_work_to_data_pos(mut p: Bpos) -> c::bbpos {
+pub fn rb_work_to_data_pos(mut p: Bpos) -> bbpos {
     let btree = if p.inode == 0 {
         Btree::stripes
-    } else if p.inode < c::BCACHEFS_ROOT_INO as u64 {
+    } else if p.inode < BCACHEFS_ROOT_INO as u64 {
         p.inode -= 1;
         Btree::reflink
     } else {
         Btree::extents
     };
-    c::bbpos { btree, pos: p }
+    bbpos { btree, pos: p }
 }
 
 /// What a key carries for reconcile: a key with pointers' entries, and any
 /// key's work btree.
 pub trait BkeyVReconcile: BkeyV {
     /// Its reconcile entry: bch2_bkey_reconcile_opts().
-    fn reconcile_opts(&self, fs: &Fs) -> Option<&c::bch_extent_reconcile>
+    fn reconcile_opts(&self, fs: &Fs) -> Option<&bch_extent_reconcile>
     where Self: BkeyVPtrs
     {
         self.extent_entries(fs).find_map(|e| match e {
@@ -164,18 +170,18 @@ pub trait BkeyVReconcile: BkeyV {
 
     /// The work btree it's tracked in - a stripe's by its needs_reconcile, as
     /// stripes have no reconcile entry: bch2_bkey_reconcile_work_id().
-    fn reconcile_work_id(&self, fs: &Fs) -> c::ReconcileWorkId
+    fn reconcile_work_id(&self, fs: &Fs) -> ReconcileWorkId
     where Self::V: BkeyVal<State = Validated>
     {
         let key = self.as_sc();
-        if let Some(s) = key.arm::<c::Stripe>() {
+        if let Some(s) = key.arm::<Stripe>() {
             return if s.v().needs_reconcile() != 0 {
-                c::ReconcileWorkId::hipri
+                ReconcileWorkId::hipri
             } else {
-                c::ReconcileWorkId::none
+                ReconcileWorkId::none
             };
         }
-        key.arm::<Ptrs>().map_or(c::ReconcileWorkId::none, |k| rb_work_id(k.reconcile_opts(fs)))
+        key.arm::<Ptrs>().map_or(ReconcileWorkId::none, |k| rb_work_id(k.reconcile_opts(fs)))
     }
 }
 
@@ -195,7 +201,7 @@ impl TransBkey<'_, '_, PtrsMut> {
             Some((_, bp)) => bp.set_idx(idx),
             None if idx != 0 => {
                 let end = self.entries_end();
-                self.insert_entry(end, &[c::bch_extent_reconcile_bp::new().with_idx(idx).into_bits()])?;
+                self.insert_entry(end, &[bch_extent_reconcile_bp::new().with_idx(idx).into_bits()])?;
             }
             None => {}
         }
@@ -207,8 +213,8 @@ impl TransBkey<'_, '_, PtrsMut> {
 
 /// The reconcile backpointer btree node pointer @k, in @btree at @level, has:
 /// rb_bp().
-pub(crate) fn rb_bp(btree: Btree, level: u32, k: BkeySC<'_>) -> c::Backpointer {
-    c::Backpointer { btree_id: btree.0 as u8, level: level as u8, pos: k.k.p, ..Default::default() }
+pub(crate) fn rb_bp(btree: Btree, level: u32, k: BkeySC<'_>) -> Backpointer {
+    Backpointer { btree_id: btree.0 as u8, level: level as u8, pos: k.k.p, ..Default::default() }
 }
 
 /// Delete btree node pointer @k's reconcile backpointer at @bp_pos - if it is
@@ -221,7 +227,7 @@ fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeyS
     let bp_k = iter.peek_slot(t)?.expect("a slot");
     let want = rb_bp(btree, level, k);
 
-    if !bp_k.arm::<c::Backpointer>().is_some_and(|bp| plain_bytes(bp.v()) == plain_bytes(&want)) {
+    if !bp_k.arm::<Backpointer>().is_some_and(|bp| plain_bytes(bp.v()) == plain_bytes(&want)) {
         fsck_err!(t, id::btree_ptr_to_bad_reconcile_bp,
                   "btree ptr points to bad/missing reconcile bp\n{}\n{}", k.to_text(fs), bp_k.to_text(fs))?;
         return Ok(());
@@ -236,7 +242,7 @@ pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u3
     let mut iter = BtreeIter::uninit(t.trans());
     t.bkey_get_empty_slot(&mut iter, Btree::reconcile_scan, pos(work, 1), pos(work, u64::MAX))?;
 
-    let mut bp = t.bkey_alloc_typed::<c::Backpointer>()?;
+    let mut bp = t.bkey_alloc_typed::<Backpointer>()?;
     bp.k_mut().p = iter.pos();
     *bp.v_mut() = rb_bp(btree, level, k);
     t.update(&iter, bp, UpdateTriggerFlags::empty())?;
@@ -248,7 +254,7 @@ pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u3
 /// What a reconcile entry counts toward reconcile_work accounting: its need_rb
 /// bits - their accounting types are ReconcileOpt's order - pending in
 /// place of target and replicas, or high_priority added: rb_accounting_counters().
-fn rb_accounting_counters(r: Option<&c::bch_extent_reconcile>) -> u32 {
+fn rb_accounting_counters(r: Option<&bch_extent_reconcile>) -> u32 {
     let Some(r) = r else { return 0 };
     let mut ret = u32::from(r.need_rb());
     if r.pending() != 0 {
@@ -264,7 +270,7 @@ fn rb_accounting_counters(r: Option<&c::bch_extent_reconcile>) -> u32 {
 /// ptrs_moving, by index among the pointers - unless the move is pending:
 /// trigger_dev_counters().
 fn trigger_dev_counters(t: &TransAttempt<'_, '_>, sectors: Option<u32>, k: BkeySC<'_>,
-                        r: Option<&c::bch_extent_reconcile>, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+                        r: Option<&bch_extent_reconcile>, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let Some(r) = r.filter(|r| r.ptrs_moving() != 0 && r.pending() == 0) else { return Ok(()) };
     let Some(k) = k.arm::<Ptrs>() else { return Ok(()) };
 
@@ -290,7 +296,7 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
     let old_r = op.old.arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied());
     let new_r = BkeySC::from(&op.new).untyped().arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied());
 
-    let needs_trigger = |r: Option<c::bch_extent_reconcile>| r.is_some_and(|r| r.need_rb() | r.ptrs_moving() != 0);
+    let needs_trigger = |r: Option<bch_extent_reconcile>| r.is_some_and(|r| r.need_rb() | r.ptrs_moving() != 0);
     if !needs_trigger(old_r) && !needs_trigger(new_r) {
         return Ok(());
     }
@@ -324,7 +330,7 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
             if flags.contains(UpdateTriggerFlags::INSERT) {
                 let (btree, level) = (op.btree, op.level);
                 let needed = u32::from(op.new.k().u64s) +
-                    (size_of::<c::bch_extent_reconcile_bp>() / size_of::<u64>()) as u32;
+                    (size_of::<bch_extent_reconcile_bp>() / size_of::<u64>()) as u32;
                 let k = op.new_with_room(t, needed)?;
 
                 if bp.inode != 0 && bp.offset == 0 {
@@ -370,11 +376,11 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
 }
 
 /// A reconcile entry against itself: bch2_extent_reconcile_validate().
-pub fn extent_reconcile_validate(v: &BkeyValidate<'_, '_>, r: &c::bch_extent_reconcile) -> Result<(), BchError> {
+pub fn extent_reconcile_validate(v: &BkeyValidate<'_, '_>, r: &bch_extent_reconcile) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, r.pending() != 0 && r.need_rb() == 0, id::extent_reconcile_bad_pending,
                       "pending incorrectly set")?;
     bkey_fsck_err_on!(v, r.hipri() != 0 &&
-                         r.need_rb() & (1 << c::ReconcileOpt::data_replicas.0) == 0,
+                         r.need_rb() & (1 << ReconcileOpt::data_replicas.0) == 0,
                       id::extent_reconcile_bad_hipri, "hipri incorrectly set")?;
     bkey_fsck_err_on!(v, r.data_replicas() == 0, id::extent_reconcile_bad_replicas, "bad replicas")
 }
@@ -394,7 +400,7 @@ macro_rules! reconcile_opts_to_text {
         from_inode(out, r.data_replicas_from_inode());
 
         write!(out, " checksum=");
-        c::CsumOpt(r.data_checksum().into()).to_text(out);
+        crate::format::CsumOpt(r.data_checksum().into()).to_text(out);
         from_inode(out, r.data_checksum_from_inode());
 
         if r.background_compression() != 0 || r.background_compression_from_inode() != 0 {
@@ -420,14 +426,14 @@ macro_rules! reconcile_opts_to_text {
 }
 
 /// bch2_extent_rebalance_v1_to_text().
-pub fn extent_rebalance_v1_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_extent_rebalance_v1) {
+pub fn extent_rebalance_v1_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &bch_extent_rebalance_v1) {
     reconcile_opts_to_text!(out, fs, r);
 }
 
 /// What it needs, then its options: bch2_extent_reconcile_to_text().
-pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_extent_reconcile) {
+pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &bch_extent_reconcile) {
     write!(out, "need_rb=");
-    crate::util::names::prt_set::<c::ReconcileOpt>(out, r.need_rb().into());
+    crate::util::names::prt_set::<ReconcileOpt>(out, r.need_rb().into());
     if r.hipri() != 0 {
         write!(out, " hipri");
     }
@@ -449,7 +455,7 @@ pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_
 /// parent - for btree_node_update_key() on a node not yet written - and it's
 /// copied while it is.
 pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut BtreeIter<'t>,
-                                       bp: BkeySC<'_, c::Backpointer>) -> Result<Option<BkeyBuf>, BchError> {
+                                       bp: BkeySC<'_, Backpointer>) -> Result<Option<BkeyBuf>, BchError> {
     let fs = t.fs();
     let v = *bp.v();
     let btree = Btree(v.btree_id.into());
@@ -492,7 +498,7 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
     Ok(None)
 }
 
-fn delete_bp(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
+fn delete_bp(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, Backpointer>) -> Result<(), BchError> {
     t.delete(Btree::reconcile_scan, bp.k.p, UpdateTriggerFlags::empty())?;
     t.commit(None, CommitFlags::NO_ENOSPC)
 }

@@ -19,6 +19,7 @@
 //! dirent commits; if the walker refetches partway through a directory, they're
 //! recounted from the btree (recalculate_sums).
 
+use crate::posix::dirent_format;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -26,6 +27,10 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::posix::str_hash::bch_hash_info;
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
@@ -43,7 +48,7 @@ struct CheckDirents<'f> {
     s:                SnapshotsSeen,
     dir:              InodeWalker,
     target:           InodeWalker,
-    hash_info:        c::bch_hash_info<'f>,
+    hash_info:        bch_hash_info<'f>,
     need_second_pass: bool,
 }
 
@@ -149,7 +154,7 @@ fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Optio
     let mut iter = BtreeIter::new(t, Btree::subvolumes, POS_MIN, BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<c::Subvolume>().map(|k| k.v()) {
+        match k.arm::<Subvolume>().map(|k| k.v()) {
             Some(s) if snapshot::is_ancestor(t, s.snapshot.get(), snapshot) =>
                 ControlFlow::Break(Some(k.k.p.offset as u32)),
             _ => ControlFlow::Continue(()),
@@ -161,7 +166,7 @@ fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Optio
 fn check_dirent_parent_subvol<'t>(
     t:      &TransAttempt<'_, 't>,
     iter:   &BtreeIter<'t>,
-    k:      BkeySC<'_, c::Dirent>,
+    k:      BkeySC<'_, dirent_format::Dirent>,
     parent: u32,
 ) -> Result<u32, BchError> {
     let fs = t.fs();
@@ -172,7 +177,7 @@ fn check_dirent_parent_subvol<'t>(
     // The root subvolume always exists (check_root() recreates it): rewiring
     // around its absence would reparent the root's subvolume dirents onto
     // arbitrary subvolumes.
-    if parent_snapshot.is_none() && parent == c::BCACHEFS_ROOT_SUBVOL {
+    if parent_snapshot.is_none() && parent == BCACHEFS_ROOT_SUBVOL {
         return Ok(parent);
     }
 
@@ -236,13 +241,13 @@ fn check_dirent_to_subvol<'t>(
 
     let mut subvol_iter = BtreeIter::new(t, Btree::subvolumes, pos(0, child as u64),
                                          BtreeIterFlags::empty());
-    let s = subvol_iter.peek_slot_typed::<c::Subvolume>(t).found()?;
+    let s = subvol_iter.peek_slot_typed::<Subvolume>(t).found()?;
 
     // A deleted subvolume is a tombstone awaiting the sweep: missing, as get()
     // would say - this is a raw read, for the key. Else the dirent outlives it,
     // and fsck stops converging once the sweep removes it.
     let s = s.filter(|s| {
-        s.v().state_decoded() != Some(c::SubvolumeState::deleted)
+        s.v().state_decoded() != Some(SubvolumeState::deleted)
     });
 
     let Some(s) = s else {
@@ -260,7 +265,7 @@ fn check_dirent_to_subvol<'t>(
 
     if fs_path_parent != parent {
         let mut path = Printbuf::new();
-        namei::inum_to_path(t, c::subvol_inum { subvol: child as u64, inum: target_inum }, &mut path)?;
+        namei::inum_to_path(t, subvol_inum { subvol: child as u64, inum: target_inum }, &mut path)?;
 
         if fsck_err!(t, id::subvol_fs_path_parent_wrong,
                      "subvol with wrong fs_path_parent, should be {parent}\n{path}\n{}",
@@ -535,7 +540,7 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
     loop {
         let progress = Progress::recovery(fs, c"bch2_check_dirents", &[Btree::dirents], &[]);
         let mut iter = BtreeIter::new(&trans, Btree::dirents,
-                                      pos(c::BCACHEFS_ROOT_INO as u64, 0),
+                                      pos(BCACHEFS_ROOT_INO as u64, 0),
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
         iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {

@@ -20,7 +20,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c;
+use crate::data_structures::fast_list::fast_list;
+use crate::errcode::Errcode;
 use crate::fs::Fs;
 use crate::util::task::TaskList;
 use crate::util::Printbuf;
@@ -43,8 +44,8 @@ pub enum AsyncObjKind {
 #[derive(MaybeZeroable, Init)]
 pub struct async_obj_list {
     #[pin]
-    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_async_obj_init))]
-    pub list: c::fast_list,
+    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_async_obj_init))]
+    pub list: fast_list,
 }
 
 use core::ptr::NonNull;
@@ -56,14 +57,14 @@ use core::ptr::NonNull;
 /// so is what its to_text() reads through it: the debugfs walk reads what it
 /// finds there under RCU.
 pub unsafe trait AsyncObj {
-    const LIST: c::AsyncObjKind;
+    const LIST: AsyncObjKind;
 
     fn to_text(&self, out: &mut Printbuf, fs: &Fs);
 }
 
 /// An object's place on its list.
 pub struct AsyncObjSlot {
-    list: Option<NonNull<c::fast_list>>,
+    list: Option<NonNull<fast_list>>,
     idx:  core::ffi::c_uint,
 }
 
@@ -111,14 +112,14 @@ impl Drop for AsyncObjSlot {
 ///
 /// # Safety
 /// @idx is the object's, from async_object_list_add() on that list.
-pub unsafe fn list_del(fs: &Fs, list: c::AsyncObjKind, idx: &mut core::ffi::c_uint) {
+pub unsafe fn list_del(fs: &Fs, list: AsyncObjKind, idx: &mut core::ffi::c_uint) {
     fs.async_objs[list as usize].list.remove(*idx);
     *idx = 0;
 }
 
 impl Fs {
     pub fn tasks(&self) -> &TaskList {
-        TaskList::of(&self.async_objs[c::AsyncObjKind::task as usize].list)
+        TaskList::of(&self.async_objs[AsyncObjKind::task as usize].list)
     }
 }
 
@@ -130,8 +131,7 @@ pub mod lists {
 use core::ffi::{c_void, CStr};
 use core::ptr::NonNull;
 
-use super::AsyncObj;
-use crate::c;
+use super::{async_obj_list, AsyncObj};
 use crate::data::read::Rbio;
 use crate::data::update_task::Update;
 use crate::errcode::BchError;
@@ -166,7 +166,7 @@ macro_rules! list_table {
     ($(($name:ident, $nr:expr)),* $(,)?) => { crate::paste! {
         /// Each list's name, and how its objects are shown: indexed as
         /// async_objs[].
-        const LISTS: [(&CStr, ObjToText); c::AsyncObjKind::NR as usize] = [$((
+        const LISTS: [(&CStr, ObjToText); crate::debug::async_objs::AsyncObjKind::NR as usize] = [$((
             match CStr::from_bytes_with_nul(concat!(stringify!($name), "\0").as_bytes()) {
                 Ok(name) => name,
                 Err(_)   => panic!(),
@@ -177,7 +177,7 @@ macro_rules! list_table {
 }
 AsyncObjKind_arms!(list_table);
 
-impl c::async_obj_list {
+impl async_obj_list {
     /// The filesystem it's one of the async_objs[] of.
     fn fs(&self) -> &Fs {
         self.container()
@@ -187,9 +187,9 @@ impl c::async_obj_list {
 enum AsyncObjList {}
 
 impl DebugFile for AsyncObjList {
-    type Obj = c::async_obj_list;
+    type Obj = async_obj_list;
 
-    async fn show(list: &c::async_obj_list, out: &mut DebugOut) -> Result<(), BchError> {
+    async fn show(list: &async_obj_list, out: &mut DebugOut) -> Result<(), BchError> {
         let fs = list.fs();
         let (_, to_text) = LISTS[list.idx.get() as usize];
 

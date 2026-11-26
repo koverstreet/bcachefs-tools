@@ -5,7 +5,7 @@
 use core::ptr;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, ValidateFlags,
-                         BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX};
+                         BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX, bkey_format_state};
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitFlags,
@@ -19,12 +19,15 @@ use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::shard::key_is_shard_boundary;
 use crate::btree::node::BtreeWriteType;
 use crate::btree::validate::{bkey_in_btree_node, validate_from};
-use crate::c;
+use crate::btree::locking::btree_bkey_cached_common;
+use crate::data::extents_format::BtreePtrV2;
+use crate::data::write::WriteFlags;
+use crate::util::time_stats::TimeStat;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data::keylist::{keys, keys_mut};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree};
+use crate::format::{Bpos, Btree, bkey_format, BTREE_MAX_DEPTH, btree_node, KEY_FORMAT_LOCAL_BTREE};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, BkeyValidate};
 use crate::init::progress::Progress;
@@ -60,7 +63,7 @@ fn insert_fixup_btree_ptr(t: &TransAttempt<'_, '_>, b: &mut LockedNode<'_, Btree
     let fs = trans.fs();
     let k = BkeySC::from(&*insert);
 
-    if let Some(p) = k.arm::<c::BtreePtrV2>() {
+    if let Some(p) = k.arm::<BtreePtrV2>() {
         assert!(p.v().sectors_written != 0, "a btree_ptr_v2 with no sectors written: {}", k.to_text(fs));
     }
 
@@ -214,7 +217,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
     let contents = b.contents();
     let data = contents.data();
 
-    if let Some(p) = BkeySC::from(b.key()).arm::<c::BtreePtrV2>() {
+    if let Some(p) = BkeySC::from(b.key()).arm::<BtreePtrV2>() {
         assert!(p.v().min_key == data.min_key, "a node whose btree_ptr_v2 min_key {} isn't its own, {}",
                 p.v().min_key, data.min_key);
     }
@@ -247,7 +250,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
     let mut prev = BkeyBuf::new();
 
     while let Some(k) = iter.peek(b) {
-        let Some(bp) = k.arm::<c::BtreePtrV2>() else { return Ok(()) };
+        let Some(bp) = k.arm::<BtreePtrV2>() else { return Ok(()) };
 
         let expected_min = match prev_end(&prev) {
             None      => data.min_key,
@@ -296,7 +299,7 @@ pub(super) fn split_threshold(fs: &Fs) -> usize {
  */
 struct SplitLayout {
     pivot:  Bpos,
-    format: [c::bkey_format; 2],
+    format: [bkey_format; 2],
     size:   [usize; 2],
 }
 
@@ -312,7 +315,7 @@ struct SplitLayout {
  */
 fn predict_split(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], inserting: Option<&InteriorUpdate<'_>>,
                  n1_target_u64s: usize, mut pivot: Bpos) -> SplitLayout {
-    let mut state = [c::bkey_format_state::new(), c::bkey_format_state::new()];
+    let mut state = [bkey_format_state::new(), bkey_format_state::new()];
     let mut nr_keys = [0; 2];
     let mut val_u64s = [0; 2];
     let (mut u64s, mut n1_u64s) = (0, n1_target_u64s);
@@ -398,7 +401,7 @@ fn split_layout(t: &TransAttempt<'_, '_>, b: Node<'_>, inserting: Option<&Interi
     };
 
     for i in 0..2 {
-        if size_of::<Head<c::btree_node>>() + layout.size[i] * size_of::<u64>() > b.buf_bytes() {
+        if size_of::<Head<btree_node>>() + layout.size[i] * size_of::<u64>() > b.buf_bytes() {
             layout.format[i] = contents.format;
         }
     }
@@ -466,7 +469,7 @@ fn merge_layout(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>]) -> Option<SplitLayo
 
 #[derive(Clone, Copy)]
 struct DstLayout {
-    format:  c::bkey_format,
+    format:  bkey_format,
     min_key: Bpos,
     max_key: Bpos,
 }
@@ -521,7 +524,7 @@ fn pack_into_dsts(t: &TransAttempt<'_, '_>, srcs: &[Node<'_>], dsts: &mut [NewNo
             let room = &mut dst.buf[at[side]..];
             let k_f = if k.is_packed() { &src_contents.format } else { &BKEY_FORMAT_CURRENT };
             if bkey::transform(&dst.contents.format, room, k_f, k) {
-                BkeyP::from_slice_mut(room).expect("a transformed key").set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
+                BkeyP::from_slice_mut(room).expect("a transformed key").set_format(KEY_FORMAT_LOCAL_BTREE as u8);
             } else {
                 k.unpack_into(src_contents, room);
             }
@@ -643,7 +646,7 @@ fn btree_split_in(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, path: Path
         live_u64s > split_threshold(fs) ||
         b.shard_pivot(contents, fs) != POS_MIN;
 
-    let stat = if split { c::TimeStat::btree_node_split } else { c::TimeStat::btree_node_compact };
+    let stat = if split { TimeStat::btree_node_split } else { TimeStat::btree_node_compact };
     let _timer = fs.times.get(stat as usize).timer();
 
     let mut nodes: ArrayVec<NewNode<'_>, 2> = if split {
@@ -862,7 +865,7 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     for btree in (0..fs.btree_id_nr_alive()).map(Btree) {
         let mut merge_count = 0;
 
-        for level in 0..c::BTREE_MAX_DEPTH as u32 {
+        for level in 0..BTREE_MAX_DEPTH as u32 {
             let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, level, BtreeIterFlags::PREFETCH);
             while !lockrestart_do(&trans, |t| merge_btree_node_one(t, &progress, &mut iter, &mut merge_count))? {}
         }
@@ -877,8 +880,8 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
 
 crate::recovery_pass!(merge_btree_nodes => merge_btree_nodes);
 
-const PREV_SIB: usize = c::BtreeNodeSibling::btree_prev_sib as usize;
-const NEXT_SIB: usize = c::BtreeNodeSibling::btree_next_sib as usize;
+const PREV_SIB: usize = BtreeNodeSibling::btree_prev_sib as usize;
+const NEXT_SIB: usize = BtreeNodeSibling::btree_next_sib as usize;
 
 fn merge_threshold(fs: &Fs) -> usize {
     fs.btree_max_u64s() / 3
@@ -897,7 +900,7 @@ fn set_sib_u64s(b: Node<'_>, sib: usize, u64s: u16) {
 }
 
 /// @path's node above @level, as btree_node_parent() has it: for identity.
-fn parent(paths: &Paths<'_>, path: PathIdx, level: usize) -> *mut c::btree_bkey_cached_common {
+fn parent(paths: &Paths<'_>, path: PathIdx, level: usize) -> *mut btree_bkey_cached_common {
     let p = paths[path].l[level + 1].b;
     if p.is_node() { p.as_ptr() } else { ptr::null_mut() }
 }
@@ -1044,7 +1047,7 @@ fn merge_sibling(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
             let sib_parent = paths[path].locked_btree_node(level + 1).expect("a sibling's parent, relocked");
             let hash = paths[path].l[level + 1].iter.peek_all().map(|i| {
                 let keys = sib_parent.keys(sib_parent.contents());
-                let mut u = c::bkey::new();
+                let mut u = crate::format::bkey::new();
                 btree_ptr_hash_val(keys.disassemble(i, &mut u))
             });
 
@@ -1065,12 +1068,12 @@ fn merge_sibling(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
 
 /// The srcs' u64s together: in the format they'd be packed into, if they've
 /// all been read, and it - their estimates' sum if not.
-fn merge_u64s_and_format(paths: &Paths<'_>, level: usize, srcs: &[Src]) -> (usize, Option<c::bkey_format>) {
+fn merge_u64s_and_format(paths: &Paths<'_>, level: usize, srcs: &[Src]) -> (usize, Option<bkey_format>) {
     let Some(nodes) = srcs.iter().map(|s| s.node(paths, level)).collect::<Option<ArrayVec<Node<'_>, 3>>>() else {
         return (srcs.iter().map(|s| usize::from(s.live_u64s)).sum(), None);
     };
 
-    let mut s = c::bkey_format_state::new();
+    let mut s = bkey_format_state::new();
     s.add_pos(nodes[0].contents().data().min_key);
     for n in &nodes {
         n.format_add_keys(n.contents(), &mut s);
@@ -1119,7 +1122,7 @@ fn merge_fail_reset_sib_u64s(fs: &Fs, paths: &Paths<'_>, level: usize, pivot: Pa
  * in fewer dsts than srcs.
  */
 fn merge_fits(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, level: usize, pivot: PathIdx,
-              srcs: &mut ArrayVec<Src, 3>) -> Option<(usize, usize, Option<c::bkey_format>)> {
+              srcs: &mut ArrayVec<Src, 3>) -> Option<(usize, usize, Option<bkey_format>)> {
     let fs = trans.fs();
     let (mut total_u64s, mut new_f) = merge_u64s_and_format(paths, level, srcs);
     /*
@@ -1200,7 +1203,7 @@ pub(crate) fn merge(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathI
 
     let ret = merge_in(t, paths, path, level, commit, &mut srcs);
     if matches!(ret, Ok(true)) {
-        fs.times.get(c::TimeStat::btree_node_merge as usize).update(start_time);
+        fs.times.get(TimeStat::btree_node_merge as usize).update(start_time);
         if let Some(n) = merge_count {
             *n += 1;
         }
@@ -1239,11 +1242,11 @@ fn merge_in(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx, leve
      * deadlock:
      */
     let watermark = commit.get_watermark();
-    if watermark == c::Watermark::interior_updates {
+    if watermark == Watermark::interior_updates {
         return Ok(false);
     }
 
-    let commit = if watermark as u32 <= c::Watermark::reclaim as u32 {
+    let commit = if watermark as u32 <= Watermark::reclaim as u32 {
         commit.watermark(Watermark::btree).flags(CommitFlags::JOURNAL_RECLAIM)
     } else {
         commit
@@ -1570,7 +1573,7 @@ pub(crate) fn increase_depth(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, pa
 /// written to @target, if not 0.
 pub(crate) fn node_rewrite<'t>(t: &TransAttempt<'t, 't>, paths: &mut Paths<'_>, iter: &mut BtreeIter<'t>,
                                node: BtreeNodeRef, target: u32, commit: CommitOpts,
-                               write: c::WriteFlags) -> Result<(), BchError> {
+                               write: WriteFlags) -> Result<(), BchError> {
     let level = usize::from(paths[iter.path].level());
     assert!(!paths[iter.path].locked_btree_node(level).expect("a rewrite's node, held by its path").is_fake(),
             "rewriting a fake btree node");

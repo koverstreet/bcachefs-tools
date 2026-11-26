@@ -10,7 +10,7 @@
 //! fold() adds a data block to the parity made so far; recover() rebuilds
 //! the blocks it's told failed from the rest.
 
-use crate::c;
+use crate::format::BCH_BKEY_PTRS_MAX;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::os::simd;
 use g2p::bulk::{self, MulTable};
@@ -19,7 +19,7 @@ use g2p::{GaloisField, GaloisField8, Matrix};
 g2p::g2p!(Gf, 8, modulus: 0b1_0001_1101);
 
 /// The most blocks a stripe has.
-const MAX_BLOCKS: usize = c::BCH_BKEY_PTRS_MAX as usize;
+const MAX_BLOCKS: usize = BCH_BKEY_PTRS_MAX as usize;
 
 /// The most parity blocks: A's rows.
 const MAX_PARITY: usize = 6;

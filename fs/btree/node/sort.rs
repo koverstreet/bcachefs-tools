@@ -7,7 +7,8 @@ use super::{BtreeNode, BtreeNrKeys, NodeContents};
 use crate::btree::path::{LockedNode, Write};
 use crate::btree::bkey::{self, BkeyP, BKEY_FORMAT_CURRENT, BKEY_U64S};
 use crate::btree::cache::Bounce;
-use crate::c;
+use crate::format::{btree_node, btree_node_entry, KEY_FORMAT_LOCAL_BTREE};
+use crate::util::time_stats::TimeStat;
 use crate::fs::Fs;
 use crate::types::Le64;
 use crate::os::kernel::{copy_u64s_small, local_clock, mem_alloc_profiling_enabled};
@@ -109,9 +110,9 @@ pub enum CompactMode {
     COMPACT_ALL,
 }
 
-const NODE_U64S: usize = size_of::<Head<c::btree_node>>() / size_of::<u64>();
-const ENTRY_U64S: usize = size_of::<Head<c::btree_node_entry>>() / size_of::<u64>();
-const ENTRY_KEYS: usize = offset_of!(Head<c::btree_node_entry>, keys) / size_of::<u64>();
+const NODE_U64S: usize = size_of::<Head<btree_node>>() / size_of::<u64>();
+const ENTRY_U64S: usize = size_of::<Head<btree_node_entry>>() / size_of::<u64>();
+const ENTRY_KEYS: usize = offset_of!(Head<btree_node_entry>, keys) / size_of::<u64>();
 
 /// Runs of keys, merged: by position, then by @tie_break - of each key's
 /// offset and key.
@@ -466,7 +467,7 @@ pub fn btree_node_sort(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents, star
         .fold(0, |out, (_, k)| copy_key(room, out, k, |_| {}));
 
     if sorting_entire_node {
-        fs.times.get(c::TimeStat::btree_node_sort as usize).update(start_time);
+        fs.times.get(TimeStat::btree_node_sort as usize).update(start_time);
     }
 
     /* Make sure we preserve bset journal_seq: */
@@ -541,7 +542,7 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
 
             let k_f = if k.is_packed() { in_f } else { &BKEY_FORMAT_CURRENT };
             if bkey::transform(out_f, room, k_f, k) {
-                BkeyP::from_slice_mut(room).expect("a transformed key").set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
+                BkeyP::from_slice_mut(room).expect("a transformed key").set_format(KEY_FORMAT_LOCAL_BTREE as u8);
             } else {
                 k.unpack_into(src_contents, room);
             }
@@ -557,7 +558,7 @@ pub fn btree_sort_into(fs: &Fs, dst: &mut LockedNode<'_, BtreeNode, Write>, src:
 
     dst.bset_head_mut(t.data_offset).set_u64s(out - t.first_offset() as usize);
 
-    fs.times.get(c::TimeStat::btree_node_sort as usize).update(start_time);
+    fs.times.get(TimeStat::btree_node_sort as usize).update(start_time);
 
     dst.set_bset_end(0);
     dst.verify_btree_nr_keys();

@@ -13,7 +13,7 @@ use core::ffi::{c_uint, CStr};
 use core::mem::ManuallyDrop;
 
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::dentry::Dentry;
 use crate::os::fiemap::Fiemap;
 use crate::os::file::OpeningTmpfile;
@@ -82,7 +82,7 @@ crate::vfs_ops! {
         -> Result<Option<PosixAcl>, BchError>
     {
         if rcu {
-            return Err(c::Errcode::ECHILD_get_inode_acl_rcu.into());
+            return Err(Errcode::ECHILD_get_inode_acl_rcu.into());
         }
         inode.get_acl(ty)
     };

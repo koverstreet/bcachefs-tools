@@ -9,6 +9,11 @@ use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags};
 use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::alloc::foreground::Watermark;
+use crate::data::ec::head::StripeBlockMask;
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::posix::logged_ops_format::LoggedOpStripeUpdate;
 use crate::data::ec::buf::{blocks_good, blocks_in, generate_block_checksums, generate_checksums, parity_blocks,
                            validate_msg, MemWait, StripeBuf, POST, PRE};
 use crate::data::ec::delete::stripe_delete;
@@ -24,7 +29,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
-use crate::sb::members::DevIoRef;
+use crate::sb::members::{DevIoRef, DevWriteRefKind};
 use crate::util::alloc::KBox;
 use crate::util::rcu::read_lock;
 use crate::util::task::{waiter, Resume};
@@ -248,19 +253,19 @@ async fn zip_block(fs: &Fs, s: &StripeNew, w: &mut Working, i: usize, at: Resume
 }
 
 /// Whether a device of @v's is being removed.
-fn stripe_has_removing_dev(fs: &Fs, v: &c::Stripe<Validated>) -> bool {
+fn stripe_has_removing_dev(fs: &Fs, v: &Stripe<Validated>) -> bool {
     let rcu = read_lock();
     v.block_ptrs().iter().any(|p| fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.removing()))
 }
 
 /// The new stripe's key, to commit: its reconcile state set, and no key at
 /// its slot already.
-fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, c::Stripe<Validated>>) -> Result<(), BchError> {
+fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Stripe<Validated>>) -> Result<(), BchError> {
     let fs = t.fs();
     let mut new = t.bkey_make_mut_noupdate(k)?;
 
     let opts = inode_opts::get_fs(fs, false);
-    new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
+    new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
 
     let mut iter = BtreeIter::new(t, Btree::stripes, k.k.p, BtreeIterFlags::INTENT);
     let old = iter.peek_slot(t)?.expect("a slot always has a key");
@@ -285,10 +290,10 @@ struct Working {
     reuse:           Option<KBox<Reuse>>,
     res:             Option<DiskReservation<'static>>,
     /// The new blocks moved from the old stripe, to be written
-    moving:          c::StripeBlockMask,
+    moving:          StripeBlockMask,
     old_block_map:   ArrayVec<u8, MAX_BLOCKS>,
     allocated:       bool,
-    watermark:       c::Watermark,
+    watermark:       Watermark,
 }
 
 impl Working {
@@ -361,12 +366,12 @@ async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(),
     // Kept by device, not by c->devs[idx]: dev_remove may clear that slot
     // while our io ref still pins the device.
     let carried = |i: usize| i < w.old_block_map.len() && !w.moving.test(i);
-    let mut cas: ArrayVec<DevIoRef<c::DevWriteRefKind>, MAX_BLOCKS> = ArrayVec::new();
+    let mut cas: ArrayVec<DevIoRef<DevWriteRefKind>, MAX_BLOCKS> = ArrayVec::new();
     for (i, ptr) in w.new_stripe.stripe().v().block_ptrs().iter().enumerate() {
         if carried(i) {
             continue;
         }
-        let Some(ca) = fs.dev_get_ioref::<c::DevWriteRefKind>(ptr.dev().into()) else {
+        let Some(ca) = fs.dev_get_ioref::<DevWriteRefKind>(ptr.dev().into()) else {
             return fs.throw(Errcode::stripe_create_device_offline);
         };
         cas.push(ca);
@@ -452,7 +457,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     let old_idx = reuse.as_ref().map_or(0, |r| r.stripe.idx());
     let new_idx = new_stripe.idx();
 
-    let mut op = BkeyI::<c::LoggedOpStripeUpdate>::new();
+    let mut op = BkeyI::<LoggedOpStripeUpdate>::new();
     op.v.old_idx       = old_idx.into();
     op.v.new_idx       = new_idx.into();
     op.v.old_blocks_nr = old_block_map.len() as u8;

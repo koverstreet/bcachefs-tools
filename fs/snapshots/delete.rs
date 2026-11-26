@@ -60,7 +60,9 @@ use crate::btree::iter::{
 };
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::init::passes::RecoveryPass;
+use crate::init::progress::progress_indicator;
+use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
@@ -131,7 +133,7 @@ pub(crate) struct SnapshotDelete {
     nodes:    Locked<RwSem, Option<DeleteNodes>>,
     /// Which sweep the progress describes: 1 or 2.
     version:  AtomicU32,
-    progress: c::progress_indicator,
+    progress: progress_indicator,
 }
 
 impl SnapshotDelete {
@@ -204,11 +206,11 @@ impl Fs {
 /// Node @id's key for @edit, then queued for update; missing is an
 /// inconsistency.
 fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
-                        edit: impl FnOnce(&mut TransBkey<'a, 't, c::Snapshot>) -> Result<R, BchError>)
+                        edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
     -> Result<R, BchError>
 {
     let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
-    let k = iter.peek_slot_typed::<c::Snapshot>(t)
+    let k = iter.peek_slot_typed::<Snapshot>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(t.fs(), "missing snapshot {id}");
         })?;
@@ -217,7 +219,7 @@ fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
 }
 
 /// Missing is an inconsistency.
-fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
+fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<Snapshot>, BchError> {
     snapshot::lookup_key(t, id)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(t.fs(), "missing snapshot {id}");
@@ -227,13 +229,13 @@ fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, 
 /// The raw field: 0 on keys that predate it, which matches no state - so a
 /// legacy node is never == deleted, and always != live. What the node
 /// actually is: state_compat().
-fn state(v: &c::Snapshot) -> c::SnapshotState {
-    c::SnapshotState(v.state().get())
+fn state(v: &Snapshot) -> SnapshotState {
+    SnapshotState(v.state().get())
 }
 
 /// The node's child, if it has exactly one: then it's redundant, and its keys
 /// move to the child.
-fn only_child(v: &c::Snapshot) -> Option<u32> {
+fn only_child(v: &Snapshot) -> Option<u32> {
     match v.children() {
         [c, 0] | [0, c] if c != 0 => Some(c),
         _                         => None,
@@ -243,14 +245,14 @@ fn only_child(v: &c::Snapshot) -> Option<u32> {
 /// Node @id's subvolume is being deleted: mark it will_delete, if it's live.
 pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     edit_node(t, id, |s| {
-        if state(s.v()) != c::SnapshotState::live {
+        if state(s.v()) != SnapshotState::live {
             return Ok(());
         }
 
         // The backref is retained: it now points at the subvolume's tombstone,
         // and deletion checks it - a will_delete leaf without a subvolume
         // pointing back is an invalid state (check_should_delete_leaf):
-        s.v_mut().set_state(c::SnapshotState::will_delete);
+        s.v_mut().set_state(SnapshotState::will_delete);
         Ok(())
     })
 }
@@ -266,7 +268,7 @@ fn schedule_content_passes(fs: &Fs, msg: &mut Printbuf, btrees: u64) -> Result<(
                           (Btree::dirents, RecoveryPass::check_dirents),
                           (Btree::xattrs,  RecoveryPass::check_xattrs)] {
         if btrees & (1u64 << btree.0) != 0 {
-            let r = passes::run_explicit(fs, msg, pass, c::RunRecoveryPassFlags::empty());
+            let r = passes::run_explicit(fs, msg, pass, RunRecoveryPassFlags::empty());
             if r.is_err() {
                 ret = r;
             }
@@ -343,7 +345,7 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
     // stranded dirent. And check_allocations, since the count itself may be
     // what's wrong:
     let mut ret = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
-                                       c::RunRecoveryPassFlags::empty());
+                                       RunRecoveryPassFlags::empty());
 
     let r = schedule_content_passes(fs, &mut msg, acct.btrees());
     if r.is_err() {
@@ -420,10 +422,10 @@ fn node_set_no_keys(t: &TransAttempt<'_, '_>, id: u32, run: &Run<'_>) -> Result<
     /* Before the get_mut below queues anything - see check_deletable() */
     check_no_data(t, id, "set_no_keys", Some(run))?;
 
-    edit_node(t, id, |s| Ok(s.v_mut().set_state(c::SnapshotState::no_keys)))
+    edit_node(t, id, |s| Ok(s.v_mut().set_state(SnapshotState::no_keys)))
 }
 
-fn normalize_child_pointers(s: &mut c::Snapshot) {
+fn normalize_child_pointers(s: &mut Snapshot) {
     let [a, b] = s.children();
     if a < b {
         s.children.swap(0, 1);
@@ -464,7 +466,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
     let s = lookup_node(t, id)?;
     let v = s.v();
 
-    if state(v) == c::SnapshotState::deleted {
+    if state(v) == SnapshotState::deleted {
         trans_inconsistent!(t, "deleting snapshot node {id}: already in state deleted");
         return fs.throw(Errcode::EINVAL_snapshot_delete_already_deleted);
     }
@@ -475,11 +477,11 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
 
     if v.subvol() != 0 {
         // Raw lookup, as in check_should_delete_leaf()
-        let subvol: c::Subvolume = t.bkey_get_val(Btree::subvolumes, pos(0, v.subvol() as u64),
-                                                  BtreeIterFlags::CACHED)?;
+        let subvol: Subvolume = t.bkey_get_val(Btree::subvolumes, pos(0, v.subvol() as u64),
+                                               BtreeIterFlags::CACHED)?;
 
         if v.children()[0] != 0 ||
-           (subvol.state().get() != c::SubvolumeState::deleted.0 &&
+           (subvol.state().get() != SubvolumeState::deleted.0 &&
             fs.version_upgrade_complete() >=
             MetadataVersion::per_dev_fragmentation_lru) {
             let mut msg = LogMsg::new(fs);
@@ -559,11 +561,11 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         // is the last snapshot ID in this tree:
         let tree = pos(0, s.v().tree() as u64);
         if child_id != 0 {
-            t.bkey_get_mut::<c::SnapshotTree, _>(Btree::snapshot_trees, tree, BtreeIterFlags::empty(),
-                                                 UpdateTriggerFlags::empty(),
-                                                 |s_t| Ok(s_t.v_mut().root_snapshot = child_id.into()))?;
+            t.bkey_get_mut::<SnapshotTree, _>(Btree::snapshot_trees, tree, BtreeIterFlags::empty(),
+                                              UpdateTriggerFlags::empty(),
+                                              |s_t| Ok(s_t.v_mut().root_snapshot = child_id.into()))?;
         } else {
-            t.bkey_get_val::<c::SnapshotTree>(Btree::snapshot_trees, tree, BtreeIterFlags::empty())?;
+            t.bkey_get_val::<SnapshotTree>(Btree::snapshot_trees, tree, BtreeIterFlags::empty())?;
             t.delete(Btree::snapshot_trees, tree, UpdateTriggerFlags::empty())?;
         }
     }
@@ -577,7 +579,7 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
             v.subvol = 0u32.into();
             v.depth  = 0u32.into();
             v.skip   = [0u32.into(); 3];
-            v.set_state(c::SnapshotState::deleted);
+            v.set_state(SnapshotState::deleted);
             Ok(())
         })?;
     } else {
@@ -596,8 +598,8 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
 /// the tree. no_keys is an emptied interior - kept in the tree until the next
 /// remount precisely so ancestry still resolves - and carries child pointers
 /// like any other node, so it is a perfectly ordinary neighbour to attach to.
-fn in_tree(v: &c::Snapshot) -> bool {
-    v.state_compat() != c::SnapshotState::deleted
+fn in_tree(v: &Snapshot) -> bool {
+    v.state_compat() != SnapshotState::deleted
 }
 
 /// Where to splice back in from below.
@@ -637,11 +639,11 @@ fn relink_target(t: &TransAttempt<'_, '_>, mut child_id: u32) -> Result<u32, Bch
 
 /// Node @id's key for @edit, then queued for update - None if there's no node.
 fn edit_node_opt<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
-                            edit: impl FnOnce(&mut TransBkey<'a, 't, c::Snapshot>) -> Result<R, BchError>)
+                            edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
     -> Result<Option<R>, BchError>
 {
     let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
-    let k = match iter.peek_slot_typed::<c::Snapshot>(t) {
+    let k = match iter.peek_slot_typed::<Snapshot>(t) {
         Err(e) if e.matches(c::ENOENT) => return Ok(None),
         k => t.bkey_make_mut_noupdate(k?)?,
     };
@@ -662,7 +664,7 @@ fn cannot_undelete<T>(fs: &Fs, msg: &mut LogMsg<'_>, why: &str) -> Result<T, Bch
 /// nothing to relink. If the topology has moved on, or an old wiped tombstone
 /// retained nothing, the node revives unlinked and the tree pointer checks
 /// handle it downstream.
-pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::Snapshot>)
+pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, Snapshot>)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -716,7 +718,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
             }
         }
 
-        u.v_mut().set_state(c::SnapshotState::live);
+        u.v_mut().set_state(SnapshotState::live);
         return Ok(());
     }
 
@@ -754,7 +756,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
             return cannot_undelete(fs, &mut msg, "parent no longer exists");
         }
     } else if tree.get() != 0 {
-        let r = t.bkey_get_mut::<c::SnapshotTree, _>(
+        let r = t.bkey_get_mut::<SnapshotTree, _>(
                 Btree::snapshot_trees, pos(0, tree.get() as u64),
                 BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |s_t| {
             if s_t.v().root_snapshot.get() == child_id {
@@ -772,7 +774,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
     let v = u.v_mut();
     v.parent = parent_id.into();
     v.tree   = tree;
-    v.set_state(c::SnapshotState::live);
+    v.set_state(SnapshotState::live);
 
     v.depth = fs.snapshots.depth(parent_id).into();
     let mut skip: [u32; 3] = core::array::from_fn(|_| fs.snapshots.skiplist_get(parent_id));
@@ -1011,7 +1013,7 @@ fn delete_dead_snapshot_keys_v2(trans: &TransGuard<'_>, run: &Run<'_>) -> Result
         // invariant v1 doesn't need. Refuse anyway - the inode keys below are
         // the only way left to find anything that is in fact stranded.
         let ret = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
-                                       c::RunRecoveryPassFlags::empty());
+                                       RunRecoveryPassFlags::empty());
 
         bch_err!(fs, "{}", msg.as_str());
 
@@ -1042,7 +1044,7 @@ struct Collection {
     no_keys: Vec<InteriorDelete>,
 }
 
-fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snapshot)
+fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &Snapshot)
     -> Result<bool, BchError>
 {
     let fs = t.fs();
@@ -1051,8 +1053,8 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
     prt!(&mut buf, "{}", k.to_text(fs));
 
     match state(v) {
-        c::SnapshotState::live => Ok(false),
-        c::SnapshotState::will_delete if v.subvol() == 0 => {
+        SnapshotState::live => Ok(false),
+        SnapshotState::will_delete if v.subvol() == 0 => {
             // A will_delete leaf with no subvolume backref is safe to delete
             // once check_subvols has confirmed no live subvolume points at a
             // non-live snapshot (it halts recovery if one does). Require
@@ -1063,15 +1065,15 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
             passes::require(fs, &mut buf, RecoveryPass::check_subvols)?;
             Ok(true)
         }
-        c::SnapshotState::will_delete => {
+        SnapshotState::will_delete => {
             // Raw lookup, not subvolume::get(): this is the deletion path,
             // the one caller that must see the deleted tombstone rather than
             // have it reported as ENOENT.
-            let subvol: c::Subvolume = t.bkey_get_val(Btree::subvolumes,
-                                                      pos(0, v.subvol() as u64),
-                                                      BtreeIterFlags::CACHED)?;
+            let subvol: Subvolume = t.bkey_get_val(Btree::subvolumes,
+                                                   pos(0, v.subvol() as u64),
+                                                   BtreeIterFlags::CACHED)?;
 
-            if subvol.state().get() != c::SubvolumeState::deleted.0 {
+            if subvol.state().get() != SubvolumeState::deleted.0 {
                 fs_inconsistent!(fs, "snapshot marked for deletion but subvolume not marked for deletion\n{}",
                                  buf.as_str());
                 return Ok(false);
@@ -1084,7 +1086,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
             }
             Ok(true)
         }
-        c::SnapshotState::no_keys => {
+        SnapshotState::no_keys => {
             // An emptied interior node whose children have all been deleted
             // is normally reaped in the same pass that deletes its last child
             // - each node deletion is its own commit, so a childless no_keys
@@ -1132,7 +1134,7 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
     let fs = t.fs();
     let id = k.k.p.offset as u32;
 
-    if state(&v) == c::SnapshotState::deleted {
+    if state(&v) == SnapshotState::deleted {
         return Ok(());
     }
 
@@ -1175,11 +1177,11 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
         prt!(&mut msg, "{}", k.to_text(fs));
 
         passes::run_explicit(fs, &mut msg, RecoveryPass::check_snapshots,
-                             c::RunRecoveryPassFlags::empty())?;
+                             RunRecoveryPassFlags::empty())?;
         return fs.throw(Errcode::EINVAL_snapshot_delete_bad_topology);
     }
 
-    let no_keys = state(&v) == c::SnapshotState::no_keys;
+    let no_keys = state(&v) == SnapshotState::no_keys;
 
     if !no_keys {
         add_nodup(fs, &mut coll.nodes.deleting_from_trees, fs.snapshots.tree(id))?;
@@ -1420,7 +1422,7 @@ crate::recovery_pass!(delete_dead_snapshots => delete_dead_snapshots);
 fn get_dead_interior_snapshots(k: BkeySC<'_>, delete: &mut Vec<InteriorDelete>) -> Result<(), BchError> {
     let Some(v) = snapshot::val(k) else { return Ok(()) };
 
-    if state(&v) != c::SnapshotState::no_keys {
+    if state(&v) != SnapshotState::no_keys {
         return Ok(());
     }
     let Some(child) = only_child(&v) else { return Ok(()) };
@@ -1448,7 +1450,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
 
             let _ = writeln!(msg, "Deleting interior snapshot nodes forces check_snapshots:");
             passes::run_explicit(fs, &mut msg, RecoveryPass::check_snapshots,
-                                 c::RunRecoveryPassFlags::empty())?;
+                                 RunRecoveryPassFlags::empty())?;
         }
 
         // This is also what makes the non-atomic depth rewrite below safe to
@@ -1520,9 +1522,9 @@ pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<
     let Some(v) = snapshot::val(k) else { return };
 
     let needs_delete = match v.state_compat() {
-        c::SnapshotState::deleted     => false,
-        c::SnapshotState::no_keys     => { *nr_empty_interior += 1; false }
-        c::SnapshotState::will_delete => true,
+        SnapshotState::deleted     => false,
+        SnapshotState::no_keys     => { *nr_empty_interior += 1; false }
+        SnapshotState::will_delete => true,
         _                                                 => only_child(&v).is_some(),
     };
 
@@ -1533,6 +1535,6 @@ pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<
         // best-effort: ignore the return.
         let mut buf = Printbuf::new();
         let _ = passes::run_explicit(t.fs(), &mut buf, RecoveryPass::delete_dead_snapshots,
-                                     c::RunRecoveryPassFlags::ephemeral);
+                                     RunRecoveryPassFlags::ephemeral);
     }
 }

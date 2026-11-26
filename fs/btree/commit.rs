@@ -11,10 +11,12 @@ use crate::alloc::accounting::Accounting;
 use crate::alloc::accounting_mem::{self, mem_add, Delta, MarkRead};
 use crate::alloc::capacity::account_disk_usage_change;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_validate, BkeyI, BkeySC, ValidateFlags, BKEY_U64S};
+use crate::btree::bkey::{bkey_validate, BkeyI, BkeySC, ValidateFlags, BKEY_U64S,
+    bkey_validate_context, BkeyValidateFrom};
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::btree::interior::{merge, split_leaf};
-use crate::btree::iter::{is_restart, BtreeTrans, CommitFlags, CommitOpts, TransAttempt};
+use crate::btree::iter::{is_restart, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
+    BtreeIterUpdateTriggerFlags};
 use crate::btree::journal_overlay;
 use crate::btree::key_cache::{bch2_btree_insert_key_cached, bch2_btree_key_cache_drop, key_buf};
 use crate::btree::node::BtreeNode;
@@ -22,11 +24,21 @@ use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_old_key};
 use crate::btree::BtreeNodeType;
 use crate::c;
-use crate::c::JournalFlag as Journal;
-use crate::cstructs::c as cs;
+use crate::btree::locking::btree_bkey_cached_common;
+use crate::alloc::buckets::ReservationFlags;
+use crate::alloc::foreground::{BCH_WATERMARK_MASK, Watermark};
+use crate::btree::journal_overlay::journal_keys;
+use crate::btree::update::btree_insert_entry;
+use crate::fs::FsFlag;
+use crate::journal::journal::{journal_res, JOURNAL_RES_GET_CHECK, JOURNAL_RES_GET_NONBLOCK};
+use crate::journal::pins::JournalPinType;
+use crate::sb::errors_format::SbErrorId;
+use crate::util::time_stats::TimeStat;
+use crate::journal::journal::JournalFlag as Journal;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Btree, Bversion};
+use crate::format::{BkeyType, Btree, Bversion, jset_entry, JSET_KEYS_U64s, MetadataVersion,
+    JsetEntryRef, JsetEntryType};
 use crate::init::error::BkeyValidate;
 use crate::journal::entries::NoRoom;
 use crate::journal::validate::journal_entry_validate;
@@ -43,33 +55,33 @@ use crate::{bch_err, fs_fatal_error, fs_inconsistent, prt};
 const JSET_ENTRY_LOG_U64S: usize = 4;
 
 fn jset_u64s(u64s: usize) -> usize {
-    u64s + c::JSET_KEYS_U64s as usize
+    u64s + JSET_KEYS_U64s as usize
 }
 
 fn watermark(flags: CommitOpts) -> u32 {
-    flags.to_c().bits() & c::BCH_WATERMARK_MASK
+    flags.to_c().bits() & BCH_WATERMARK_MASK
 }
 
 fn has(flags: CommitOpts, f: CommitFlags) -> bool {
     flags.to_c().bits() & f.bits() != 0
 }
 
-fn insert_l(paths: &Paths<'_>, i: &c::btree_insert_entry) -> NodePtr<cs::btree_bkey_cached_common> {
+fn insert_l(paths: &Paths<'_>, i: &btree_insert_entry) -> NodePtr<btree_bkey_cached_common> {
     paths[i.path].node(i.level().into())
 }
 
 /// Whether update @i's leaf is the one before's: @prev carries it from call to
 /// call, for the updates in order, each leaf loaded once.
-fn same_leaf_as_prev(paths: &Paths<'_>, i: &c::btree_insert_entry,
-                     prev: &mut NodePtr<cs::btree_bkey_cached_common>) -> bool {
+fn same_leaf_as_prev(paths: &Paths<'_>, i: &btree_insert_entry,
+                     prev: &mut NodePtr<btree_bkey_cached_common>) -> bool {
     let leaf = insert_l(paths, i);
     core::mem::replace(prev, leaf) == leaf
 }
 
 /// Whether update @idx's leaf is the one after's: @next carries the one after's
 /// to the next call, for the updates in order, each leaf loaded once.
-fn same_leaf_as_next(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize,
-                     next: &mut Option<(usize, NodePtr<cs::btree_bkey_cached_common>)>) -> bool {
+fn same_leaf_as_next(paths: &Paths<'_>, u: &[btree_insert_entry], idx: usize,
+                     next: &mut Option<(usize, NodePtr<btree_bkey_cached_common>)>) -> bool {
     let leaf = match next.take() {
         Some((n, l)) if n == idx => l,
         _ => insert_l(paths, &u[idx]),
@@ -80,29 +92,29 @@ fn same_leaf_as_next(paths: &Paths<'_>, u: &[c::btree_insert_entry], idx: usize,
 
 /// Whether update @i is the first of its leaf's, with the leaves write
 /// locked: lock_updates_write() locks each through its first update's path.
-fn first_update_of_leaf(paths: &Paths<'_>, i: &c::btree_insert_entry) -> bool {
+fn first_update_of_leaf(paths: &Paths<'_>, i: &btree_insert_entry) -> bool {
     paths[i.path].write_locked(i.level().into())
 }
 
-fn leaf<'p>(paths: &'p Paths<'_>, i: &c::btree_insert_entry) -> LockedNode<'p, BtreeNode> {
+fn leaf<'p>(paths: &'p Paths<'_>, i: &btree_insert_entry) -> LockedNode<'p, BtreeNode> {
     paths[i.path].locked_btree_node(i.level().into()).expect("an update's path has its node locked")
 }
 
 /// The transaction's journal entries are its own, made by its updates: trusted,
 /// as C trusts them.
 fn for_each_journal_entry(t: &TransAttempt<'_, '_>,
-                          f: impl FnMut(&c::jset_entry<Validated>) -> Result<(), BchError>)
+                          f: impl FnMut(&jset_entry<Validated>) -> Result<(), BchError>)
     -> Result<(), BchError>
 {
     t.trans().journal_entries.get().iter(t, |mut entries| entries.try_for_each(f))
 }
 
 /// A btree_keys or write_buffer_keys entry's keys: none of any other's.
-fn for_each_entry_key(e: &c::jset_entry<Validated>,
+fn for_each_entry_key(e: &jset_entry<Validated>,
                       f: impl FnMut(&BkeyI) -> Result<(), BchError>) -> Result<(), BchError> {
     let mut keys = match e.typed() {
-        Ok(c::JsetEntryRef::btree_keys(k))        => k.entries(),
-        Ok(c::JsetEntryRef::write_buffer_keys(k)) => k.entries(),
+        Ok(JsetEntryRef::btree_keys(k))        => k.entries(),
+        Ok(JsetEntryRef::write_buffer_keys(k)) => k.entries(),
         _ => return Ok(()),
     };
     keys.try_for_each(f)
@@ -159,7 +171,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    fn insert_entry_checks(&self, paths: &Paths<'_>, i: &c::btree_insert_entry) {
+    fn insert_entry_checks(&self, paths: &Paths<'_>, i: &btree_insert_entry) {
         let fs = self.fs();
         let path = &paths[i.path];
         let k = i.key();
@@ -172,7 +184,7 @@ impl BtreeTrans<'_> {
         assert!(u32::from(i.bkey_type) == BtreeNodeType::of(path.level().into(), path.btree_id()).0);
         ebug_assert!(!(i.level() == 0 &&
                        i.btree_id().has_snapshots() &&
-                       i.flags & c::BtreeIterUpdateTriggerFlags::internal_snapshot_node.bits() == 0 &&
+                       i.flags & BtreeIterUpdateTriggerFlags::internal_snapshot_node.bits() == 0 &&
                        fs.journal.flags.get(Journal::replay_done) &&
                        k.k.p.snapshot != 0 &&
                        fs.snapshots.is_leaf(k.k.p.snapshot) == Ok(false)));
@@ -180,13 +192,13 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn journal_transaction_names_changed(&self, res: &mut c::journal_res) -> BchError {
+    fn journal_transaction_names_changed(&self, res: &mut journal_res) -> BchError {
         self.fs().journal.res_put(res);
         self.restart(Errcode::transaction_restart_journal_overwrites_changed)
     }
 
     #[inline(always)]
-    fn commit_journal_res_get(&self, paths: &mut Paths<'_>, res: &mut c::journal_res, flags: u32)
+    fn commit_journal_res_get(&self, paths: &mut Paths<'_>, res: &mut journal_res, flags: u32)
         -> Result<(), BchError>
     {
         let ret = self.fs().journal.res_get_waiting(res, self.journal_u64s.get(), flags, |ev, cond, timeout| {
@@ -249,7 +261,7 @@ impl BtreeTrans<'_> {
             ck.contents_mut().k = Some(new_k);
         }
 
-        if watermark(flags) < c::Watermark::reclaim as u32 &&
+        if watermark(flags) < Watermark::reclaim as u32 &&
            !paths[path].locked_key_cached().expect("a cached update's path holds its entry").dirty() &&
            fs.btree.key_cache.must_wait() &&
            fs.journal.flags.get(Journal::replay_done)
@@ -295,7 +307,7 @@ impl BtreeTrans<'_> {
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "{}(): invalid journal entry on insert\n", self.fn_name());
         self.updates_to_text(&mut msg);
-        fs.sb_error_count(c::SbErrorId::validate_error_in_commit);
+        fs.sb_error_count(SbErrorId::validate_error_in_commit);
         fs.emergency_read_only(&mut msg);
         let _ = prt_task_backtrace(&mut msg, sched::current(), 1);
         err
@@ -303,14 +315,14 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn commit_invalid_key(&self, i: &c::btree_insert_entry, err: BchError) -> BchError {
+    fn commit_invalid_key(&self, i: &btree_insert_entry, err: BchError) -> BchError {
         let fs = self.fs();
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "{}() -> ", self.fn_name());
         prt_symbol(&mut msg, i.ip_allocated);
         prt!(&mut msg, ": invalid bkey on insert from\n");
         self.updates_to_text(&mut msg);
-        fs.sb_error_count(c::SbErrorId::validate_error_in_commit);
+        fs.sb_error_count(SbErrorId::validate_error_in_commit);
         fs.emergency_read_only(&mut msg);
         let _ = prt_task_backtrace(&mut msg, sched::current(), 1);
         err
@@ -319,7 +331,7 @@ impl BtreeTrans<'_> {
     /// Whether, checking, a key the transaction writes was overwritten in the
     /// journal since: the commit restarts.
     #[cold]
-    fn check_drop_overwrites_from_journal(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, jk: &c::journal_keys,
+    fn check_drop_overwrites_from_journal(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, jk: &journal_keys,
                                           g: &mut journal_overlay::OverwriteGuard<'_>, check: bool) -> bool {
         /*
          * Accounting keys aren't deduped in the journal: we have to compare
@@ -349,7 +361,7 @@ impl BtreeTrans<'_> {
     #[cold]
     #[inline(never)]
     fn commit_to_journal_replay_pre<'k>(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>,
-                                        jk: &'k c::journal_keys, flags: CommitOpts)
+                                        jk: &'k journal_keys, flags: CommitOpts)
         -> Result<journal_overlay::OverwriteGuard<'k>, BchError>
     {
         let mut g = jk.overwrites.lock();
@@ -366,7 +378,7 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn commit_to_journal_replay_post(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, jk: &c::journal_keys,
+    fn commit_to_journal_replay_post(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, jk: &journal_keys,
                                      mut g: journal_overlay::OverwriteGuard<'_>, ok: bool) {
         if ok {
             self.check_drop_overwrites_from_journal(t, paths, jk, &mut g, false);
@@ -379,7 +391,7 @@ impl BtreeTrans<'_> {
         })
     }
 
-    fn commit_error_inner(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut c::journal_res,
+    fn commit_error_inner(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut journal_res,
                           flags: CommitOpts, i: Option<usize>, err: BchError)
         -> Result<(), BchError>
     {
@@ -390,12 +402,12 @@ impl BtreeTrans<'_> {
              * XXX: this should probably be a separate BTREE_INSERT_NONBLOCK
              * flag
              */
-            if has(flags, CommitFlags::JOURNAL_RECLAIM) && watermark(flags) < c::Watermark::reclaim as u32 {
+            if has(flags, CommitFlags::JOURNAL_RECLAIM) && watermark(flags) < Watermark::reclaim as u32 {
                 return fs.throw(Errcode::journal_reclaim_would_deadlock);
             }
 
             return t.drop_locks_do_in(paths, |paths| {
-                self.commit_journal_res_get(paths, res, watermark(flags) | c::JOURNAL_RES_GET_CHECK)
+                self.commit_journal_res_get(paths, res, watermark(flags) | JOURNAL_RES_GET_CHECK)
             });
         }
 
@@ -434,7 +446,7 @@ impl BtreeTrans<'_> {
                      kc.nr_keys.load(Relaxed), kc.nr_dirty.load(Relaxed), kc.dirty_over_max());
             });
 
-            let times = fs.times.get(c::TimeStat::blocked_key_cache_flush as usize);
+            let times = fs.times.get(TimeStat::blocked_key_cache_flush as usize);
             times.track_event_change(true);
             let ret = fs.journal.key_cache_reclaim_wait(|| self.unlock_long_from(paths, crate::ret_ip!()));
             times.track_event_change(false);
@@ -447,7 +459,7 @@ impl BtreeTrans<'_> {
     }
 
     #[inline(never)]
-    fn commit_error(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut c::journal_res,
+    fn commit_error(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut journal_res,
                     flags: CommitOpts, i: Option<usize>, err: BchError)
         -> Result<(), BchError>
     {
@@ -491,7 +503,7 @@ impl BtreeTrans<'_> {
             let btree = Btree(i.btree_id.into());
             for_each_entry_key(i, |k| journal_overlay::insert(not_rw, btree, i.level.into(), k))?;
 
-            if i.type_() == c::JsetEntryType::btree_root {
+            if i.type_() == JsetEntryType::btree_root {
                 fs.journal_entry_to_btree_root(i);
             }
             Ok(())
@@ -512,7 +524,7 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
 
         /* we're actually shutting down */
-        if fs.flags.get(c::FsFlag::may_go_rw) {
+        if fs.flags.get(FsFlag::may_go_rw) {
             return fs.throw(Errcode::erofs_trans_commit);
         }
 
@@ -569,9 +581,9 @@ impl BtreeTrans<'_> {
         let res = t.disk_res().expect("extra_disk_res charged with no disk reservation");
         res.add_physical(self.extra_disk_res.get(), self.extra_disk_res_replicas.get().into(),
                          if has(flags, CommitFlags::NO_ENOSPC) {
-                             c::ReservationFlags::nofail
+                             ReservationFlags::nofail
                          } else {
-                             c::ReservationFlags::empty()
+                             ReservationFlags::empty()
                          })
     }
 
@@ -591,7 +603,7 @@ impl BtreeTrans<'_> {
 
         for i in paths.updates() {
             crate::warn_once!(i.level() == 0 &&
-                              i.flags & c::BtreeIterUpdateTriggerFlags::norun.bits() == 0 &&
+                              i.flags & BtreeIterUpdateTriggerFlags::norun.bits() == 0 &&
                               matches!(i.btree_id(), Btree::extents | Btree::reflink),
                               self.fs(), "{}(): update to {} without a disk reservation",
                               self.fn_name(), i.btree_id());
@@ -608,7 +620,7 @@ impl BtreeTrans<'_> {
      */
     #[cold]
     #[inline(never)]
-    fn commit_compact_tail(&self, updates: &mut [c::btree_insert_entry], dst: usize, i: usize) {
+    fn commit_compact_tail(&self, updates: &mut [btree_insert_entry], dst: usize, i: usize) {
         updates.copy_within(i + 1.., dst);
         self.nr_updates.set((dst + updates.len() - (i + 1)) as _);
     }
@@ -631,7 +643,7 @@ impl BtreeTrans<'_> {
         merge(t, paths, path, level, flags.watermark_hipri(), None)
     }
 
-    fn update_is_noop(i: &c::btree_insert_entry, flags: CommitOpts) -> bool {
+    fn update_is_noop(i: &btree_insert_entry, flags: CommitOpts) -> bool {
         let old: BkeySC<'_> = BkeySC { k: &i.old_k, v: i.old_v, iter: PhantomData, val: PhantomData };
 
         /*
@@ -668,7 +680,7 @@ impl BtreeTrans<'_> {
         }
 
         for_each_journal_entry(t, |i| {
-            if c::JsetEntryType(i.type_.into()) != c::JsetEntryType::write_buffer_keys {
+            if JsetEntryType(i.type_.into()) != JsetEntryType::write_buffer_keys {
                 return Err(BchError::from(c::EINVAL));
             }
 
@@ -685,7 +697,7 @@ impl BtreeTrans<'_> {
     }
 
     #[inline]
-    fn commit_journal_fill(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, res: &mut c::journal_res) {
+    fn commit_journal_fill(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, res: &mut journal_res) {
         let names = self.journal_transaction_names();
 
         /*
@@ -695,7 +707,7 @@ impl BtreeTrans<'_> {
         self.fs().journal.res_append_entries(res, |w| {
             if names {
                 invariant!(w.room() >= jset_u64s(JSET_ENTRY_LOG_U64S));
-                let log = w.add_entry(c::JsetEntryType::log, 0, 0, JSET_ENTRY_LOG_U64S)?.as_mut_bytes();
+                let log = w.add_entry(JsetEntryType::log, 0, 0, JSET_ENTRY_LOG_U64S)?.as_mut_bytes();
                 let name = self.fn_name().as_bytes();
                 let (n, pad) = log.split_at_mut(name.len().min(log.len()));
                 n.copy_from_slice(&name[..n.len()]);
@@ -703,7 +715,7 @@ impl BtreeTrans<'_> {
             }
 
             for (i, k) in paths.update_keys() {
-                if i.key_cache_already_flushed() || i.flags & c::BtreeIterUpdateTriggerFlags::nojournal.bits() != 0 {
+                if i.key_cache_already_flushed() || i.flags & BtreeIterUpdateTriggerFlags::nojournal.bits() != 0 {
                     continue;
                 }
 
@@ -717,14 +729,14 @@ impl BtreeTrans<'_> {
                         unsafe { core::slice::from_raw_parts(i.old_v.cast::<u64>(), i.old_k.val_u64s()) }
                     };
                     invariant!(w.room() >= jset_u64s(i.old_k.u64s.into()));
-                    let e = w.add_entry(c::JsetEntryType::overwrite, btree, level, i.old_k.u64s.into())?;
+                    let e = w.add_entry(JsetEntryType::overwrite, btree, level, i.old_k.u64s.into())?;
                     let (ek, ev) = e.split_at_mut(BKEY_U64S);
                     ek.as_mut_bytes().copy_from_slice(plain_bytes(&i.old_k));
                     ev.copy_from_slice(val);
                 }
 
                 invariant!(w.room() >= jset_u64s(k.k.u64s.into()));
-                w.add_entry(c::JsetEntryType::btree_keys, btree, level, k.k.u64s.into())?
+                w.add_entry(JsetEntryType::btree_keys, btree, level, k.k.u64s.into())?
                     .as_mut_bytes().copy_from_slice(k.as_bytes());
             }
 
@@ -738,7 +750,7 @@ impl BtreeTrans<'_> {
                 let a = a.u64s();
                 if !a.is_empty() {
                     invariant!(w.room() >= jset_u64s(a.len()));
-                    w.add_entry(c::JsetEntryType::write_buffer_keys, Btree::accounting.0 as u8, 0, a.len())?
+                    w.add_entry(JsetEntryType::write_buffer_keys, Btree::accounting.0 as u8, 0, a.len())?
                         .copy_from_slice(a);
                 }
                 Ok(())
@@ -747,7 +759,7 @@ impl BtreeTrans<'_> {
     }
 
     #[inline]
-    fn commit_write_locked(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut c::journal_res,
+    fn commit_write_locked(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut journal_res,
                            flags: CommitOpts, stopped_at: &mut Option<usize>)
         -> Result<(), BchError>
     {
@@ -811,7 +823,7 @@ impl BtreeTrans<'_> {
          * succeed:
          */
         if likely(!no_journal_res) {
-            self.commit_journal_res_get(paths, res, watermark(flags) | c::JOURNAL_RES_GET_NONBLOCK)?;
+            self.commit_journal_res_get(paths, res, watermark(flags) | JOURNAL_RES_GET_NONBLOCK)?;
         }
 
         /*
@@ -861,15 +873,15 @@ impl BtreeTrans<'_> {
         run_mem_triggers(t, paths).map_err(|err| self.commit_fatal_err(err))?;
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            let mut validate_context = c::bkey_validate_context::default();
-            validate_context.set_from(c::BkeyValidateFrom::commit);
+            let mut validate_context = bkey_validate_context::default();
+            validate_context.set_from(BkeyValidateFrom::commit);
 
             if !no_journal_res {
                 validate_context.set_flags(ValidateFlags::write | ValidateFlags::commit);
             }
 
             self.journal_entries.get().iter_mut(t, |mut entries| entries.try_for_each(|e| {
-                journal_entry_validate(fs, e.as_bytes_mut(), c::MetadataVersion::CURRENT, cfg!(target_endian = "big"),
+                journal_entry_validate(fs, e.as_bytes_mut(), MetadataVersion::CURRENT, cfg!(target_endian = "big"),
                                        validate_context)
             })).map_err(|err| self.commit_invalid_entry(err))?;
 
@@ -898,7 +910,7 @@ impl BtreeTrans<'_> {
             }
 
             if unlikely(!self.journal_pin.get().is_null()) {
-                j.pin_set(res.seq, unsafe { &*self.journal_pin.get() }, c::JournalPinType::JOURNAL_PIN_TYPE_other);
+                j.pin_set(res.seq, unsafe { &*self.journal_pin.get() }, JournalPinType::JOURNAL_PIN_TYPE_other);
             }
 
             if let Some(f) = unsafe { self.flush.get().as_mut() }.and_then(Option::take) {
@@ -937,7 +949,7 @@ impl BtreeTrans<'_> {
      * Get journal reservation, take write locks, and attempt to do btree update(s):
      */
     #[inline]
-    fn do_commit(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut c::journal_res,
+    fn do_commit(&self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, res: &mut journal_res,
                  flags: CommitOpts, stopped_at: &mut Option<usize>)
         -> Result<(), BchError>
     {
@@ -1000,7 +1012,7 @@ impl BtreeTrans<'_> {
             return Ok(());
         }
 
-        if watermark(flags) <= c::Watermark::normal as u32 &&
+        if watermark(flags) <= Watermark::normal as u32 &&
            likely(fs.journal.flags.get(Journal::replay_done)) &&
            unlikely(fs.btree.cache.should_throttle.load(Relaxed))
         {
@@ -1057,7 +1069,7 @@ impl BtreeTrans<'_> {
 
             ebug_assert!(pu.paths[i.path].intent_locked(i.level().into()));
 
-            if i.key_cache_already_flushed() || i.flags & c::BtreeIterUpdateTriggerFlags::nojournal.bits() != 0 {
+            if i.key_cache_already_flushed() || i.flags & BtreeIterUpdateTriggerFlags::nojournal.bits() != 0 {
                 idx += 1;
                 continue;
             }
@@ -1113,9 +1125,9 @@ impl BtreeTrans<'_> {
             None
         };
 
-        ebug_assert!(!fs.flags.get(c::FsFlag::clean_shutdown));
+        ebug_assert!(!fs.flags.get(FsFlag::clean_shutdown));
 
-        let mut res = c::journal_res::default();
+        let mut res = journal_res::default();
         loop {
             let mut errored_at = None;
 

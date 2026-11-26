@@ -9,6 +9,18 @@ pub(crate) fn vs() -> TokenStream {
     quote!(crate::util::vstructs)
 }
 
+/// `in MODULE;`, if it's next: where a macro's declaration is, for what it
+/// generates that's expanded elsewhere to name what's here by.
+pub(crate) fn parse_module(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<syn::Path>> {
+    if !input.peek(syn::Token![in]) {
+        return Ok(None);
+    }
+    input.parse::<syn::Token![in]>()?;
+    let m = input.parse()?;
+    input.parse::<syn::Token![;]>()?;
+    Ok(Some(m))
+}
+
 /// The name of @name's generated @part - its head, its storage - cased as
 /// @name is: bch_sb_head, DiskAccountingPosStorage.
 pub(crate) fn derived(name: &Ident, part: &str) -> Ident {

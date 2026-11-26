@@ -22,10 +22,14 @@ use crate::alloc::lru::{LruId, LruPos};
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_eq, pos, AnyKeySC, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::util::vstructs::Unvalidated;
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::data::ec::trigger::GcStripeData;
+use crate::data::extents::extent_ptr_decoded;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{Errcode, BchError};
-use crate::format::BkeyType;
+use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, bch_csum, bkey, BKEY_U64s_MAX, CsumType};
 use crate::fs::Fs;
 use crate::btree::bkey::BkeyOps;
 use crate::btree::trigger::Trigger;
@@ -42,23 +46,23 @@ use core::mem::{offset_of, size_of};
 use core::ops::{Range, RangeInclusive};
 
 /// The most blocks a stripe has: a pointer each, of the most a key holds.
-pub(crate) const MAX_BLOCKS: usize = c::BCH_BKEY_PTRS_MAX as usize;
+pub(crate) const MAX_BLOCKS: usize = BCH_BKEY_PTRS_MAX as usize;
 
 /// Where a stripe's pointers start: sizeof(struct bch_stripe).
-const STRIPE_PTRS: usize = offset_of!(c::Stripe, repr.ptrs);
+const STRIPE_PTRS: usize = offset_of!(Stripe, repr.ptrs);
 
 /// The header: its shape, and the sizes of the sections after it - ec/trigger.h's
 /// inlines. In C's unsigned arithmetic: nr_redundant past nr_blocks is damage
 /// validate doesn't catch, and wraps nr_data; csum_granularity_bits is under 31,
 /// as validate checks first. Offsets are into the value's tail, after the header.
-impl c::Stripe {
+impl Stripe {
     pub fn nr_data(&self) -> u32 {
         u32::from(self.nr_blocks).wrapping_sub(self.nr_redundant.into())
     }
 
     /// A checksum type this version doesn't know is an error, not a guess.
     pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
-        if self.csum_type.get().0 >= c::CsumType::NR {
+        if self.csum_type.get().0 >= CsumType::NR {
             return fs.throw(Errcode::stripe_unknown_csum_type);
         }
         Ok(())
@@ -84,7 +88,7 @@ impl c::Stripe {
     }
 
     fn ptrs_bytes(&self) -> usize {
-        usize::from(self.nr_blocks) * size_of::<c::bch_extent_ptr>()
+        usize::from(self.nr_blocks) * size_of::<bch_extent_ptr>()
     }
 
     fn csums_at(&self) -> Option<Range<usize>> {
@@ -111,12 +115,12 @@ impl c::Stripe {
 /// through csum_type: for one this version doesn't know - a newer version's
 /// stripe, which validate passes on purpose - csums() and blockcounts() are
 /// None, and the stripe can't be updated.
-impl c::Stripe<Validated> {
-    pub fn block_ptrs(&self) -> &[c::bch_extent_ptr] {
+impl Stripe<Validated> {
+    pub fn block_ptrs(&self) -> &[bch_extent_ptr] {
         cast_plain_slice(&self.ptrs[..self.ptrs_bytes()]).expect("a stripe's pointers, aligned")
     }
 
-    pub fn block_ptrs_mut(&mut self) -> &mut [c::bch_extent_ptr] {
+    pub fn block_ptrs_mut(&mut self) -> &mut [bch_extent_ptr] {
         let n = self.ptrs_bytes();
         cast_plain_slice_mut(&mut self.ptrs[..n]).expect("a stripe's pointers, aligned")
     }
@@ -186,7 +190,7 @@ impl c::Stripe<Validated> {
         let Some(empty) = self.data_blocks_empty() else { return 0 };
         let live = self.nr_data() - empty;
 
-        if live == 0 || live >= c::BCH_BKEY_PTRS_MAX.saturating_sub(self.nr_redundant.into()) {
+        if live == 0 || live >= BCH_BKEY_PTRS_MAX.saturating_sub(self.nr_redundant.into()) {
             return 0;
         }
         self.reuse_group() << STRIPE_REUSE_LIVE_BITS | u64::from(live)
@@ -218,8 +222,8 @@ impl<B> StripeCsums<B> {
 
 impl<B: AsRef<[u8]>> StripeCsums<B> {
     /// stripe_csum_get().
-    pub fn get(&self, block: u32, granule: u32) -> c::bch_csum {
-        let mut csum = c::bch_csum::default();
+    pub fn get(&self, block: u32, granule: u32) -> bch_csum {
+        let mut csum = bch_csum::default();
         plain_bytes_mut(&mut csum)[..self.csum_bytes].copy_from_slice(&self.bytes.as_ref()[self.at(block, granule)]);
         csum
     }
@@ -227,7 +231,7 @@ impl<B: AsRef<[u8]>> StripeCsums<B> {
 
 impl<B: AsMut<[u8]>> StripeCsums<B> {
     /// stripe_csum_set().
-    pub fn set(&mut self, block: u32, granule: u32, csum: c::bch_csum) {
+    pub fn set(&mut self, block: u32, granule: u32, csum: bch_csum) {
         let at = self.at(block, granule);
         self.bytes.as_mut()[at].copy_from_slice(&plain_bytes(&csum)[..self.csum_bytes]);
     }
@@ -242,7 +246,7 @@ const STRIPE_REUSE_LIVE_BITS: u32 = 8;
 
 /// The stripe reuse lru's entries new stripe @new may be packed into, fewest
 /// live blocks first: None if it's too narrow to take any.
-pub fn stripe_reuse_lru(new: &c::Stripe<Validated>) -> Option<RangeInclusive<LruPos>> {
+pub fn stripe_reuse_lru(new: &Stripe<Validated>) -> Option<RangeInclusive<LruPos>> {
     let group = new.reuse_group();
     let at = |live, target| LruPos::new(LruId::StripeReuse.id(), group << STRIPE_REUSE_LIVE_BITS | live, target);
     let nr_data = u64::from(new.nr_data());
@@ -251,7 +255,7 @@ pub fn stripe_reuse_lru(new: &c::Stripe<Validated>) -> Option<RangeInclusive<Lru
 
 /// Whether @p is the data block its stripe_ptr names in @s:
 /// bch2_ptr_matches_stripe(). A block past the value matches nothing.
-pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr_decoded) -> bool {
+pub fn ptr_matches_stripe(s: BkeySC<'_, Stripe<Validated>>, p: &extent_ptr_decoded) -> bool {
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
     let v = s.v();
@@ -265,7 +269,7 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr
 }
 
 /// ptr_matches_stripe(), against gc's copy of the stripe, locked.
-pub fn ptr_matches_stripe_m(m: &c::GcStripeData, p: &c::extent_ptr_decoded) -> bool {
+pub fn ptr_matches_stripe_m(m: &GcStripeData, p: &extent_ptr_decoded) -> bool {
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
     // unsigned, as C's
@@ -275,8 +279,8 @@ pub fn ptr_matches_stripe_m(m: &c::GcStripeData, p: &c::extent_ptr_decoded) -> b
 }
 
 /// Whether @data_ptr is in the block of @sectors at @stripe_ptr.
-pub(crate) fn ptr_in_block(stripe_ptr: &c::bch_extent_ptr, data_ptr: &c::bch_extent_ptr, sectors: u64) -> bool {
-    let invalid = c::BCH_SB_MEMBER_INVALID as u8;
+pub(crate) fn ptr_in_block(stripe_ptr: &bch_extent_ptr, data_ptr: &bch_extent_ptr, sectors: u64) -> bool {
+    let invalid = BCH_SB_MEMBER_INVALID as u8;
     (data_ptr.dev() == stripe_ptr.dev() || data_ptr.dev() == invalid || stripe_ptr.dev() == invalid) &&
         data_ptr.generation() == stripe_ptr.generation() &&
         data_ptr.offset() >= stripe_ptr.offset() &&
@@ -293,7 +297,7 @@ fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blocks:
         return 0;
     }
     // unsigned, as C's
-    let t = nr_devs.min(c::BCH_BKEY_PTRS_MAX).wrapping_sub(nr_redundant);
+    let t = nr_devs.min(BCH_BKEY_PTRS_MAX).wrapping_sub(nr_redundant);
     if max_data_blocks != 0 { t.min(max_data_blocks) } else { t }
 }
 
@@ -303,9 +307,9 @@ fn stripe_widen_value(target_nr_data: u32, actual_nr_data: u32) -> u8 {
     (target_nr_data as i32).wrapping_sub(actual_nr_data as i32).clamp(0, 7) as u8
 }
 
-impl BkeyOps for c::Stripe {
+impl BkeyOps for Stripe {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        let s = v.k.arm::<c::Stripe>().expect("a stripe").v();
+        let s = v.k.arm::<Stripe>().expect("a stripe").v();
 
         // checked before val_u64s(), which shifts by it
         bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, id::stripe_csum_granularity_bad,
@@ -327,7 +331,7 @@ impl BkeyOps for c::Stripe {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         // the header's there - bch2_val_to_text() checks min_val_size, all of it,
         // before calling this - but not what's after it
-        let s = k.arm::<c::Stripe>().expect("a stripe").v();
+        let s = k.arm::<Stripe>().expect("a stripe").v();
         let val = k.val_bytes();
 
         // nr_redundant past nr_blocks is damage, printed as is
@@ -360,7 +364,7 @@ impl BkeyOps for c::Stripe {
 
         let tail = &val[STRIPE_PTRS..];
         let ptrs = &tail[..s.ptrs_bytes().min(tail.len()) / 8 * 8];
-        let ptrs: &[c::bch_extent_ptr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
+        let ptrs: &[bch_extent_ptr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
         let counts = if s.csum_granularity_bits < 31 { s.blockcounts_at() } else { None };
 
         for (i, ptr) in ptrs.iter().enumerate() {
@@ -380,7 +384,7 @@ impl BkeyOps for c::Stripe {
 
 
 /// A stripe, as the trigger sees one going in or out.
-pub(crate) type StripeK<'a> = BkeySC<'a, c::Stripe<Validated>>;
+pub(crate) type StripeK<'a> = BkeySC<'a, Stripe<Validated>>;
 
 
 /// A block of a stripe: the stripe, and one of its blocks by index - one it
@@ -417,7 +421,7 @@ impl<'k> Block<'k> {
         self.idx
     }
 
-    pub(crate) fn ptr(self) -> c::bch_extent_ptr {
+    pub(crate) fn ptr(self) -> bch_extent_ptr {
         self.s.v().block_ptrs()[usize::from(self.idx)]
     }
 
@@ -483,7 +487,7 @@ impl WidenCache {
 
     /// The can_widen stripe @s should have now: how many more data blocks
     /// its disk label's RW members would let it have.
-    pub fn can_widen(&mut self, fs: &Fs, s: &c::Stripe) -> Result<u8, BchError> {
+    pub fn can_widen(&mut self, fs: &Fs, s: &Stripe) -> Result<u8, BchError> {
         let nr_devs = self.lookup(fs, s.disk_label, s.sectors.get())?;
         Ok(s.want_can_widen(nr_devs, fs.opts().ec_max_data_blocks.get().into()))
     }
@@ -500,12 +504,12 @@ pub(crate) struct Shape {
     /// unsigned, as C's - nr_redundant past nr_blocks is damage
     pub(crate) nr_data:               u32,
     pub(crate) sectors:               u32,
-    pub(crate) csum_type:             c::CsumType,
+    pub(crate) csum_type:             CsumType,
     pub(crate) csum_granularity_bits: u8,
     pub(crate) csums_per_device:      u32,
 }
 
-pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
+pub(crate) fn shape(s: BkeySC<'_, Stripe<Validated>>) -> Shape {
     let v = s.v();
     Shape {
         nr_blocks:             v.nr_blocks.into(),
@@ -524,7 +528,7 @@ pub(crate) fn shape(s: BkeySC<'_, c::Stripe<Validated>>) -> Shape {
 #[repr(C)]
 #[derive(Clone)]
 pub struct StripeKey {
-    room: DstRoom<BkeyI, [u64; c::BKEY_U64s_MAX as usize]>,
+    room: DstRoom<BkeyI, [u64; BKEY_U64s_MAX as usize]>,
 }
 
 impl StripeKey {
@@ -535,8 +539,8 @@ impl StripeKey {
     }
 
     /// Its stripe: the key, as long as its u64s say.
-    pub(crate) fn stripe(&self) -> BkeySC<'_, c::Stripe<Validated>> {
-        BkeySC::from(&*self.room).arm::<c::Stripe>().expect("a StripeKey's key is a stripe")
+    pub(crate) fn stripe(&self) -> BkeySC<'_, Stripe<Validated>> {
+        BkeySC::from(&*self.room).arm::<Stripe>().expect("a StripeKey's key is a stripe")
     }
 
     /// Its slot: the stripe's index.
@@ -550,29 +554,29 @@ impl StripeKey {
     }
 
     /// Make it @k: bkey_reassemble().
-    pub fn set(&mut self, k: BkeySC<'_, c::Stripe<Validated>>) {
+    pub fn set(&mut self, k: BkeySC<'_, Stripe<Validated>>) {
         self.room.set_key(k)
     }
 
     /// Make it a new stripe, @v its header: bkey_stripe_init(), and the value
     /// as long as @v says. Past the header it's as it was - zeroed, for a new
     /// stripe.
-    pub(crate) fn init(&mut self, v: &c::Stripe) {
-        let mut k = c::bkey::new();
+    pub(crate) fn init(&mut self, v: &Stripe) {
+        let mut k = bkey::new();
         k.set_key_type(BkeyType::stripe);
         k.set_val_bytes(v.val_u64s() as usize * size_of::<u64>());
 
         self.room.k = k;
-        plain_bytes_mut(self.room.val_mut())[..size_of::<c::Stripe>()].copy_from_slice(plain_bytes(v));
+        plain_bytes_mut(self.room.val_mut())[..size_of::<Stripe>()].copy_from_slice(plain_bytes(v));
     }
 
     /// Its header, to edit: its position, say.
-    pub(crate) fn k_mut(&mut self) -> &mut c::bkey {
+    pub(crate) fn k_mut(&mut self) -> &mut bkey {
         &mut self.room.k
     }
 
     /// Its stripe's value, to edit.
-    pub(crate) fn stripe_mut(&mut self) -> &mut c::Stripe<Validated> {
+    pub(crate) fn stripe_mut(&mut self) -> &mut Stripe<Validated> {
         cast_mut(plain_bytes_mut(self.room.val_mut())).expect("a stripe's value")
     }
 }

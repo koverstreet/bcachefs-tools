@@ -11,10 +11,9 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef,
 use crate::btree::path::Paths;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use super::NodeKey;
-use crate::c;
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
 use crate::errcode::{Errcode, BchError};
-use crate::format::Btree;
+use crate::format::{Btree, JsetEntryType};
 use crate::util::vstructs::Validated;
 
 impl<'a, 't> TransAttempt<'a, 't> {
@@ -131,8 +130,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 key_trigger(self, &mut op)?;
             }
 
-            self.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8 + 1, &*old)?;
-            self.journal_entry_add(c::JsetEntryType::btree_root, btree.0 as u8, level as u8, key.as_ref())?;
+            self.journal_entry_add(JsetEntryType::overwrite, btree.0 as u8, level as u8 + 1, &*old)?;
+            self.journal_entry_add(JsetEntryType::btree_root, btree.0 as u8, level as u8, key.as_ref())?;
 
             /*
              * propagated back to c->btree.roots[].key by

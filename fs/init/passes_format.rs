@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
 use crate::types::{Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
@@ -282,9 +281,9 @@ pub struct recovery_pass_entry_flags {
     __:             u31,
 }
 
-#[whole(tail = start: [c::recovery_pass_entry])]
+#[whole(tail = start: [recovery_pass_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_recovery_passes {
-    pub start: [c::recovery_pass_entry; 0],
+    pub start: [recovery_pass_entry; 0],
 }

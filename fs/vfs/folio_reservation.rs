@@ -10,9 +10,8 @@ use core::cmp::min;
 use core::ops::Range;
 
 use crate::alloc::capacity::DiskReservation;
-use crate::c;
-use crate::c::FolioSectorState as SectorState;
-use crate::c::ReservationFlags as ReservationFlags;
+use crate::vfs::pagecache::FolioSectorState as SectorState;
+use crate::alloc::buckets::ReservationFlags as ReservationFlags;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 

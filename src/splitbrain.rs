@@ -23,12 +23,14 @@ use anyhow::Result;
 use log::warn;
 
 use bcachefs_kernel::util::prompt::{fs_name, Choice, Prompt, Question, Reply, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
-use bcachefs_kernel::c;
+use bcachefs_kernel::errcode::Errcode;
+use bcachefs_kernel::format::bch_sb;
+use bcachefs_kernel::opts::bch_opts;
 use bcachefs_kernel::init::dev::dev_in_fs;
 use bcachefs_kernel::fs::newest;
 use bcachefs_kernel::sb::members;
 use bcachefs_kernel::util::printbuf::DateTime;
-use c::bch_sb_handle;
+use bcachefs_kernel::init::dev::bch_sb_handle;
 
 pub struct Divergent {
     path: PathBuf,
@@ -39,11 +41,11 @@ pub struct Divergent {
     expected_seq: u64,
 }
 
-fn seq(sb: &c::bch_sb) -> u64 {
+fn seq(sb: &bch_sb) -> u64 {
     sb.seq.get()
 }
 
-fn write_time(sb: &c::bch_sb) -> u64 {
+fn write_time(sb: &bch_sb) -> u64 {
     sb.write_time.get()
 }
 
@@ -59,7 +61,7 @@ fn authoritative(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<usize> {
 
 /// Devices that have diverged, or an empty vec. Never errors: anything that is
 /// not divergence is somebody else's problem, reported at mount.
-pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Divergent> {
+pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &bch_opts) -> Vec<Divergent> {
     let Some(best_idx) = authoritative(sbs) else {
         return Vec::new();
     };
@@ -75,7 +77,7 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
 
         let ret = dev_in_fs(best_handle.sb(), Some(best_handle.bdev()), handle, opts);
 
-        if ret.is_err_and(|e| e.matches(c::Errcode::device_splitbrain)) {
+        if ret.is_err_and(|e| e.matches(Errcode::device_splitbrain)) {
             let sb = handle.sb();
             out.push(Divergent {
                 path: path.clone(),

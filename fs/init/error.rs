@@ -29,15 +29,16 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::RecoveryPass;
-use crate::fs::Dev;
-use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags};
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
+use crate::fs::{Dev, FsFlag};
+use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags,
+    bkey_validate_context, BkeyValidateFrom};
 use crate::btree::trans::TransGuard;
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};use crate::c;
+use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::errors::{FsckFlags, SbErrorId};
+use crate::sb::errors::{FsckFlags, SbErrorId, bch_sb_error_entry_cpu};
 use crate::util::alloc::Vec;
 use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
@@ -52,7 +53,11 @@ use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
 use pin_init::pin_data;
-use crate::format::{Bpos, Btree, MemberState};
+use crate::format::{Bpos, Btree, MemberState, ErrorAction};
+use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
+use crate::opts::FsckErrOpt;
+use crate::sb::members_format::MemberErrorType;
+use crate::snapshots::subvolume::subvol_inum;
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -83,7 +88,7 @@ pub(crate) struct FsckErrState {
     /// The verdict, once there's been one
     pub(crate) ret:         Option<BchError>,
     /// FSCK_FIX_yes or FSCK_FIX_no for all of them: a Y or N answer
-    pub(crate) fix:         Option<c::FsckErrOpt>,
+    pub(crate) fix:         Option<FsckErrOpt>,
     pub(crate) last_msg:    Option<Vec<u8>>,
 }
 
@@ -98,7 +103,7 @@ impl FsckErrState {
 pub(crate) struct ErrorsLocked {
     pub(crate) msgs:                    Vec<FsckErrState>,
     pub(crate) msgs_alloc_err:          bool,
-    pub(crate) damaged_paths:           Vec<c::fsck_damaged_path>,
+    pub(crate) damaged_paths:           Vec<fsck_damaged_path>,
     pub(crate) damaged_paths_alloc_err: bool,
 }
 
@@ -125,7 +130,7 @@ pub struct bch_fs_errors {
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
     #[init(new_lock!(Vec::new()))]
-    pub(crate) counts: Locked<Mutex, Vec<c::bch_sb_error_entry_cpu>>,
+    pub(crate) counts: Locked<Mutex, Vec<bch_sb_error_entry_cpu>>,
 }
 
 /// The fsck error ids by their names: id::inode_wrong_nlink.
@@ -276,11 +281,11 @@ pub fn fs_fatal_error(fs: &Fs, from: &CStr, msg: &dyn ToText) {
 pub struct BkeyValidate<'a, 'k> {
     pub fs:   &'a Fs,
     pub k:    AnyKeySC<'k, Unvalidated>,
-    pub from: &'a c::bkey_validate_context,
+    pub from: &'a bkey_validate_context,
 }
 
 impl<'a, 'k> BkeyValidate<'a, 'k> {
-    pub fn new<V: ?Sized + BkeyVal>(fs: &'a Fs, k: BkeySC<'k, V>, from: &'a c::bkey_validate_context) -> Self {
+    pub fn new<V: ?Sized + BkeyVal>(fs: &'a Fs, k: BkeySC<'k, V>, from: &'a bkey_validate_context) -> Self {
         BkeyValidate { fs, k: k.as_read(), from }
     }
 }
@@ -469,7 +474,7 @@ fn prt_actioning(out: &mut Printbuf, action: &[u8]) {
     write!(out, "ing");
 }
 
-fn error_action_name(a: c::ErrorAction) -> &'static str {
+fn error_action_name(a: ErrorAction) -> &'static str {
     a.name().unwrap_or("?")
 }
 
@@ -481,8 +486,8 @@ fn error_action_name(a: c::ErrorAction) -> &'static str {
 pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos, mut flags: FsckFlags,
                         err: SbErrorId, msg: &dyn ToText) -> BchError {
     use Errcode as e;
-    use c::ErrorAction as a;
-    use c::FsFlag as fl;
+    use crate::format::ErrorAction as a;
+    use crate::fs::FsFlag as fl;
 
     flags |= flags_extra(err);
 
@@ -521,7 +526,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
     }
     out.write_bytes_indented(text);
 
-    let fix_errors = c::FsckErrOpt::from_bits(fs.opts.fix_errors.get().into());
+    let fix_errors = FsckErrOpt::from_bits(fs.opts.fix_errors.get().into());
     let errors = fs.opts.errors();
     let (mut inconsistent, mut exiting) = (false, false);
 
@@ -576,13 +581,13 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     write!(out, ", continuing");
                     fs.err(e::fsck_ignore)
                 }
-            } else if fix_errors == c::FsckErrOpt::exit {
+            } else if fix_errors == FsckErrOpt::exit {
                 write!(out, ", exiting");
                 fs.err(e::fsck_errors_not_fixed)
             } else if flags.contains(FsckFlags::CAN_FIX) {
                 let fix = s.as_ref().and_then(|s| s.fix).unwrap_or(fix_errors);
 
-                if fix == c::FsckErrOpt::ask {
+                if fix == FsckErrOpt::ask {
                     cnt.print = false;
 
                     let answer = match ask(fs, trans, &mut out, action) {
@@ -592,8 +597,8 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     };
                     if let Some(s) = s.as_deref_mut() {
                         match answer {
-                            Answer::AllNo  => s.fix = Some(c::FsckErrOpt::no),
-                            Answer::AllYes => s.fix = Some(c::FsckErrOpt::yes),
+                            Answer::AllNo  => s.fix = Some(FsckErrOpt::no),
+                            Answer::AllYes => s.fix = Some(FsckErrOpt::yes),
                             _ => {}
                         }
                     }
@@ -602,7 +607,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     } else {
                         e::fsck_ignore
                     })
-                } else if fix == c::FsckErrOpt::yes ||
+                } else if fix == FsckErrOpt::yes ||
                           (fs.opts.nochanges.get() != 0 && !flags.contains(FsckFlags::CAN_IGNORE)) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
@@ -621,7 +626,7 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
             };
 
             let ret = if ret.matches(e::fsck_ignore) &&
-                         (fix_errors == c::FsckErrOpt::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
+                         (fix_errors == FsckErrOpt::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
                 fs.err(e::fsck_errors_not_fixed)
             } else {
                 ret
@@ -672,7 +677,7 @@ fn report(fs: &Fs, out: &mut Printbuf, s: Option<&mut FsckErrState>, cnt: Counte
 fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: SbErrorId,
           st: impl Sized, mut ret: BchError) -> BchError {
     use Errcode as e;
-    use c::FsFlag as fl;
+    use crate::fs::FsFlag as fl;
 
     drop(st);
 
@@ -701,7 +706,7 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
 /// The verdict on an invalid key - fsck_delete_bkey, at once, for a check
 /// that's silent, or an error silenced; else fsck_err_verdict()'s, offering
 /// to delete it - fixed without asking, but where it's a write's or a commit's.
-pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &c::bkey_validate_context, err: SbErrorId,
+pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &bkey_validate_context, err: SbErrorId,
                              msg: &dyn ToText) -> BchError {
     let vflags = from.bits.flags();
     if vflags.contains(ValidateFlags::silent) {
@@ -719,7 +724,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &c::bk
     let from_ty = from.bits.from();
     let msg = Msg(|out: &mut Printbuf| {
         write!(out, "invalid bkey in {}", from_ty.name());
-        if from_ty == c::BkeyValidateFrom::journal {
+        if from_ty == BkeyValidateFrom::journal {
             write!(out, " journal seq={} offset={}", from.journal_seq, from.journal_offset);
         }
         let btree = from.btree;
@@ -773,7 +778,7 @@ pub fn free_fsck_errs(fs: &Fs) {
 const DAMAGED_PATHS_MAX: usize = 4096;
 const DAMAGED_PATHS_PRINT: usize = 200;
 
-impl c::fsck_damaged_path {
+impl fsck_damaged_path {
     fn add_err(&mut self, err: SbErrorId) {
         let nr = usize::from(self.nr_errors);
         if !self.errors[..nr].contains(&(err.0 as u16)) && nr < self.errors.len() {
@@ -796,7 +801,7 @@ pub fn fsck_damaged(fs: &Fs, pos: Bpos, err: SbErrorId) {
         return;
     }
 
-    let mut p = c::fsck_damaged_path { inum, snapshot: pos.snapshot, nr_errors: 1, ..Default::default() };
+    let mut p = fsck_damaged_path { inum, snapshot: pos.snapshot, nr_errors: 1, ..Default::default() };
     p.errors[0] = err.0 as u16;
     if paths.len() >= DAMAGED_PATHS_MAX || paths.push(p).is_err() {
         st.damaged_paths_alloc_err = true;
@@ -835,7 +840,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
 }
 
 /// One damaged path, and what happened to it.
-pub fn damaged_path_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, p: &c::fsck_damaged_path) {
+pub fn damaged_path_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, p: &fsck_damaged_path) {
     // into a buffer of its own, so a restart doesn't print it twice
     let mut path = Printbuf::new();
     match lockrestart_do(trans, |t| damaged_path_resolve(t, p.inum, p.snapshot, &mut path)) {
@@ -893,7 +898,7 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
     -> Result<(), BchError>
 {
     let ret = if subvol != 0 {
-        crate::posix::namei::inum_to_path(t, c::subvol_inum { subvol: subvol.into(), inum: pos.inode }, out)
+        crate::posix::namei::inum_to_path(t, subvol_inum { subvol: subvol.into(), inum: pos.inode }, out)
     } else if pos.snapshot != 0 {
         crate::posix::namei::inum_snapshot_to_path(t, pos.inode, pos.snapshot, out)
     } else {
@@ -925,9 +930,9 @@ impl Fs {
     /// emergency read-only, or panic - and noted in @out: whether we're going
     /// read-only.
     pub fn inconsistent_error(&self, out: &mut Printbuf) -> bool {
-        use c::ErrorAction as a;
+        use crate::format::ErrorAction as a;
 
-        self.flags.set(c::FsFlag::error, true);
+        self.flags.set(FsFlag::error, true);
         match self.opts.errors() {
             a::continue_ => false,
             a::fix_safe | a::ro => {
@@ -948,12 +953,12 @@ impl Fs {
     pub fn topology_error(&self, out: &mut Printbuf) -> BchError {
         write!(out, "btree topology error: ");
 
-        self.flags.set(c::FsFlag::topology_error, true);
-        if !self.flags.get(c::FsFlag::in_recovery) {
+        self.flags.set(FsFlag::topology_error, true);
+        if !self.flags.get(FsFlag::in_recovery) {
             self.inconsistent_error(out);
         } else if let Err(e) = crate::init::passes::run_explicit(self, out,
                 RecoveryPass::check_topology,
-                c::RunRecoveryPassFlags::from_bits_retain(0)) {
+                RunRecoveryPassFlags::from_bits_retain(0)) {
             return e;
         }
         self.err(Errcode::btree_need_topology_repair)
@@ -1012,10 +1017,10 @@ impl Fs {
 impl Dev {
     /// An IO error of type @ty: counted, and a write's starting the write
     /// error clock, which io_error_work() reads.
-    pub fn io_error(&self, ty: c::MemberErrorType) {
+    pub fn io_error(&self, ty: MemberErrorType) {
         self.errors[ty].fetch_add(1, Relaxed);
 
-        if ty == c::MemberErrorType::write && self.write_errors_start.load(Relaxed) == 0 {
+        if ty == MemberErrorType::write && self.write_errors_start.load(Relaxed) == 0 {
             self.write_errors_start.store(jiffies() as usize, Relaxed);
         }
 
@@ -1035,7 +1040,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
 
     let state = fs.state_lock_write();
     if ca.removing() ||
-       fs.flags.get(c::FsFlag::stopping) ||
+       fs.flags.get(FsFlag::stopping) ||
        ca.mi.get().state >= MemberState::ro {
         return;
     }
@@ -1045,7 +1050,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
     write!(buf, "writes erroring for {timeout} seconds\n");
 
     let dev = state.dev_set_state(ca, MemberState::ro,
-                                  c::BCH_FORCE_IF_DEGRADED, &mut buf).is_ok();
+                                  BCH_FORCE_IF_DEGRADED, &mut buf).is_ok();
     write!(buf, "setting {} ro", if dev { "device" } else { "filesystem" });
     if dev || fs.emergency_read_only(&mut buf) {
         print_str(fs, LogLevel::ERR, &mut buf);

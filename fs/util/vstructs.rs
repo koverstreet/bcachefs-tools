@@ -1681,7 +1681,8 @@ impl<T: core::fmt::Debug> std::error::Error for ArmWalkError<T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::c;
+    use crate::format::{JsetEntryRef, JsetEntryType, SbFieldType};
+    use crate::format::{bch_sb, bch_sb_field, bch_sb_field_clean, btree_node_entry, jset, jset_entry};
     use crate::types::{Le32, Le64};
     use crate::util::projections::{View, ViewMut};
     use cstruct_macros::{Plain, View};
@@ -1696,8 +1697,8 @@ mod tests {
         plain_bytes(buf)
     }
 
-    fn entry(u64s: usize) -> Head<c::jset_entry> {
-        let mut e = Head::<c::jset_entry>::default();
+    fn entry(u64s: usize) -> Head<jset_entry> {
+        let mut e = Head::<jset_entry>::default();
         e.set_u64s(u64s);
         e
     }
@@ -1706,9 +1707,9 @@ mod tests {
     /// with @second's u64s for the second, the jset's u64s saying 1 + 1 + 1
     /// + 3 still.
     fn jset(second: usize) -> Vec<u64> {
-        let hdr = size_of::<Head<c::jset>>();
+        let hdr = size_of::<Head<jset>>();
         let mut buf = vec![0u64; hdr / 8 + 6];
-        let mut j = Head::<c::jset>::default();
+        let mut j = Head::<jset>::default();
         j.set_u64s(6);
         put(&mut buf, 0, &j);
         put(&mut buf, hdr, &entry(1));
@@ -1722,7 +1723,7 @@ mod tests {
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
         // SAFETY: valid, as built
-        let j = unsafe { c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let j = unsafe { jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(j.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
@@ -1737,21 +1738,21 @@ mod tests {
     fn data_usage_entry() {
         let mut buf = [0u64; 3];
         let mut e = entry(2);
-        e.type_ = c::JsetEntryType::data_usage.0 as u8;
+        e.type_ = JsetEntryType::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         buf[1] = 77;                            // v
         buf[2] = 1 | 2 << 8 | 1 << 16 | 3 << 24 | 5 << 32; // r: data_type, nr_devs 2, nr_required, devs 3, 5
         // SAFETY: valid, as built
-        let e = unsafe { c::jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
-        let Ok(c::JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
+        let e = unsafe { jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let Ok(JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
         assert_eq!((u.v.get(), u.as_bytes().len()), (77, 16));
         assert_eq!(&u._rest[..u.r.nr_devs as usize], [3, 5]);
 
         let mut e = entry(1);
-        e.type_ = c::JsetEntryType::data_usage.0 as u8;
+        e.type_ = JsetEntryType::data_usage.0 as u8;
         put(&mut buf, 0, &e);
         // SAFETY: as above
-        let e = unsafe { c::jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let e = unsafe { jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(e.as_bytes().len(), 16);
         assert!(e.typed().is_err());
     }
@@ -1762,7 +1763,7 @@ mod tests {
         let buf = jset(4);
         // SAFETY: valid, as built - but for the entry past it, which the walk
         // ends at
-        let j = unsafe { c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let j = unsafe { jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(j.entries().count(), 1);
     }
 
@@ -1773,27 +1774,27 @@ mod tests {
         let mut buf = [0u64; 8];
 
         put(&mut buf, 0, &entry(3));
-        assert_eq!(c::jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 8 + 24);
+        assert_eq!(jset_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 8 + 24);
 
-        let mut f = Head::<c::bch_sb_field>::default();
+        let mut f = Head::<bch_sb_field>::default();
         f.set_u64s(3);
         put(&mut buf, 0, &f);
-        assert_eq!(c::bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 24);
+        assert_eq!(bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 24);
 
-        let mut b = ::pin_init::zeroed::<Head<c::btree_node_entry>>();
+        let mut b = ::pin_init::zeroed::<Head<btree_node_entry>>();
         b.keys.set_u64s(3);
         put(&mut buf, 0, &b);
-        assert_eq!(c::btree_node_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 16 + 24 + 24);
+        assert_eq!(btree_node_entry::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().bytes(), 16 + 24 + 24);
     }
 
     /// A superblock of one u64 past its header, and in it a field of @u64s.
     fn sb(field_u64s: usize) -> Vec<u64> {
-        let hdr = size_of::<Head<c::bch_sb>>();
+        let hdr = size_of::<Head<bch_sb>>();
         let mut buf = vec![0u64; hdr / 8 + 1];
-        let mut sb = ::pin_init::zeroed::<Head<c::bch_sb>>();
+        let mut sb = ::pin_init::zeroed::<Head<bch_sb>>();
         sb.set_u64s(1);
         put(&mut buf, 0, &sb);
-        let mut f = Head::<c::bch_sb_field>::default();
+        let mut f = Head::<bch_sb_field>::default();
         f.set_u64s(field_u64s);
         put(&mut buf, hdr, &f);
         buf
@@ -1805,12 +1806,12 @@ mod tests {
     fn entries_end_at_a_zero_length_entry() {
         let buf = sb(0);
         // SAFETY: valid, as built - but for the field that ends the walk
-        let sb = unsafe { c::bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let sb = unsafe { bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(sb.entries().count(), 0);
 
         let buf = self::sb(1);
         // SAFETY: as above
-        let sb = unsafe { c::bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let sb = unsafe { bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
         assert_eq!(sb.entries().count(), 1);
     }
 
@@ -1820,18 +1821,18 @@ mod tests {
     #[test]
     fn unvalidated_counts_are_checked() {
         let buf = jset(3);
-        let j = c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let j = jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es = j.entries().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!((es[0].u64s(), es[1].u64s()), (1, 3));
         assert_eq!(es[1].as_bytes().len(), 32);
 
         let buf = jset(4);
-        let j = c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let j = jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es: Vec<_> = j.entries().collect();
         assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 40, have: 32, .. })]));
 
-        let hdr = size_of::<Head<c::jset>>();
-        assert!(matches!(c::jset::<Unvalidated>::from_bytes(&bytes(&buf)[..hdr + 8]),
+        let hdr = size_of::<Head<jset>>();
+        assert!(matches!(jset::<Unvalidated>::from_bytes(&bytes(&buf)[..hdr + 8]),
                          Err(VStructError::Overrun { want, have, .. }) if want == hdr + 48 && have == hdr + 8));
     }
 
@@ -1840,7 +1841,7 @@ mod tests {
     #[test]
     fn unvalidated_short_entry() {
         let buf = sb(0);
-        let sb = c::bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let sb = bch_sb::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es: Vec<_> = sb.entries().collect();
         assert!(matches!(es[..], [Err(VStructError::Short { len: 0, .. })]));
     }
@@ -1850,16 +1851,16 @@ mod tests {
     /// ones, each as long as it says.
     #[test]
     fn entries_start_at_start() {
-        let (hdr, start) = (size_of::<Head<c::bch_sb_field>>(), size_of::<c::bch_sb_field_clean>());
+        let (hdr, start) = (size_of::<Head<bch_sb_field>>(), size_of::<bch_sb_field_clean>());
         let mut buf = vec![0u64; (hdr + start) / 8 + 2];
-        let mut f = Head::<c::bch_sb_field>::default();
+        let mut f = Head::<bch_sb_field>::default();
         f.set_u64s(buf.len());
-        f.type_ = Le32::new(c::SbFieldType::clean.0);
+        f.type_ = Le32::new(SbFieldType::clean.0);
         put(&mut buf, 0, &f);
         put(&mut buf, hdr + start, &entry(1));
         // SAFETY: valid, as built
-        let f = unsafe { c::bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
-        let clean = f.arm::<c::bch_sb_field_clean<Validated>>().expect("a clean section");
+        let f = unsafe { bch_sb_field::<Unvalidated>::from_bytes(bytes(&buf)).unwrap().assume_validated() };
+        let clean = f.arm::<bch_sb_field_clean<Validated>>().expect("a clean section");
         assert_eq!(clean.as_bytes().len(), buf.len() * 8 - hdr);
         let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);

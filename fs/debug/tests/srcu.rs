@@ -22,7 +22,8 @@ use pin_init::stack_try_pin_init;
 
 use super::TestRet;
 use crate::c;
-use crate::errcode::BchError;
+use crate::c::rcu_head;
+use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::new_srcu;
 use crate::os::kernel::{local_clock, msleep, num_online_cpus, random_u64_below};
@@ -35,7 +36,7 @@ use bcachefs_shim as kernel;
 
 fn failed(what: core::fmt::Arguments<'_>) -> TestRet {
     kernel::pr_err!("test_srcu: {what}\n");
-    Err(BchError::from(c::Errcode::EINVAL_test_srcu_failed))
+    Err(BchError::from(Errcode::EINVAL_test_srcu_failed))
 }
 
 /// Waits up to @secs for @cond, a grace period to end: whether it did.
@@ -53,7 +54,7 @@ fn wait_for(secs: u64, mut cond: impl FnMut() -> bool) -> bool {
 /// A callback's: whether it's run.
 #[repr(C)]
 struct Flagged {
-    head: c::rcu_head,
+    head: rcu_head,
     ran:  AtomicBool,
 }
 
@@ -166,7 +167,7 @@ const DEAD: u64 = 2;
 
 #[repr(C)]
 struct Obj {
-    head:  c::rcu_head,
+    head:  rcu_head,
     state: AtomicU64,
     life:  AtomicU64,
     free:  AtomicBool,

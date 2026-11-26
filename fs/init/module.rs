@@ -7,6 +7,8 @@
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::os::kobject::{fs_kobj, StaticKobject};
 use crate::os::module::{ModuleExit, ThisModule};
+#[cfg(kernel)]
+use crate::format::MetadataVersion;
 
 #[cfg(kernel)]
 crate::module_info!("license" = "GPL");
@@ -21,7 +23,7 @@ crate::module_info!("file" = env!("RUST_MODFILE"));
 
 crate::module_param! {
     #[cfg(kernel)]
-    static version: u32 = crate::c::MetadataVersion::CURRENT.0;
+    static version: u32 = MetadataVersion::CURRENT.0;
     perm = 0o444
 }
 

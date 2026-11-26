@@ -2,10 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::alloc::replicas_format::bch_replicas_entry_v1;
 use crate::util::vstructs::Head;
 use cstruct_macros::{bch_enum, counters, tagged_union, whole, MaybeZeroable, Plain, TypeInfo};
-use crate::format::Bpos;
+use crate::format::{Bpos, bch_val};
 use crate::types::Le8;
 
 /*
@@ -53,7 +53,7 @@ use crate::types::Le8;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Accounting {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub d: [u64; 0],
 }
 
@@ -78,10 +78,11 @@ pub enum DataType {
     multiple = 11,
 }
 
-pub type Replicas = Head<c::bch_replicas_entry_v1>;
+pub type Replicas = Head<bch_replicas_entry_v1>;
 crate::alloc::accounting::acct_counters!(ReplicasCounters { sectors });
 
 tagged_union! {
+    in crate::alloc::accounting_format;
     #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
     #[derive(TypeInfo)]
     #[tag(type_: u8)]
@@ -139,7 +140,7 @@ tagged_union! {
             #[counters(buckets, sectors, fragmented)]
             pub struct DevDataType {
                 pub dev: u8,
-                pub data_type: Le8<c::DataType>,
+                pub data_type: Le8<crate::alloc::accounting_format::DataType>,
             }
         ) = 3,
 
@@ -157,7 +158,7 @@ tagged_union! {
             #[repr(C)]
             #[counters(nr_extents, uncompressed, compressed)]
             pub struct Compression {
-                pub type_: Le8<c::CompressionType>,
+                pub type_: Le8<crate::format::CompressionType>,
             }
         ) = 4,
 

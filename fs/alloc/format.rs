@@ -2,7 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::alloc::accounting_format::{DataType, DataTypes};
+use crate::format::bch_val;
 use crate::types::{Le8, Le64};
 use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
                      SizedVal};
@@ -11,7 +12,7 @@ use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroa
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct Alloc {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub fields: u8,
     pub generation: u8,
     pub data: [u8; 0],
@@ -34,7 +35,7 @@ xmacro! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct AllocV2 {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub nr_fields: u8,
     pub generation: u8,
     pub oldest_gen: u8,
@@ -57,7 +58,7 @@ xmacro! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct AllocV3 {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub journal_seq: Le64,
     #[members]
     pub flags: AllocV3Flags,
@@ -102,13 +103,13 @@ pub struct AllocV3Flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct AllocV4 {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub journal_seq_nonempty: u64,
     #[members]
     pub flags: AllocV4Flags,
     pub generation: u8,
     pub oldest_gen: u8,
-    pub data_type: Le8<c::DataType>,
+    pub data_type: Le8<DataType>,
     pub stripe_redundancy_obsolete: u8,
     pub dirty_sectors: u32,
     pub cached_sectors: u32,
@@ -124,7 +125,7 @@ pub struct AllocV4 {
 #[allow(non_upper_case_globals)]
 pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
 #[allow(non_upper_case_globals)]
-pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::AllocV4>() / size_of::<u64>();
+pub const BCH_ALLOC_V4_U64s: usize = size_of::<AllocV4>() / size_of::<u64>();
 
 #[bitfield(u32)]
 pub struct AllocV4Flags {
@@ -138,7 +139,7 @@ pub struct AllocV4Flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, View, SizedVal)]
 pub struct BucketGens {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub gens: [u8; BucketGens::NR],
 }
 
@@ -149,7 +150,7 @@ impl BucketGens {
     pub const MASK: u64 = Self::NR as u64 - 1;
 }
 
-pub const DATA_TYPES_MOVABLE: c::DataTypes = c::DataTypes::btree
-    .union(c::DataTypes::user)
-    .union(c::DataTypes::stripe)
-    .union(c::DataTypes::multiple);
+pub const DATA_TYPES_MOVABLE: DataTypes = DataTypes::btree
+    .union(DataTypes::user)
+    .union(DataTypes::stripe)
+    .union(DataTypes::multiple);

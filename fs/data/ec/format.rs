@@ -2,7 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::format::{bch_val, CsumType};
 use crate::types::{Le8, Le16};
 use cstruct_macros::{bitfield, whole, MaybeZeroable, Plain, TypeInfo, BitfieldMembers};
 use nestify::nest;
@@ -12,7 +13,7 @@ nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, MaybeZeroable, BitfieldMembers, Plain, TypeInfo)]
     pub struct Stripe {
-        pub v: c::bch_val,
+        pub v: bch_val,
         pub sectors: Le16,
         #[members]
         #>[bitfield(u8)]
@@ -30,7 +31,7 @@ nest! {
         pub nr_redundant: u8,
 
         pub csum_granularity_bits: u8,
-        pub csum_type: Le8<c::CsumType>,
+        pub csum_type: Le8<CsumType>,
 
         /*
          * XXX: targets should be 16 bits - fix this if we ever do a stripe_v2
@@ -57,6 +58,6 @@ nest! {
          * checksum type is unknown.
          */
 
-        pub ptrs: [c::bch_extent_ptr; 0],
+        pub ptrs: [bch_extent_ptr; 0],
     }
 }

@@ -4,7 +4,8 @@ use std::os::fd::AsFd;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::ValidateFlags;
 use bcachefs_kernel::os::blkdev;
-use bcachefs_kernel::c;
+use bcachefs_kernel::format::{bch_sb, BCH_SB_SECTOR};
+use bcachefs_kernel::opts::bch_opts;
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::SbFieldType;
 use clap::Parser;
@@ -54,7 +55,7 @@ pub struct RecoverSuperCli {
     device: String,
 }
 
-fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
+fn sb_last_mount_time(sb: &bch_sb) -> u64 {
     (0..sb.nr_devices as i32)
         .map(|i| {
             let m = sb_member(sb, i as u32).unwrap_or_else(pin_init::zeroed);
@@ -66,7 +67,7 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
 
 fn validate_sb(sb: SbBuf<Unvalidated>, offset_sectors: u64) -> Result<SbBuf, Printbuf> {
     let mut err = Printbuf::new();
-    sb.validate(&c::bch_opts::default(), offset_sectors, ValidateFlags::empty(), &mut err)
+    sb.validate(&bch_opts::default(), offset_sectors, ValidateFlags::empty(), &mut err)
         .map_err(|_| err)
 }
 
@@ -97,7 +98,7 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<SbBuf>
         return Vec::new();
     }
 
-    let magic_off = std::mem::offset_of!(Head<c::bch_sb>, magic);
+    let magic_off = std::mem::offset_of!(Head<bch_sb>, magic);
     let mut results = Vec::new();
     let mut offset = 0usize;
 
@@ -164,7 +165,7 @@ fn recover_from_scan(
 }
 
 fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<SbBuf> {
-    let mut opts = c::bch_opts::default();
+    let mut opts = bch_opts::default();
     opts.set_noexcl(true);
     opts.set_nochanges(true);
 
@@ -197,7 +198,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
         block_size << 9,
         bucket_size << 9,
         sb_max_size,
-        c::BCH_SB_SECTOR as u64,
+        BCH_SB_SECTOR as u64,
         dev_size >> 9,
         false,
     )?;

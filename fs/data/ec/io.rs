@@ -3,11 +3,16 @@
 //! Stripe block IO - ec/io.c's - and what reads stripes: the read path's
 //! reconstruct, and scrub.
 
-use crate::init::passes::RecoveryPass;
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
 use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::data::ec::head::StripeBlockMask;
+use crate::data::extents::{extent_ptr_decoded, ReadFlags};
+use crate::data::extents_format::bch_extent_ptr;
+use crate::sb::members_format::MemberErrorType;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::util::alloc::KBox;
 use crate::data::ec::buf::{block_checksum, blocks_in, errs_only_dev_offline, errs_to_text, validate, Blocks, MemWait,
@@ -18,7 +23,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::data::dev_bio::DevBio;
-use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
+use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx, DevReadRefKind, DevWriteRefKind};
 use crate::os::bio::{buf_bio_bytes, buf_nr_bvecs, Bio, Buffer, Gathered, HoldsDev, MapBuf};
 use crate::os::blkdev::BlockDevice;
 use crate::util::gather::{Fold, Gather, Scope};
@@ -34,7 +39,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::args_stored_once;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-use crate::format::{Bpos, Btree, DataType};
+use crate::format::{Bpos, Btree, DataType, bch_csum, CsumType};
 
 // ── Block IO ─────────────────────────────────────────────────────────────
 //
@@ -107,7 +112,7 @@ pub(crate) trait RoundBuf: MapBuf + Sized + Send {
 }
 
 impl RoundBuf for &mut [u8] {
-    type Rw = c::DevReadRefKind;
+    type Rw = DevReadRefKind;
 
     fn split_at(self, mid: usize) -> (Self, Self) {
         self.split_at_mut(mid)
@@ -115,7 +120,7 @@ impl RoundBuf for &mut [u8] {
 }
 
 impl RoundBuf for &[u8] {
-    type Rw = c::DevWriteRefKind;
+    type Rw = DevWriteRefKind;
 
     fn split_at(self, mid: usize) -> (Self, Self) {
         <[u8]>::split_at(self, mid)
@@ -127,7 +132,7 @@ impl RoundBuf for &[u8] {
 #[repr(C)]
 pub struct EcBio<M: MapBuf> {
     /// The block's pointer, for the endio's staleness check
-    ptr: c::bch_extent_ptr,
+    ptr: bch_extent_ptr,
     idx: u8,
     #[pin]
     dev: DevBio<Buffer<M>>,
@@ -198,7 +203,7 @@ where
     }
 
     /// Block @idx of stripe @s, what the buffer has of it.
-    pub(crate) fn submit(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize) {
+    pub(crate) fn submit(&mut self, s: BkeySC<'_, Stripe<Validated>>, idx: usize) {
         let (offset, size) = (self.blocks.offset, self.blocks.size);
         self.submit_range(s, idx, offset, size)
     }
@@ -207,7 +212,7 @@ where
     /// stripe, within what the buffer has - read into its buffer, or written
     /// from it: bch2_ec_block_io_range(). A block's IO is once a round. Its
     /// device offline, or its pointer stale, is the block's error at once.
-    pub(crate) fn submit_range(&mut self, s: BkeySC<'_, c::Stripe<Validated>>, idx: usize,
+    pub(crate) fn submit_range(&mut self, s: BkeySC<'_, Stripe<Validated>>, idx: usize,
                                sector_offset: u32, sectors: u32) {
         let this = self;
         let fs = this.fs;
@@ -278,7 +283,7 @@ impl<M: RoundBuf> BlockIo<'_, M, waiter::Async> {
 }
 
 /// The blocks of @s in @blocks read into @buf, waited on.
-pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut StripeBuf, blocks: u32) {
+pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeBuf, blocks: u32) {
     let errs = {
         stack_pin_init!(let done = Gather::new());
         let mut io = BlockIo::<_, waiter::Sync>::read(fs, buf, &done);
@@ -296,8 +301,8 @@ pub(crate) fn read_sync(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, buf: &mut 
 /// checksums, and the first one's checksum, as it should be and as it is.
 pub struct Scrubbed {
     pub bad_sectors: u64,
-    pub want:        c::bch_csum,
-    pub got:         c::bch_csum,
+    pub want:        bch_csum,
+    pub got:         bch_csum,
 }
 
 /// Scrub: block @block of stripe @s checked against the stripe's checksums
@@ -306,10 +311,10 @@ pub struct Scrubbed {
 /// ever reads them. The error if the block couldn't
 /// be read, including its pointer going stale: the stripe deleted, or
 /// reused, under us. Its buffer, of one granule, is its own.
-pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -> Result<Scrubbed, BchError> {
+pub fn scrub_block(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, block: usize) -> Result<Scrubbed, BchError> {
     let sh = shape(s);
     let mut ret = Scrubbed { bad_sectors: 0, want: Default::default(), got: Default::default() };
-    if sh.csum_type == c::CsumType::none {
+    if sh.csum_type == CsumType::none {
         return Ok(ret);
     }
     let granularity = 1u32 << sh.csum_granularity_bits;
@@ -336,7 +341,7 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -
 
     if ret.bad_sectors != 0 {
         if let Some(ca) = fs.dev_get(s.v().block_ptrs()[block].dev().into()) {
-            ca.io_error(c::MemberErrorType::checksum);
+            ca.io_error(MemberErrorType::checksum);
         }
     }
     Ok(ret)
@@ -357,7 +362,7 @@ pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -
 /// been deleted while the IO was in flight.
 #[args_stored_once]
 pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut Bio,
-                                pick: &c::extent_ptr_decoded, flags: c::ReadFlags, msg: &mut Printbuf)
+                                pick: &extent_ptr_decoded, flags: ReadFlags, msg: &mut Printbuf)
     -> Result<(), BchError>
 {
     let iter = c::bvec_iter { bi_sector: pick.ptr.offset(), ..bio.raw().bi_iter };
@@ -366,7 +371,7 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
         stack_pin_init!(let done = Gather::new());
         let mut io = BlockIo::<_, waiter::Async>::read(fs, &mut buf, &done);
         {
-            let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
+            let s = BkeySC::from(&key).arm::<Stripe>().expect("a stripe, as looked up");
             for i in blocks_in(EC_BLOCKS_ALL & ((1u64 << s.v().nr_blocks) - 1) as u32) {
                 io.submit(s, i);
             }
@@ -379,12 +384,12 @@ pub(crate) async fn read_extent(fs: &Fs, btree: Btree, data_pos: Bpos, bio: &mut
 
 /// The stripe looked up and checked, and its buffer: everything before the IO.
 fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
-                     pick: &c::extent_ptr_decoded, flags: c::ReadFlags, msg: &mut Printbuf)
+                     pick: &extent_ptr_decoded, flags: ReadFlags, msg: &mut Printbuf)
     -> Result<(BkeyBuf, KBox<StripeBuf>, usize), BchError>
 {
     assert!(pick.has_ec, "reconstructing a read of an extent with no stripe");
     let mut key = BkeyBuf::new();
-    let mut stale = c::StripeBlockMask::default();
+    let mut stale = StripeBlockMask::default();
     let found = {
         let trans = crate::btree_trans!(fs);
         lockrestart_do(&trans, |t| {
@@ -398,11 +403,11 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
             }
 
             let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, pick.ec.idx()), BtreeIterFlags::SLOTS);
-            let Some(s) = iter.peek_slot(t)?.expect("a slot always has a key").arm::<c::Stripe>() else {
+            let Some(s) = iter.peek_slot(t)?.expect("a slot always has a key").arm::<Stripe>() else {
                 return Ok(Some(false));
             };
             key.set_key(s.untyped());
-            stale = c::StripeBlockMask::default();
+            stale = StripeBlockMask::default();
             let rcu = read_lock();
             for (i, p) in s.v().block_ptrs().iter().enumerate() {
                 if fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.dev_ptr_stale(p, &rcu)) {
@@ -421,7 +426,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
         }
     }
 
-    let s = BkeySC::from(&key).arm::<c::Stripe>().expect("a stripe, as looked up");
+    let s = BkeySC::from(&key).arm::<Stripe>().expect("a stripe, as looked up");
     if !ptr_matches_stripe(s, pick) {
         prt!(msg, "pointer doesn't match stripe\n{}\n", s.to_text(fs));
         return fs.throw(Errcode::stripe_reconstruct);
@@ -435,12 +440,12 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
         return fs.throw(Errcode::stripe_reconstruct);
     }
 
-    if stale != c::StripeBlockMask::default() {
+    if stale != StripeBlockMask::default() {
         let mut m = log_msg_ratelimited!(fs);
         prt!(&mut m, "Stripe with stale pointer(s):\n{}", s.to_text(fs));
         count_fsck_err(fs, id::stale_dirty_ptr, &mut m);
         let _ = passes::run_explicit(fs, &mut m, RecoveryPass::check_allocations,
-                                     c::RunRecoveryPassFlags::from_bits_retain(0));
+                                     RunRecoveryPassFlags::from_bits_retain(0));
     }
 
     let Ok(mut buf) = StripeBuf::new(fs, s, EC_BLOCKS_ALL, offset, sectors, MemWait::Never) else {
@@ -454,8 +459,8 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
 /// The IO done: what it read checked, and @block's copied into @bio - @iter
 /// its position, at the pick's sector.
 fn reconstruct_finish(fs: &Fs, key: &BkeyBuf, buf: &mut StripeBuf, block: usize, bio: &mut Bio,
-                      iter: c::bvec_iter, flags: c::ReadFlags, msg: &mut Printbuf) -> Result<(), BchError> {
-    let s = BkeySC::from(key).arm::<c::Stripe>().expect("a stripe, as looked up");
+                      iter: c::bvec_iter, flags: ReadFlags, msg: &mut Printbuf) -> Result<(), BchError> {
+    let s = BkeySC::from(key).arm::<Stripe>().expect("a stripe, as looked up");
     let (sectors, offset) = (iter.bi_size >> 9, (iter.bi_sector - s.v().block_ptrs()[block].offset()) as u32);
 
     // A block went stale under us: the stripe was deleted or replaced, so

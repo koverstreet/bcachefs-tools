@@ -6,27 +6,31 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
+use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::opts::bch_inode_opts;
+use crate::sb::members::DevWriteRefKind;
 use crate::journal::flush_wait::Flush;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data::nocow_locking::{bkey_lock_cas, bkey_unlock_cas, NocowKind};
 use crate::data::ptrs::{crc_is_encoded, extents_match, Ptrs, PtrsMut};
-use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor};
+use crate::data::write::{index_update_wq, write_op_error, DevWriteRef, WriteFor, bch_write_op};
 use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::os::bio::{Bio, BioRange};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
-use crate::format::{Btree, DataType, BkeyType};
+use crate::format::{Btree, DataType, BkeyType, BCH_BKEY_PTRS_MAX, BCH_REPLICAS_MAX};
 use crate::snapshots::subvolume;
 use crate::os::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::task::Resume;
 use crate::{btree_trans, fs_inconsistent};
 use crate::posix::inode;
-use c::WriteFlags as w;
+use crate::data::write::WriteFlags as w;
 use core::ops::ControlFlow;
 
-type Op = c::bch_write_op;
+type Op = bch_write_op;
 
 fn extent_is_writeable(op: &Op, k: BkeySC<'_>) -> bool {
     let fs = op.fs();
@@ -66,7 +70,7 @@ fn nocow_write_convert_one_unwritten<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeI
      * pointers to BCH_SB_MEMBER_INVALID so the extent is accounted as
      * degraded
      */
-    let new_buf_u64s = usize::from(k.k.u64s) + 1 + c::BCH_REPLICAS_MAX as usize;
+    let new_buf_u64s = usize::from(k.k.u64s) + 1 + BCH_REPLICAS_MAX as usize;
     let mut new = t.bkey_reassemble_room(k, new_buf_u64s * size_of::<u64>())?;
 
     if let Some(mut ptrs) = new.reborrow().arm::<PtrsMut>() {
@@ -80,10 +84,10 @@ fn nocow_write_convert_one_unwritten<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeI
      * since been created. The write is still outstanding, so we're ok
      * w.r.t. snapshot atomicity:
      */
-    let mut opts = c::bch_inode_opts::default();
+    let mut opts = bch_inode_opts::default();
 
     t.extent_update_i_size_sectors(iter, (new.k().p.offset << 9).min(op.new_i_size), 0, &mut opts)?;
-    new.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
+    new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground,
                             op.opts.change_cookie)?;
     t.update(iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)
 }
@@ -141,7 +145,7 @@ fn nocow_write_done(op: &mut Op, flush: Option<&mut Option<Flush<'_>>>) {
 fn bkey_get_dev_iorefs(fs: &Fs, k: BkeySC<'_, Ptrs>, cas: &mut [Option<DevWriteRef>]) -> Option<usize> {
     let mut i = 0;
     for ptr in k.ptrs(fs) {
-        cas[i] = Some(fs.dev_get_ioref::<c::DevWriteRefKind>(ptr.dev().into())?);
+        cas[i] = Some(fs.dev_get_ioref::<DevWriteRefKind>(ptr.dev().into())?);
         i += 1;
     }
 
@@ -164,12 +168,12 @@ fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) ->
 /// overwrites, and an io ref for each of its pointers, its buckets locked.
 struct NocowExtent<'a> {
     data: BioRange<'a>,
-    k:    DstRoom<BkeyI, [u64; c::BKEY_EXTENT_U64s_MAX as usize]>,
-    cas:  [Option<DevWriteRef>; c::BCH_BKEY_PTRS_MAX as usize],
+    k:    DstRoom<BkeyI, [u64; BKEY_EXTENT_U64s_MAX as usize]>,
+    cas:  [Option<DevWriteRef>; BCH_BKEY_PTRS_MAX as usize],
     nr:   usize,
 }
 
-type NocowExtents<'a> = ArrayVec<NocowExtent<'a>, { c::BCH_BKEY_PTRS_MAX as usize }>;
+type NocowExtents<'a> = ArrayVec<NocowExtent<'a>, { BCH_BKEY_PTRS_MAX as usize }>;
 
 /// The write's data - @data, a position in its bio, advanced past what's
 /// done - written in place, as much as its extents allow, in @t: each extent
@@ -221,17 +225,17 @@ fn nocow_write_submit<'a>(t: &TransAttempt<'_, '_>, op: &mut Op, data: &mut BioR
         }
 
         /* Get iorefs before dropping btree locks: */
-        let mut refs = [const { None }; c::BCH_BKEY_PTRS_MAX as usize];
+        let mut refs = [const { None }; BCH_BKEY_PTRS_MAX as usize];
         let Some(nr_cas) = bkey_get_dev_iorefs(fs, k.arm::<Ptrs>().expect("a writeable extent"), &mut refs) else {
             return Ok(false);
         };
         let cas = &refs[..nr_cas];
-        let devs: [Option<&Dev>; c::BCH_BKEY_PTRS_MAX as usize] =
+        let devs: [Option<&Dev>; BCH_BKEY_PTRS_MAX as usize] =
             core::array::from_fn(|i| cas.get(i).and_then(Option::as_deref));
         let devs = &devs[..nr_cas];
 
         /* Unlock before taking nocow locks, doing IO: */
-        let mut copy = DstRoom::<BkeyI, [u64; c::BKEY_EXTENT_U64s_MAX as usize]>::default();
+        let mut copy = DstRoom::<BkeyI, [u64; BKEY_EXTENT_U64s_MAX as usize]>::default();
         if copy.reassemble(k).is_err() {
             return Ok(false);
         }
@@ -327,7 +331,7 @@ async fn nocow_write_pass<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32, at
     }
     let mut io = InFlight::new(op.fs());
     for e in extents.iter_mut() {
-        io.submit::<c::DevWriteRefKind>(e.data, opf, DataType::user, &e.k, Refs::Nocow(&mut e.cas[..e.nr]), at).await;
+        io.submit::<DevWriteRefKind>(e.data, opf, DataType::user, &e.k, Refs::Nocow(&mut e.cas[..e.nr]), at).await;
     }
     (more, io.wait(at).await)
 }

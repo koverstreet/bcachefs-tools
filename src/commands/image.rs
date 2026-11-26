@@ -15,6 +15,13 @@ use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::util::{HumanReadable, ToText};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bcachefs_kernel::c;
+use bcachefs_kernel::alloc::buckets::bch_dev_usage_full;
+use bcachefs_kernel::alloc::write_point::write_point_specifier;
+use bcachefs_kernel::data::write::WriteFlags;
+use bcachefs_kernel::errcode::Errcode;
+use bcachefs_kernel::opts::{bch_opts, OptFlags, OptId};
+use bcachefs_kernel::sb::members::DevReadRefKind;
+use bcachefs_kernel::sb::members_format::{BCH_MIN_NR_NBUCKETS, bch_sb_field_members_v2};
 use bcachefs_kernel::util::vstructs::Head;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bcachefs_kernel::data::moving::{MoveStats, MovingCtxt};
@@ -138,7 +145,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
 
     let target = Target::Dev(target_dev).encode();
     let stats = MoveStats::default();
-    let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::hashed(1), false)
+    let ctxt = MovingCtxt::new(fs, &stats, write_point_specifier::hashed(1), false)
         .map_err(|_| anyhow!("allocating a moving context"))?;
     let btree_id_nr = Btree::NR;
 
@@ -158,7 +165,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
                 return Ok(false);
             }
 
-            opts.write_flags |= c::WriteFlags::only_specified_devs;
+            opts.write_flags |= WriteFlags::only_specified_devs;
             Ok(true)
         })
         .map_err(|e| anyhow!("moving btree {}: {}", btree_id, e))?;
@@ -181,7 +188,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let result: Result<(BkeyType, u64), _> = lockrestart_do(&trans, |t| {
         match iter.peek_prev(t)? {
             Some(k) => Ok((k.k.key_type(), k.k.p.offset)),
-            None => Err(bcachefs_kernel::errcode::BchError::from(c::Errcode::ENOENT_image_nbuckets_used)),
+            None => Err(bcachefs_kernel::errcode::BchError::from(Errcode::ENOENT_image_nbuckets_used)),
         }
     });
 
@@ -204,7 +211,7 @@ fn prt_sectors(out: &mut Printbuf, v: u64) {
 fn print_data_type_usage(
     out: &mut Printbuf,
     ca: &Dev,
-    usage: &c::bch_dev_usage_full,
+    usage: &bch_dev_usage_full,
     data_type: DataType,
 ) {
     let d = &usage.d[data_type];
@@ -334,7 +341,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     }
 
     // Truncate image to used size
-    let ca = fs.dev_get_ioref::<c::DevReadRefKind>(0).expect("an image has device 0, online");
+    let ca = fs.dev_get_ioref::<DevReadRefKind>(0).expect("an image has device 0, online");
     let image_size = nbuckets * ca.bucket_bytes();
     let fd = ca.bdev().fd();
     rustix::fs::ftruncate(fd, image_size)
@@ -368,12 +375,12 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     sb.sb_mut().features.update(|f| f | SbFeatures::small_image);
 
     // Resize members_v2 to contain only one device
-    let member_bytes = sb.field::<c::bch_sb_field_members_v2>()
+    let member_bytes = sb.field::<bch_sb_field_members_v2>()
         .expect("members_v2 field missing")
         .member_bytes.get();
-    let u64s = (std::mem::size_of::<Head<c::bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
+    let u64s = (std::mem::size_of::<Head<bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
-    fs.sb_resize(&mut sb).field_resize::<c::bch_sb_field_members_v2>(u64s);
+    fs.sb_resize(&mut sb).field_resize::<bch_sb_field_members_v2>(u64s);
     sb.sb_mut().nr_devices = 1;
     sb.sb_mut().set_multi_device(false);
 
@@ -384,8 +391,8 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
 /// Create a new filesystem image from a directory.
 fn image_create_inner(
-    fs_opt_strs: &[(c::OptId, String)],
-    fs_opts: c::bch_opts,
+    fs_opt_strs: &[(OptId, String)],
+    fs_opts: bch_opts,
     mut format_opts: FormatOpts<'_>,
     dev_opts: DevOpts,
     src_path: &str,
@@ -457,7 +464,7 @@ fn image_create_inner(
         .collect();
     drop(devs);
 
-    let mut opts: c::bch_opts = Default::default();
+    let mut opts: bch_opts = Default::default();
     opts.set_copygc_enabled(false);
     opts.set_reconcile_enabled(false);
     opts.set_nostart(true);
@@ -538,7 +545,7 @@ fn image_update_inner(
     }
 
     // Open filesystem
-    let mut opts: c::bch_opts = Default::default();
+    let mut opts: bch_opts = Default::default();
     opts.set_copygc_enabled(false);
     opts.set_reconcile_enabled(false);
     opts.set_nostart(true);
@@ -564,7 +571,7 @@ fn image_update_inner(
     let metadata_dev_size = std::cmp::max(
         input_bytes,
         std::cmp::max(
-            fs.opts().btree_node_size.get() as u64 * c::BCH_MIN_NR_NBUCKETS as u64,
+            fs.opts().btree_node_size.get() as u64 * BCH_MIN_NR_NBUCKETS as u64,
             64 << 20,
         ),
     );
@@ -648,11 +655,11 @@ fn image_update_inner(
 
 fn image_create_usage() {
     let fs_opts = opts_usage_str(
-        c::OptFlags::format.bits() | c::OptFlags::fs.bits(),
-        c::OptFlags::device.bits(),
+        OptFlags::format.bits() | OptFlags::fs.bits(),
+        OptFlags::device.bits(),
     );
     let dev_opts = opts_usage_str(
-        c::OptFlags::device.bits(),
+        OptFlags::device.bits(),
         0,
     );
 
@@ -690,9 +697,9 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 }
 
 fn cmd_image_create(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::OptFlags::format.bits()
-        | c::OptFlags::fs.bits()
-        | c::OptFlags::device.bits();
+    let opt_flags = OptFlags::format.bits()
+        | OptFlags::fs.bits()
+        | OptFlags::device.bits();
 
     let mut source: Option<String> = None;
     let mut keep_alloc = false;
@@ -707,10 +714,10 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
 
     let mut dev_label: Option<String> = None;
     let mut dev_fs_size: u64 = 0;
-    let mut dev_opts: c::bch_opts = Default::default();
+    let mut dev_opts: bch_opts = Default::default();
 
-    let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(c::OptId, String)> = Vec::new();
+    let mut fs_opts: bch_opts = Default::default();
+    let mut deferred_opts: Vec<(OptId, String)> = Vec::new();
 
     let mut image_path: Option<String> = None;
 
@@ -749,9 +756,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
-                            if opt.flags.bits() & c::OptFlags::device.bits() != 0 {
+                            if opt.flags.bits() & OptFlags::device.bits() != 0 {
                                 dev_opts.set(opt_id, v);
-                            } else if opt.flags.bits() & c::OptFlags::fs.bits() != 0 {
+                            } else if opt.flags.bits() & OptFlags::fs.bits() != 0 {
                                 fs_opts.set(opt_id, v);
                             }
                         }
@@ -902,7 +909,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     d.fs_size = dev_fs_size;
     d.opts = dev_opts;
     if let Some(l) = dev_label_cstr {
-        d.opt_strs.push((c::OptId::label, l));
+        d.opt_strs.push((OptId::label, l));
     }
 
     image_create_inner(

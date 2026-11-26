@@ -51,7 +51,7 @@
 
 use crate::c;
 use crate::data_structures::fifo::FifoRead;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::Fifo;
@@ -251,7 +251,7 @@ impl StdioRedirect {
         let out = &self.output;
         loop {
             if self.done() {
-                return Err(c::Errcode::EPIPE_thread_with_file_write.into());
+                return Err(Errcode::EPIPE_thread_with_file_write.into());
             }
 
             let wrote = {
@@ -266,7 +266,7 @@ impl StdioRedirect {
             }
 
             if nonblocking {
-                return Err(c::Errcode::EAGAIN_thread_with_file_write.into());
+                return Err(Errcode::EAGAIN_thread_with_file_write.into());
             }
 
             out.wait_interruptible(|| self.has_room(out))?;
@@ -289,8 +289,8 @@ impl StdioRedirect {
                     b.waiting_for_line = true;
                 }
                 nl.map(|nl| Some(nl + 1))
-            }).map_err(|_| BchError::from(c::Errcode::ETIME_thread_with_file_readline))?
-              .ok_or(BchError::from(c::Errcode::EPIPE_thread_with_file_readline))?;
+            }).map_err(|_| BchError::from(Errcode::ETIME_thread_with_file_readline))?
+              .ok_or(BchError::from(Errcode::EPIPE_thread_with_file_readline))?;
 
             if n > line.capacity() {
                 line.clear();
@@ -315,13 +315,13 @@ impl StdioRedirect {
         if !nonblock {
             out.wait_interruptible(|| self.has_data(out))?;
         } else if !self.has_data(out) {
-            return Err(c::Errcode::EAGAIN_thread_with_file_read_user.into());
+            return Err(Errcode::EAGAIN_thread_with_file_read_user.into());
         }
 
         while u.len() != 0 && out.len() != 0 {
             let writeable = u.fault_in_writeable();
             if writeable == 0 {
-                return Err(c::Errcode::EFAULT_thread_with_file_read_user.into());
+                return Err(Errcode::EFAULT_thread_with_file_read_user.into());
             }
 
             let n = out.lock().data.drain_with(writeable, |s| u.copy_to_nofault(s));
@@ -338,12 +338,12 @@ impl StdioRedirect {
 
         while u.len() != 0 {
             if self.done() {
-                return Err(c::Errcode::EPIPE_thread_with_file_write_user.into());
+                return Err(Errcode::EPIPE_thread_with_file_write_user.into());
             }
 
             let readable = u.fault_in_readable();
             if readable == 0 {
-                return Err(c::Errcode::EFAULT_thread_with_file_write_user.into());
+                return Err(Errcode::EFAULT_thread_with_file_write_user.into());
             }
 
             let n = {
@@ -363,7 +363,7 @@ impl StdioRedirect {
             if n != 0 {
                 input.wake();
             } else if nonblock {
-                return Err(c::Errcode::EAGAIN_thread_with_file_write_user.into());
+                return Err(Errcode::EAGAIN_thread_with_file_write_user.into());
             } else {
                 input.wait_interruptible(|| self.has_room(input))?;
             }

@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
 use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo};
@@ -477,11 +476,11 @@ pub struct bch_sb_field_error_entry {
     pub last_error_time: Le64,
 }
 
-#[whole(tail = entries: [c::bch_sb_field_error_entry])]
+#[whole(tail = entries: [bch_sb_field_error_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_errors {
-    pub entries: [c::bch_sb_field_error_entry; 0],
+    pub entries: [bch_sb_field_error_entry; 0],
 }
 
 #[bitfield(Le64)]
@@ -520,11 +519,11 @@ nest! {
     }
 }
 
-#[whole(tail = entries: [c::bch_sb_field_error_entry_v2])]
+#[whole(tail = entries: [bch_sb_field_error_entry_v2])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_errors_v2 {
-    pub entries: [c::bch_sb_field_error_entry_v2; 0],
+    pub entries: [bch_sb_field_error_entry_v2; 0],
 }
 
 pub const BCH_SB_ERROR_ENTRY_V2_NR_MAX: u64 = (1 << 32) - 1;

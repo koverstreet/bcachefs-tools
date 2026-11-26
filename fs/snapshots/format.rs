@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::format::{bch_le128, bch_val};
 use crate::types::{Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, grown, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
 
@@ -12,7 +12,7 @@ pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct Subvolume {
-    pub v: c::bch_val,
+    pub v: bch_val,
     #[members]
     pub flags: SubvolumeFlags,
     pub snapshot: Le32,
@@ -27,7 +27,7 @@ pub struct Subvolume {
      */
     pub creation_parent: Le32,
     pub fs_path_parent: Le32,
-    pub otime: c::bch_le128,
+    pub otime: bch_le128,
 
     pub state: Le32,
     pub pad: Le32,
@@ -66,7 +66,7 @@ pub struct SubvolumeFlags {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct Snapshot {
-    pub v: c::bch_val,
+    pub v: bch_val,
     #[members]
     pub flags: SnapshotFlags,
     pub parent: Le32,
@@ -76,7 +76,7 @@ pub struct Snapshot {
     pub tree: Le32,
     pub depth: Le32,
     pub skip: [Le32; 3],
-    pub btime: c::bch_le128,
+    pub btime: bch_le128,
 
     pub state: Le32,
     pub pad: Le32,
@@ -177,7 +177,7 @@ pub struct SnapshotFlags {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, View, SizedVal)]
 pub struct SnapshotTree {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub master_subvol: Le32,
     pub root_snapshot: Le32,
 }

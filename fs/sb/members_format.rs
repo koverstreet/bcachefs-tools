@@ -2,7 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::c;
+use crate::alloc::accounting_format::DataTypes;
+use crate::format::__uuid_t;
 use crate::types::{Le16, Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
@@ -40,7 +42,7 @@ pub enum MemberErrorType {
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_member {
-    pub uuid: c::__uuid_t,
+    pub uuid: __uuid_t,
     pub nbuckets: Le64, /* device size */
     pub first_bucket: Le16, /* index of first bucket used */
     pub bucket_size: Le16, /* sectors */
@@ -51,8 +53,8 @@ pub struct bch_member {
     #[members]
     pub flags: bch_member_flags,
     pub iops: [Le32; 4],
-    pub errors: [Le64; c::MemberErrorType::NR as usize],
-    pub errors_at_reset: [Le64; c::MemberErrorType::NR as usize],
+    pub errors: [Le64; MemberErrorType::NR as usize],
+    pub errors_at_reset: [Le64; MemberErrorType::NR as usize],
     pub errors_reset_time: Le64,
     pub seq: Le64,
     pub btree_allocated_bitmap: Le64,
@@ -99,8 +101,8 @@ pub struct bch_member_flags {
     /* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
     __:                             u10,
     discard:                        bool,
-    #[bits(5, from = c::DataTypes::from_bits_retain)]
-    data_allowed:                   c::DataTypes,
+    #[bits(5, from = DataTypes::from_bits_retain)]
+    data_allowed:                   DataTypes,
     group:                          u8,
     durability:                     u2,
     freespace_initialized:          bool,
@@ -141,7 +143,7 @@ pub enum MemberInitialized {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v1 {
-    pub _members: [c::bch_member; 0], //Members are now variable size
+    pub _members: [bch_member; 0], //Members are now variable size
 }
 
 #[whole(tail = _members: [u8])]
@@ -150,5 +152,5 @@ pub struct bch_sb_field_members_v1 {
 pub struct bch_sb_field_members_v2 {
     pub member_bytes: Le16, //size of single member entry
     pub pad: [u8; 6],
-    pub _members: [c::bch_member; 0],
+    pub _members: [bch_member; 0],
 }

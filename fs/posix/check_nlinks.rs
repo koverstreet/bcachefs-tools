@@ -18,6 +18,8 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
 use crate::c;
+use crate::posix::inode_format::InodeFlags;
+use crate::posix::inode::bch_inode_unpacked;
 use crate::posix::check::SnapshotsSeen;
 use crate::posix::dirent::{Dirent, DirentTarget};
 use crate::errcode::{Errcode, BchError};
@@ -78,7 +80,7 @@ fn inc_link(
     }
 }
 
-fn is_dir(u: &c::bch_inode_unpacked) -> bool {
+fn is_dir(u: &bch_inode_unpacked) -> bool {
     u.bi_mode as u32 & c::S_IFMT == c::S_IFDIR
 }
 
@@ -179,7 +181,7 @@ fn check_nlinks_update_inode(
     let link = links[*idx];
 
     let nlink = u.nlink();
-    let unlinked = u.flag(c::InodeFlags::unlinked);
+    let unlinked = u.flag(InodeFlags::unlinked);
 
     if fsck_err_on!(t, nlink != link.count || (unlinked && u.bi_nlink != 0),
                     id::inode_wrong_nlink,

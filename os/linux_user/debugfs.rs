@@ -13,8 +13,7 @@ use std::ffi::CString;
 use std::io::Write;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::kernel::PAGE_SIZE;
 use crate::util::alloc::KBox;
 
@@ -158,7 +157,7 @@ pub fn read_or_html_dirlist(path: &str, out: &mut Vec<u8>) -> Result<(), BchErro
     for name in path.split('/').filter(|n| !n.is_empty()) {
         dir = tree.children(dir)
             .find(|d| d.name.to_bytes() == name.as_bytes())
-            .ok_or(BchError::from(c::Errcode::ENOENT_debugfs_lookup))?;
+            .ok_or(BchError::from(Errcode::ENOENT_debugfs_lookup))?;
     }
 
     if let Some(f) = unsafe { dir.as_ref() }.and_then(|d| d.file.as_ref()) {

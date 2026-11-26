@@ -6,9 +6,8 @@ use core::mem::offset_of;
 
 use super::format::{bkey_fields, FIELDS};
 use super::BKEY_U64S;
-use crate::c;
 use crate::format::BkeyField::{self, *};
-use crate::format::bkey_format;
+use crate::format::{bkey_format, KEY_FORMAT_CURRENT};
 use crate::types::field_size;
 
 struct Emit<'a> {
@@ -204,7 +203,7 @@ impl bkey_format {
         out.i(&[0x8b, 0x06]);
 
         /* add eax, BKEY_U64s - format->key_u64s */
-        out.i(&[0x05, (BKEY_U64S as u8).wrapping_sub(self.key_u64s), c::KEY_FORMAT_CURRENT as u8, 0, 0]);
+        out.i(&[0x05, (BKEY_U64S as u8).wrapping_sub(self.key_u64s), KEY_FORMAT_CURRENT as u8, 0, 0]);
 
         /* and eax, imm32: mask out k->pad: */
         out.i(&[0x25, 0xff, 0xff, 0xff, 0]);
@@ -215,8 +214,8 @@ impl bkey_format {
         macro_rules! compile_fields {
             ($( ($id:ident, $($field:ident).+) ),* $(,)?) => {
                 $(compile_bkey_field(self, &mut out, $id,
-                                     offset_of!(c::bkey, $($field).+) as u8,
-                                     field_size(|k: c::bkey| k.$($field).+) as usize,
+                                     offset_of!(crate::format::bkey, $($field).+) as u8,
+                                     field_size(|k: crate::format::bkey| k.$($field).+) as usize,
                                      &mut eax_zeroed);)*
             };
         }

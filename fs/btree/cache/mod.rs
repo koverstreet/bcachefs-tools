@@ -105,12 +105,16 @@ use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeyI, BkeySC, BkeyVal, 
 use crate::data_structures::dst_room::DstRoom;
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
-use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::node::{BtreeNode, NodeContents, BtreeNodeFlags};
 use crate::util::alloc::{Box, Global};
 use crate::util::place::{Contained, PlacedDrop};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::util::sleep::Sleep;
 use crate::c;
+use crate::btree::bch_fs_btree;
+use crate::btree::bbpos::bbpos;
+use crate::data::extents_format::BtreePtrV2;
+use crate::data_structures::fast_list::fast_list;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
 use crate::prt;
@@ -122,8 +126,8 @@ use crate::util::{HumanReadable, Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
-use crate::format::{Btree, BkeyType};
-use crate::btree::interior::{BtreeRoots, BtreeRootsLive};
+use crate::format::{Btree, BkeyType, btree_node};
+use crate::btree::interior::{BtreeRoots, BtreeRootsLive, BTREE_ROOT_LEVEL_BITS};
 use core::sync::atomic::{AtomicBool, AtomicIsize};
 use crate::locking::{ExclusiveGuard, Locked, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 use crate::types::CacheAligned;
@@ -183,7 +187,7 @@ pub struct btree_cache_list {
 
 /// live[idx]'s shrinker: not bc->lock's, as the lists are - the shrinker
 /// runs without it.
-#[placed(c::bch_fs_btree_cache.shrinkers[], index = idx: u32)]
+#[placed(bch_fs_btree_cache.shrinkers[], index = idx: u32)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
@@ -196,7 +200,7 @@ pub struct btree_cache_shrinker {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct BtreeCacheLists {
-    pub live: [c::btree_cache_list; 2],
+    pub live: [btree_cache_list; 2],
     pub freeable: BtreeNodeList,
     pub freed_pcpu: BtreeNodeList,
     pub freed_nonpcpu: BtreeNodeList,
@@ -204,15 +208,15 @@ pub struct BtreeCacheLists {
     pub nr_vmalloc: usize,
     pub nr_by_btree: [usize; Btree::NR as usize],
 
-    pub pinned_nodes_start: c::bbpos,
-    pub pinned_nodes_end: c::bbpos,
+    pub pinned_nodes_start: bbpos,
+    pub pinned_nodes_end: bbpos,
     /* btree id mask: 0 for leaves, 1 for interior */
     pub pinned_nodes_mask: [u64; 2],
 
     /* shrinker stats */
     pub nr_freed: usize,
     pub nr_requested: usize,
-    pub not_freed: [u64; c::BtreeCacheNotFreedReason::NR as usize],
+    pub not_freed: [u64; BtreeCacheNotFreedReason::NR as usize],
 }
 
 /// bc->lock: its holder never enters reclaim, which would take it again
@@ -257,7 +261,7 @@ impl BtreeCacheLive {
     }
 }
 
-#[placed(c::bch_fs_btree.cache)]
+#[placed(bch_fs_btree.cache)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
@@ -286,7 +290,7 @@ pub struct bch_fs_btree_cache {
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
     pub lock: crate::util::place::Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
     #[pin]
-    pub shrinkers: [c::btree_cache_shrinker; 2],
+    pub shrinkers: [btree_cache_shrinker; 2],
 
     /*
      * Every struct btree the cache has, whatever its state: to walk them all
@@ -295,8 +299,8 @@ pub struct bch_fs_btree_cache {
      * aren't the cache's, and are freed while we run: they're not on it.
      */
     #[pin]
-    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_btree_cache_init))]
-    pub nodes: c::fast_list,
+    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_fs_btree_cache_init))]
+    pub nodes: fast_list,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     #[pin]
@@ -349,12 +353,12 @@ pub struct btree_evicted_size {
 }
 
 pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
-pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << c::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
+pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << BTREE_EVICTED_SIZE_HASH_BITS) - 1;
 
 
-impl c::btree_evicted_size {
+impl btree_evicted_size {
     fn pack(hash: u64, live_u64s: u16) -> u64 {
-        ((hash & c::BTREE_EVICTED_SIZE_HASH_MASK) << 16) | u64::from(live_u64s)
+        ((hash & BTREE_EVICTED_SIZE_HASH_MASK) << 16) | u64::from(live_u64s)
     }
 
     fn slot(&self, hash: u64) -> Option<&AtomicU64> {
@@ -372,7 +376,7 @@ impl c::btree_evicted_size {
     /// The live u64s recorded for @hash, if its slot still has them.
     pub fn lookup(&self, hash: u64) -> Option<u16> {
         let entry = self.slot(hash)?.load(Relaxed);
-        ((entry >> 16) == (hash & c::BTREE_EVICTED_SIZE_HASH_MASK)).then_some(entry as u16)
+        ((entry >> 16) == (hash & BTREE_EVICTED_SIZE_HASH_MASK)).then_some(entry as u16)
     }
 
     /// The table for @fs, sized by its capacity: for btree_init_rw(). Made
@@ -407,7 +411,7 @@ impl c::btree_evicted_size {
 pub fn btree_ptr_hash_val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> u64 {
     let offset = match k.k.key_type() {
         BkeyType::btree_ptr    => 0,
-        BkeyType::btree_ptr_v2 => offset_of!(c::BtreePtrV2, repr.seq),
+        BkeyType::btree_ptr_v2 => offset_of!(BtreePtrV2, repr.seq),
         _ => return 0,
     };
     k.val_bytes().get(offset..offset + 8)
@@ -426,7 +430,7 @@ pub fn node_key_hash_val(k: &DstRoom<BkeyI>) -> u64 {
 
 pub const BTREE_WRITE_IO_LIMIT: u32 = 64;
 
-impl c::bch_fs_btree_cache {
+impl bch_fs_btree_cache {
     pub fn update_throttle(&self) {
         let (live, dirty) = (self.lock.nr_live(), self.lock.nr_dirty());
         let throttle = self.nr_in_flight_inner.load(Relaxed) > BTREE_WRITE_IO_LIMIT as isize ||
@@ -454,18 +458,18 @@ impl BtreeNode {
     /// current bits - passing it to transition_state_locked() is a no-op when
     /// the node is already in the right state, so callers don't need "do we
     /// need to transition?" conditionals.
-    pub fn live_state(&self) -> c::BtreeNodeCacheState {
+    pub fn live_state(&self) -> BtreeNodeCacheState {
         let f = self.flags.load();
         if f.dirty() || f.write_in_flight() {
-            c::BtreeNodeCacheState::DIRTY
+            BtreeNodeCacheState::DIRTY
         } else {
-            c::BtreeNodeCacheState::CLEAN
+            BtreeNodeCacheState::CLEAN
         }
     }
 }
 
 impl BtreeNode {
-    pub fn wait_on_flag(&self, flag: fn(&c::BtreeNodeFlags) -> bool) {
+    pub fn wait_on_flag(&self, flag: fn(&BtreeNodeFlags) -> bool) {
         let Ok(()) = self.flags.wait_until(Sleep::UNINTERRUPTIBLE.io(), |f| !flag(&f));
     }
 }
@@ -543,7 +547,7 @@ impl BtreeTrans<'_> {
 /// What a node costs to recreate, by live list: a pinned one, 4x.
 const SEEKS_MULT: [c_int; 2] = [1, 4];
 
-impl Shrink for c::btree_cache_shrinker {
+impl Shrink for btree_cache_shrinker {
     fn shrinker(&self) -> &Shrinker<Self> {
         &self.shrink
     }
@@ -557,13 +561,13 @@ impl Shrink for c::btree_cache_shrinker {
     }
 }
 
-impl PlacedDrop for c::btree_cache_shrinker {
+impl PlacedDrop for btree_cache_shrinker {
     unsafe fn placed_drop(&self) {
         unsafe { self.shrink.unregister() }
     }
 }
 
-impl c::bch_fs_btree_cache {
+impl bch_fs_btree_cache {
     pub fn shrinkers_register(&self, fs: &Fs) -> Result<(), BchError> {
         let seeks = c_int::from(fs.opts.btree_cache_shrinker_seeks.get());
         let lists = ["btree_cache", "btree_cache-pinned"].into_iter().zip(SEEKS_MULT);
@@ -611,7 +615,7 @@ pub fn btree_pos_to_text(out: &mut Printbuf, fs: &Fs, btree: Btree, level: c_uin
     prt!(out, "{btree} level {level}/");
     let root = fs.btree.cache.roots.roots_b.get(btree.0 as usize).map_or(0, |r| r.get());
     if root != 0 {
-        prt!(out, "{}", root & ((1 << c::BTREE_ROOT_LEVEL_BITS) - 1));
+        prt!(out, "{}", root & ((1 << BTREE_ROOT_LEVEL_BITS) - 1));
     } else {
         prt!(out, "(unknown)");
     }
@@ -643,7 +647,7 @@ pub fn btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode, contents: 
     prt!(out, "    unpack fn len: {}\n", contents.unpack_fn_len);
     prt!(out, "    bytes used {}/{} ({}% full)\n",
          usize::from(nr.live_u64s) * size_of::<u64>(),
-         b.buf_bytes() - size_of::<Head<c::btree_node>>(),
+         b.buf_bytes() - size_of::<Head<btree_node>>(),
          usize::from(nr.live_u64s) * 100 / fs.btree_max_u64s());
     prt!(out, "    sib u64s: {}, {} (merge threshold {})\n",
          contents.sib_u64s[0].get(), contents.sib_u64s[1].get(), fs.btree.foreground_merge_threshold);
@@ -657,7 +661,7 @@ fn prt_btree_cache_line(out: &mut Printbuf, fs: &Fs, label: &str, nr: usize) {
     prt!(out, "{label}\t{} ({nr})\n", HumanReadable(nr as u64 * u64::from(fs.opts.btree_node_size.get())));
 }
 
-impl ToText for c::bch_fs_btree_cache {
+impl ToText for bch_fs_btree_cache {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
         let fs = self.container().container();
@@ -692,7 +696,7 @@ impl ToText for c::bch_fs_btree_cache {
         prt!(out, "not freed:\n");
 
         for (i, &nr) in l.not_freed.iter().enumerate() {
-            prt!(out, "  {}\t{nr}\n", c::BtreeCacheNotFreedReason::from_bits(i as u32));
+            prt!(out, "  {}\t{nr}\n", BtreeCacheNotFreedReason::from_bits(i as u32));
         }
     }
 }

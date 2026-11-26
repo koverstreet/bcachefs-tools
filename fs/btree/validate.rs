@@ -2,12 +2,15 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_header_validate, bkey_val_validate, AllTypes, BkeyI, BkeyP, BkeySC, FamilyVal,
-                         ValidateFlags, BKEY_U64S};
+                         ValidateFlags, BKEY_U64S, bkey_validate_context, BkeyValidateFrom};
 use crate::btree::{compat, node::{BtreeNode, NodeContents}, read::BsetHolder};
-use crate::c::{self, Errcode as e};
+use crate::data::extents::{bch_io_failures, ReadFlags};
+use crate::data::extents_format::BtreePtrV2;
+use crate::sb::members_format::MemberErrorType;
+use crate::errcode::Errcode as e;
 use crate::data::ptrs::BkeyVRead;
 use crate::errcode::BchError;
-use crate::format::{BkeyType, Btree, MetadataVersion};
+use crate::format::{BkeyType, Btree, MetadataVersion, bkey, bset, btree_node, KEY_FORMAT_CURRENT};
 use crate::fs::{Dev, Fs};
 use crate::init::{error::{id, BkeyValidate}, passes::RecoveryPass};
 use crate::sb::errors::{FsckFlags, SbErrorId};
@@ -22,7 +25,7 @@ use core::cmp::Ordering;
 pub enum NodeIo<'a> {
     Read {
         ca:      &'a Dev,
-        failed:  Option<&'a mut c::bch_io_failures>,
+        failed:  Option<&'a mut bch_io_failures>,
         err_msg: &'a mut Printbuf,
     },
     Write,
@@ -45,22 +48,22 @@ pub struct ErrAt {
 impl ErrAt {
     pub const NODE: Self = Self { bset_u64s: None, key: None };
 
-    pub fn bset(i: &Head<c::bset>) -> Self {
+    pub fn bset(i: &Head<bset>) -> Self {
         Self { bset_u64s: Some(i.u64s()), key: None }
     }
 
     /// The key at byte @at of what holds @i.
-    pub fn key(i: &Head<c::bset>, at: usize) -> Self {
+    pub fn key(i: &Head<bset>, at: usize) -> Self {
         Self { bset_u64s: Some(i.u64s()), key: Some(at) }
     }
 }
 
 fn ptr_sectors_written(k: BkeySC<'_>) -> u32 {
-    k.arm::<c::BtreePtrV2>().map_or(0, |v2| v2.v().sectors_written.get().into())
+    k.arm::<BtreePtrV2>().map_or(0, |v2| v2.v().sectors_written.get().into())
 }
 
 fn ptr_range_updated(k: &BkeyI) -> bool {
-    BkeySC::from(k).arm::<c::BtreePtrV2>().is_some_and(|v2| v2.v().range_updated())
+    BkeySC::from(k).arm::<BtreePtrV2>().is_some_and(|v2| v2.v().range_updated())
 }
 
 fn err_msg(out: &mut Printbuf, ca: Option<&Dev>, b: &BtreeNode, at: ErrAt, msg: &dyn ToText) {
@@ -118,7 +121,7 @@ impl NodeValidate<'_> {
                 err_msg(out, Some(ca), b, at, msg);
 
                 let have_retry = matches!(BkeySC::from(&*b.key_peek())
-                                              .pick_read_device(fs, failed.as_deref(), 0, c::ReadFlags::empty()),
+                                              .pick_read_device(fs, failed.as_deref(), 0, ReadFlags::empty()),
                                           Ok(Some(_)));
 
                 /*
@@ -188,7 +191,7 @@ impl NodeValidate<'_> {
     pub fn csum_bad(&mut self) {
         let fs = self.fs;
         if let NodeIo::Read { ca, failed, .. } = &mut self.io {
-            ca.io_error(c::MemberErrorType::checksum);
+            ca.io_error(MemberErrorType::checksum);
 
             if let Some(f) = failed.as_deref_mut() {
                 if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err_keys_lost)) {
@@ -227,7 +230,7 @@ pub fn bkey_in_btree_node(v: &BkeyValidate<'_, '_>, contents: &NodeContents) -> 
 }
 
 /* A node header as a machine of @big_endian wrote it, made this one's, or back */
-fn compat_btree_node(big_endian: bool, bn: &mut c::btree_node<Unvalidated>) {
+fn compat_btree_node(big_endian: bool, bn: &mut btree_node<Unvalidated>) {
     if big_endian != cfg!(target_endian = "big") {
         bn.min_key.swab();
         bn.max_key.swab();
@@ -296,7 +299,7 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents:
 
     if let Some(bn) = n.node() {
         let big_endian = bn.keys.big_endian();
-        let v2 = BkeySC::from(b.key(contents)).arm::<c::BtreePtrV2>();
+        let v2 = BkeySC::from(b.key(contents)).arm::<BtreePtrV2>();
 
         /* These indicate that we read the wrong btree node: */
 
@@ -368,13 +371,13 @@ pub fn validate_bset<H: BsetHolder + ?Sized>(v: &mut NodeValidate<'_>, contents:
     Ok(())
 }
 
-pub(crate) fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> c::bkey_validate_context {
-    let mut from = c::bkey_validate_context {
+pub(crate) fn validate_from(b: &BtreeNode, flags: ValidateFlags) -> bkey_validate_context {
+    let mut from = bkey_validate_context {
         level: b.c.level.get(),
         btree: Btree(b.c.btree_id.get().into()),
         ..Default::default()
     };
-    from.bits.set_from(c::BkeyValidateFrom::btree_node);
+    from.bits.set_from(BkeyValidateFrom::btree_node);
     from.bits.set_flags(flags);
     from
 }
@@ -385,7 +388,7 @@ pub fn btree_node_bkey_val_validate(fs: &Fs, b: &BtreeNode, k: BkeySC<'_>,
 }
 
 fn bset_key_validate(fs: &Fs, contents: &NodeContents, k: BkeySC<'_>, updated_range: bool,
-                     from: &c::bkey_validate_context) -> Result<(), BchError> {
+                     from: &bkey_validate_context) -> Result<(), BchError> {
     let v = BkeyValidate::new(fs, k, from);
 
     bkey_header_validate(&v)?;
@@ -398,11 +401,11 @@ fn bset_key_validate(fs: &Fs, contents: &NodeContents, k: BkeySC<'_>, updated_ra
     Ok(())
 }
 
-fn bkey_packed_valid(fs: &Fs, b: &BtreeNode, contents: &NodeContents, i: &c::bset<Unvalidated>,
+fn bkey_packed_valid(fs: &Fs, b: &BtreeNode, contents: &NodeContents, i: &bset<Unvalidated>,
                      at: usize) -> bool {
     let Some(k) = i.key_at(at) else { return false };
 
-    if k.format() as u32 > c::KEY_FORMAT_CURRENT {
+    if k.format() as u32 > KEY_FORMAT_CURRENT {
         return false;
     }
 
@@ -410,7 +413,7 @@ fn bkey_packed_valid(fs: &Fs, b: &BtreeNode, contents: &NodeContents, i: &c::bse
         return false;
     }
 
-    let mut tmp = c::bkey::default();
+    let mut tmp = bkey::default();
     let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
     bkey_header_validate(&BkeyValidate::new(fs, u, &validate_from(b, ValidateFlags::silent))).is_ok()
 }
@@ -423,7 +426,7 @@ fn btree_node_read_bkey_cmp(contents: &NodeContents, l: &BkeyP, r: &BkeyP) -> Or
 }
 
 fn bkey_compat(v: &NodeValidate<'_>, ks: &BsetKeys<'_>, k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
-    if ks.version < c::MetadataVersion::CURRENT ||
+    if ks.version < MetadataVersion::CURRENT ||
        ks.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         unsafe {
@@ -439,7 +442,7 @@ struct BsetKeys<'a> {
     version:       MetadataVersion,
     big_endian:    bool,
     updated_range: bool,
-    from:          c::bkey_validate_context,
+    from:          bkey_validate_context,
 }
 
 enum Key {
@@ -449,14 +452,14 @@ enum Key {
 
 /// The key at byte @at of @i checked, made this machine's - or the disk's, to
 /// write - and against the key before it, at @prev.
-fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<Unvalidated>,
+fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut bset<Unvalidated>,
                   at: usize, prev: Option<usize>) -> Result<Key, BchError> {
     let (fs, contents) = (v.fs, ks.contents);
     let h = i.key_header(at).expect("a key's first word, before the end of its bset");
     let (u64s, format, key_u64s) = (h.u64s(), h.format(), h.key_u64s(&contents.format));
     let here = ErrAt::key(i, ks.keys_at + at);
 
-    if btree_err_on!(v, format as u32 > c::KEY_FORMAT_CURRENT,
+    if btree_err_on!(v, format as u32 > KEY_FORMAT_CURRENT,
                      FsckFlags::CAN_FIX,
                      here,
                      id::btree_node_bkey_bad_format,
@@ -480,7 +483,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
         bkey_compat(v, ks, k);
     }
 
-    let mut tmp = c::bkey::default();
+    let mut tmp = bkey::default();
     let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
 
     match bset_key_validate(fs, contents, u, ks.updated_range, &ks.from) {
@@ -513,8 +516,8 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut c::bset<U
 
 /// The bad key at byte @at of @i dropped: its @u64s, or if they can't be
 /// trusted, up to the next good key - or the rest of the bset.
-fn bset_key_drop<'i>(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &'i mut c::bset<Unvalidated>,
-                     at: usize, u64s: usize) -> &'i mut c::bset<Unvalidated> {
+fn bset_key_drop<'i>(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &'i mut bset<Unvalidated>,
+                     at: usize, u64s: usize) -> &'i mut bset<Unvalidated> {
     let (fs, b) = (v.fs, v.b);
     let mut next_good_key = u64s;
 
@@ -525,7 +528,7 @@ fn bset_key_drop<'i>(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &'i mut c::
          * do
          */
 
-        let keys: &c::bset<Unvalidated> = i;
+        let keys: &bset<Unvalidated> = i;
         if !bkey_packed_valid(fs, b, ks.contents, keys, at + next_good_key * 8) {
             let rest = (keys.u64s() * 8 - at) / 8;
 

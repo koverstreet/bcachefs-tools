@@ -15,8 +15,7 @@
 //! is read under RCU, by the in-flight listing, while it's in use.
 
 use crate::btree::bkey::{BkeyI, BkeySC};
-use crate::c;
-use crate::format::Btree;
+use crate::format::{Btree, bkey};
 use core::mem::size_of;
 use crate::data_structures::dst_room::DstRoom;
 use crate::data_structures::dst_room::InlineOrBoxed;
@@ -47,10 +46,10 @@ impl DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S, HEAP_U64S>> {
 }
 
 /// Copies a key - header @k, value @val - to the front of @dst.
-pub(crate) fn copy_key(dst: &mut [u64], k: &c::bkey, val: &[u8]) {
+pub(crate) fn copy_key(dst: &mut [u64], k: &bkey, val: &[u8]) {
     let dst = plain_bytes_mut(dst);
-    dst[..size_of::<c::bkey>()].copy_from_slice(plain_bytes(k));
-    dst[size_of::<c::bkey>()..][..val.len()].copy_from_slice(val);
+    dst[..size_of::<bkey>()].copy_from_slice(plain_bytes(k));
+    dst[size_of::<bkey>()..][..val.len()].copy_from_slice(val);
 }
 
 impl<'a> From<&'a BkeyBuf> for BkeySC<'a> {

@@ -12,9 +12,9 @@ use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::traverse::level_init_iter;
-use crate::c;
+use crate::btree::update::btree_insert_entry;
 use crate::errcode::Errcode;
-use crate::format::Btree;
+use crate::format::{Btree, BTREE_MAX_DEPTH};
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::Printbuf;
@@ -76,7 +76,7 @@ impl BtreeTrans<'_> {
     }
 
     pub(in crate::btree) fn revalidate_updates_in_node(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>,
-                                                       updates: &mut [c::btree_insert_entry],
+                                                       updates: &mut [btree_insert_entry],
                                                        b: LockedNode<'_, BtreeNode>) {
         let data = b.contents().data();
         let btree = Btree(b.c.btree_id.get().into());
@@ -153,7 +153,7 @@ impl BtreeTrans<'_> {
      */
     pub(crate) fn node_forget(&self, paths: &mut Paths<'_>, b: *const BtreeNode) {
         for idx in self.path_idxs() {
-            for l in 0..c::BTREE_MAX_DEPTH as usize {
+            for l in 0..BTREE_MAX_DEPTH as usize {
                 if paths[idx].l[l].b.is(b.cast()) && !paths[idx].locked(l) {
                     paths[idx].l[l].b = NodePtr::err(Errcode::no_btree_node_drop.into());
                 }

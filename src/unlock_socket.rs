@@ -30,7 +30,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use bcachefs_kernel::c::bch_sb_handle;
+use bcachefs_kernel::init::dev::bch_sb_handle;
 use log::{debug, info};
 use uuid::Uuid;
 use zeroize::Zeroizing;

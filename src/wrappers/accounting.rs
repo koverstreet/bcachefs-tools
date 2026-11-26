@@ -1,7 +1,8 @@
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey::AnyKey;
 use anyhow::anyhow;
-use bcachefs_kernel::c;
+use bcachefs_kernel::alloc::accounting_format::Accounting;
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_query_accounting, bch_ioctl_query_accounting_v2};
 use bcachefs_kernel::format::MetadataVersion;
 use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
@@ -61,7 +62,7 @@ impl BcachefsHandle {
 
     fn query_accounting_v2(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         let buf = grow_on_erange(1 << 10, MAX_REPLY, |bytes| {
-            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting_v2>::with_trailing_bytes(bytes);
+            let mut buf = IoctlBuf::<bch_ioctl_query_accounting_v2>::with_trailing_bytes(bytes);
             buf.hdr_mut().accounting_u64s = (bytes / 8) as u32;
             buf.hdr_mut().accounting_types_mask = type_mask;
             unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING_v2>(&self.ioctl_fd(), buf.as_mut_ptr())? };
@@ -81,7 +82,7 @@ impl BcachefsHandle {
 
     fn query_accounting_v1(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         let buf = grow_on_erange(1 << 10, MAX_REPLY, |bytes| {
-            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting>::with_trailing_bytes(bytes);
+            let mut buf = IoctlBuf::<bch_ioctl_query_accounting>::with_trailing_bytes(bytes);
             buf.hdr_mut().accounting_u64s = (bytes / 8) as u32;
             buf.hdr_mut().accounting_types_mask = type_mask;
             unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(&self.ioctl_fd(), buf.as_mut_ptr())? };
@@ -114,7 +115,7 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
     UnvalidatedEntries::<AnyKey<Unvalidated>>::new(data)
         .map(|k| {
             let k = k.map_err(|e| anyhow!("QUERY_ACCOUNTING reply: {e}"))?;
-            let a = k.arm::<c::Accounting>().ok_or_else(|| {
+            let a = k.arm::<Accounting>().ok_or_else(|| {
                 anyhow!("QUERY_ACCOUNTING reply: a key of type {} at {}", k.k.type_, k.k.p)
             })?;
 

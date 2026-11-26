@@ -21,14 +21,23 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::AllocWait;
+use crate::alloc::foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::c::Errcode;
+use crate::alloc::buckets::ReservationFlags;
+use crate::alloc::write_point::write_point_specifier;
+use crate::btree::bbpos::bbpos;
+use crate::btree::update::TransCommitFlags;
+use crate::c::rcu_head;
+use crate::data::extents::{extent_ptr_decoded, ReadFlags};
+use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
+use crate::data::write::{bch_write_op, WriteFlags};
+use crate::opts::bch_inode_opts;
+use crate::errcode::Errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, extent_ptr_durability,
                                BkeyVDurability};
 use crate::data::moving::Moving;
@@ -53,11 +62,11 @@ use core::ffi::{c_int, c_uint};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{MaybeZeroable, bitfield, bch_enum, BitfieldMembers};
-use c::DataUpdateType as Type;
+use self::DataUpdateType as Type;
 use crate::data::read::{ReadFor, ReadDone, Rbio};
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
-use crate::format::{Bpos, Btree, CompressionType};
+use crate::format::{Bpos, Btree, CompressionType, BCH_BKEY_PTRS_MAX, CsumType};
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -86,7 +95,7 @@ nest! {
     #[repr(C)]
     #[derive(Clone, Copy, MaybeZeroable, BitfieldMembers)]
     pub struct data_update_opts {
-        pub type_: c::DataUpdateType,
+        pub type_: DataUpdateType,
         pub ptrs_io_error: u16,
         pub ptrs_kill: u16,
         pub ptrs_kill_ec: u16,
@@ -101,9 +110,9 @@ nest! {
         },
 
         pub read_dev: c_uint,
-        pub read_flags: c::ReadFlags,
-        pub write_flags: c::WriteFlags,
-        pub commit_flags: c::TransCommitFlags,
+        pub read_flags: ReadFlags,
+        pub write_flags: WriteFlags,
+        pub commit_flags: TransCommitFlags,
     }
 }
 
@@ -126,27 +135,27 @@ pub struct data_update_index {
     /* extent being updated: */
     pub btree_id: Btree,
     pub k: BkeyBuf,
-    pub opts: c::data_update_opts,
+    pub opts: data_update_opts,
     pub ctxt: Option<BackRef<crate::data::moving::MovingContext>>,
 }
 
 // borrowed by its write, on whatever thread that runs: @ctxt, its one
 // pointer, is to a moving context that outlives the update
-unsafe impl Sync for c::data_update_index {}
+unsafe impl Sync for data_update_index {}
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct data_update {
-    pub rcu: c::rcu_head,
-    pub index: c::data_update_index,
+    pub rcu: rcu_head,
+    pub index: data_update_index,
 
     /* read by the in-flight listing, racily */
     pub read_done: AtomicBool,
     /* its key in c->update_table, while it's in: Held's in_flight */
-    pub in_flight_key: c::data_update_key,
+    pub in_flight_key: data_update_key,
 
     pub rbio: Rbio,
-    pub op: c::bch_write_op,
+    pub op: bch_write_op,
     /* the bio the write's of, owning the pages the read reads into */
     pub pages: Bio<Pages<'static>>,
 }
@@ -178,34 +187,34 @@ pub fn fail_should_trace(type_: Type, e: BchError) -> bool {
 
 // ── In flight ────────────────────────────────────────────────────────────
 
-pub(crate) type InFlightTable = Cuckoo<Entry<c::data_update_key>>;
+pub(crate) type InFlightTable = Cuckoo<Entry<data_update_key>>;
 
 /// An update's place in the in-flight table, at its in_flight_key.
-pub(crate) type InFlightReg = Registration<c::data_update_key, c::data_update_key>;
+pub(crate) type InFlightReg = Registration<data_update_key, data_update_key>;
 
-impl c::data_update_key {
-    fn new(pos: c::bbpos, type_: Type) -> Self {
-        c::data_update_key { btree: pos.btree, pos: pos.pos, copygc: type_ == Type::copygc }
+impl data_update_key {
+    fn new(pos: bbpos, type_: Type) -> Self {
+        data_update_key { btree: pos.btree, pos: pos.pos, copygc: type_ == Type::copygc }
     }
 }
 
 impl Fs {
     /// Whether an update in flight at @pos conflicts with a new one of @type_:
     /// a new copygc update conflicts only with copygc, anything else with any.
-    pub fn data_update_in_flight(&self, pos: c::bbpos, type_: Type) -> bool {
-        let key = c::data_update_key::new(pos, type_);
+    pub fn data_update_in_flight(&self, pos: bbpos, type_: Type) -> bool {
+        let key = data_update_key::new(pos, type_);
         self.update_table.contains(&key) ||
-            (!key.copygc && self.update_table.contains(&c::data_update_key { copygc: true, ..key }))
+            (!key.copygc && self.update_table.contains(&data_update_key { copygc: true, ..key }))
     }
 
     /// Adds @m to the in-flight table, or fails with data_update_fail_in_flight.
     /// If the table can't grow, @m goes ahead untracked rather than failing.
-    pub fn data_update_in_flight_add(&self, m: &mut c::data_update, pos: c::bbpos)
+    pub fn data_update_in_flight_add(&self, m: &mut data_update, pos: bbpos)
         -> Result<Option<InFlightReg>, BchError>
     {
         let type_ = m.index.opts.type_;
         if !self.data_update_in_flight(pos, type_) {
-            m.in_flight_key = c::data_update_key::new(pos, type_);
+            m.in_flight_key = data_update_key::new(pos, type_);
             // SAFETY: an update is freed a grace period after it's done, and
             // in_flight_key is written only here, before it's inserted; the
             // table is the filesystem's, which outlives its updates
@@ -231,7 +240,7 @@ impl Fs {
 pub(crate) struct Held {
     in_flight: Option<InFlightReg>,
     nocow:     Option<nocow_locking::Locked>,
-    devs:      [Option<DevRef>; c::BCH_BKEY_PTRS_MAX as usize],
+    devs:      [Option<DevRef>; BCH_BKEY_PTRS_MAX as usize],
 }
 
 // ── To text ──────────────────────────────────────────────────────────────
@@ -245,8 +254,8 @@ pub(crate) fn ptr_bits_to_text(out: &mut Printbuf, bits: u16, name: &str) {
 
 impl Fs {
     #[cold]
-    pub fn data_update_opts_to_text(&self, out: &mut Printbuf, io_opts: &c::bch_inode_opts,
-                                    data_opts: &c::data_update_opts) {
+    pub fn data_update_opts_to_text(&self, out: &mut Printbuf, io_opts: &bch_inode_opts,
+                                    data_opts: &data_update_opts) {
         if out.nr_tabstops() == 0 {
             out.tabstop_push(20);
         }
@@ -276,10 +285,10 @@ impl Fs {
 }
 
 
-impl c::data_update_index {
+impl data_update_index {
     /// The update, @op its write.
     #[cold]
-    pub(crate) fn to_text(&self, out: &mut Printbuf, op: &c::bch_write_op) {
+    pub(crate) fn to_text(&self, out: &mut Printbuf, op: &bch_write_op) {
         let fs = op.fs();
         fs.data_update_opts_to_text(out, &op.opts, &self.opts);
         out.newline();
@@ -292,7 +301,7 @@ impl c::data_update_index {
     }
 }
 
-impl ToText for c::data_update {
+impl ToText for data_update {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
         self.index.to_text(out, &self.op);
@@ -300,7 +309,7 @@ impl ToText for c::data_update {
 }
 
 #[cold]
-pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
+pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &data_update) {
     let fs = m.op.fs();
     prt!(out, "{}", BkeySC::from(m.index.k.as_ref()).to_text(fs));
     out.newline();
@@ -329,7 +338,7 @@ pub(crate) fn is_scrub(t: Type) -> bool {
     matches!(t, Type::scrub | Type::scrub_no_repair)
 }
 
-impl c::data_update_opts {
+impl data_update_opts {
     /// A checksummed extent with unchecksummed pointers: we mustn't apply the
     /// existing checksum to unchecksummed data, or lose the ability to tell
     /// that replicas differ. So read from the replica being rewritten, and
@@ -337,7 +346,7 @@ impl c::data_update_opts {
     fn checksummed_and_non_checksummed_handling(&mut self, fs: &Fs, k: BkeySC<'_>) {
         let Some(kp) = k.arm::<Ptrs>() else { return };
 
-        let paranoia = self.bits.checksum_paranoia() || kp.ptrs_decoded(fs).any(|d| d.p.crc.csum_type == c::CsumType::none);
+        let paranoia = self.bits.checksum_paranoia() || kp.ptrs_decoded(fs).any(|d| d.p.crc.csum_type == CsumType::none);
         self.bits.set_checksum_paranoia(paranoia);
         if !paranoia {
             return;
@@ -373,7 +382,7 @@ fn put_found(found: Option<&BadRef>, bad: Bad) {
 /// For an update with nothing to write: drops @k's killed pointers and extra
 /// cached pointers, and commits.
 fn extent_drop_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>,
-                    io_opts: &c::bch_inode_opts, data_opts: &c::data_update_opts) -> Result<(), BchError> {
+                    io_opts: &bch_inode_opts, data_opts: &data_update_opts) -> Result<(), BchError> {
     let fs = t.fs();
     // an extents btree update always wants a reservation passed in
     let res = DiskReservation::new(fs);
@@ -411,7 +420,7 @@ fn extent_drop_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)
 }
 
-impl c::data_update {
+impl data_update {
     fn fs(&self) -> &'static Fs {
         self.op.fs()
     }
@@ -422,7 +431,7 @@ impl c::data_update {
 
     /// The pages the update's data is read into, and written from: its pages'
     /// bio, which the write is of, and the read's bio, a clone of it.
-    fn bios_init(&mut self, io_opts: &c::bch_inode_opts, buf_bytes: u32) -> Result<(), BchError> {
+    fn bios_init(&mut self, io_opts: &bch_inode_opts, buf_bytes: u32) -> Result<(), BchError> {
         let fs = self.fs();
         let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
@@ -499,7 +508,7 @@ impl c::data_update {
                 let op = &mut self.op;
                 let nr = op.bits.nr_replicas().into();
                 let mut req = t.alloc_request(op.target.into(), false, Some(&op.devs_have), nr, nr,
-                                              c::Watermark::from_bits(op.bits.watermark().into()),
+                                              Watermark::from_bits(op.bits.watermark().into()),
                                               op.flags(), AllocWait::Sync(None))?;
                 match t.alloc_sectors(&mut req, op.write_point) {
                     Err(e) if e.matches(Errcode::operation_blocked) => {
@@ -521,9 +530,9 @@ impl c::data_update {
                 }
             };
             let op = &mut self.op;
-            op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize)?;
+            op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX as usize)?;
             let (pos, obs) = (op.pos, &mut op.open_buckets);
-            let sectors = op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |k| {
+            let sectors = op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX as usize, |k| {
                 wp.unwritten_extent(k, pos, (end.offset - pos.offset) as u32, obs)
             });
             op.pos.offset += u64::from(sectors);
@@ -543,10 +552,10 @@ impl c::data_update {
     /// The update is zeroed, and doesn't move until exit().
     #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn init(&mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>, moving: Option<&Moving<'_>>,
-                   wp: c::write_point_specifier, io_opts: &c::bch_inode_opts, data_opts: c::data_update_opts,
+                   wp: write_point_specifier, io_opts: &bch_inode_opts, data_opts: data_update_opts,
                    btree_id: Btree, k: BkeySC<'_>) -> Result<Held, BchError> {
         let fs = t.fs();
-        let pos = c::bbpos {
+        let pos = bbpos {
             btree: iter.map_or(Btree::extents, |i| i.btree()),
             pos:   k.k.p,
         };
@@ -560,17 +569,17 @@ impl c::data_update {
         self.index.ctxt = moving.map(|m| unsafe { BackRef::new(m.context()) });
 
         // SAFETY: an update is done before the filesystem goes
-        unsafe { c::bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
+        unsafe { bch_write_op::init_at(&raw mut self.op, fs, *io_opts) };
         self.op.pos = self.index.k.as_ref().k().start_pos();
         self.op.version = self.index.k.as_ref().k().bversion;
         self.op.target = data_opts.target;
         self.op.write_point = wp;
-        use c::WriteFlags as w;
+        use crate::data::write::WriteFlags as w;
         self.op.set(w::pages_stable | w::pages_owned | w::data_encoded |
                     w::update | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
-        let watermark = (data_opts.commit_flags.bits() & c::BCH_WATERMARK_MASK)
-            .max(c::Watermark::normal as u32);
+        let watermark = (data_opts.commit_flags.bits() & BCH_WATERMARK_MASK)
+            .max(Watermark::normal as u32);
         self.op.bits.set_watermark(watermark as u8);
 
         let ret = self.init_body(t, iter, io_opts, pos);
@@ -587,7 +596,7 @@ impl c::data_update {
     /// On error, Held's guards - locals till it returns - are dropped; init()
     /// gives back the rest.
     fn init_body(&mut self, t: &TransAttempt<'_, '_>, iter: Option<&BtreeIter<'_>>,
-                 io_opts: &c::bch_inode_opts, pos: c::bbpos) -> Result<Held, BchError> {
+                 io_opts: &bch_inode_opts, pos: bbpos) -> Result<Held, BchError> {
         let fs = self.fs();
         let mut held = Held { in_flight: None, nocow: None, devs: Default::default() };
         let type_ = self.index.opts.type_;
@@ -612,7 +621,7 @@ impl c::data_update {
 
         if self.index.opts.extra_replicas != 0 {
             // the reservation's first charge: the op's init() made it empty
-            self.op.res.add(k.k.size.into(), self.index.opts.extra_replicas.into(), c::ReservationFlags::empty())?;
+            self.op.res.add(k.k.size.into(), self.index.opts.extra_replicas.into(), ReservationFlags::empty())?;
         }
 
         if self.index.opts.ptrs_kill != 0 && self.op.opts.data_checksum != 0 {
@@ -664,7 +673,7 @@ impl c::data_update {
             // lost durability needs every copy it asks for
             let d = k.durability(t)?;
             if d.online >= io_opts.data_replicas {
-                self.op.set(c::WriteFlags::replicas_best_effort);
+                self.op.set(WriteFlags::replicas_best_effort);
             }
 
             // Short of data_replicas, don't rereplicate up to it unless
@@ -674,7 +683,7 @@ impl c::data_update {
                 self.op.res.nr_replicas.get();
             if keeping == 0 {
                 nr = nr.max(1);
-                self.op.clear(c::WriteFlags::cached);
+                self.op.clear(WriteFlags::cached);
             }
             self.op.bits.set_nr_replicas(nr as u8);
 
@@ -765,7 +774,7 @@ impl c::data_update {
     /// @found.
     #[cold]
     #[inline(never)]
-    fn read_err_record(&self, e: BchError, pick: Option<&c::extent_ptr_decoded>, found: Option<&BadRef>) {
+    fn read_err_record(&self, e: BchError, pick: Option<&extent_ptr_decoded>, found: Option<&BadRef>) {
         if read_err_benign(e) {
             return;
         }

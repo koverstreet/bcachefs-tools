@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::format::MetadataVersion;
 use crate::types::Le16;
 use zerocopy::byteorder::little_endian as le;
 use crate::util::vstructs::Head;
@@ -16,7 +16,7 @@ use cstruct_macros::{counted, whole, MaybeZeroable, Plain, TypeInfo};
 #[repr(C, align(2))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_downgrade_entry {
-    pub version: Le16<c::MetadataVersion>,
+    pub version: Le16<MetadataVersion>,
     pub recovery_passes: [le::U64; 2],
     pub nr_errors: le::U16,
     pub errors: [le::U16; 0],
@@ -28,5 +28,5 @@ pub struct bch_sb_field_downgrade_entry {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_downgrade {
-    pub start: [Head<c::bch_sb_field_downgrade_entry>; 0],
+    pub start: [Head<bch_sb_field_downgrade_entry>; 0],
 }

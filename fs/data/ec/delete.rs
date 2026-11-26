@@ -6,7 +6,8 @@
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::data::ec::bch_fs_ec;
 use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -38,7 +39,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
 
     // the worker races with the write buffer: its lru entry can outlive the
     // stripe. An open stripe must exist, but needn't be empty.
-    let Some(s) = k.arm::<c::Stripe>() else {
+    let Some(s) = k.arm::<Stripe>() else {
         if is_open {
             fs_inconsistent!(fs, "error deleting stripe: open stripe {idx} missing\n{}", k.to_text(fs));
         }
@@ -57,7 +58,7 @@ pub(crate) fn stripe_delete(t: &TransAttempt<'_, '_>, idx: u64, is_open: bool) -
 /// STRIPE_LRU_POS_EMPTY, ahead of every one with data: it walks just those.
 ///
 /// XXX: can we kill this and delete stripes from the trigger?
-pub(crate) fn delete_empty_stripes(ec: &c::bch_fs_ec) {
+pub(crate) fn delete_empty_stripes(ec: &bch_fs_ec) {
     let fs = ec.container();
     let trans = btree_trans!(fs);
     let at = |offset| LruPos::new(LruId::StripeFragmentation.id(), STRIPE_LRU_POS_EMPTY, offset).to_bpos();

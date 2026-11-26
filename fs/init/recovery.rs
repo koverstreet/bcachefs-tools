@@ -10,16 +10,22 @@ use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
-use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys};
+use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys,
+    journal_key, journal_keys};
 use crate::c;
+use crate::journal::init::journal_start_info;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume};
+use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs};
 use crate::init::error::{self, id};
-use crate::init::passes::{self, run_explicit_sb};
+use crate::init::passes::{self, run_explicit_sb, RunRecoveryPassFlags};
 use crate::journal::read::{journal_pos_from_member_info_resume, journal_read, journal_reread_for_rewind};
 use crate::journal::sb as journal_sb;
 use crate::journal::seq_blacklist::blacklist_entries_gc;
-use crate::opts::opts_hooks_pre_set;
+use crate::opts::{opts_hooks_pre_set, FsckErrOpt};
 use crate::sb::io::{check_version_downgrade, sb_upgrade, SbWrite};
 use crate::snapshots::snapshot::snapshots_read;
 use crate::snapshots::subvolume;
@@ -33,11 +39,13 @@ use crate::util::Printbuf;
 use crate::posix::{inode, logged_ops, namei, quota};
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
             message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
-use c::FsFlag as Flag;
-use c::ProgressUnit as Units;
+use crate::fs::FsFlag as Flag;
+use crate::bcachefs_ioctl::ProgressUnit as Units;
 use core::cmp::Ordering;
 use core::sync::atomic::Ordering::Relaxed;
-use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature, SbFeatures};
+use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature, SbFeatures, bch_sb_field_clean,
+    bkey, BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, ErrorAction, FsUsageType, jset_entry, MetadataVersion,
+    SbCompat, ScrubJournalOpt, VersionUpgradeOpt, JsetEntryRef, SbCompats};
 use zerocopy::IntoBytes;
 
 type Pass = RecoveryPass;
@@ -138,7 +146,7 @@ pub fn btree_lost_data(fs: &Fs, msg: &mut Printbuf, btree: Btree) -> Result<(), 
     /* The last error, as C's ?: chain kept it: every pass is scheduled */
     let mut ret = Ok(());
     let mut run = |w: &mut SbWrite<'_>, pass| {
-        if let Err(e) = run_explicit_sb(fs, msg, pass, c::RunRecoveryPassFlags::empty(), Some(w)) {
+        if let Err(e) = run_explicit_sb(fs, msg, pass, RunRecoveryPassFlags::empty(), Some(w)) {
             ret = Err(e);
         }
     };
@@ -206,7 +214,7 @@ fn reconstruct_alloc(fs: &Fs) {
         }
 
         let compat = &w.published().compat;
-        compat.set(compat.get() - c::SbCompats::alloc_info);
+        compat.set(compat.get() - SbCompats::alloc_info);
 
         let opts = fs.opts_writer(&mut w);
         opts.recovery_passes.set(opts.recovery_passes.get() | passes::passes_from_stable(v));
@@ -217,7 +225,7 @@ fn reconstruct_alloc(fs: &Fs) {
 
     for btree in (0..fs.btree_id_nr_alive()).filter(|&b| btree_id_is_alloc(b)) {
         fs.btree.cache.roots.lock().get_mut(btree).expect("a btree below btree_id_nr_alive()").alive = 0;
-        shoot_down_journal_keys(fs, Btree(btree), 0, c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
+        shoot_down_journal_keys(fs, Btree(btree), 0, BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
     }
 }
 
@@ -237,17 +245,17 @@ fn ignore_journal_rewind_errors(fs: &Fs) {
 
 /* journal replay: */
 
-fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, k: &c::journal_key)
+fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, k: &journal_key)
     -> Result<(), BchError>
 {
     let fs = t.fs();
     let bk = jk.key(k);
 
-    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(),
+    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, BTREE_MAX_DEPTH, k.level().into(),
                                       BtreeIterFlags::INTENT);
     iter.iter().traverse(t)?;
 
-    let mut u = c::bkey::default();
+    let mut u = bkey::default();
     let old = iter.iter().path_peek_slot(t, &mut u);
 
     /* Has this delta already been applied to the btree? */
@@ -267,7 +275,7 @@ fn journal_replay_accounting_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys,
     t.update(iter.iter(), new, UpdateTriggerFlags::NORUN)
 }
 
-fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize) -> Result<(), BchError> {
+fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &journal_keys, idx: usize) -> Result<(), BchError> {
     let fs = t.fs();
     let k = &jk.keys()[idx];
     let mut iter_flags = BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS;
@@ -296,7 +304,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
     }
 
     let bk = jk.key(k);
-    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, k.level().into(), iter_flags);
+    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, BTREE_MAX_DEPTH, k.level().into(), iter_flags);
     iter.iter().traverse(t)?;
 
     // A cached path's level is always there: its key cache entry, traversed
@@ -311,7 +319,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
     }
 
     if bk.k.key_type() == BkeyType::accounting {
-        let val = &bk.as_bytes()[size_of::<c::bkey>()..];
+        let val = &bk.as_bytes()[size_of::<bkey>()..];
         return t.subbuf_push(&t.trans().accounting, &bk.k, val.len() / size_of::<u64>(),
                              |v| v.as_mut_bytes().copy_from_slice(val));
     }
@@ -322,7 +330,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize
 
 #[cold]
 #[inline(never)]
-fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, idx: usize,
+fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &journal_keys, idx: usize,
                               iter_flags: BtreeIterFlags) -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -346,13 +354,13 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &c::journal_keys, id
         return Ok(());
     }
 
-    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, c::BTREE_MAX_DEPTH, 0, iter_flags);
+    let mut iter = BtreeNodeIter::new(t, k.btree_id(), bk.k.p, BTREE_MAX_DEPTH, 0, iter_flags);
     iter.iter().traverse(t)?;
     t.btree_increase_depth(iter.iter())?;
     Err(t.restart(Errcode::transaction_restart_nested))
 }
 
-fn journal_sort_seq_cmp(l: &c::journal_key, r: &c::journal_key) -> Ordering {
+fn journal_sort_seq_cmp(l: &journal_key, r: &journal_key) -> Ordering {
     match (l.journal_pos(), r.journal_pos()) {
         (Some(l), Some(r)) => l.journal_seq_offset.cmp(&r.journal_seq_offset),
         _                  => l.allocated().cmp(&r.allocated()),
@@ -379,7 +387,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
 
     let trans = btree_trans!(fs);
 
-    let replays_accounting = |k: &c::journal_key| {
+    let replays_accounting = |k: &journal_key| {
         jk.key(k).k.key_type() == BkeyType::accounting && !k.allocated()
     };
     let accounting_total = keys.iter().filter(|k| replays_accounting(k)).count();
@@ -444,7 +452,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
          * journal-space watermark ever trips.
          */
         let self_reclaim = fs.btree.cache.nr_self_reclaim.load(Relaxed);
-        let replayed = fs.journal.watermark() == c::Watermark::stripe &&
+        let replayed = fs.journal.watermark() == Watermark::stripe &&
             self_reclaim == 0 &&
             commit_do(&trans, None,
                       replay_flags | CommitFlags::JOURNAL_RECLAIM |
@@ -513,14 +521,14 @@ crate::recovery_pass!(journal_replay => journal_replay);
 
 /* journal replay early: */
 
-fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchError> {
+fn journal_replay_entry_early(fs: &Fs, entry: &jset_entry) -> Result<(), BchError> {
     match entry.typed() {
-        Ok(c::JsetEntryRef::btree_root(e)) => {
+        Ok(JsetEntryRef::btree_root(e)) => {
             let Some(k) = e.entries().next() else { return Ok(()) };
             let id = u32::from(entry.btree_id);
 
-            if fsck_err_on!(fs, id >= c::BTREE_ID_NR_MAX, id::invalid_btree_id,
-                            "invalid btree id {} (max {})", id, c::BTREE_ID_NR_MAX)? {
+            if fsck_err_on!(fs, id >= BTREE_ID_NR_MAX, id::invalid_btree_id,
+                            "invalid btree id {} (max {})", id, BTREE_ID_NR_MAX)? {
                 return Ok(());
             }
 
@@ -542,18 +550,18 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
                                             crate::btree::interior::roots_journal_u64s(nr_roots));
             }
         }
-        Ok(c::JsetEntryRef::usage(u)) => {
-            if entry.btree_id == c::FsUsageType::key_version.0 as u8 {
+        Ok(JsetEntryRef::usage(u)) => {
+            if entry.btree_id == FsUsageType::key_version.0 as u8 {
                 fs.key_version.store(u.v.get() as i64, Relaxed);
             }
         }
-        Ok(c::JsetEntryRef::blacklist(bl)) => {
+        Ok(JsetEntryRef::blacklist(bl)) => {
             fs.journal_seq_blacklist_add(bl.seq.get(), bl.seq.get().wrapping_add(1))?;
         }
-        Ok(c::JsetEntryRef::blacklist_v2(bl)) => {
+        Ok(JsetEntryRef::blacklist_v2(bl)) => {
             fs.journal_seq_blacklist_add(bl.start.get(), bl.end.get().wrapping_add(1))?;
         }
-        Ok(c::JsetEntryRef::clock(clock)) => {
+        Ok(JsetEntryRef::clock(clock)) => {
             fs.io_clock[usize::from(clock.rw)].now.store(clock.time.get() as i64, Relaxed);
         }
         _ => {}
@@ -561,7 +569,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &c::jset_entry) -> Result<(), BchE
     Ok(())
 }
 
-fn journal_replay_early(fs: &Fs, clean: Option<&c::bch_sb_field_clean<crate::util::vstructs::Validated>>)
+fn journal_replay_early(fs: &Fs, clean: Option<&bch_sb_field_clean<crate::util::vstructs::Validated>>)
     -> Result<(), BchError>
 {
     if let Some(clean) = clean {
@@ -652,7 +660,7 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
 crate::recovery_pass!(set_may_go_rw => set_may_go_rw);
 
 fn recovery(fs: &Fs) -> Result<(), BchError> {
-    let mut journal_start = c::journal_start_info::default();
+    let mut journal_start = journal_start_info::default();
 
     let mut clean = if fs.sb.clean.get() != 0 {
         let c = fs.read_superblock_clean()?;
@@ -671,7 +679,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     let read_journal = fs.sb.clean.get() == 0 ||
         fs.opts.retain_recovery_info.get() != 0 ||
         fs.opts.journal_rewind.get() != 0 ||
-        u32::from(fs.opts.scrub_recent_journal_entries.get()) == c::ScrubJournalOpt::always.0;
+        u32::from(fs.opts.scrub_recent_journal_entries.get()) == ScrubJournalOpt::always.0;
     let mut use_clean = !read_journal;
 
     if read_journal {
@@ -703,7 +711,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
                                 id::clean_but_journal_not_empty,
                                 "filesystem marked clean but journal not empty")? {
             let mut sb = fs.sb_lock();
-            sb.published().compat.set(fs.sb.compat.get() - c::SbCompats::alloc_info);
+            sb.published().compat.set(fs.sb.compat.get() - SbCompats::alloc_info);
             sb.sb_mut().set_clean(false);
             sb.published().clean.set(0);
         }
@@ -791,11 +799,11 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         let mut sb = fs.sb_lock();
         let w = fs.opts_writer(&mut sb);
         let fix = w.fix_errors.get();
-        if fix == c::FsckErrOpt::yes as u8 || fix == c::FsckErrOpt::ask as u8 {
-            w.fix_errors.set(c::FsckErrOpt::no as u8);
+        if fix == FsckErrOpt::yes as u8 || fix == FsckErrOpt::ask as u8 {
+            w.fix_errors.set(FsckErrOpt::no as u8);
         }
-        if u32::from(w.errors.get()) == c::ErrorAction::fix_safe.0 {
-            w.errors.set(c::ErrorAction::continue_.0 as u8);
+        if u32::from(w.errors.get()) == ErrorAction::fix_safe.0 {
+            w.errors.set(ErrorAction::continue_.0 as u8);
         }
     }
 
@@ -975,7 +983,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         }
 
         if !error {
-            w.set_compat(c::SbCompat::alloc_info);
+            w.set_compat(SbCompat::alloc_info);
         }
 
         if fs.opts.fsck.get() != 0 &&
@@ -1014,7 +1022,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
         if complete(Pass::check_extents) &&
            complete(Pass::check_indirect_extents) {
-            w.set_compat(c::SbCompat::no_stale_ptrs);
+            w.set_compat(SbCompat::no_stale_ptrs);
         }
 
         /*
@@ -1022,7 +1030,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * the stripe fragmentation counters true.
          */
         if complete(Pass::check_allocations) {
-            w.set_compat(c::SbCompat::stripe_frag_accounting);
+            w.set_compat(SbCompat::stripe_frag_accounting);
         }
 
         /*
@@ -1031,7 +1039,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
          * snapshots - and a later violation is a bug, not legacy state.
          */
         if complete(Pass::check_inodes) {
-            w.set_compat(c::SbCompat::inode_opts_propagated);
+            w.set_compat(SbCompat::inode_opts_propagated);
         }
     }
 
@@ -1063,16 +1071,16 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
 
     {
         let mut sb = fs.sb_lock();
-        sb.sb_mut().compat.update(|f| f | c::SbCompats::extents_above_btree_updates_done |
-                                          c::SbCompats::bformat_overflow_done |
-                                          c::SbCompats::no_stale_ptrs |
-                                          c::SbCompats::stripe_frag_accounting |
-                                          c::SbCompats::inode_opts_propagated);
+        sb.sb_mut().compat.update(|f| f | SbCompats::extents_above_btree_updates_done |
+                                          SbCompats::bformat_overflow_done |
+                                          SbCompats::no_stale_ptrs |
+                                          SbCompats::stripe_frag_accounting |
+                                          SbCompats::inode_opts_propagated);
 
         check_version_downgrade(fs, &mut sb);
 
-        if u32::from(fs.opts.version_upgrade.get()) != c::VersionUpgradeOpt::none.0 {
-            let current = c::MetadataVersion::CURRENT;
+        if u32::from(fs.opts.version_upgrade.get()) != VersionUpgradeOpt::none.0 {
+            let current = MetadataVersion::CURRENT;
             sb_upgrade(fs, &mut sb, current, false);
             sb.sb_mut().set_version_upgrade_complete(current);
             fs.write_super(&mut sb);
@@ -1104,7 +1112,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
      * journal_res_get() will crash if called before this has
      * set up the journal.pin FIFO and journal.cur pointer:
      */
-    fs.journal.start(c::journal_start_info { cur_seq: 1, ..Default::default() })?;
+    fs.journal.start(journal_start_info { cur_seq: 1, ..Default::default() })?;
 
     set_may_go_rw(fs)?;
     journal_replay(fs)?;
@@ -1113,8 +1121,8 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     fs.presplit_shard_boundaries();
 
     let mut root_inode = inode::init(fs, 0, 0, (c::S_IFDIR | 0o755) as c::umode_t, 0, None);
-    root_inode.bi_inum = c::BCACHEFS_ROOT_INO.into();
-    root_inode.bi_subvol = c::BCACHEFS_ROOT_SUBVOL;
+    root_inode.bi_inum = BCACHEFS_ROOT_INO.into();
+    root_inode.bi_subvol = BCACHEFS_ROOT_SUBVOL;
     let mut packed_inode = inode::pack(&root_inode);
     packed_inode.k.p.snapshot = u32::MAX;
 
@@ -1122,14 +1130,14 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
                                      CommitFlags::empty(), BtreeIterFlags::empty()),
                  "creating root directory")?;
 
-    let mut lostfound_inode = c::bch_inode_unpacked::default();
+    let mut lostfound_inode = bch_inode_unpacked::default();
     inode::init_early(fs, &mut lostfound_inode);
 
-    let mut new_subvol = c::Subvolume::default();
+    let mut new_subvol = Subvolume::default();
     bch_err_msg!(fs, trans_commit_do(fs, None, CommitFlags::empty(), |t| {
-        namei::create_trans(t, c::subvol_inum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
+        namei::create_trans(t, subvol_inum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
                             Some(OsStr::from_bytes(b"lost+found")), 0, 0, (c::S_IFDIR | 0o700) as c::umode_t, 0,
-                            None, None, c::subvol_inum::default(), 0)
+                            None, None, subvol_inum::default(), 0)
     }), "creating lost+found")?;
 
     passes::set_pass_done(fs, passes::LAST);

@@ -7,7 +7,7 @@ use std::process;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bcachefs_kernel::c::bch_ioctl_query_counters;
+use bcachefs_kernel::bcachefs_ioctl::bch_ioctl_query_counters;
 use bcachefs_kernel::sb::counters::{COUNTERS, CounterInfo};
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
@@ -25,6 +25,7 @@ use crate::util::{fmt_bytes_human, fmt_num_human, run_tui};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_COUNTERS};
 use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
+use bcachefs_kernel::sb::counters_format::PersistentCounterStable;
 
 const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
 
@@ -336,7 +337,7 @@ impl TopState {
         name_mode: DeviceNameMode,
     ) -> Result<Self> {
         let ioctl_fd = handle.ioctl_fd();
-        let nr_stable = bcachefs_kernel::c::PersistentCounterStable::NR as u16;
+        let nr_stable = PersistentCounterStable::NR as u16;
 
         let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
         let start_vals = read_counters(ioctl_fd, 0, nr_stable)?;
@@ -572,7 +573,7 @@ fn run_non_interactive(
     name_mode: DeviceNameMode,
 ) -> Result<()> {
     let ioctl_fd   = handle.ioctl_fd();
-    let nr_stable  = bcachefs_kernel::c::PersistentCounterStable::NR as u16;
+    let nr_stable  = PersistentCounterStable::NR as u16;
     let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
     let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
 

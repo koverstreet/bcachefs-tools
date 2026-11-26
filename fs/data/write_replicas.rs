@@ -7,22 +7,27 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC};
 use crate::c;
+use crate::data::extents::bch_io_failures;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::errcode::status::BLK_STS_REMOVED;
+use crate::init::dev::bch_devs_mask;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::dev_bio::DevBio;
 use crate::data::nocow_locking::NocowKind;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::errcode::BchError;
-use crate::format::DataType;
+use crate::format::{DataType, BCH_BKEY_PTRS_MAX};
 use crate::fs::{Dev, Fs};
 use crate::locking::MemallocFlags;
 use crate::os::kernel::WRITE;
-use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx};
+use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx, DevReadRefKind};
 use crate::os::bio::{BioBox, BioOwner, BioRange, BioSet, Data, HasBio, Remapped, Submitted};
 use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
 use cstruct_macros::args_stored_once;
 
-const PTRS: usize = c::BCH_BKEY_PTRS_MAX as usize;
+const PTRS: usize = BCH_BKEY_PTRS_MAX as usize;
 
 /// What writes' replicas came to, by device - one key's, or each extent's of a
 /// data write's pass: the devices that failed, with their errors, and those a
@@ -34,7 +39,7 @@ const PTRS: usize = c::BCH_BKEY_PTRS_MAX as usize;
 #[derive(Default)]
 pub struct ReplicaErrs {
     failed:        ArrayVec<(u8, c::blk_status_t), PTRS>,
-    pub unflushed: c::bch_devs_mask,
+    pub unflushed: bch_devs_mask,
 }
 
 impl ReplicaErrs {
@@ -42,8 +47,8 @@ impl ReplicaErrs {
         self.failed.iter().copied()
     }
 
-    pub fn failures(&self, fs: &Fs) -> c::bch_io_failures {
-        let mut failed = c::bch_io_failures::default();
+    pub fn failures(&self, fs: &Fs) -> bch_io_failures {
+        let mut failed = bch_io_failures::default();
         for (dev, status) in self.failed() {
             failed.set_blk_status(fs, dev.into(), status);
         }
@@ -116,9 +121,9 @@ impl<'a> InFlight<'a> {
 
         /* For nocow, bkey_get_dev_iorefs would have bailed if it hit an
          * invalid ptr, so cas_idx stays in sync with the iterator. */
-        let devs: ArrayVec<c::bch_extent_ptr, PTRS> = {
+        let devs: ArrayVec<bch_extent_ptr, PTRS> = {
             let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("writing a key with no pointers");
-            ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID).copied().collect()
+            ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID).copied().collect()
         };
         assert!(!devs.is_empty(), "writing with no devices");
 
@@ -133,7 +138,7 @@ impl<'a> InFlight<'a> {
                     Some(cas[i].take().expect("a write's io refs, one per pointer")),
             };
             let Some(ca) = ca else {
-                self.errs.fail(ptr.dev(), c::BLK_STS_REMOVED);
+                self.errs.fail(ptr.dev(), BLK_STS_REMOVED);
                 continue;
             };
             ca.io_done_add(WRITE, ty, (src.len() >> 9).into());
@@ -207,8 +212,8 @@ pub async fn write_replicas<O: BioOwner<Owns = Data>>(fs: &Fs, bio: Remapped<'_,
      * XXX: btree writes should be using io_ref[WRITE], but we aren't retrying
      * failed btree writes yet (due to device removal/ro):
      */
-    io.submit::<c::DevReadRefKind>(bio.bio().range(), bio.bio().opf(), ty, k, Refs::Get,
-                                   Resume::queue(Queue::system_dfl()))
+    io.submit::<DevReadRefKind>(bio.bio().range(), bio.bio().opf(), ty, k, Refs::Get,
+                                Resume::queue(Queue::system_dfl()))
         .await;
     io.wait(at).await
 }

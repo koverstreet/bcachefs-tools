@@ -5,7 +5,7 @@
 use super::{node_mem_alloc, node_mem_free, OwnedNode};
 use crate::btree::node::BtreeNode;
 use super::BtreeCacheGuard;
-use crate::c;
+use crate::btree::cache::bch_fs_btree_cache;
 use crate::data_structures::list::Walk;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
@@ -14,8 +14,8 @@ use crate::prt;
 use crate::os::kernel::cond_resched;
 use crate::util::log::LogMsg;
 use crate::util::place::{Contained, PlacedDrop};
-use c::BtreeNodeCacheState as State;
-use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use crate::btree::cache::BtreeNodeCacheState as State;
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -109,7 +109,7 @@ impl Fs {
     }
 }
 
-impl PlacedDrop for c::bch_fs_btree_cache {
+impl PlacedDrop for bch_fs_btree_cache {
     unsafe fn placed_drop(&self) {
         let (fs, bc) = (self.container().container(), self);
 

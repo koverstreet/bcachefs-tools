@@ -4,19 +4,19 @@ use super::{btree_ptr_hash_val, cached_node, node_key_hash_val};
 use crate::btree::bkey::{BkeyI, BkeySC};
 use crate::btree::node::BtreeNode;
 use super::{BtreeCacheGuard, BtreeCacheLists, BtreeNodeList};
-use crate::c;
+use crate::btree::bbpos::bbpos;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::Fs;
-use crate::locking::six::{six_lock_counts, six_lock_wakeup_all};
+use crate::locking::six::{six_lock_counts, six_lock_wakeup_all, SixLockType};
 use crate::locking::Guard as _;
 use crate::prt;
 use crate::util::hash::GoldenRatio;
 use crate::os::kernel::is_vmalloc_addr;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use c::BtreeNodeCacheState as State;
+use crate::btree::cache::BtreeNodeCacheState as State;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};
 
@@ -49,7 +49,7 @@ impl BtreeNode {
 /* Pinning */
 
 fn node_pinned(lists: &BtreeCacheLists, b: &BtreeNode) -> bool {
-    let pos = c::bbpos { btree: Btree(b.c.btree_id.get().into()), pos: b.key_peek().k.p };
+    let pos = bbpos { btree: Btree(b.c.btree_id.get().into()), pos: b.key_peek().k.p };
 
     let mask = lists.pinned_nodes_mask[(b.c.level.get() != 0) as usize];
 
@@ -83,7 +83,7 @@ impl Fs {
          * lists and is safe under bc->lock alone.
          */
         ebug_assert!((state_hashed(old) && state_hashed(new)) ||
-                     six_lock_counts(b.c.lock.six()).n[c::SixLockType::SIX_LOCK_write as usize] != 0,
+                     six_lock_counts(b.c.lock.six()).n[SixLockType::SIX_LOCK_write as usize] != 0,
                      "cache state {old:?} -> {new:?} without the node write locked");
         assert!(!(state_has_buffer(old) || state_has_buffer(new)) || !data.is_null(),
                 "cache state {old:?} -> {new:?} of a node with no buffer");

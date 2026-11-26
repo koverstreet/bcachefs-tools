@@ -21,7 +21,7 @@ impl ChaCha20 {
 
         let mut state = c::chacha_state::default();
         unsafe { c::chacha_init(&mut state, words.as_ptr(), iv.as_ptr()) };
-        c::wipe(&mut words);
+        crate::util::wipe(&mut words);
         ChaCha20 { state, partial: false }
     }
 
@@ -46,7 +46,7 @@ impl ChaCha20 {
 
 impl Drop for ChaCha20 {
     fn drop(&mut self) {
-        c::wipe(&mut self.state)
+        crate::util::wipe(&mut self.state)
     }
 }
 
@@ -94,7 +94,7 @@ impl Poly1305 {
 
 impl Drop for Poly1305 {
     fn drop(&mut self) {
-        c::wipe(&mut self.0)
+        crate::util::wipe(&mut self.0)
     }
 }
 

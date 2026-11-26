@@ -19,7 +19,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 
-use bcachefs_kernel::c;
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_err_msg, bch_ioctl_pread_raw};
 use clap::Parser;
 
 use bcachefs_kernel::util::alloc::{AlignedBox, Flags};
@@ -151,13 +151,13 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         // this chunk's.
         err_msg_buf.fill(0);
 
-        let mut arg = c::bch_ioctl_pread_raw {
+        let mut arg = bch_ioctl_pread_raw {
             offset: cli.offset + pos,
             len:    want,
             buf:    buf.as_mut_ptr() as u64,
             flags:  if cli.no_poison_check { 1 << 0 } else { 0 },
             errors: 0,
-            err: c::bch_ioctl_err_msg {
+            err: bch_ioctl_err_msg {
                 msg_ptr: err_msg_buf.as_mut_ptr() as u64,
                 msg_len: err_msg_buf.len() as u32,
                 pad:     0,

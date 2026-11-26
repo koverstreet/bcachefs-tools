@@ -12,9 +12,13 @@ use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::bkey::BkeyOps;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
+use crate::data::extents_format::{BCH_INLINE_DATA_POISONED, InlineData, InlineDataCsum,
+    InlineDataV2};
+use crate::opts::bch_inode_opts;
 use crate::data::checksum::csum_err_msg;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits};
+use crate::format::{Bpos, Btree, BkeyTypeFlags, BkeyTypeFlags_bits, bch_csum, bkey, CsumOpt,
+    CsumType};
 use crate::fs::{Fs, WriteRef};
 use crate::init::damage;
 use crate::init::error::{id, BkeyValidate};
@@ -33,7 +37,7 @@ pub type Inline = FamilyVal<ByFlag<{ BkeyTypeFlags_bits::inline_data }>>;
 pub static DATA: FieldOffsets = FieldOffsets::new(BkeyTypeFlags::inline_data, "data");
 pub static CSUM: FieldOffsets = FieldOffsets::optional(BkeyTypeFlags::inline_data, "csum");
 
-impl c::bkey {
+impl bkey {
     pub fn extent_is_inline_data(&self) -> bool {
         <Inline as BkeyFamily>::contains(self)
     }
@@ -43,7 +47,7 @@ impl c::bkey {
 /// one. A key with one starts @offset sectors into data[]: a cut moves it,
 /// and never touches data[], which the checksum is of as written.
 pub struct InlineDataRef<'a> {
-    pub csum: Option<&'a c::InlineDataCsum>,
+    pub csum: Option<&'a InlineDataCsum>,
     pub data: &'a [u8],
 }
 
@@ -102,7 +106,7 @@ impl<'a> InlineDataRef<'a> {
 
 /// The same, to change: a cut's, or a sanitized dump's.
 pub struct InlineDataMut<'a> {
-    pub csum: Option<&'a mut c::InlineDataCsum>,
+    pub csum: Option<&'a mut InlineDataCsum>,
     pub data: &'a mut [u8],
 }
 
@@ -121,9 +125,9 @@ impl<'a> InlineDataMut<'a> {
 
 /// An inline data key's data that doesn't match its checksum.
 pub struct CsumMismatch {
-    pub ty:   c::CsumType,
-    pub want: c::bch_csum,
-    pub got:  c::bch_csum,
+    pub ty:   CsumType,
+    pub want: bch_csum,
+    pub got:  bch_csum,
 }
 
 impl CsumMismatch {
@@ -132,39 +136,39 @@ impl CsumMismatch {
     }
 }
 
-impl c::InlineDataCsum {
+impl InlineDataCsum {
     /// For @data, written now with @opts: offset 0, the checksum @opts'
     /// data_checksum says - none for none, or for nocow - never an encryption
     /// type, whatever the filesystem is.
-    pub fn new(fs: &Fs, opts: &c::bch_inode_opts, data: &[u8]) -> Self {
+    pub fn new(fs: &Fs, opts: &bch_inode_opts, data: &[u8]) -> Self {
         let ty = if opts.nocow != 0 {
-            c::CsumType::none
+            CsumType::none
         } else {
-            c::CsumOpt(opts.data_checksum.into()).to_type(fs, true)
+            CsumOpt(opts.data_checksum.into()).to_type(fs, true)
         };
         Self { csum_type: ty.into(), csum: ty.checksum_unkeyed(data), ..Default::default() }
     }
 
     pub fn poisoned(&self) -> bool {
-        self.flags & c::BCH_INLINE_DATA_POISONED != 0
+        self.flags & BCH_INLINE_DATA_POISONED != 0
     }
 }
 
 pub(crate) fn csum_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let h = InlineDataRef::of(v.k).and_then(|d| d.csum).expect("an inline data key with a checksum");
     let ty = h.csum_type.get();
-    bkey_fsck_err_on!(v, ty.0 >= c::CsumType::NR || ty.is_encryption(),
+    bkey_fsck_err_on!(v, ty.0 >= CsumType::NR || ty.is_encryption(),
                       id::inline_data_csum_type_bad, "inline data with checksum type {}", ty.0)
 }
 
-impl BkeyOps for c::InlineData {
+impl BkeyOps for InlineData {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         InlineDataRef::of(k).expect("inline data").to_text(out)
     }
 }
 
-impl BkeyOps for c::InlineDataV2 {
+impl BkeyOps for InlineDataV2 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         csum_validate(v)
     }
@@ -210,7 +214,7 @@ async fn poison_task(fs: &Fs, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
         if h.poisoned() {
             return Ok(());
         }
-        h.flags |= c::BCH_INLINE_DATA_POISONED;
+        h.flags |= BCH_INLINE_DATA_POISONED;
         t.update(&iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         if record {

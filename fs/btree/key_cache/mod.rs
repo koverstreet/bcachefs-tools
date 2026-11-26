@@ -21,11 +21,16 @@ use crate::btree::iter::TransAttempt;
 use crate::btree::path::{LockedNode, Paths, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::c;
+use crate::btree::bch_fs_btree;
+use crate::btree::locking::btree_bkey_cached_common;
+use crate::data_structures::fast_list::fast_list;
+use crate::journal::pins::journal_entry_pin;
+use crate::util::time_stats::TimeStat;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree};
-use crate::fs::Fs;
-use crate::locking::six::SixHold;
+use crate::fs::{Fs, FsFlag};
+use crate::locking::six::{SixHold, SixLockInitFlags};
 use crate::prt;
 use crate::util::alloc::{init_at, Box, Global};
 use crate::util::hash::GoldenRatio;
@@ -39,7 +44,7 @@ use crate::util::rcu_pending::{RcuPending, RcuRealloc};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::os::workqueue::{Queue, ReffedWork};
 use crate::util::{Printbuf, ToText};
-use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 #[cfg(kernel)]
 use core::ffi::c_int;
 use core::ffi::{c_uint, c_ulong};
@@ -61,18 +66,18 @@ pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 #[pin_data]
 #[repr(C)]
 #[derive(RcuHead, Init)]
-#[init_args(lock_flags: c::SixLockInitFlags)]
+#[init_args(lock_flags: SixLockInitFlags)]
 pub struct bkey_cached {
     #[pin]
-    #[init(c::btree_bkey_cached_common::init(true, lock_flags, Flags::empty()))]
-    pub c: c::btree_bkey_cached_common,
+    #[init(btree_bkey_cached_common::init(true, lock_flags, Flags::empty()))]
+    pub c: btree_bkey_cached_common,
 
     #[init(AtomicUsize::new(0))]
     pub flags: AtomicUsize,
     /* set write locked; read unlocked, by the table's lookups and the flush walk */
-    pub key: Volatile<c::bkey_cached_key>,
+    pub key: Volatile<bkey_cached_key>,
 
-    pub journal: c::journal_entry_pin,
+    pub journal: journal_entry_pin,
 
     #[init(LockedBy::new(Default::default(), ()))]
     pub contents: LockedBy<crate::btree::key_cache::EntryContents, (), NodeLock<bkey_cached>>,
@@ -89,15 +94,15 @@ impl bkey_cached {
     }
 
     pub fn dirty(&self) -> bool {
-        self.flag(c::BKEY_CACHED_DIRTY)
+        self.flag(BKEY_CACHED_DIRTY)
     }
 
     pub fn accessed(&self) -> bool {
-        self.flag(c::BKEY_CACHED_ACCESSED)
+        self.flag(BKEY_CACHED_ACCESSED)
     }
 
     pub fn immediate_flush(&self) -> bool {
-        self.flag(c::BKEY_CACHED_IMMEDIATE_FLUSH)
+        self.flag(BKEY_CACHED_IMMEDIATE_FLUSH)
     }
 
     pub fn set_flag(&self, bit: u32) {
@@ -110,7 +115,7 @@ impl bkey_cached {
 }
 
 
-pub(crate) type KeyTable = Cuckoo<Entry<c::bkey_cached>, GoldenRatio>;
+pub(crate) type KeyTable = Cuckoo<Entry<bkey_cached>, GoldenRatio>;
 
 #[allow(non_camel_case_types)]
 #[repr(C, align(4))]
@@ -124,16 +129,16 @@ pub struct bkey_cached_key {
 // checks its key again
 impl TearSafe for bkey_cached_key {}
 
-crate::keyed_by_value!(c::bkey_cached, |ck| ck.key.get() => c::bkey_cached_key);
+crate::keyed_by_value!(bkey_cached, |ck| ck.key.get() => bkey_cached_key);
 
 // what's shared is the entry lock's, published, or atomic
-unsafe impl Sync for c::bkey_cached {}
+unsafe impl Sync for bkey_cached {}
 
 fn btree_uses_pcpu_readers(id: Btree) -> bool {
     id == Btree::subvolumes
 }
 
-static KEY_CACHE: KmemCache<c::bkey_cached> = KmemCache::new();
+static KEY_CACHE: KmemCache<bkey_cached> = KmemCache::new();
 
 /// The shrinker's counts: bumped by concurrent scans, as C's plain counters
 /// were.
@@ -168,7 +173,7 @@ fn inc(n: &AtomicUsize) {
 pub(crate) struct Cached<const PCPU: bool> {
     #[pin]
     #[rcu_head]
-    ck: c::bkey_cached,
+    ck: bkey_cached,
 }
 
 unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
@@ -185,19 +190,19 @@ unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
 
     fn init() -> impl PinInit<Self, BchError> {
         let flags = if PCPU {
-            c::SixLockInitFlags::pcpu
+            SixLockInitFlags::pcpu
         } else {
-            c::SixLockInitFlags::empty()
+            SixLockInitFlags::empty()
         };
-        pin_init!(Self { ck <- c::bkey_cached::init(flags) }? BchError)
+        pin_init!(Self { ck <- bkey_cached::init(flags) }? BchError)
     }
 }
 
-pub(crate) type Pending<const PCPU: bool> = RcuPending<'static, Cached<PCPU>, &'static KmemCache<c::bkey_cached>>;
+pub(crate) type Pending<const PCPU: bool> = RcuPending<'static, Cached<PCPU>, &'static KmemCache<bkey_cached>>;
 pub(crate) type Pendings = (Pending<false>, Pending<true>);
 
 #[allow(non_camel_case_types)]
-#[placed(c::bch_fs_btree.key_cache)]
+#[placed(bch_fs_btree.key_cache)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, TypeInfo, Init)]
@@ -207,11 +212,11 @@ pub struct bch_fs_btree_key_cache {
     pub(crate) table: KeyTable,
     /* what's in the table, to walk: an entry's slot is from insert to evict */
     #[pin]
-    #[init(crate::util::alloc::init_or(c::fast_list::new(), c::Errcode::ENOMEM_fs_btree_key_cache_init))]
-    pub(crate) keys: c::fast_list,
+    #[init(crate::util::alloc::init_or(fast_list::new(), Errcode::ENOMEM_fs_btree_key_cache_init))]
+    pub(crate) keys: fast_list,
 
     #[pin]
-    pub(crate) shrinker: c::btree_key_cache_shrinker,
+    pub(crate) shrinker: btree_key_cache_shrinker,
     #[pin]
     #[init(AtomicUsize::new(0))]
     pub(crate) shrink_iter: AtomicUsize,
@@ -267,22 +272,22 @@ impl bch_fs_btree_key_cache {
 
 /// An entry, held write locked: what its contents are written through.
 pub(super) struct LockedEntry<'a> {
-    ck:   LockedNode<'a, c::bkey_cached, Write>,
+    ck:   LockedNode<'a, bkey_cached, Write>,
     held: SixHold<'a>,
 }
 
 impl<'a> LockedEntry<'a> {
-    fn new(ck: &'a c::bkey_cached, held: SixHold<'a>) -> Self {
+    fn new(ck: &'a bkey_cached, held: SixHold<'a>) -> Self {
         assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &ck.c.lock),
                 "a key cache entry's handle without its write lock");
         LockedEntry { ck: unsafe { LockedNode::new_write(ck) }, held }
     }
 
-    fn into_parts(self) -> (&'a c::bkey_cached, SixHold<'a>) {
+    fn into_parts(self) -> (&'a bkey_cached, SixHold<'a>) {
         (self.ck.node(), self.held)
     }
 
-    fn held(&self) -> LockedNode<'_, c::bkey_cached> {
+    fn held(&self) -> LockedNode<'_, bkey_cached> {
         self.ck.held()
     }
 
@@ -296,14 +301,14 @@ impl<'a> LockedEntry<'a> {
 }
 
 impl Deref for LockedEntry<'_> {
-    type Target = c::bkey_cached;
+    type Target = bkey_cached;
 
-    fn deref(&self) -> &c::bkey_cached {
+    fn deref(&self) -> &bkey_cached {
         self.ck.node()
     }
 }
 
-fn bkey_cached_trylock(ck: &c::bkey_cached) -> Option<LockedEntry<'_>> {
+fn bkey_cached_trylock(ck: &bkey_cached) -> Option<LockedEntry<'_>> {
     let intent = ck.c.lock.try_lock_as(SIX_LOCK_intent)?;
     Some(LockedEntry::new(ck, intent.try_write().ok()?))
 }
@@ -311,14 +316,14 @@ fn bkey_cached_trylock(ck: &c::bkey_cached) -> Option<LockedEntry<'_>> {
 impl BtreeTrans<'_> {
     /// @pos's entry, found unlocked: for as long as the transaction holds the
     /// btree trans SRCU, which an entry is freed a grace period of.
-    pub(crate) fn btree_key_cache_find(&self, btree: Btree, pos: Bpos) -> Option<&c::bkey_cached> {
-        let key = c::bkey_cached_key { btree_id: btree.0, pos };
+    pub(crate) fn btree_key_cache_find(&self, btree: Btree, pos: Bpos) -> Option<&bkey_cached> {
+        let key = bkey_cached_key { btree_id: btree.0, pos };
 
         self.fs().btree.key_cache.table.get_entry(&key, &read_lock()).map(|ck| unsafe { &*ptr::from_ref(ck) })
     }
 }
 
-fn bkey_cached_lock_for_evict(ck: &c::bkey_cached) -> Option<LockedEntry<'_>> {
+fn bkey_cached_lock_for_evict(ck: &bkey_cached) -> Option<LockedEntry<'_>> {
     let intent = ck.c.lock.try_lock_as(SIX_LOCK_intent)?;
 
     if ck.dirty() {
@@ -328,13 +333,13 @@ fn bkey_cached_lock_for_evict(ck: &c::bkey_cached) -> Option<LockedEntry<'_>> {
     Some(LockedEntry::new(ck, intent.try_write().ok()?))
 }
 
-impl c::bch_fs_btree_key_cache {
+impl bch_fs_btree_key_cache {
     fn bkey_cached_evict(&self, ck: &mut LockedEntry<'_>) -> bool {
         let ret = self.table.remove_entry(&ck.key.get(), NonNull::from(ck.ck.node()));
         if ret {
             self.keys.remove(ck.contents().keys_idx);
             ck.contents_mut().keys_idx = 0;
-            ck.key.set(c::bkey_cached_key { btree_id: !0, pos: SPOS_MAX });
+            ck.key.set(bkey_cached_key { btree_id: !0, pos: SPOS_MAX });
             self.nr_keys.fetch_sub(1, Relaxed);
         }
 
@@ -344,10 +349,10 @@ impl c::bch_fs_btree_key_cache {
     /// Its entries, from slot @idx: for as long as @srcu, the btree trans
     /// SRCU's, is held.
     fn keys_from<'r, 's: 'r>(&'s self, idx: usize, rcu: &'r ReadGuard, srcu: &'s SrcuReadGuard<'_>)
-        -> impl Iterator<Item = (usize, &'s c::bkey_cached)> + 'r
+        -> impl Iterator<Item = (usize, &'s bkey_cached)> + 'r
     {
         ebug_assert!(ptr::eq(srcu.srcu(), &self.fs().btree.trans.barrier));
-        self.keys.items_from(idx, rcu).map(|(i, ck)| (i, unsafe { ck.cast::<c::bkey_cached>().as_ref() }))
+        self.keys.items_from(idx, rcu).map(|(i, ck)| (i, unsafe { ck.cast::<bkey_cached>().as_ref() }))
     }
 
     /*
@@ -481,8 +486,8 @@ impl<const PCPU: bool> Drop for NewEntry<'_, PCPU> {
 ///
 /// # Safety
 /// @ck was just claimed, and is had for 'a.
-unsafe fn claimed<'a>(ck: NonNull<c::bkey_cached>) -> LockedEntry<'a> {
-    let ck: &'a c::bkey_cached = unsafe { ck.as_ref() };
+unsafe fn claimed<'a>(ck: NonNull<bkey_cached>) -> LockedEntry<'a> {
+    let ck: &'a bkey_cached = unsafe { ck.as_ref() };
     LockedEntry::new(ck, unsafe { SixHold::from_raw(&ck.c.lock, SIX_LOCK_write) })
 }
 
@@ -512,7 +517,7 @@ impl BtreeTrans<'_> {
 /// The key cache's shrinker, Sync - a shrinker's owner is - as the key cache,
 /// with its per-CPU counter and fast_list, isn't.
 #[allow(non_camel_case_types)]
-#[placed(c::bch_fs_btree_key_cache.shrinker)]
+#[placed(bch_fs_btree_key_cache.shrinker)]
 #[pin_data]
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
@@ -523,7 +528,7 @@ pub struct btree_key_cache_shrinker {
     pub(crate) shrink_table_work: ReffedWork<shrink_table, crate::field!(super.super.super.ro_ref)>,
 }
 
-impl Shrink for c::btree_key_cache_shrinker {
+impl Shrink for btree_key_cache_shrinker {
     fn shrinker(&self) -> &Shrinker<Self> {
         &self.shrink
     }
@@ -543,17 +548,17 @@ impl Shrink for c::btree_key_cache_shrinker {
 
 /// shrink_table_work: scan() runs in reclaim, and a smaller table is an
 /// allocation.
-pub(crate) fn shrink_table(s: &c::btree_key_cache_shrinker) {
+pub(crate) fn shrink_table(s: &btree_key_cache_shrinker) {
     let _ = s.container().table.shrink();
 }
 
-impl PlacedDrop for c::btree_key_cache_shrinker {
+impl PlacedDrop for btree_key_cache_shrinker {
     unsafe fn placed_drop(&self) {
         unsafe { self.shrink.unregister() }
     }
 }
 
-impl c::bch_fs_btree_key_cache {
+impl bch_fs_btree_key_cache {
     fn count(&self) -> usize {
         let nr = self.nr_keys.load(Relaxed) - self.nr_dirty.load(Relaxed);
 
@@ -596,7 +601,7 @@ impl c::bch_fs_btree_key_cache {
                 if ck.dirty() {
                     inc(&self.stats.skipped_dirty);
                 } else if ck.accessed() {
-                    ck.clear_flag(c::BKEY_CACHED_ACCESSED);
+                    ck.clear_flag(BKEY_CACHED_ACCESSED);
                     inc(&self.stats.skipped_accessed);
                 } else if let Some(mut ck) = bkey_cached_lock_for_evict(ck) {
                     if self.bkey_cached_evict(&mut ck) {
@@ -634,7 +639,7 @@ impl c::bch_fs_btree_key_cache {
 
         self.shrink_iter.store(pos, Relaxed);
 
-        fs.times.get(c::TimeStat::btree_key_cache_scan as usize).update(start_time);
+        fs.times.get(TimeStat::btree_key_cache_scan as usize).update(start_time);
 
         Some(freed)
     }
@@ -673,7 +678,7 @@ impl c::bch_fs_btree_key_cache {
         drop(srcu);
 
         let nr_dirty = self.nr_dirty.load(Relaxed);
-        if nr_dirty != 0 && fs.journal.error().is_ok() && fs.flags.get(c::FsFlag::was_rw) {
+        if nr_dirty != 0 && fs.journal.error().is_ok() && fs.flags.get(FsFlag::was_rw) {
             panic!("btree key cache shutdown error: nr_dirty nonzero ({nr_dirty})");
         }
 
@@ -707,7 +712,7 @@ impl c::bch_fs_btree_key_cache {
     }
 }
 
-impl ToText for c::bch_fs_btree_key_cache {
+impl ToText for bch_fs_btree_key_cache {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
         out.tabstop_push(24);

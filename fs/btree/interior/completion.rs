@@ -13,13 +13,17 @@ use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
                          TransBkey, UpdateTriggerFlags, Watermark};
-use crate::btree::node::{BtreeNode, NR_WRITES};
+use crate::btree::node::{BtreeNode, NR_WRITES, BtreeNodeFlags};
 use crate::btree::path::{LockedNode, Paths};
 use crate::btree::trigger::{deleted_room, key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
-use crate::cstructs::c::BtreeWriteType;
-use crate::c;
-use crate::c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
+use crate::btree::node::BtreeWriteType;
+use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::format::{btree_node, Deleted, JsetEntryType};
+use crate::journal::pins::JournalPinType;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
 use crate::data_structures::array_vec::ArrayVec;
@@ -62,10 +66,10 @@ impl InteriorUpdate<'_> {
     pub(super) fn emit_new_node_key(&self, n: &mut NewNode<'_>) {
         let fs = self.fs();
         let mut n = n.locked();
-        let bytes = size_of::<Head<c::btree_node>>() + n.contents().data().keys.u64s() * size_of::<u64>();
+        let bytes = size_of::<Head<btree_node>>() + n.contents().data().keys.u64s() * size_of::<u64>();
         let sectors = (bytes.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
-        n.update_key(|k| if let Some(mut p) = (&mut **k).as_s().arm::<c::BtreePtrV2>() {
+        n.update_key(|k| if let Some(mut p) = (&mut **k).as_s().arm::<BtreePtrV2>() {
             p.v_mut().sectors_written = crate::types::Le16::new(sectors);
         });
     }
@@ -138,7 +142,7 @@ impl InteriorUpdate<'_> {
         for slot in 0..NR_WRITES {
             WriteBlocked::drain(&mut fs.btree.interior_updates.lock.lock(), |g| write_blocked(b.node(), slot, g), |g, p| {
                 p.set_mode(g, Mode::Update);
-                fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other);
+                fs.journal.pin_copy(&self.journal, &p.journal, JournalPinType::JOURNAL_PIN_TYPE_other);
 
                 /*
                  * for flush_held_btree_writes() waiting on updates to flush or
@@ -162,7 +166,7 @@ impl InteriorUpdate<'_> {
          * when the new nodes are persistent and reachable on disk:
          */
         for w in &b.writes {
-            fs.journal.pin_copy(&self.journal, w, c::JournalPinType::JOURNAL_PIN_TYPE_other);
+            fs.journal.pin_copy(&self.journal, w, JournalPinType::JOURNAL_PIN_TYPE_other);
             fs.journal.pin_drop(w);
         }
 
@@ -173,7 +177,7 @@ impl InteriorUpdate<'_> {
 fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.extent_entries(fs).any(|e| match e {
         ExtentEntry::reconcile(_) => true,
-        ExtentEntry::ptr(p)       => u32::from(p.dev()) == c::BCH_SB_MEMBER_INVALID,
+        ExtentEntry::ptr(p)       => u32::from(p.dev()) == BCH_SB_MEMBER_INVALID,
         _                         => false,
     }))
 }
@@ -211,7 +215,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
                                     UpdateTriggerFlags::OVERWRITE | UpdateTriggerFlags::TRANSACTIONAL);
         key_trigger(t, &mut op)?;
 
-        t.journal_entry_add(c::JsetEntryType::overwrite, btree.0 as u8, level as u8, &*i.key)?;
+        t.journal_entry_add(JsetEntryType::overwrite, btree.0 as u8, level as u8, &*i.key)?;
     }
 
     let mut key_changed = KeyChanged::new();
@@ -223,8 +227,8 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
         strip_reconcile(fs, (&mut *i.key).as_s());
 
         let mut k = t.bkey_reassemble_room(BkeySC::from(&*i.key),
-                                           c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
-        k.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
+                                           BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
+        k.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_foreground, 0)?;
 
         /*
          * This is not strictly the best way of doing this, what we
@@ -251,7 +255,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
             }
         }
 
-        let deleted = BkeyI::<c::Deleted>::at(k.k().p);
+        let deleted = BkeyI::<Deleted>::at(k.k().p);
         let mut op = TriggerOp::new(btree, level + 1, BkeySC::from(deleted.as_ref()), k.reborrow(),
                                     UpdateTriggerFlags::INSERT | UpdateTriggerFlags::TRANSACTIONAL);
         key_trigger(t, &mut op)?;
@@ -263,9 +267,9 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
         };
         if !update_node_key || root {
             let (ty, level) = if root {
-                (c::JsetEntryType::btree_root, level)
+                (JsetEntryType::btree_root, level)
             } else {
-                (c::JsetEntryType::btree_keys, level + 1)
+                (JsetEntryType::btree_keys, level + 1)
             };
             t.journal_entry_add(ty, btree.0 as u8, level as u8, k.as_ref())?;
         } else {
@@ -308,7 +312,7 @@ fn btree_node_seq_matches(b: &BtreeNode, seq: Le64) -> bool {
         return false;
     }
 
-    let data = unsafe { ptr::read_volatile(&raw const (*b.contents.data_ptr()).bufs.data) }.cast::<Head<c::btree_node>>();
+    let data = unsafe { ptr::read_volatile(&raw const (*b.contents.data_ptr()).bufs.data) }.cast::<Head<btree_node>>();
     let b_seq = if data.is_null() { Le64::default() } else { unsafe { ptr::read_volatile(&raw const (*data).keys.seq) } };
     b_seq == seq
 }
@@ -381,7 +385,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
         trans.unlock_long();
 
         if seq_matches {
-            b.wait_on_flag(c::BtreeNodeFlags::write_in_flight_inner);
+            b.wait_on_flag(BtreeNodeFlags::write_in_flight_inner);
         }
     }
 

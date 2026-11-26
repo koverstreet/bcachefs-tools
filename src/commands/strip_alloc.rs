@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use bcachefs_kernel::c;
+use bcachefs_kernel::opts::bch_opts;
 use anyhow::bail;
 use clap::Parser;
 
@@ -15,7 +15,7 @@ fn cmd_strip_alloc(cli: Cli) -> anyhow::Result<()> {
     let devs = cli.devices;
 
     loop {
-        let mut opts: c::bch_opts = Default::default();
+        let mut opts: bch_opts = Default::default();
         opts.set_nostart(true);
 
         let fs = crate::device_scan::open_scan(&devs, opts)

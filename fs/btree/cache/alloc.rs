@@ -12,18 +12,20 @@ use super::{BtreeCacheGuard, BtreeNodeList};
 use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::c;
+use crate::data::extents_format::BKEY_BTREE_PTR_U64s_MAX;
+use crate::util::time_stats::TimeStat;
 use crate::data_structures::list::Walk;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::Btree;
+use crate::format::{Btree, BTREE_MAX_DEPTH};
 use crate::fs::Fs;
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::os::kernel::{cond_resched, local_clock, unlikely};
 use crate::util::log::LogMsg;
 use crate::os::sched::current;
-use c::BtreeNodeCacheState as State;
-use c::SixLockType::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use crate::btree::cache::BtreeNodeCacheState as State;
+use crate::locking::six::SixLockType::{self, SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
@@ -271,7 +273,7 @@ impl BtreeTrans<'_> {
                     self.unlock_keep_cannibalize(paths, crate::ret_ip!());
                     bufs.alloc(fs, flags::NOWARN, true).is_ok()
                 };
-                fs.times.get(c::TimeStat::btree_node_buf_alloc as usize).update(buf_start);
+                fs.times.get(TimeStat::btree_node_buf_alloc as usize).update(buf_start);
                 if !got {
                     bufs.free();
                     break 'err;
@@ -300,7 +302,7 @@ impl BtreeTrans<'_> {
                 break 'got_mem (n, None);
             }
 
-            fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
+            fs.times.get(TimeStat::btree_node_mem_alloc as usize).update(start_time);
             return Err(Errcode::ENOMEM_btree_node_mem_alloc.into());
         };
 
@@ -325,7 +327,7 @@ impl BtreeTrans<'_> {
         b.whiteout_u64s.set(0);
         b.keys_mut(contents).btree_keys_init();
 
-        fs.times.get(c::TimeStat::btree_node_mem_alloc as usize).update(start_time);
+        fs.times.get(TimeStat::btree_node_mem_alloc as usize).update(start_time);
 
         /*
          * Room in the table for the node's hash insert, which grows it under
@@ -351,9 +353,9 @@ impl BtreeTrans<'_> {
 
         ebug_assert!(path.is_none_or(|p| level + 1 == paths[p].level() as usize));
 
-        if unlikely(level >= c::BTREE_MAX_DEPTH as usize) {
+        if unlikely(level >= BTREE_MAX_DEPTH as usize) {
             let mut msg = LogMsg::new(fs);
-            prt!(msg, "attempting to get btree node at level {level}, >= max depth {}", c::BTREE_MAX_DEPTH);
+            prt!(msg, "attempting to get btree node at level {level}, >= max depth {}", BTREE_MAX_DEPTH);
             return Err(fs.topology_error(&mut msg));
         }
 
@@ -364,7 +366,7 @@ impl BtreeTrans<'_> {
             return Err(fs.topology_error(&mut msg));
         }
 
-        if unlikely(usize::from(k.k.u64s) > c::BKEY_BTREE_PTR_U64s_MAX) {
+        if unlikely(usize::from(k.k.u64s) > BKEY_BTREE_PTR_U64s_MAX) {
             let mut msg = LogMsg::new(fs);
             prt!(msg, "attempting to get btree node with too big key ");
             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(k));

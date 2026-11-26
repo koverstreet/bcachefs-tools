@@ -10,7 +10,7 @@
 
 mod tables;
 
-use crate::c::Errcode;
+use crate::errcode::Errcode;
 use crate::errcode::BchError;
 use crate::util::os_str::{OsStr, OsStrExt};
 

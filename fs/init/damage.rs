@@ -33,37 +33,39 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::AnyKeySC;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::c;
+use crate::data::extents_format::BtreePtrV2;
+use crate::init::damage_format::Damage;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::posix::inode;
-use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId};
+use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId, bch_sb_error_entry_cpu};
 use crate::snapshots::subvolume;
 use crate::util::{DateTime, Printbuf};
 use crate::util::alloc::Vec;
 use crate::os::kernel::ktime_get_real_seconds;
 use crate::util::vstructs::{Unvalidated, Validated};
 use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
-use c::bch_sb_field_error_entry_v2 as Entry;
+use crate::sb::errors_format::bch_sb_field_error_entry_v2 as Entry;
 use core::cmp::Ordering;
 use core::mem::size_of;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, BKEY_VAL_U64s_MAX};
 
 // ── The key ──────────────────────────────────────────────────────────────
 
 const ENTRY: usize = size_of::<Entry>();
 
 /// The most entries a key's value holds: its u64s are a u8.
-const MAX_ENTRIES: usize = c::BKEY_VAL_U64s_MAX * size_of::<u64>() / ENTRY;
+const MAX_ENTRIES: usize = BKEY_VAL_U64s_MAX * size_of::<u64>() / ENTRY;
 
-impl crate::btree::bkey::BkeyOps for c::Damage {
+impl crate::btree::bkey::BkeyOps for Damage {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let val_bytes = v.k.k.val_bytes();
         bkey_fsck_err_on!(v, val_bytes % ENTRY != 0,
                           id::damage_entries_bad, "val size {val_bytes} not a multiple of entry size")?;
 
-        let entries = &v.k.arm::<c::Damage>().expect("a damage key").v().entries;
+        let entries = &v.k.arm::<Damage>().expect("a damage key").v().entries;
         bkey_fsck_err_on!(v, entries.is_empty(), id::damage_entries_bad, "no entries")?;
 
         let mut prev = 0;
@@ -82,7 +84,7 @@ impl crate::btree::bkey::BkeyOps for c::Damage {
 
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        for (i, e) in k.arm::<c::Damage>().expect("a damage key").v().entries.iter().enumerate() {
+        for (i, e) in k.arm::<Damage>().expect("a damage key").v().entries.iter().enumerate() {
             if i != 0 {
                 out.newline();
             }
@@ -106,12 +108,12 @@ pub fn inode_has_damage(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> R
 /// versions', merged, sorted by id: damage recorded against an ancestor
 /// version happened to the data a descendant sees.
 pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
-    -> Result<Vec<c::bch_sb_error_entry_cpu>, BchError>
+    -> Result<Vec<bch_sb_error_entry_cpu>, BchError>
 {
-    let mut out: Vec<c::bch_sb_error_entry_cpu> = Vec::new();
+    let mut out: Vec<bch_sb_error_entry_cpu> = Vec::new();
     loop {
         let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum, snapshot), BtreeIterFlags::NOPRESERVE);
-        let Some(d) = iter.peek_slot(t)?.and_then(|k| k.arm::<c::Damage>()) else { break };
+        let Some(d) = iter.peek_slot(t)?.and_then(|k| k.arm::<Damage>()) else { break };
 
         for e in d.v().entries.iter() {
             match out.binary_search_by_key(&e.id(), |o| o.id()) {
@@ -145,7 +147,7 @@ pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: SbErrorId) -> Result<(),
 
     let mut iter = BtreeIter::new(t, Btree::damage, at,
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
-    let cur = iter.peek_slot(t)?.and_then(|k| k.arm::<c::Damage>());
+    let cur = iter.peek_slot(t)?.and_then(|k| k.arm::<Damage>());
     let old = cur.as_ref().map_or(&[][..], |d| &d.v().entries);
     let (idx, found) = match old.binary_search_by_key(&err.0, |e| e.id().0) {
         Ok(i)  => (i, true),
@@ -163,7 +165,7 @@ pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: SbErrorId) -> Result<(),
     }
 
     let now = ktime_get_real_seconds() as u64;
-    let mut n = t.bkey_alloc_init::<c::Damage>(nr * ENTRY / size_of::<u64>(), at)?;
+    let mut n = t.bkey_alloc_init::<Damage>(nr * ENTRY / size_of::<u64>(), at)?;
     let dst = &mut n.v_mut().entries;
     if found {
         dst.copy_from_slice(old);
@@ -231,7 +233,7 @@ pub fn delete(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<(), 
 /// so a real one when no older version needs the record and a whiteout when
 /// one does - snapshots keep their view, and the whiteout hides inherited
 /// damage from this view and its descendants. A clean file's is nothing.
-pub fn clear(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<(), BchError> {
+pub fn clear(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
     let mut iter = BtreeIter::new(t, Btree::damage, spos(0, inum.inum, snapshot), BtreeIterFlags::INTENT);
@@ -253,12 +255,12 @@ pub fn keys_merge<'a, 't>(
     pos: Bpos,
     a:   BkeySC<'_>,
     b:   BkeySC<'_>,
-) -> Result<TransBkey<'a, 't, c::Damage<Validated>>, BchError> {
-    let ea = &a.arm::<c::Damage>().expect("a damage key").v().entries;
-    let eb = &b.arm::<c::Damage>().expect("a damage key").v().entries;
+) -> Result<TransBkey<'a, 't, Damage<Validated>>, BchError> {
+    let ea = &a.arm::<Damage>().expect("a damage key").v().entries;
+    let eb = &b.arm::<Damage>().expect("a damage key").v().entries;
 
     let nr = (ea.len() + eb.len()).min(MAX_ENTRIES);
-    let mut n = t.bkey_alloc_init::<c::Damage>(nr * ENTRY / size_of::<u64>(), pos)?;
+    let mut n = t.bkey_alloc_init::<Damage>(nr * ENTRY / size_of::<u64>(), pos)?;
 
     let (mut i, mut j, mut out) = (0, 0, 0);
     let dst = &mut n.v_mut().entries;
@@ -304,7 +306,7 @@ pub fn note_lost_extents(fs: &Fs, btree: Btree, k: BkeySC<'_>) {
     if btree != Btree::extents {
         return;
     }
-    let Some(p) = k.arm::<c::BtreePtrV2>() else { return };
+    let Some(p) = k.arm::<BtreePtrV2>() else { return };
     let (start, end) = (p.v().min_key, k.k.p);
 
     if fs.lost_extents_ranges.lock().push(start..end).is_err() {

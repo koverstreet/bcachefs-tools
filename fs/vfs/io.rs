@@ -9,6 +9,12 @@ use pin_init::stack_pin_init;
 use crate::btree::bkey::{bkey_ge, pos};
 use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
+use crate::alloc::write_point::write_point_specifier;
+use crate::init::dev::bch_devs_mask;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::sb::members::DevWriteRefKind;
+use crate::snapshots::subvolume::subvol_inum;
+use crate::vfs::inode::PagecacheBlock;
 use crate::data::dev_bio::DevBio;
 use crate::data::durability::BkeyVDurability;
 use crate::data::extents::BkeyVExtents;
@@ -56,12 +62,12 @@ impl InodeInfo {
          * that shows up after the exchange, and is picked up by the next flush
          * either way.
          */
-        let mut devs = c::bch_devs_mask::default();
+        let mut devs = bch_devs_mask::default();
         self.ei_devs_need_flush.take(&mut devs.d);
 
         stack_pin_init!(let g = Gather::<(), waiter::Sync>::new());
         for dev in devs.d.iter() {
-            let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<c::DevWriteRefKind>(ca));
+            let ca = fs.dev_rcu(dev as u32, &read_lock()).and_then(|ca| fs.io_ref_tryget::<DevWriteRefKind>(ca));
             let Some(ca) = ca else { continue };
 
             let bio = fs.vfs.nocow_flush_bioset
@@ -98,7 +104,7 @@ impl InodeInfo {
     }
 }
 
-fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<u64, BchError> {
+fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: subvol_inum) -> Result<u64, BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::uninit(t.trans());
     let mut u = inode::__peek(t, &mut iter, inum, BtreeIterFlags::empty(),
@@ -177,7 +183,7 @@ impl InodeInfo {
     /// Whether writeback writes the folio back, and with it i_size: if not,
     /// the caller updates i_size.
     fn truncate_folio(&self, index: u64, start: u64, end: u64) -> Result<bool, BchError> {
-        use c::FolioSectorState as SectorState;
+        use crate::vfs::pagecache::FolioSectorState as SectorState;
 
         let fs = self.fs();
         let mapping = self.mapping();
@@ -290,7 +296,7 @@ impl InodeInfo {
         Ok(ret)
     }
 
-    fn extend(&self, idmap: MntIdmap<'_>, inode_u: &c::bch_inode_unpacked, attr: &c::iattr)
+    fn extend(&self, idmap: MntIdmap<'_>, inode_u: &bch_inode_unpacked, attr: &c::iattr)
         -> Result<(), BchError>
     {
         self.zero_pagecache_posteof();
@@ -308,7 +314,7 @@ impl InodeInfo {
     }
 
     pub(crate) fn truncate(&self, idmap: MntIdmap<'_>, attr: &mut c::iattr) -> Result<(), BchError> {
-        use c::InodeInfoFlag::{EI_INODE_ERROR, EI_INODE_FLUSH_ON_CLOSE};
+        use crate::vfs::inode::InodeInfoFlag::{EI_INODE_ERROR, EI_INODE_FLUSH_ON_CLOSE};
 
         let fs = self.fs();
         let v = self.vfs();
@@ -332,7 +338,7 @@ impl InodeInfo {
         }
 
         v.dio_wait();
-        let _block = self.ei_pagecache_lock.lock::<c::PagecacheBlock>();
+        let _block = self.ei_pagecache_lock.lock::<PagecacheBlock>();
 
         let inode_u = inode::find_by_inum(fs, self.inum())?;
 
@@ -546,7 +552,7 @@ impl InodeInfo {
                 }
 
                 io_misc::extent_fallocate(t, inum, &mut iter, sectors, &opts, &mut i_sectors_delta,
-                                          c::write_point_specifier::hashed(current_id()))?;
+                                          write_point_specifier::hashed(current_id()))?;
 
                 self.i_sectors_acct(Some(&mut *quota_res), i_sectors_delta);
 
@@ -635,7 +641,7 @@ pub(super) fn fallocate(inode: &InodeInfo, file: &File, mode: c_int, offset: i64
 
     let _i_rwsem = inode.vfs().lock();
     inode.vfs().dio_wait();
-    let _block = inode.ei_pagecache_lock.lock::<c::PagecacheBlock>();
+    let _block = inode.ei_pagecache_lock.lock::<PagecacheBlock>();
 
     file.modified()?;
 

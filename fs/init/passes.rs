@@ -26,7 +26,7 @@ use crate::util::projections::Volatile;
 use crate::os::workqueue::ReffedWork;
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
 use pin_init::pin_data;
-use crate::format::{Btree, SbFeature};
+use crate::format::{Btree, SbFeature, bch_sb, bch_sb_field_ext};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -80,9 +80,9 @@ pub struct bch_recovery_runner {
      * but we still want the same last_run/last_runtime throttle so automatic
      * recovery doesn't hammer a pass that keeps failing.
      */
-    pub passes_failing_ratelimit: [c::recovery_pass_entry; c::RecoveryPass::NR as usize],
+    pub passes_failing_ratelimit: [recovery_pass_entry; RecoveryPass::NR as usize],
     /* Consecutive failures, for exponential backoff; zeroed on success */
-    pub passes_failing_nr: [u8; c::RecoveryPass::NR as usize],
+    pub passes_failing_nr: [u8; RecoveryPass::NR as usize],
 }
 // rewound_from and rewound_to zeroed are pass 0, recovery_pass_empty: none
 
@@ -112,7 +112,7 @@ pub struct bch_fs_recovery {
      * indicator rather than a stack because no pass has two live at once -
      * which is what check_reconcile_work_data_btrees() exists to keep true.
      */
-    pub progress: c::progress_indicator,
+    pub progress: progress_indicator,
 
     /* the runner's state, under its lock, and what it publishes */
     #[pin]
@@ -151,10 +151,14 @@ pub trait Run {
 }
 
 use crate::btree::iter::lockrestart_do;
-use crate::c;
+use crate::init::passes_format::{bch_sb_field_recovery_passes, recovery_pass_entry};
+use crate::init::progress::progress_indicator;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::snapshots::format::BCACHEFS_ROOT_SUBVOL;
+use crate::snapshots::subvolume::subvol_inum;
 use self::bch_recovery_runner as Runner;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard};
+use crate::fs::{Fs, SbLockGuard, FsFlag};
 use crate::locking::ExclusiveGuard;
 use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
@@ -175,7 +179,7 @@ use core::mem::size_of;
 pub use crate::init::passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
 
 type Pass = RecoveryPass;
-type Flags = c::RunRecoveryPassFlags;
+type Flags = RunRecoveryPassFlags;
 
 // ── The passes ───────────────────────────────────────────────────────────────
 
@@ -188,6 +192,8 @@ pub const LAST: Pass = Pass::from_bits(NR as u32 - 1);
 /// own: a unit struct's name is a value too, and two passes' functions here
 /// have theirs.
 pub mod pass {
+    use crate::init::passes_format::RecoveryPass_arms;
+
     macro_rules! pass_types {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => {
             $(pub struct $name;)*
@@ -197,7 +203,7 @@ pub mod pass {
                 [$(<$name as super::Run>::run),*];
         };
     }
-    crate::c::RecoveryPass_arms!(pass_types);
+    RecoveryPass_arms!(pass_types);
 }
 use pass::RUN;
 use crate::sb::io::SbResize;
@@ -247,10 +253,10 @@ crate::recovery_pass!(recovery_pass_empty => recovery_pass_empty);
 /// That the root inode can be read, while recovery can still rewind to
 /// repair it.
 fn lookup_root_inode(fs: &Fs) -> Result<(), BchError> {
-    let inum = c::subvol_inum { subvol: c::BCACHEFS_ROOT_SUBVOL.into(), inum: c::BCACHEFS_ROOT_INO.into() };
+    let inum = subvol_inum { subvol: BCACHEFS_ROOT_SUBVOL.into(), inum: BCACHEFS_ROOT_INO.into() };
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
-        subvolume::get(t, c::BCACHEFS_ROOT_SUBVOL, true)?;
+        subvolume::get(t, BCACHEFS_ROOT_SUBVOL, true)?;
         inode::find_by_inum_trans(t, inum, here!()).map(drop)
     })
 }
@@ -319,9 +325,9 @@ pub fn prt_stable(out: &mut Printbuf, stable: u64) {
 
 /// When each pass last ran and how long it took, by stable id: what
 /// ratelimiting a pass goes by.
-impl SbFieldOps for c::bch_sb_field_recovery_passes<Validated> {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                r: &c::bch_sb_field_recovery_passes<Unvalidated>) {
+impl SbFieldOps for bch_sb_field_recovery_passes<Validated> {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                r: &bch_sb_field_recovery_passes<Unvalidated>) {
         while out.nr_tabstops() < 2 {
             out.tabstop_push(32);
         }
@@ -338,7 +344,7 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes<Validated> {
 
 // ── Its entries ──────────────────────────────────────────────────────────────
 
-type Section = c::bch_sb_field_recovery_passes<Validated>;
+type Section = bch_sb_field_recovery_passes<Validated>;
 
 /// For self healing - e.g. missing backpointers - that would otherwise keep
 /// scheduling an expensive repair pass that can wait: run it at most once per
@@ -347,15 +353,15 @@ type Section = c::bch_sb_field_recovery_passes<Validated>;
 const SELF_HEAL_RATELIMIT: u32 = 100;
 
 /// @pass's entry, if the section has one.
-fn entry(sb: &c::bch_sb, pass: Pass) -> Option<c::recovery_pass_entry> {
+fn entry(sb: &bch_sb, pass: Pass) -> Option<recovery_pass_entry> {
     sb.field::<Section>()?.start.get(pass.stable().0 as usize).copied()
 }
 
 /// @pass's entry, the section made or grown to hold it: None if there's no
 /// room in the superblock.
-fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut c::recovery_pass_entry> {
+fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut recovery_pass_entry> {
     let stable = pass.stable().0 as usize;
-    let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<c::recovery_pass_entry>();
+    let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<recovery_pass_entry>();
     if fs.sb_resize(sb).field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32).is_none() {
         bch_err!(fs, "error creating recovery_passes sb section");
         return None;
@@ -367,13 +373,13 @@ fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a
 /// was more than 1/@runtime_fraction of the time since, and it isn't marked
 /// never to be. Both ratelimits go by it: the superblock's, of expensive
 /// passes, and the in-memory one of failing passes, each with its own entries.
-pub fn entry_ratelimited(e: &c::recovery_pass_entry, runtime_fraction: u32) -> bool {
+pub fn entry_ratelimited(e: &recovery_pass_entry, runtime_fraction: u32) -> bool {
     let now = ktime_get_real_seconds() as u64;
     !e.no_ratelimit() &&
         u64::from(e.last_runtime.get()) * u64::from(runtime_fraction) > now.wrapping_sub(e.last_run.get())
 }
 
-fn want_ratelimit_locked(sb: &c::bch_sb, pass: Pass, runtime_fraction: u32) -> bool {
+fn want_ratelimit_locked(sb: &bch_sb, pass: Pass, runtime_fraction: u32) -> bool {
     entry(sb, pass).is_some_and(|e| entry_ratelimited(&e, runtime_fraction))
 }
 
@@ -399,7 +405,7 @@ pub fn set_no_ratelimit(fs: &Fs, pass: Pass) {
 /// with the passes required - are done with too.
 fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
     let mut sb = fs.sb_lock();
-    let ext = sb.field_mut::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
+    let ext = sb.field_mut::<bch_sb_field_ext<Validated>>().expect("an ext section");
     LeBitmap::from_words_mut(&mut ext.recovery_passes_required).clear(pass.stable().0 as usize);
     // the runner takes each pass off current_passes before running it: none
     // left, this was the last
@@ -470,13 +476,13 @@ fn lock(fs: &Fs) -> Recovery<'_> {
 /// Whether recovery has @pass still to run, or running: as
 /// recovery_pass_will_run(). Never true outside recovery.
 pub fn will_run(fs: &Fs, pass: Pass) -> bool {
-    fs.flags.get(c::FsFlag::in_recovery) && fs.recovery.runner.current_passes.get() & bit(pass) != 0
+    fs.flags.get(FsFlag::in_recovery) && fs.recovery.runner.current_passes.get() & bit(pass) != 0
 }
 
 /// Whether recovery work should stop - the filesystem going read-only, or
 /// the kthread running it told to.
 pub fn cancelled(fs: &Fs) -> Result<(), BchError> {
-    if fs.flags.get(c::FsFlag::going_ro) {
+    if fs.flags.get(FsFlag::going_ro) {
         return fs.throw(Errcode::erofs_recovery_cancelled);
     }
     if Kthread::should_stop() {
@@ -532,13 +538,13 @@ fn should_defer(pass: usize, passes: u64) -> bool {
 /// into current_passes - which is how an offline pass reaches a live
 /// filesystem.
 fn may_run_now(fs: &Fs, pass: Pass) -> bool {
-    !fs.flags.get(c::FsFlag::started) || pass.when().intersects(PassFlags::ONLINE)
+    !fs.flags.get(FsFlag::started) || pass.when().intersects(PassFlags::ONLINE)
 }
 
 /// Whether running @pass means going back for it: the pass loop is running,
 /// is past it, and hasn't run it this run.
 fn needs_rewind(fs: &Fs, r: &Recovery<'_>, pass: Pass) -> bool {
-    fs.flags.get(c::FsFlag::running_recovery_passes) &&
+    fs.flags.get(FsFlag::running_recovery_passes) &&
         fs.recovery.runner.current_pass.get() > pass &&
         r.passes_attempted & bit(pass) == 0
 }
@@ -552,7 +558,7 @@ fn is_persistent(pass: Pass) -> bool {
 /// Whether scheduling @pass would do anything. With ratelimit
 /// in @flags, the superblock - @sb, under sb_lock - decides whether it's to be
 /// ratelimited, and if not it's taken out of @flags.
-fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Option<&c::bch_sb>) -> bool {
+fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Option<&bch_sb>) -> bool {
     if flags.contains(Flags::skip_if_complete) &&
        fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return false;
@@ -579,7 +585,7 @@ fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Optio
      * scan_for_btree_nodes can never reach the superblock set - so this arm
      * always says "not already requested".
      */
-    let in_recovery = fs.flags.get(c::FsFlag::in_recovery);
+    let in_recovery = fs.flags.get(FsFlag::in_recovery);
     let already_running = if !in_recovery || is_persistent(pass) {
         fs.sb.recovery_passes_required.get()
     } else {
@@ -622,14 +628,14 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
 
     out.set_suppressed(false);
 
-    let running = fs.flags.get(c::FsFlag::running_recovery_passes);
+    let running = fs.flags.get(FsFlag::running_recovery_passes);
     let ratelimit = flags.contains(Flags::ratelimit);
 
     if flags.contains(Flags::ephemeral) || !is_persistent(pass) {
         *r.published().scheduled_passes_ephemeral.place() |= bit(pass);
     } else {
         let w = w.expect("not ephemeral: an sb_write");
-        let ext = w.field_mut::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
+        let ext = w.field_mut::<bch_sb_field_ext<Validated>>().expect("an ext section");
         let required = LeBitmap::from_words_mut(&mut ext.recovery_passes_required);
         let new = !required.test_and_set(pass.stable().0 as usize);
         w.record(new);
@@ -647,7 +653,7 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
     }
 
     if pass < Pass::set_may_go_rw &&
-       fs.flags.get(c::FsFlag::may_go_rw) {
+       fs.flags.get(FsFlag::may_go_rw) {
         write!(out, "need recovery pass {} ({}), but already rw\n", pass.name(), pass as u32);
         return fs.throw(Errcode::cannot_rewind_recovery);
     }
@@ -753,7 +759,7 @@ pub fn run_explicit(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags) -
 /// if it has; restart_recovery if it's in recovery's past, which rewinds to
 /// it; else recovery_pass_will_run - it's scheduled, and runs later.
 pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> {
-    if fs.flags.get(c::FsFlag::running_recovery_passes) &&
+    if fs.flags.get(FsFlag::running_recovery_passes) &&
        fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return Ok(());
     }
@@ -818,7 +824,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
              * to passes the sb marks NO_RATELIMIT: that flag is about not
              * throttling successful reruns, not about hammering failures.
              */
-            r.passes_failing_ratelimit[p] = c::recovery_pass_entry {
+            r.passes_failing_ratelimit[p] = recovery_pass_entry {
                 last_run:     Le64::new(end_time as u64),
                 last_runtime: Le32::new(runtime as u32),
                 ..Default::default()
@@ -840,7 +846,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
     r.passes_failing_nr[pass as usize] = 0;
     drop(r);
 
-    if !fs.flags.get(c::FsFlag::error) {
+    if !fs.flags.get(FsFlag::error) {
         pass_complete(fs, pass, start_time);
     }
     Ok(())
@@ -857,7 +863,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
      * loop is running, which includes the async runner - not only during
      * mount. BCH_FS_in_recovery is cleared before the async runner starts.
      */
-    fs.flags.set(c::FsFlag::running_recovery_passes, true);
+    fs.flags.set(FsFlag::running_recovery_passes, true);
 
     let rec = &fs.recovery.runner;
     let mut r = lock(fs);
@@ -878,7 +884,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
      * run them even if they failed before, and let them fail loudly again
      * rather than silently returning success having done nothing.
      */
-    if !fs.flags.get(c::FsFlag::in_fsck) {
+    if !fs.flags.get(FsFlag::in_fsck) {
         for p in (0..NR).filter(|&p| r.passes_failing & 1 << p != 0) {
             if entry_ratelimited(&r.passes_failing_ratelimit[p], failing_pass_backoff(&r, p)) {
                 passes &= !(1 << p);
@@ -950,14 +956,14 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     r.published().current_pass.set(NONE);
     drop(r);
 
-    fs.flags.set(c::FsFlag::running_recovery_passes, false);
+    fs.flags.set(FsFlag::running_recovery_passes, false);
     ret
 }
 
 /// The async runner: the passes scheduled that can run online, unless a run
 /// is already going - then it picks them up. run_async() queues it, holding
 /// a write ref.
-pub(crate) fn async_runner(recovery: &c::bch_fs_recovery) {
+pub(crate) fn async_runner(recovery: &bch_fs_recovery) {
     let fs = recovery.container();
     let Some(_run) = recovery.run_lock.try_lock() else { return };
 
@@ -1052,7 +1058,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
         run_passes(fs, passes, true)?;
     }
 
-    fs.flags.set(c::FsFlag::in_recovery, false);
+    fs.flags.set(FsFlag::in_recovery, false);
 
     if defer != 0 {
         let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
@@ -1117,7 +1123,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 
         line(out, "Next", r.runner.current_passes.get());
 
-        if fs.flags.get(c::FsFlag::in_recovery) && rewound_from != NONE {
+        if fs.flags.get(FsFlag::in_recovery) && rewound_from != NONE {
             write!(out, "Rewound from:\t{} ({})\n", rewound_from.name(), rewound_from as u32);
         }
     }
@@ -1127,7 +1133,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 /// erofs_trans_commit. opts.recovery_passes counts because Fs::start()
 /// asks before recovery schedules them.
 pub fn go_rw_in_recovery(fs: &Fs) -> bool {
-    fs.flags.get(c::FsFlag::may_upgrade_downgrade) &&
+    fs.flags.get(FsFlag::may_upgrade_downgrade) &&
         (fs.journal_keys_get().is_some_and(|jk| !jk.value().keys().is_empty()) ||
          fs.opts().read_only.get() == 0 ||
          fs.sb.clean.get() == 0 ||

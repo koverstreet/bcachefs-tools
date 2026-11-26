@@ -18,7 +18,9 @@ use crate::btree::bkey::prelude::*;
 use crate::os::posix_acl::AclType;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
-use crate::c;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::posix::str_hash::bch_hash_info;
+use crate::posix::xattr_format::Xattr;
 use crate::posix::check::{InodeWalker, SnapshotsSeen};
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -32,7 +34,7 @@ use crate::format::Btree;
 struct CheckXattrs<'f> {
     s:         SnapshotsSeen,
     inode:     InodeWalker,
-    hash_info: c::bch_hash_info<'f>,
+    hash_info: bch_hash_info<'f>,
 }
 
 /// The inode flag a POSIX ACL xattr needs.
@@ -81,7 +83,7 @@ fn check_xattr<'t>(
         st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
     }
 
-    if let Some(acl) = k.arm::<c::Xattr>().and_then(|k| AclType::from_xattr_type(k.v().ty())) {
+    if let Some(acl) = k.arm::<Xattr>().and_then(|k| AclType::from_xattr_type(k.v().ty())) {
         check_acl_flag(t, st, k, acl)?;
     }
 
@@ -105,7 +107,7 @@ fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
     };
 
     let mut iter = BtreeIter::new(&trans, Btree::xattrs,
-                                  pos(c::BCACHEFS_ROOT_INO as u64, 0),
+                                  pos(BCACHEFS_ROOT_INO as u64, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,

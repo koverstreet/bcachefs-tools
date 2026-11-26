@@ -4,6 +4,7 @@
 //! tag's value as the discriminant:
 //!
 //!   tagged_union! {
+//!       in crate::alloc::accounting_format;
 //!       #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]*
 //!       #[tag(type_: u8)]
 //!       #[tag_enum(DiskAccountingType: u32, nr)]
@@ -19,7 +20,8 @@
 //!   }
 //!
 //!   tagged_union! {
-//!       #[storage(c::jset_entry)]
+//!       in crate::format;
+//!       #[storage(crate::format::jset_entry)]
 //!       #[tag(type_: u8)]
 //!       #[tag_enum(JsetEntryType: u32, nr)]
 //!       #[size(header)]
@@ -29,6 +31,10 @@
 //!           ...
 //!       }
 //!   }
+//!
+//! `in MODULE;` is where it's declared: NAME_match! expands where it's used,
+//! and names what's generated here by it. The arm types it pastes are as
+//! written, so are full paths.
 //!
 //! A discriminant not written is the last's plus one, as an enum's. An arm's
 //! type may be defined in its variant, `[#[..]] [pub] struct|union NAME {
@@ -158,6 +164,9 @@ use crate::tokens::vs;
 /// the arm its tag selects, the head the start of every arm.
 struct TaggedUnion {
     name:      Ident,
+    /// `in MODULE;`: where it's declared, which NAME_match! - expanded where
+    /// it's used - names the arms' enum by.
+    module:    syn::Path,
     /// #[storage(TYPE)]: the storage is that type, another's, and what's
     /// generated a view of it; else it's this one's own, which it defines.
     storage:   Option<syn::Type>,
@@ -249,7 +258,8 @@ const OURS: &[&str] = &["tag", "tag_enum", "storage", "pad", "size", "packed"];
 /// The union the declaration says, and what's generated from its arms besides
 /// it: the tag enum and NAME_arms!.
 fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), String> {
-    let (attrs, arm_attrs, ours, vis, name, body) = syn::parse::Parser::parse2(|input: ParseStream<'_>| {
+    let (module, attrs, arm_attrs, ours, vis, name, body) = syn::parse::Parser::parse2(|input: ParseStream<'_>| {
+        let module = crate::tokens::parse_module(input)?;
         let (mut attrs, mut arm_attrs, mut ours) = (Vec::new(), TokenStream::new(), Vec::new());
         while input.peek(Token![#]) {
             let content;
@@ -273,9 +283,11 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
         let name: Ident = input.parse()?;
         let body;
         syn::braced!(body in input);
-        Ok((attrs, arm_attrs, ours, vis, name, body.parse::<TokenStream>()?))
-    }, input).map_err(|e| format!("expected [#[..]] pub enum NAME {{ .. }}: {e}"))?;
+        Ok((module, attrs, arm_attrs, ours, vis, name, body.parse::<TokenStream>()?))
+    }, input).map_err(|e| format!("expected in MODULE; [#[..]] pub enum NAME {{ .. }}: {e}"))?;
     let err = |m: &str| format!("tagged_union! {name}: {m}");
+    let module = module.ok_or_else(|| err("no `in MODULE;` - NAME_match!, which expands where it's used, \
+                                            names the arms' enum by it"))?;
 
     let mut tag: Option<(Ident, syn::Type)> = None;
     let mut tag_enum: Option<EnumDef> = None;
@@ -320,11 +332,12 @@ fn enum_form(input: TokenStream) -> Result<(Decl, TaggedUnion, TokenStream), Str
     }
     let tag_enum_ty = tag_enum.as_ref().map(|e| -> syn::Type {
         let n = &e.name;
-        parse_quote!(c::#n)
+        parse_quote!(#module::#n)
     });
 
     let tu = TaggedUnion {
         name: name.clone(),
+        module,
         storage,
         tag_field,
         tag_ty,
@@ -670,7 +683,7 @@ impl Gen<'_> {
     /// is Unvalidated, all the way down.
     fn header(&self) -> Result<TokenStream, String> {
         let (tu, vs, vis, s_ty, tag_enum) = (self.tu, vs(), self.vis, &self.s_ty, self.tag_enum);
-        let (arms, name, tag_ty) = (&tu.arms, &tu.name, &tu.tag_ty);
+        let (arms, name, tag_ty, module) = (&tu.arms, &tu.name, &tu.tag_ty, &tu.module);
         let (en_ref, determinant, t_tag) = (&self.en_ref, &self.determinant, self.t_tag());
         let not_path = std::iter::once(s_ty).chain(arms.iter().map(|a| &a.ty))
             .find(|t| !matches!(t, syn::Type::Path(_)));
@@ -750,7 +763,7 @@ impl Gen<'_> {
         }
         let match_arms = arms.iter().map(|a| {
             let (arm, path) = (&a.name, arm_path(&a.ty));
-            quote!(crate::c::#en_ref::#arm($a) => { $(type $A<S> = #path<S>;)? $body })
+            quote!(#module::#en_ref::#arm($a) => { $(type $A<S> = #path<S>;)? $body })
         });
         let tag_arms = arms.iter().map(|a| {
             let (v, path) = (self.as_tag(&a.value), arm_path(&a.ty));

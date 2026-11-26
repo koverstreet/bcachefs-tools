@@ -12,7 +12,10 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::write_buffer::WbMaybeFlush;
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::data::extents_format::{bch_extent_stripe_ptr, BKEY_EXTENT_U64s_MAX};
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::posix::logged_ops_format::LoggedOpStripeUpdate;
 use crate::data::durability::drop_extra_durability;
 use crate::data::ec::stripe::{carried_blocks, ptr_in_block, Block};
 use crate::data::ptrs::{brand, BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, Ptrs, PtrsMut};
@@ -29,7 +32,7 @@ use crate::{bch_err, fs_inconsistent, fsck_err_flags, prt};
 use crate::posix::logged_ops;
 use core::mem::size_of;
 use core::ops::RangeInclusive;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, Backpointer};
 
 // ── A stripe block's extents ─────────────────────────────────────────────
 //
@@ -45,7 +48,7 @@ use crate::format::{Bpos, Btree, BkeyType};
 pub(crate) type Extent<'k, 'a> = Option<(&'k BtreeIter<'a>, BkeySC<'k>)>;
 
 /// Where block @block's backpointers are.
-fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (Btree, RangeInclusive<Bpos>) {
+fn block_bps(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, block: u32) -> (Btree, RangeInclusive<Bpos>) {
     let ptr = &s.v().block_ptrs()[block as usize];
 
     // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair of
@@ -61,11 +64,11 @@ fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (Btree
 
 /// @f on each extent in block @block of stripe @s, found by backpointer, a
 /// commit after each - and @res put before each.
-pub(crate) fn block_for_each_extent<'t, F>(trans: &'t BtreeTrans<'t>, s: BkeySC<'_, c::Stripe<Validated>>, block: u32,
+pub(crate) fn block_for_each_extent<'t, F>(trans: &'t BtreeTrans<'t>, s: BkeySC<'_, Stripe<Validated>>, block: u32,
                                 res: Option<&DiskReservation<'_>>, flags: CommitOpts, mut f: F)
     -> Result<(), BchError>
 where
-    F: for<'a, 'k, 'e> FnMut(&'k TransAttempt<'a, 't>, BkeySC<'k, c::Backpointer>, Extent<'e, 'a>) -> Result<(), BchError>,
+    F: for<'a, 'k, 'e> FnMut(&'k TransAttempt<'a, 't>, BkeySC<'k, Backpointer>, Extent<'e, 'a>) -> Result<(), BchError>,
 {
     let fs = trans.fs();
     let (btree, range) = block_bps(fs, s, block);
@@ -76,7 +79,7 @@ where
             if let Some(res) = res {
                 res.put();
             }
-            let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(()) };
+            let Some(bp) = bp_k.arm::<Backpointer>() else { return Ok(()) };
 
             // the stripe's own
             if bp.v().target().btree == Btree::stripes {
@@ -105,7 +108,7 @@ struct UpdateStats {
     done:          (u32, u32),
 }
 
-fn count(c: &mut (u32, u32), bp: BkeySC<'_, c::Backpointer>) {
+fn count(c: &mut (u32, u32), bp: BkeySC<'_, Backpointer>) {
     c.0 += 1;
     c.1 += bp.v().bucket_len;
 }
@@ -122,7 +125,7 @@ struct BlockUpdate<'o, 'n> {
 /// pointer dropped, its pointer moved to the new block and given the new
 /// stripe's, then the replicas that's made extra dropped - the new pointer
 /// kept.
-fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, bp: BkeySC<'_, c::Backpointer>,
+fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, bp: BkeySC<'_, Backpointer>,
                         ext: Extent<'_, '_>) -> Result<(), BchError> {
     let fs = t.fs();
     let (old, new) = (u.old.stripe(), u.new.stripe());
@@ -181,7 +184,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
     // C reads them from the edited key: its position and type are @k's,
     // which is all they're found by
     let opts = get_io_opts(t, None, k)?;
-    let mut n = t.bkey_reassemble_room(k, c::BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
+    let mut n = t.bkey_reassemble_room(k, BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
     {
         let mut kp = n.reborrow().arm::<PtrsMut>().expect("a key with pointers, as it had one to the block");
 
@@ -210,7 +213,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
 
         let at = kp.ptrs_decoded(fs).find(|d| u32::from(d.ptr.dev()) == new_dev).map(|d| d.pos)
             .expect("the pointer just moved");
-        let stripe_ptr = c::bch_extent_stripe_ptr::new()
+        let stripe_ptr = bch_extent_stripe_ptr::new()
             .with_block(u.new.idx())
             .with_redundancy(new.v().nr_redundant)
             .with_idx(new_idx);
@@ -224,7 +227,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         })?;
     }
 
-    n.set_needs_reconcile(t, None, &opts, c::SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
+    n.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_other, 0)?;
     let traced = <events::stripe_update_extent as TraceEvent>::trace_enabled()
         .then(|| BkeyBuf::from_key(n.as_sc()));
     t.update(iter, n, UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
@@ -284,8 +287,8 @@ fn stripe_update_inject_crash(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 /// Each data block's extents pointed at @new: the first @old_block_map.len()
 /// carried from @old - block old_block_map[j] there - the rest @new's own. A
 /// map that doesn't fit the two - a damaged op, resumed - is an error.
-pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, c::Stripe<Validated>>,
-                                        new: BkeySC<'k, c::Stripe<Validated>>, old_block_map: &[u8],
+pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, Stripe<Validated>>,
+                                        new: BkeySC<'k, Stripe<Validated>>, old_block_map: &[u8],
                                         watermark: Watermark)
     -> Result<(), BchError>
 {
@@ -310,8 +313,8 @@ pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, 
 /// Making a stripe completes space already taken, and holds open buckets
 /// and writes until it's done: it can't wait behind the journal's free space
 /// throttle (dev_starved_watermark()), or a full filesystem deadlocks.
-pub(crate) fn create_watermark(w: c::Watermark) -> c::Watermark {
-    use c::Watermark as W;
+pub(crate) fn create_watermark(w: Watermark) -> Watermark {
+    use crate::alloc::foreground::Watermark as W;
     if w as u32 > W::copygc as u32 { w } else { W::copygc }
 }
 
@@ -320,13 +323,13 @@ pub(crate) fn create_watermark(w: c::Watermark) -> c::Watermark {
 /// A stripe update logged op, after a crash.
 pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), BchError> {
     let fs = trans.fs();
-    let op = op_k.arm::<c::LoggedOpStripeUpdate>().expect("a stripe update op");
+    let op = op_k.arm::<LoggedOpStripeUpdate>().expect("a stripe update op");
     let (old_idx, new_idx) = (op.v.old_idx.get(), op.v.new_idx.get());
 
     let get = |idx| lockrestart_do(trans, |t| {
         let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx), BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
-        Ok(k.arm::<c::Stripe>().is_some().then(|| BkeyBuf::from_key(k)))
+        Ok(k.arm::<Stripe>().is_some().then(|| BkeyBuf::from_key(k)))
     });
 
     let Some(new) = get(new_idx)? else {
@@ -349,17 +352,17 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
         None => BkeyBuf::from_key(BkeySC::from(&new)),
     };
 
-    fn stripe(b: &BkeyBuf) -> BkeySC<'_, c::Stripe<Validated>> {
-        BkeySC::from(b).arm::<c::Stripe>().expect("a stripe, as read")
+    fn stripe(b: &BkeyBuf) -> BkeySC<'_, Stripe<Validated>> {
+        BkeySC::from(b).arm::<Stripe>().expect("a stripe, as read")
     }
     let map = &op.v.old_block_map[..old_blocks_nr.min(op.v.old_block_map.len())];
-    stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(c::Watermark::normal).into())
+    stripe_update_extents(trans, stripe(&old), stripe(&new), map, create_watermark(Watermark::normal).into())
 }
 
-impl crate::btree::bkey::BkeyOps for c::LoggedOpStripeUpdate {
+impl crate::btree::bkey::BkeyOps for LoggedOpStripeUpdate {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let k = k.arm::<c::LoggedOpStripeUpdate>().expect("a stripe update op");
+        let k = k.arm::<LoggedOpStripeUpdate>().expect("a stripe update op");
         let op = k.v();
 
         prt!(out, "old_idx={}", op.old_idx.get());

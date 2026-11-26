@@ -4,10 +4,10 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, BkeyS, BkeySC, BkeyVal};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
-use crate::c;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion};
-use crate::fs::Fs;
+use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion, bkey,
+    Cookie, Deleted, Error, ExtentWhiteout, HashWhiteout, Set, Whiteout};
+use crate::fs::{Fs, FsFlag};
 use crate::init::error::BkeyValidate;
 use crate::prt;
 use crate::util::Printbuf;
@@ -43,7 +43,7 @@ nest! {
         #[members]
         #>[bitfield(u16)]
         pub bits: pub struct bkey_validate_context_bits {
-            #[bits(8)] pub from: c::BkeyValidateFrom,
+            #[bits(8)] pub from: BkeyValidateFrom,
             #[bits(8, from = ValidateFlags::from_bits_retain)] pub flags: ValidateFlags,
         },
         pub level: u8,
@@ -110,33 +110,33 @@ fn empty_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                              "incorrect value size ({n} != 0)")
 }
 
-impl BkeyOps for c::Deleted {}
-impl BkeyOps for c::Whiteout {}
-impl BkeyOps for c::ExtentWhiteout {}
+impl BkeyOps for Deleted {}
+impl BkeyOps for Whiteout {}
+impl BkeyOps for ExtentWhiteout {}
 
-impl BkeyOps for c::Error {
+impl BkeyOps for Error {
     /// Why it's an error: none in a value from before there was a reason.
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        let err = k.val_bytes().get(core::mem::offset_of!(c::Error, repr.err)).copied().unwrap_or(0);
+        let err = k.val_bytes().get(core::mem::offset_of!(Error, repr.err)).copied().unwrap_or(0);
         crate::util::ToText::to_text(&ErrorKeyReason(err.into()), out)
     }
 }
 
-impl BkeyOps for c::Cookie {
+impl BkeyOps for Cookie {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        crate::prt!(out, "{}", k.arm::<c::Cookie>().expect("a cookie").v().cookie.get());
+        crate::prt!(out, "{}", k.arm::<Cookie>().expect("a cookie").v().cookie.get());
     }
 }
 
-impl BkeyOps for c::HashWhiteout {
+impl BkeyOps for HashWhiteout {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         empty_val_validate(v)
     }
 }
 
-impl BkeyOps for c::Set {
+impl BkeyOps for Set {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         empty_val_validate(v)
     }
@@ -175,7 +175,7 @@ pub fn bpos_to_text(out: &mut Printbuf, p: Bpos) {
 }
 
 #[cold]
-pub fn bkey_to_text(out: &mut Printbuf, k: &c::bkey) {
+pub fn bkey_to_text(out: &mut Printbuf, k: &bkey) {
     prt!(out, "u64s {} type ", k.u64s);
     match k.key_type().name() {
         Some(name) => prt!(out, "{name} "),
@@ -235,7 +235,7 @@ pub fn bkey_val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>
 /// The value, by its type's validate - checked first that it's as long as
 /// the type's shortest.
 pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    if v.fs.flags.get(c::FsFlag::no_invalid_checks) {
+    if v.fs.flags.get(FsFlag::no_invalid_checks) {
         return Ok(());
     }
 
@@ -265,7 +265,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     use crate::bkey_fsck_err_on;
     let k = v.k.k;
 
-    if v.fs.flags.get(c::FsFlag::no_invalid_checks) {
+    if v.fs.flags.get(FsFlag::no_invalid_checks) {
         return Ok(());
     }
 
@@ -327,7 +327,7 @@ pub fn bkey_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 /// @r might be merged into @l - the same type and version, @r starting where
 /// @l ends.
-pub fn bch2_bkey_maybe_mergable(l: &c::bkey, r: &c::bkey) -> bool {
+pub fn bch2_bkey_maybe_mergable(l: &bkey, r: &bkey) -> bool {
     l.type_ == r.type_ && { l.bversion } == { r.bversion } && l.p == r.start_pos()
 }
 

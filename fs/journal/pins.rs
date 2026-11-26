@@ -18,12 +18,13 @@ use core::sync::atomic::{AtomicI32, Ordering::{Relaxed, Release, SeqCst}};
 use pin_init::{pin_data, PinInit, Zeroable};
 use cstruct_macros::NoUninit;
 
-use crate::c;
-use crate::c::JournalPinType as PinType;
+use crate::init::dev::bch_devs_list;
+use crate::journal::journal::{journal, JournalFlag};
+use self::JournalPinType as PinType;
 use crate::alloc::replicas::SbEntry;
 use crate::data_structures::list::List;
 use crate::errcode::{Errcode, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, BCH_REPLICAS_MAX};
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
 use crate::os::kernel::unlikely;
@@ -53,12 +54,12 @@ pub enum JournalPinType {
     JOURNAL_PIN_TYPE_NR,
 }
 
-pub type PinFlushFn = fn(&Fs, &c::journal_entry_pin, u64) -> Result<(), crate::errcode::BchError>;
+pub type PinFlushFn = fn(&Fs, &journal_entry_pin, u64) -> Result<(), crate::errcode::BchError>;
 
 /* A pin's, its seq's pin list lock's: the list it's on, and what it's on it as */
 pub struct PinLocked {
     pub list:     ListLinks,
-    pub pin_type: Cell<c::JournalPinType>,
+    pub pin_type: Cell<JournalPinType>,
 }
 
 // Zeroed, it's a pin never set: on no list, JOURNAL_PIN_TYPE_btree3
@@ -109,11 +110,11 @@ const JOURNAL_PIN: u64 = 32 * 1024;
  */
 const JOURNAL_PIN_MAX: u64 = 1024 * 1024;
 
-pub type Pin = c::journal_entry_pin;
+pub type Pin = journal_entry_pin;
 
 /* Where a pin's links are: in its locked half */
 const PIN_LIST: usize = offset_of!(Pin, locked) +
-    LockedBy::<c::PinLocked>::PROTECTED_OFFSET + offset_of!(c::PinLocked, list);
+    LockedBy::<PinLocked>::PROTECTED_OFFSET + offset_of!(PinLocked, list);
 
 type PinListHead = List<Pin, PIN_LIST>;
 
@@ -131,7 +132,7 @@ fn noflush(_: &Fs, _: &Pin, _: u64) -> Result<(), BchError> {
 }
 
 impl Pin {
-    fn with_flush(flush: c::PinFlushFn) -> Self {
+    fn with_flush(flush: PinFlushFn) -> Self {
         Self { locked: LockedBy::new(pin_init::zeroed(), ()), seq: Volatile::new(0), flush }
     }
 
@@ -181,8 +182,8 @@ impl core::fmt::Display for Symbol {
 #[derive(Clone, Copy, Default, Zeroable, NoUninit)]
 pub struct PinDevs {
     nr:   u8,
-    devs: [u8; c::BCH_REPLICAS_MAX as usize],
-    _pad: [u8; 7 - c::BCH_REPLICAS_MAX as usize],
+    devs: [u8; BCH_REPLICAS_MAX as usize],
+    _pad: [u8; 7 - BCH_REPLICAS_MAX as usize],
 }
 
 impl PinDevs {
@@ -190,11 +191,11 @@ impl PinDevs {
      * @d is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write),
      * and by replay_devs() (journal start)
      */
-    fn new(d: &c::bch_devs_list) -> Self {
-        debug_assert!(u32::from(d.nr) <= c::BCH_REPLICAS_MAX,
+    fn new(d: &bch_devs_list) -> Self {
+        debug_assert!(u32::from(d.nr) <= BCH_REPLICAS_MAX,
                       "journal entry on {} devices, past BCH_REPLICAS_MAX", d.nr);
         let devs = d.as_slice();
-        let devs = &devs[..devs.len().min(c::BCH_REPLICAS_MAX as usize)];
+        let devs = &devs[..devs.len().min(BCH_REPLICAS_MAX as usize)];
         let mut r = Self { nr: devs.len() as u8, ..Self::default() };
         r.devs[..devs.len()].copy_from_slice(devs);
         r
@@ -204,8 +205,8 @@ impl PinDevs {
         &self.devs[..self.nr as usize]
     }
 
-    fn list(self) -> c::bch_devs_list {
-        let mut l = c::bch_devs_list { nr: self.nr, ..Default::default() };
+    fn list(self) -> bch_devs_list {
+        let mut l = bch_devs_list { nr: self.nr, ..Default::default() };
         l.data[..self.as_slice().len()].copy_from_slice(self.as_slice());
         l
     }
@@ -217,7 +218,7 @@ impl PinDevs {
 
 #[derive(Zeroable)]
 struct PinLists {
-    unflushed: [PinListHead; c::JournalPinType::JOURNAL_PIN_TYPE_NR as usize],
+    unflushed: [PinListHead; JournalPinType::JOURNAL_PIN_TYPE_NR as usize],
     flushed:   PinListHead,
 }
 
@@ -313,7 +314,7 @@ fn new_entries(nr: usize) -> Result<Vec<PinList>, AllocError> {
     Ok(v)
 }
 
-impl c::PinRange {
+impl PinRange {
     pub(crate) fn used(&self) -> u64 {
         self.pin_back.get() - self.pin_front.get()
     }
@@ -321,16 +322,16 @@ impl c::PinRange {
 
 /* The live entries, with pin_resize_lock held for read */
 pub struct PinsRead<'a> {
-    j: &'a c::journal,
-    g: SharedGuard<'a, PercpuRwSem, c::PinBuf, c::PinRange>,
+    j: &'a journal,
+    g: SharedGuard<'a, PercpuRwSem, PinBuf, PinRange>,
 }
 
-impl c::journal {
+impl journal {
     pub fn pins(&self) -> PinsRead<'_> {
         PinsRead { j: self, g: self.pin_resize_lock.read() }
     }
 
-    pub(crate) fn pin_range(&self) -> &c::PinRange {
+    pub(crate) fn pin_range(&self) -> &PinRange {
         &self.pin_resize_lock
     }
 
@@ -353,7 +354,7 @@ impl c::journal {
     /// @seq's pins to @out, @seq first moved up to last_seq: true once it's
     /// past the last entry.
     pub fn seq_pins_to_text(&self, out: &mut Printbuf, seq: &mut u64, nr: Option<&mut c_uint>) -> bool {
-        if !self.flags.get(c::JournalFlag::running) {
+        if !self.flags.get(JournalFlag::running) {
             return true;
         }
 
@@ -444,7 +445,7 @@ impl<'a> PinsRead<'a> {
     }
 
     /* @pin's locked half, through @lists - which must be its seq's, held */
-    fn locked<'l>(&self, pin: &'l Pin, lists: &'l PinLists) -> &'l c::PinLocked {
+    fn locked<'l>(&self, pin: &'l Pin, lists: &'l PinLists) -> &'l PinLocked {
         assert!(ptr::eq(lists, self.slot(pin.seq()).lists.data_ptr()),
                 "journal pin at seq {} reached without its seq's lists", pin.seq());
         unsafe { pin.locked.protected() }
@@ -494,11 +495,11 @@ impl<'a> PinsRead<'a> {
         bytes
     }
 
-    pub fn seq_devs(&self, seq: u64) -> c::bch_devs_list {
+    pub fn seq_devs(&self, seq: u64) -> bch_devs_list {
         self.get(seq).devs.get().list()
     }
 
-    pub fn seq_set_devs(&self, seq: u64, devs: &c::bch_devs_list) {
+    pub fn seq_set_devs(&self, seq: u64, devs: &bch_devs_list) {
         self.get(seq).devs.set(PinDevs::new(devs))
     }
 
@@ -823,7 +824,7 @@ impl<'a> PinsRead<'a> {
  * way it ends: flushed(), then pin_flush()'s waiters woken
  */
 pub(crate) struct Flushing<'a> {
-    j:      &'a c::journal,
+    j:      &'a journal,
     pin:    &'a Pin,
     seq:    u64,
     pub ty: PinType,
@@ -854,7 +855,7 @@ impl Drop for Flushing<'_> {
  *
  * Returns the current size when there's nothing to do.
  */
-fn want_size(r: &c::PinRange) -> u64 {
+fn want_size(r: &PinRange) -> u64 {
     let (size, used) = (r.pin_size.get(), r.used());
     let max = JOURNAL_PIN_MAX;
 
@@ -875,7 +876,7 @@ fn want_size(r: &c::PinRange) -> u64 {
  * Must NOT be called with j->lock held - alloc + percpu_down_write may sleep.
  * Called only from pin_resize(), the work, so resizes don't race each other.
  */
-fn resize(j: &c::journal) -> Result<(), BchError> {
+fn resize(j: &journal) -> Result<(), BchError> {
     let fs = j.fs();
     let r = j.pin_range();
 
@@ -930,7 +931,7 @@ fn resize(j: &c::journal) -> Result<(), BchError> {
  * sometimes called from NONBLOCK contexts holding btree locks, where we can't
  * sleep on percpu_down_write / kvmalloc.
  */
-pub(crate) fn pin_resize(j: &c::journal) {
+pub(crate) fn pin_resize(j: &journal) {
     let _ = resize(j);
 }
 
@@ -941,7 +942,7 @@ pub(crate) fn pin_resize(j: &c::journal) {
  *
  * Errors are journal errors, reported at the source - nothing to do here.
  */
-pub(crate) fn flush_degraded(j: &c::journal) {
+pub(crate) fn flush_degraded(j: &journal) {
     let _ = j.flush_device_pins(-1);
 }
 
@@ -951,7 +952,7 @@ pub(crate) fn flush_degraded(j: &c::journal) {
  * here. Filesystems from before JOURNAL_PIN_MAX can have millions; reclaim
  * works them back down and the fifo shrinks to the ceiling.
  */
-pub(crate) fn start(j: &c::journal, last_seq: u64, cur_seq: u64) -> Result<(), BchError> {
+pub(crate) fn start(j: &journal, last_seq: u64, cur_seq: u64) -> Result<(), BchError> {
     let fs = j.fs();
     let mut nr = cur_seq - last_seq;
 

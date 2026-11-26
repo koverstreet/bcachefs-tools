@@ -13,9 +13,10 @@ use core::mem::size_of;
 
 use crate::init::passes::RecoveryPass;
 use crate::btree::bkey::ValidateFlags;
-use crate::c;
+use crate::init::dev::bch_sb_buf;
+use crate::sb::downgrade_format::{bch_sb_field_downgrade, bch_sb_field_downgrade_entry};
 use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard};
+use crate::fs::{Fs, SbLockGuard, FsFlag};
 use crate::init::passes;
 use crate::{prt, sb_err_on};
 use crate::sb::errors::{prt_error_ids, SbErrorId};
@@ -26,15 +27,15 @@ use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated};
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
-use crate::format::{Btree, MetadataVersion};
+use crate::format::{Btree, MetadataVersion, bch_sb, bch_sb_field_ext};
 
-type Section = c::bch_sb_field_downgrade<Validated>;
+type Section = bch_sb_field_downgrade<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
 
 impl SbFieldOps for Section {
-    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_downgrade<Unvalidated>,
+    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_downgrade<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         let sb_major = sb.version.get().major();
         for e in f.entries().map_while(Result::ok) {
@@ -45,8 +46,8 @@ impl SbFieldOps for Section {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                f: &c::bch_sb_field_downgrade<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                f: &bch_sb_field_downgrade<Unvalidated>) {
         if out.nr_tabstops() <= 1 {
             out.tabstop_push(16);
         }
@@ -65,14 +66,14 @@ impl SbFieldOps for Section {
     }
 
     fn entries_end(b: &[u8]) -> Option<usize> {
-        entries_end::<c::bch_sb_field_downgrade_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
+        entries_end::<bch_sb_field_downgrade_entry<Unvalidated>>(b, SECTION_HEAD, |_| true)
     }
 
     /// downgrade_entries(): what this version knows. As C, failing leaves
     /// the section as it was: the write goes on.
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         // have_stripes() reads the btree roots
-        if !fs.flags.get(c::FsFlag::btree_running) {
+        if !fs.flags.get(FsFlag::btree_running) {
             return Ok(());
         }
 
@@ -241,13 +242,13 @@ const DOWNGRADE_STRIPES: &[UpDown] = table! {
 // ── Applying them ────────────────────────────────────────────────────────────
 
 /// Every superblock has one from mount on.
-pub(crate) fn ext(sb: &mut c::bch_sb_buf) -> &mut c::bch_sb_field_ext<Validated> {
-    sb.field_mut::<c::bch_sb_field_ext>().expect("an ext section")
+pub(crate) fn ext(sb: &mut bch_sb_buf) -> &mut bch_sb_field_ext<Validated> {
+    sb.field_mut::<bch_sb_field_ext>().expect("an ext section")
 }
 
 /// Upgrading from @old to @new: what each version past @old, up to @new,
 /// needs, into the ext section's recovery_passes_required and errors_silent.
-fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: MetadataVersion, new: MetadataVersion) {
+fn set_upgrade(sb: &mut bch_sb_buf, table: &[UpDown], old: MetadataVersion, new: MetadataVersion) {
     let ext = ext(sb);
     for i in table.iter().filter(|i| old < i.version && i.version <= new) {
         let fsck = if i.all_fsck { passes::fsck_passes() } else { 0 };
@@ -260,12 +261,12 @@ fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: MetadataVersion, n
 }
 
 /// set_upgrade(), by the table for upgrades.
-pub(crate) fn sb_set_upgrade(sb: &mut c::bch_sb_buf, old: MetadataVersion, new: MetadataVersion) {
+pub(crate) fn sb_set_upgrade(sb: &mut bch_sb_buf, old: MetadataVersion, new: MetadataVersion) {
     set_upgrade(sb, UPGRADE, old, new)
 }
 
 /// set_upgrade(), by the table for allowing incompatible features.
-pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_buf, old: MetadataVersion, new: MetadataVersion) {
+pub(crate) fn set_upgrade_incompat(sb: &mut bch_sb_buf, old: MetadataVersion, new: MetadataVersion) {
     set_upgrade(sb, UPGRADE_INCOMPAT, old, new)
 }
 
@@ -308,7 +309,7 @@ pub(crate) fn sb_set_downgrade(sb: &mut SbLockGuard<'_>, new_minor: u32, old_min
         passes[0] |= e.recovery_passes[0].get();
         passes[1] |= e.recovery_passes[1].get();
         for id in e.errors.iter().map(|id| usize::from(id.get())) {
-            if id < c::SbErrorId::NR as usize {
+            if id < SbErrorId::NR as usize {
                 let bits = c_ulong::BITS as usize;
                 *cpu.errors_silent[id / bits].place() |= 1 << (id % bits);
             }

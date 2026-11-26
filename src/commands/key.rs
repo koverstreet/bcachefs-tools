@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
-use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
-use bcachefs_kernel::c;
+use bcachefs_kernel::format::{bch_key, bch_encrypted_key, bch_sb_field_crypt};
+use bcachefs_kernel::init::dev::bch_sb_buf;
+use bcachefs_kernel::opts::bch_opts;
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::fs::{Fs, OpenFs, SbLockGuard};
 use bcachefs_kernel::sb::io::read_super;
@@ -85,7 +86,7 @@ fn parse_device_list(args: &[String]) -> Vec<PathBuf> {
 
 /// Open a filesystem for superblock modification: never started.
 fn open_nostart(devs: &[PathBuf], user_key: Option<&bch_key>) -> Result<OpenFs> {
-    let mut opts = c::bch_opts::default();
+    let mut opts = bch_opts::default();
     opts.set_nostart(true);
     opts.set_will_not_start(true);
     Fs::open_with_key(devs, opts, user_key)
@@ -107,7 +108,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(OpenFs, bch_key)> {
         .map(|p| p.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(":");
-    let sbs = crate::device_scan::scan_sbs(&dev_str, &c::bch_opts::default())?;
+    let sbs = crate::device_scan::scan_sbs(&dev_str, &bch_opts::default())?;
     let sb_handle = &sbs.first()
         .ok_or_else(|| anyhow!("no bcachefs superblock found on {dev_str}"))?.1;
 
@@ -129,8 +130,8 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(OpenFs, bch_key)> {
 }
 
 /// Write a new encrypted key to the crypt superblock field.
-fn set_crypt_key(sb: &mut bcachefs_kernel::c::bch_sb_buf, key: c::bch_encrypted_key) {
-    sb.field_mut::<c::bch_sb_field_crypt>()
+fn set_crypt_key(sb: &mut bch_sb_buf, key: bch_encrypted_key) {
+    sb.field_mut::<bch_sb_field_crypt>()
         .expect("filesystem has no crypt field")
         .key = key;
 }
@@ -160,7 +161,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
 
     let mut sb = fs.sb_lock();
     if !sb_is_encrypted(&sb) {
-        sb.field_mut::<c::bch_sb_field_crypt>()
+        sb.field_mut::<bch_sb_field_crypt>()
             .expect("filesystem has no crypt field")
             .kdf_init();
     }

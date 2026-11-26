@@ -25,7 +25,7 @@ use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::c;
+use bcachefs_kernel::opts::{bch_opts, OptFlags, OptId};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::SbFieldType;
@@ -59,11 +59,11 @@ pub(crate) fn version_parse(s: &str) -> Result<MetadataVersion> {
 
 fn format_usage() {
     let fs_opts = opts_usage_str(
-        c::OptFlags::format.bits() | c::OptFlags::fs.bits(),
-        c::OptFlags::device.bits(),
+        OptFlags::format.bits() | OptFlags::fs.bits(),
+        OptFlags::device.bits(),
     );
     let dev_opts = opts_usage_str(
-        c::OptFlags::device.bits(),
+        OptFlags::device.bits(),
         0,
     );
 
@@ -105,9 +105,9 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 struct DevConfig {
     path: String,
     /// Device options that can only be resolved once the sb exists (labels):
-    opt_strs: Vec<(c::OptId, String)>,
+    opt_strs: Vec<(OptId, String)>,
     fs_size: u64,
-    opts: c::bch_opts,
+    opts: bch_opts,
 }
 
 /// Get the value for a long option, consuming the next argv entry if needed.
@@ -156,11 +156,11 @@ struct FormatConfig {
     uuid_bytes:      Option<[u8; 16]>,
     format_version:  Option<MetadataVersion>,
     superblock_size: u32,
-    fs_opts:         c::bch_opts,
-    deferred_opts:   Vec<(c::OptId, String)>,
+    fs_opts:         bch_opts,
+    deferred_opts:   Vec<(OptId, String)>,
 }
 
-fn requested_replicas(fs_opts: &c::bch_opts) -> u8 {
+fn requested_replicas(fs_opts: &bch_opts) -> u8 {
     let defaults = bcachefs_kernel::opts::DEFAULTS;
     let data = if fs_opts.data_replicas != 0 {
         fs_opts.data_replicas
@@ -222,9 +222,9 @@ fn warn_same_parent_disk_replicas(cfg: &FormatConfig, devices: &[DevOpts]) {
 }
 
 fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
-    let opt_flags = c::OptFlags::format.bits()
-        | c::OptFlags::fs.bits()
-        | c::OptFlags::device.bits();
+    let opt_flags = OptFlags::format.bits()
+        | OptFlags::fs.bits()
+        | OptFlags::device.bits();
 
     let mut devices: Vec<DevConfig> = Vec::new();
     let mut force = false;
@@ -240,13 +240,13 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut superblock_size: u32 = SUPERBLOCK_SIZE_DEFAULT;
 
     // Per-device accumulator
-    let mut cur_dev_opt_strs: Vec<(c::OptId, String)> = Vec::new();
+    let mut cur_dev_opt_strs: Vec<(OptId, String)> = Vec::new();
     let mut cur_fs_size: u64 = 0;
-    let mut cur_dev_opts: c::bch_opts = Default::default();
+    let mut cur_dev_opts: bch_opts = Default::default();
     let mut unconsumed_dev_option = false;
 
-    let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(c::OptId, String)> = Vec::new();
+    let mut fs_opts: bch_opts = Default::default();
+    let mut deferred_opts: Vec<(OptId, String)> = Vec::new();
 
     macro_rules! push_device {
         ($path:expr) => {{
@@ -312,7 +312,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // Value needs a superblock to resolve against
                             // (labels, targets); device option values are
                             // per device, fs option values resolve once:
-                            if opt.flags.bits() & c::OptFlags::device.bits() != 0 {
+                            if opt.flags.bits() & OptFlags::device.bits() != 0 {
                                 push_dev_opt_str!(opt_id, val_str);
                             } else {
                                 deferred_opts.push((opt_id, val_str));
@@ -328,10 +328,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // the string silently:
                             if matches!(opt.ty, bcachefs_kernel::opts::OptType::StrMember { .. }) {
                                 push_dev_opt_str!(opt_id, val_str);
-                            } else if opt.flags.bits() & c::OptFlags::device.bits() != 0 {
+                            } else if opt.flags.bits() & OptFlags::device.bits() != 0 {
                                 cur_dev_opts.set(opt_id, v);
                                 unconsumed_dev_option = true;
-                            } else if opt.flags.bits() & c::OptFlags::fs.bits() != 0 {
+                            } else if opt.flags.bits() & OptFlags::fs.bits() != 0 {
                                 fs_opts.set(opt_id, v);
                             }
                         }
@@ -407,7 +407,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 }
                 b'l' => {
                     let val = take_short_value(arg, &argv, &mut i, 'l')?;
-                    push_dev_opt_str!(c::OptId::label, val);
+                    push_dev_opt_str!(OptId::label, val);
                 }
                 b'U' => {
                     let val = take_short_value(arg, &argv, &mut i, 'U')?;
@@ -565,7 +565,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // (cpu-scaled, fs-size-capped, clamped to [0, 8]) is shard_bits_default(),
     // which superblock validate's rewrite of legacy bits=0 filesystems uses
     // too, so the two can't diverge.
-    if !cfg.fs_opts.defined(c::OptId::shard_inode_numbers_bits) {
+    if !cfg.fs_opts.defined(OptId::shard_inode_numbers_bits) {
         let nr_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1) as u32;
@@ -614,7 +614,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         let dev_paths: Vec<PathBuf> = cfg.devices.iter().map(|d| PathBuf::from(&d.path)).collect();
         drop(devices);
 
-        let open_opts: c::bch_opts = Default::default();
+        let open_opts: bch_opts = Default::default();
 
         // Starting and stopping the filesystem log what the kernel would put
         // in dmesg: shown only if it fails. Copying in --source isn't

@@ -13,9 +13,9 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
-use crate::c;
+use crate::posix::logged_ops_format::LoggedOpsInum;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::init::error::id;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
@@ -48,7 +48,7 @@ pub struct bch_fs_logged_ops {
 }
 
 /// Where the ops are, in BTREE_ID_logged_ops: at offsets of this inode.
-const INUM: u64 = c::LoggedOpsInum::LOGGED_OPS_INUM_logged_ops.0 as u64;
+const INUM: u64 = LoggedOpsInum::LOGGED_OPS_INUM_logged_ops.0 as u64;
 
 struct LoggedOp {
     /// As written to the sysfs knob
@@ -125,7 +125,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
      * Fixing logs the error to the journal via the transaction: close()
      * commits that before the resume, which runs transactions of its own.
      */
-    fsck_err_on!(t, fs.flags.get(c::FsFlag::clean_recovery), id::logged_op_but_clean,
+    fsck_err_on!(t, fs.flags.get(FsFlag::clean_recovery), id::logged_op_but_clean,
                  "filesystem marked as clean but have logged op\n{}", k.to_text(fs))?;
 
     Err(t.close(CommitFlags::NO_ENOSPC, |trans| {

@@ -9,7 +9,7 @@
 //! device failed, or is offline, is read by reconstructing it from its
 //! stripe.
 
-use crate::format::BkeyType;
+use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, CsumType};
 use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
@@ -21,6 +21,8 @@ use crate::os::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::c_int;
 use core::ops::{Deref, DerefMut};
+use crate::data::extents::{bch_io_failures, extent_ptr_decoded, ReadFlags};
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -51,15 +53,15 @@ pub struct IoFailures<const N: usize> {
     pub ec_msg: Printbuf,
 }
 
-impl Deref for c::bch_io_failures {
-    type Target = IoFailures<{ c::BCH_BKEY_PTRS_MAX as usize }>;
+impl Deref for bch_io_failures {
+    type Target = IoFailures<{ BCH_BKEY_PTRS_MAX as usize }>;
 
     fn deref(&self) -> &Self::Target {
         &self.failures
     }
 }
 
-impl DerefMut for c::bch_io_failures {
+impl DerefMut for bch_io_failures {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.failures
     }
@@ -114,7 +116,7 @@ impl<const N: usize> IoFailures<N> {
     /// Record @err, reading @p: a failed reconstruct, a checksum error - those
     /// counted, retried until checksum_err_retry_nr - or an io error.
     /// bch2_mark_io_failure().
-    pub fn mark(&mut self, p: &c::extent_ptr_decoded, err: BchError) {
+    pub fn mark(&mut self, p: &extent_ptr_decoded, err: BchError) {
         assert!(err.raw() != 0, "marking an io failure that isn't one");
         assert!(!err.matches(Errcode::transaction_restart),
                 "marking a transaction restart as an io failure");
@@ -229,8 +231,8 @@ fn dev_latency(ca: Option<&Dev>) -> u64 {
 
 /// Whether @p1 is a better read than @p2, of latencies @l1 and @l2:
 /// ptr_better(). The last choice is random.
-fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_ptr_decoded, mut l2: u64,
-              preferred_dev: u32, flags: c::ReadFlags) -> bool {
+fn ptr_better(fs: &Fs, p1: &extent_ptr_decoded, mut l1: u64, p2: &extent_ptr_decoded, mut l2: u64,
+              preferred_dev: u32, flags: ReadFlags) -> bool {
     if debug_params::force_reconstruct_read() {
         return p1.do_ec_reconstruct > p2.do_ec_reconstruct;
     }
@@ -254,12 +256,12 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
     }
 
     // prefer extents with checksums
-    let (c1, c2) = (p1.crc.csum_type != c::CsumType::none, p2.crc.csum_type != c::CsumType::none);
+    let (c1, c2) = (p1.crc.csum_type != CsumType::none, p2.crc.csum_type != CsumType::none);
     if unlikely(c1 != c2) {
         return c1;
     }
 
-    if unlikely(flags.contains(c::ReadFlags::soft_require_read_device)) {
+    if unlikely(flags.contains(ReadFlags::soft_require_read_device)) {
         if u32::from(p1.ptr.dev()) == preferred_dev {
             if fs.dev_rotational(p2.ptr.dev().into()) {
                 return true;
@@ -286,9 +288,9 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
     /// failed reading it so far: bch2_bkey_pick_read_device(). None if there's
     /// nothing to read: it's unwritten, or has no pointers but cached ones, or
     /// none. An error is why nothing could be picked.
-    fn pick_read_device(&self, fs: &Fs, failed: Option<&c::bch_io_failures>, preferred_dev: u32,
-                        flags: c::ReadFlags) -> Result<Option<c::extent_ptr_decoded>, BchError> {
-        use c::Errcode as e;
+    fn pick_read_device(&self, fs: &Fs, failed: Option<&bch_io_failures>, preferred_dev: u32,
+                        flags: ReadFlags) -> Result<Option<extent_ptr_decoded>, BchError> {
+        use crate::errcode::Errcode as e;
         let key = self.as_sc();
 
         if key.k.key_type() == BkeyType::error {
@@ -297,7 +299,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
 
         let (mut have_csum_errors, mut have_io_errors, mut have_missing_devs) = (false, false, false);
         let mut have_dirty_ptrs = false;
-        let mut pick: Option<(c::extent_ptr_decoded, u64)> = None;
+        let mut pick: Option<(extent_ptr_decoded, u64)> = None;
 
         if let Some(k) = key.arm::<Ptrs>() {
             let mut rcu = read_lock();
@@ -312,12 +314,12 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
 
                 let dev = u32::from(p.ptr.dev());
-                if flags.contains(c::ReadFlags::hard_require_read_device) && dev != preferred_dev {
+                if flags.contains(ReadFlags::hard_require_read_device) && dev != preferred_dev {
                     continue;
                 }
 
                 // reported outside the read-side section; still not there
-                let missing = unlikely(fs.dev_rcu(dev, &rcu).is_none() && dev != c::BCH_SB_MEMBER_INVALID);
+                let missing = unlikely(fs.dev_rcu(dev, &rcu).is_none() && dev != BCH_SB_MEMBER_INVALID);
                 if missing {
                     drop(rcu);
                     fs.dev_missing_bkey(key.untyped(), dev)?;

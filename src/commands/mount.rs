@@ -9,8 +9,9 @@ use std::{
 };
 
 use anyhow::{ensure, Result};
-use bcachefs_kernel::c::{bch_opts, bch_sb_handle};
-use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::init::dev::bch_sb_handle;
+use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::{c, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
@@ -29,6 +30,7 @@ use crate::{
     unlock_socket::UnlockSocket,
     logging,
 };
+use bcachefs_kernel::format::DegradedAction;
 
 /// Carry the mount's side of the conversation while it's coming up: the
 /// filesystem to stderr, stdin back to the filesystem, and recovery progress
@@ -379,7 +381,7 @@ fn mount_legacy(
     // An interior NUL can't be expressed in a C string at all. Nothing has been
     // attempted at this point, so the errno is ours rather than the kernel's.
     let bad_arg = |what: &str| MountError {
-        code: c::Errcode::EINVAL_mount_arg_nul.into(),
+        code: Errcode::EINVAL_mount_arg_nul.into(),
         text: format!("{what} contains a NUL byte"),
     };
 
@@ -501,8 +503,7 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
 mod tests {
     use super::{is_splitbrain, parse_mountflag_options, take_fuse_option};
     use rustix::mount::MountFlags;
-    use bcachefs_kernel::c;
-    use bcachefs_kernel::errcode::BchError;
+    use bcachefs_kernel::errcode::{BchError, Errcode};
 
     #[test]
     fn fuse_option_is_consumed_wherever_it_is() {
@@ -521,12 +522,12 @@ mod tests {
     /// straight through `?`, and behind a context someone adds later.
     #[test]
     fn splitbrain_is_recognised_through_anyhow() {
-        let sb = || BchError::from(c::Errcode::device_splitbrain);
+        let sb = || BchError::from(Errcode::device_splitbrain);
 
         assert!(is_splitbrain(&anyhow::Error::from(sb())));
         assert!(is_splitbrain(&anyhow::Error::from(sb()).context("scanning for devices")));
 
-        let other = BchError::from(c::Errcode::device_has_been_removed);
+        let other = BchError::from(Errcode::device_has_been_removed);
         assert!(!is_splitbrain(&anyhow::Error::from(other)));
         assert!(!is_splitbrain(&anyhow::anyhow!("not a bcachefs error at all")));
     }
@@ -583,7 +584,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<Unlocked> {
 /// exactly as it does when there is no split brain.
 fn is_splitbrain(err: &anyhow::Error) -> bool {
     err.downcast_ref::<BchError>()
-        .is_some_and(|e| e.matches(c::Errcode::device_splitbrain))
+        .is_some_and(|e| e.matches(Errcode::device_splitbrain))
 }
 
 /// Scan for the filesystem's devices, and if its history has forked, ask.
@@ -624,7 +625,7 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
         return Err(err);
     }
 
-    opts.set_degraded(c::DegradedAction::yes);
+    opts.set_degraded(DegradedAction::yes);
     Ok(sbs)
 }
 

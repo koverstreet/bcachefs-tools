@@ -134,11 +134,13 @@
 //! And new_stripes' before the stripe's, as to_text takes them, so nothing
 //! takes new_stripes' holding the stripe's.
 
-use crate::alloc::buckets::bucket_to_u64;
+use crate::alloc::buckets::{bucket_to_u64, ReservationFlags};
 use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef};
+use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef, Watermark};
 use crate::btree::bkey::{pos, BkeyV};
-use crate::c;
+use crate::alloc::write_point::WritePointLocked;
+use crate::data::ec::head::StripeBlockMask;
+use crate::init::dev::{bch_devs_mask, DevsMask};
 use crate::data::ec::buf::{parity_blocks, MemWait, StripeBuf};
 use crate::data::ec::open::StripeClaim;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
@@ -166,7 +168,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use c::EcStripeNewState as State;
+use crate::data::ec::head::EcStripeNewState as State;
 
 // ── A stripe being made ──────────────────────────────────────────────────
 
@@ -209,7 +211,7 @@ published! {
     /// have, as stopping the filesystem drops them all.
     #[derive(::pin_init::Zeroable)]
     pub(crate) struct BlockDevs {
-        pub(crate) block_devs: Volatile<c::DevsMask>,
+        pub(crate) block_devs: Volatile<DevsMask>,
     }
 }
 
@@ -320,8 +322,8 @@ pub(crate) struct Internal {
     /// Its maker's io ref - its head's or repair's - till fill() puts it
     maker:                Option<IoRef>,
 
-    pub(crate) devs:      c::bch_devs_mask,
-    pub(crate) watermark: c::Watermark,
+    pub(crate) devs:      bch_devs_mask,
+    pub(crate) watermark: Watermark,
 
     pub(crate) allocated:           bool,
 
@@ -416,7 +418,7 @@ impl StripeNew {
     /// task, made - open: ec_new_stripe_alloc(). Its one io ref is its
     /// maker's, in @maker.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn alloc(fs: &Fs, devs: c::bch_devs_mask, watermark: c::Watermark, disk_label: u32, algorithm: u32,
+    pub(crate) fn alloc(fs: &Fs, devs: bch_devs_mask, watermark: Watermark, disk_label: u32, algorithm: u32,
              nr_data: u32, nr_parity: u32, blocksize: u32) -> Result<StripeNewBox, BchError> {
         let init = pin_init!(StripeNew {
             // SAFETY: its head, a repair on reconcile's thread - stopped
@@ -539,7 +541,7 @@ unsafe impl Refcount for StripeNew {
 
 impl Internal {
     /// Open, on @devs, at @watermark: its keys zeroed, for new_stripe_key().
-    fn new(devs: c::bch_devs_mask, watermark: c::Watermark) -> impl PinInit<Self> {
+    fn new(devs: bch_devs_mask, watermark: Watermark) -> impl PinInit<Self> {
         pin_init!(Internal {
             write:               None,
             task:                None,
@@ -578,8 +580,8 @@ impl Internal {
     }
 
     /// Its blocks that have one: a bucket, or the old stripe's in place.
-    pub(crate) fn gotten(&self) -> c::StripeBlockMask {
-        let mut m = c::StripeBlockMask::default();
+    pub(crate) fn gotten(&self) -> StripeBlockMask {
+        let mut m = StripeBlockMask::default();
         for (i, b) in self.blocks.iter().enumerate() {
             if b.gotten() {
                 m.set(i);
@@ -596,7 +598,7 @@ impl Internal {
 
     /// Its parity's disk reservation: the stripe's sectors for each parity
     /// block, which a full stripe's data was reserved without.
-    pub(crate) fn reserve_parity(&mut self, stripe_fs: &BackRef<Fs>, flags: c::ReservationFlags)
+    pub(crate) fn reserve_parity(&mut self, stripe_fs: &BackRef<Fs>, flags: ReservationFlags)
         -> Result<(), BchError>
     {
         let v = self.new_stripe.stripe().v();
@@ -717,7 +719,7 @@ impl StripeNew {
 
 /// Where @wp's write goes in its stripe's buffer, if one of its open buckets
 /// is a block of a stripe being made: NULL if none is.
-pub(crate) fn writepoint_ec_buf(fs: &Fs, wp: &c::WritePointLocked) -> *mut c_void {
+pub(crate) fn writepoint_ec_buf(fs: &Fs, wp: &WritePointLocked) -> *mut c_void {
     // the write point's pins, which its lock keeps
     let Some((ob, s)) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.into_ref().stripe()?))) else {
         return core::ptr::null_mut()

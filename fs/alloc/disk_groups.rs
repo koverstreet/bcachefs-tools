@@ -65,9 +65,14 @@
  */
 
 use crate::btree::bkey::ValidateFlags;
-use crate::c;
+use crate::alloc::disk_groups_format::{bch_disk_group, bch_disk_group_flags,
+    bch_sb_field_disk_groups, BCH_SB_LABEL_SIZE};
+use crate::init::dev::{bch_devs_mask, bch_sb_buf};
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+use crate::init::dev::CONGESTED_MAX;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
-use crate::format::DataType;
+use crate::format::{DataType, bch_sb};
 use crate::fs::{Fs, SbLockGuard};
 use crate::locking::Guard as _;
 use crate::opts::OptFn;
@@ -90,8 +95,8 @@ pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 pub struct DiskGroup {
     pub deleted: bool,
     pub parent: u16,
-    pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
-    pub devs: c::bch_devs_mask,
+    pub label: [u8; BCH_SB_LABEL_SIZE as usize],
+    pub devs: bch_devs_mask,
 }
 
 /// c->disk_groups, published under RCU.
@@ -108,10 +113,10 @@ pub enum Target {
 
 impl Target {
     pub fn decode(target: u32) -> Self {
-        if target >= c::TARGET_GROUP_START {
-            Target::Group(target - c::TARGET_GROUP_START)
-        } else if target >= c::TARGET_DEV_START {
-            Target::Dev(target - c::TARGET_DEV_START)
+        if target >= TARGET_GROUP_START {
+            Target::Group(target - TARGET_GROUP_START)
+        } else if target >= TARGET_DEV_START {
+            Target::Dev(target - TARGET_DEV_START)
         } else {
             Target::Null
         }
@@ -120,8 +125,8 @@ impl Target {
     pub fn encode(self) -> u16 {
         (match self {
             Target::Null     => 0,
-            Target::Dev(d)   => c::TARGET_DEV_START + d,
-            Target::Group(g) => c::TARGET_GROUP_START + g,
+            Target::Dev(d)   => TARGET_DEV_START + d,
+            Target::Group(g) => TARGET_GROUP_START + g,
         }) as u16
     }
 }
@@ -131,7 +136,7 @@ impl Target {
 const DISK_PATH_MAX: usize = 32;
 
 /// NUL terminated only if shorter than the field.
-fn label_bytes(label: &[u8; c::BCH_SB_LABEL_SIZE as usize]) -> &[u8] {
+fn label_bytes(label: &[u8; BCH_SB_LABEL_SIZE as usize]) -> &[u8] {
     let len = label.iter().position(|&b| b == 0).unwrap_or(label.len());
     &label[..len]
 }
@@ -144,7 +149,7 @@ trait GroupEntry {
     fn label(&self) -> &[u8];
 }
 
-impl GroupEntry for c::bch_disk_group {
+impl GroupEntry for bch_disk_group {
     fn deleted(&self) -> bool { self.flags0.deleted() }
     fn parent(&self)  -> u32  { self.flags0.parent() }
     fn label(&self)   -> &[u8] { label_bytes(&self.label) }
@@ -186,8 +191,8 @@ fn disk_path_to_text_in<G: GroupEntry>(out: &mut Printbuf, groups: &[G], mut v: 
     }
 }
 
-fn sb_groups<S: SbState>(sb: &c::bch_sb<S>) -> &[c::bch_disk_group] {
-    S::field::<c::bch_sb_field_disk_groups>(sb).map_or(&[], |g| &g.entries)
+fn sb_groups<S: SbState>(sb: &bch_sb<S>) -> &[bch_disk_group] {
+    S::field::<bch_sb_field_disk_groups>(sb).map_or(&[], |g| &g.entries)
 }
 
 /// "ssd.fast." is "ssd.fast".
@@ -196,10 +201,10 @@ fn path_labels(name: &[u8]) -> impl Iterator<Item = &[u8]> + Clone {
 }
 
 fn label_valid(name: &[u8]) -> bool {
-    !name.is_empty() && name.len() <= c::BCH_SB_LABEL_SIZE as usize
+    !name.is_empty() && name.len() <= BCH_SB_LABEL_SIZE as usize
 }
 
-fn group_find(groups: &[c::bch_disk_group], parent: u32, name: &[u8]) -> Option<u32> {
+fn group_find(groups: &[bch_disk_group], parent: u32, name: &[u8]) -> Option<u32> {
     if !label_valid(name) {
         return None;
     }
@@ -218,8 +223,8 @@ fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), Bch
         return Ok(());
     }
 
-    let u64s = sb_field_u64s::<c::bch_sb_field_disk_groups>(nr + n - free);
-    let groups = sb.field_resize::<c::bch_sb_field_disk_groups>(u64s)
+    let u64s = sb_field_u64s::<bch_sb_field_disk_groups>(nr + n - free);
+    let groups = sb.field_resize::<bch_sb_field_disk_groups>(u64s)
         .ok_or(BchError::from(Errcode::ENOSPC_disk_label_add))?;
 
     for g in &mut groups.entries[nr..] {
@@ -230,7 +235,7 @@ fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), Bch
 
 /// In the first deleted slot: groups_reserve() first.
 fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32 {
-    let groups = sb.field_mut::<c::bch_sb_field_disk_groups>()
+    let groups = sb.field_mut::<bch_sb_field_disk_groups>()
         .expect("disk groups section: reserved");
     let i = groups.entries.iter().position(|g| g.deleted())
         .expect("disk groups section: reserved");
@@ -240,12 +245,12 @@ fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32
     g.label[..name.len()].copy_from_slice(name);
     g.flags0.set_deleted(false);
     g.flags0.set_parent(parent);
-    g.flags0.set_data_allowed(c::bch_disk_group_flags::DATA_ALLOWED_MAX);
+    g.flags0.set_data_allowed(bch_disk_group_flags::DATA_ALLOWED_MAX);
 
     i as u32
 }
 
-impl c::bch_sb_buf {
+impl bch_sb_buf {
     pub fn disk_path_find(&self, name: &[u8]) -> Option<u32> {
         let groups = sb_groups(self.sb());
         // index + 1: path_labels() yields at least one label
@@ -263,14 +268,14 @@ impl Fs {
         disk_path_to_text(out, Some(self), v);
     }
 
-    fn group_devs<'g>(&'g self, g: u32, rcu: &'g ReadGuard) -> Option<&'g c::bch_devs_mask> {
+    fn group_devs<'g>(&'g self, g: u32, rcu: &'g ReadGuard) -> Option<&'g bch_devs_mask> {
         self.disk_groups.read(rcu).get(g as usize).filter(|e| !e.deleted).map(|e| &e.devs)
     }
 
     /// The devices that take @data_type writes now, in @target - all of them
     /// if @target names no devices.
-    pub fn target_rw_devs(&self, data_type: DataType, target: Target) -> c::bch_devs_mask {
-        let mut devs = c::bch_devs_mask { d: self.allocator.rw_devs[data_type].load() };
+    pub fn target_rw_devs(&self, data_type: DataType, target: Target) -> bch_devs_mask {
+        let mut devs = bch_devs_mask { d: self.allocator.rw_devs[data_type].load() };
         let rcu = read_lock();
         if let Some(t) = self.target_to_mask(target, &rcu) {
             devs.d.and(&t.d);
@@ -283,7 +288,7 @@ impl Fs {
     /// its own. This caps stripe width when failure domains are a hard
     /// requirement - a stripe can't have more blocks than domains to spread
     /// them across.
-    pub fn target_nr_domains(&self, devs: &c::bch_devs_mask) -> u32 {
+    pub fn target_nr_domains(&self, devs: &bch_devs_mask) -> u32 {
         let rcu = read_lock();
         let domain = |dev| self.dev_failure_domain(dev, &rcu);
 
@@ -303,7 +308,7 @@ impl Fs {
         {
             let now = crate::os::kernel::local_clock();
             let rcu = read_lock();
-            let rw = c::bch_devs_mask { d: self.allocator.rw_devs[DataType::user].load() };
+            let rw = bch_devs_mask { d: self.allocator.rw_devs[DataType::user].load() };
             let devs = self.target_to_mask(Target::decode(target.into()), &rcu).unwrap_or(&rw);
 
             let (mut nr, mut total) = (0u64, 0u64);
@@ -312,13 +317,13 @@ impl Fs {
                 nr += 1;
             }
             // no devices: not congested
-            nr != 0 && crate::os::kernel::random_u64_below(nr * u64::from(c::CONGESTED_MAX)) < total
+            nr != 0 && crate::os::kernel::random_u64_below(nr * u64::from(CONGESTED_MAX)) < total
         }
         #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
         false
     }
 
-    pub fn target_to_mask<'g>(&'g self, target: Target, rcu: &'g ReadGuard) -> Option<&'g c::bch_devs_mask> {
+    pub fn target_to_mask<'g>(&'g self, target: Target, rcu: &'g ReadGuard) -> Option<&'g bch_devs_mask> {
         match target {
             Target::Null     => None,
             Target::Dev(d)   => self.dev_rcu(d, rcu).map(|ca| &ca.self_mask),
@@ -327,7 +332,7 @@ impl Fs {
     }
 
     pub fn dev_in_target(&self, dev: u32, target: Target, rcu: &ReadGuard) -> bool {
-        if dev == c::BCH_SB_MEMBER_INVALID {
+        if dev == BCH_SB_MEMBER_INVALID {
             return false;
         }
 
@@ -366,7 +371,7 @@ impl Fs {
     /// ascending fills empty domains first, then doubles up. A device with no
     /// failure domain (id 0) always keys 0: it never shares a domain, so it
     /// sorts first and is never excluded.
-    pub(crate) fn dev_domain_key(&self, chosen: &c::bch_devs_mask, dev: u32, rcu: &ReadGuard) -> u64 {
+    pub(crate) fn dev_domain_key(&self, chosen: &bch_devs_mask, dev: u32, rcu: &ReadGuard) -> u64 {
         match self.dev_failure_domain(dev as usize, rcu) {
             0 => 0,
             d => chosen.d.iter().filter(|&i| self.dev_failure_domain(i, rcu) == d).count() as u64,
@@ -411,7 +416,7 @@ fn disk_path_to_text(out: &mut Printbuf, fs: Option<&Fs>, v: u32) {
     disk_path_to_text_in(out, groups, v);
 }
 
-fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: Target) {
+fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, target: Target) {
     match target {
         Target::Null => write!(out, "none"),
         Target::Dev(d) => {
@@ -427,7 +432,7 @@ fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: 
 
 // ── The table ────────────────────────────────────────────────────────────
 
-fn groups_to_cpu(dst: &mut [DiskGroup], src: &[c::bch_disk_group], sb: &c::bch_sb) {
+fn groups_to_cpu(dst: &mut [DiskGroup], src: &[bch_disk_group], sb: &bch_sb) {
     for (d, s) in dst.iter_mut().zip(src.iter()) {
         d.deleted = s.flags0.deleted();
         d.parent  = s.flags0.parent() as u16;
@@ -452,7 +457,7 @@ pub(crate) fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     // more groups than a member's 8 bit group field can name
     sb.fs_member_mut(dev).set_group(v.try_into().map_err(|_| BchError::from(Errcode::ENOSPC_disk_label_add))?);
-    c::bch_sb_field_disk_groups::<Validated>::to_cpu(fs, sb)
+    bch_sb_field_disk_groups::<Validated>::to_cpu(fs, sb)
 }
 
 /// As a member's group field: index + 1, 0 for none.
@@ -463,7 +468,7 @@ fn dev_label_resolve(sb: &mut (impl SbResize + ?Sized), name: &[u8]) -> Result<u
     Ok(sb.disk_path_find_or_create(name)? + 1)
 }
 
-pub fn disk_path_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, v: u32) {
+pub fn disk_path_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &bch_sb<S>, v: u32) {
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
 
@@ -578,7 +583,7 @@ fn invalid() -> Result<(), BchError> {
 }
 
 /// Parents are walked, so must be in range; a deleted parent is allowed.
-fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_group], err: &mut Printbuf)
+fn disk_groups_validate<S: SbState>(sb: &bch_sb<S>, groups: &[bch_disk_group], err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let nr = groups.len();
@@ -622,14 +627,14 @@ fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_gro
     Ok(())
 }
 
-impl SbFieldOps for c::bch_sb_field_disk_groups<Validated> {
-    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_disk_groups<Unvalidated>,
+impl SbFieldOps for bch_sb_field_disk_groups<Validated> {
+    fn validate(sb: &bch_sb<Unvalidated>, f: &bch_sb_field_disk_groups<Unvalidated>,
                 _flags: ValidateFlags, err: &mut Printbuf) -> Result<(), BchError> {
         disk_groups_validate(sb, &f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
-                f: &c::bch_sb_field_disk_groups<Unvalidated>) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>,
+                f: &bch_sb_field_disk_groups<Unvalidated>) {
         for (i, g) in f.entries.iter().enumerate() {
             if i > 0 {
                 write!(out, " ");
@@ -647,7 +652,7 @@ impl SbFieldOps for c::bch_sb_field_disk_groups<Validated> {
 
     /// The table. Without a disk groups section it's left as it is.
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        let Some(groups) = sb.field::<c::bch_sb_field_disk_groups>() else {
+        let Some(groups) = sb.field::<bch_sb_field_disk_groups>() else {
             return Ok(());
         };
         let src = &groups.entries;
@@ -660,20 +665,23 @@ impl SbFieldOps for c::bch_sb_field_disk_groups<Validated> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::c;
+    use crate::init::dev::bch_sb_handle;
+    use crate::sb::members_format::{bch_member, bch_sb_field_members_v2};
     use crate::util::vstructs::Head;
 
-    fn new_sb() -> c::bch_sb_handle {
-        let mut sb = c::bch_sb_handle::default();
+    fn new_sb() -> bch_sb_handle {
+        let mut sb = bch_sb_handle::default();
         sb.sb_realloc(0).unwrap();
         sb
     }
 
     /// (alive, group) per member, group an index + 1.
-    fn add_members(sb: &mut c::bch_sb_handle, members: &[(bool, u8)]) {
-        let bytes = size_of::<Head<c::bch_sb_field_members_v2>>() +
-                    size_of::<c::bch_member>() * members.len();
-        let mi = sb.field_resize::<c::bch_sb_field_members_v2>((bytes / 8) as u32).unwrap();
-        mi.member_bytes = (size_of::<c::bch_member>() as u16).into();
+    fn add_members(sb: &mut bch_sb_handle, members: &[(bool, u8)]) {
+        let bytes = size_of::<Head<bch_sb_field_members_v2>>() +
+                    size_of::<bch_member>() * members.len();
+        let mi = sb.field_resize::<bch_sb_field_members_v2>((bytes / 8) as u32).unwrap();
+        mi.member_bytes = (size_of::<bch_member>() as u16).into();
         sb.sb_mut().nr_devices = members.len() as u8;
 
         for (i, &(alive, group)) in members.iter().enumerate() {
@@ -683,15 +691,15 @@ mod tests {
         }
     }
 
-    fn label(s: &str) -> [u8; c::BCH_SB_LABEL_SIZE as usize] {
-        let mut l = [0; c::BCH_SB_LABEL_SIZE as usize];
+    fn label(s: &str) -> [u8; BCH_SB_LABEL_SIZE as usize] {
+        let mut l = [0; BCH_SB_LABEL_SIZE as usize];
         l[..s.len()].copy_from_slice(s.as_bytes());
         l
     }
 
     /// @parent: index + 1.
-    fn group(name: &str, parent: u32, deleted: bool) -> c::bch_disk_group {
-        let mut g = c::bch_disk_group { label: label(name), ..Default::default() };
+    fn group(name: &str, parent: u32, deleted: bool) -> bch_disk_group {
+        let mut g = bch_disk_group { label: label(name), ..Default::default() };
         g.flags0.set_parent(parent);
         g.flags0.set_deleted(deleted);
         g
@@ -703,7 +711,7 @@ mod tests {
         out.as_str().to_owned()
     }
 
-    fn validate(sb: &c::bch_sb_handle, groups: &[c::bch_disk_group]) -> Result<(), String> {
+    fn validate(sb: &bch_sb_handle, groups: &[bch_disk_group]) -> Result<(), String> {
         let mut err = Printbuf::new();
         disk_groups_validate(sb.sb(), groups, &mut err).map_err(|e| {
             assert_eq!(e, Errcode::invalid_sb_disk_groups.into());
@@ -740,15 +748,15 @@ mod tests {
         let groups = sb_groups(sb.sb());
         assert_eq!(groups.iter().map(|g| g.parent()).collect::<Vec<_>>(), [0, 1, 1, 0]);
         assert!(groups.iter().all(|g| !g.deleted() &&
-            g.flags0.data_allowed() == c::bch_disk_group_flags::DATA_ALLOWED_MAX));
+            g.flags0.data_allowed() == bch_disk_group_flags::DATA_ALLOWED_MAX));
         assert_eq!(path(groups, 2), "ssd.slow");
     }
 
     #[test]
     fn disk_path_label_lengths() {
         let mut sb = new_sb();
-        let full = [b'x'; c::BCH_SB_LABEL_SIZE as usize];
-        let over = [b'x'; c::BCH_SB_LABEL_SIZE as usize + 1];
+        let full = [b'x'; BCH_SB_LABEL_SIZE as usize];
+        let over = [b'x'; BCH_SB_LABEL_SIZE as usize + 1];
 
         assert_eq!(sb.disk_path_find_or_create(&full).unwrap(), 0);
         assert_eq!(sb.disk_path_find(&full), Some(0));
@@ -765,7 +773,7 @@ mod tests {
         let mut sb = new_sb();
         sb.disk_path_find_or_create(b"a_longer_label").unwrap();
         sb.disk_path_find_or_create(b"b").unwrap();
-        sb.field_mut::<c::bch_sb_field_disk_groups>().unwrap().entries[0].flags0.set_deleted(true);
+        sb.field_mut::<bch_sb_field_disk_groups>().unwrap().entries[0].flags0.set_deleted(true);
 
         assert_eq!(sb.disk_path_find(b"a_longer_label"), None);
         assert_eq!(sb.disk_path_find_or_create(b"c").unwrap(), 0);
@@ -824,7 +832,7 @@ mod tests {
                   group("fast", 0, false), group("fast", 1, true)];
         assert_eq!(validate(&sb, &ok), Ok(()));
 
-        let bad = |groups: &[c::bch_disk_group]| validate(&sb, groups).unwrap_err();
+        let bad = |groups: &[bch_disk_group]| validate(&sb, groups).unwrap_err();
         assert_eq!(bad(&[group("ssd", 0, false), group("ssd", 0, false)]),
                    "duplicate label 0.ssd");
         assert_eq!(bad(&[group("a", 0, false), group("b", 1, false), group("c", 0, false),

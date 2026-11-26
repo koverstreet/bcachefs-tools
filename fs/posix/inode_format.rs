@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
+use crate::format::{bch_val, StrHashKind};
 use crate::types::{Le16, Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, xmacro, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, SizedVal};
 
@@ -13,7 +13,7 @@ pub const BCACHEFS_ROOT_INO: u32 = 4096;
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, BitfieldMembers)]
 pub struct Inode {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub bi_hash_seed: Le64,
     #[members]
@@ -26,7 +26,7 @@ pub struct Inode {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo, BitfieldMembers)]
 pub struct InodeV2 {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub bi_journal_seq: Le64,
     pub bi_hash_seed: Le64,
@@ -40,7 +40,7 @@ pub struct InodeV2 {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct InodeV3 {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub bi_journal_seq: Le64,
     pub bi_hash_seed: Le64,
@@ -58,7 +58,7 @@ pub const INODEv3_FIELDS_START_INITIAL: u32 = 6;
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct InodeGeneration {
-    pub v: c::bch_val,
+    pub v: bch_val,
 
     pub bi_generation: Le32,
     pub pad: Le32,
@@ -215,7 +215,7 @@ pub struct InodeBiFlags {
     #[bits(20, from = InodeFlags::from_bits_retain)]
     flags:      InodeFlags,
     #[bits(4)]
-    str_hash:   c::StrHashKind,
+    str_hash:   StrHashKind,
     nr_fields:  u7,
     new_varint: bool,
 }
@@ -225,7 +225,7 @@ pub struct InodeV2BiFlags {
     #[bits(20, from = InodeFlags::from_bits_retain)]
     flags:      InodeFlags,
     #[bits(4)]
-    str_hash:   c::StrHashKind,
+    str_hash:   StrHashKind,
     nr_fields:  u7,
     __:         u33,
 }
@@ -235,7 +235,7 @@ pub struct InodeV3BiFlags {
     #[bits(20, from = InodeFlags::from_bits_retain)]
     flags:        InodeFlags,
     #[bits(4)]
-    str_hash:     c::StrHashKind,
+    str_hash:     StrHashKind,
     nr_fields:    u7,
     fields_start: u5,
     mode:         u16,
@@ -245,7 +245,7 @@ pub struct InodeV3BiFlags {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct InodeAllocCursor {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub bits: u8,
     pub pad: u8,
     /* C's padding, for __le32's alignment */

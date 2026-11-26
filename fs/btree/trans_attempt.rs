@@ -35,15 +35,20 @@ use super::trans::BtreeTrans;
 use super::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
+use crate::alloc::buckets::bch_fs_usage_base;
+use crate::btree::journal_overlay::journal_keys;
+use crate::btree::update::TransCommitFlags;
+use crate::data::extents_format::BKEY_BTREE_PTR_U64s_MAX;
+use crate::data::write::WriteFlags;
 use crate::journal::flush_wait::Flush;
-pub use crate::c::Watermark;
+pub use crate::alloc::foreground::Watermark;
 use crate::errcode::{
     BchError,
     Errcode,
     ret_to_result_void as ret_to_result,
 };
 use crate::btree::path::Paths;
-use crate::btree::trans::TransGuard;
+use crate::btree::trans::{TransGuard, BTREE_TRANS_MEM_MAX};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::types::Le64;
@@ -59,11 +64,11 @@ use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::write::{node_write_trans, BtreeWriteFlags};
-use crate::cstructs::c::BtreeWriteType;
+use crate::btree::node::BtreeWriteType;
 use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes_mut, State};
 use crate::data_structures::dst_room::DstRoom;
 use crate::btree::bkey_buf::copy_key;
-use crate::format::{Bpos, Btree, BkeyType};
+use crate::format::{Bpos, Btree, BkeyType, bch_val, bkey, bkey_i, BKEY_U64s, BTREE_MAX_DEPTH};
 
 /// One attempt at @trans: from one begin() to the next.
 ///
@@ -294,17 +299,17 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// The journal keys, till replay's done: the transaction's ref -
     /// journal_replay_not_finished - holds them, and only begin, which ends
     /// the attempt, lets it go.
-    pub(crate) fn journal_keys(&self) -> Option<&'a c::journal_keys> {
+    pub(crate) fn journal_keys(&self) -> Option<&'a journal_keys> {
         unlikely(self.trans.journal_replay_not_finished()).then(|| unsafe { self.fs().journal_keys_held() })
     }
 
     /// What the commit in progress changes usage by, as its triggers
     /// accounted it.
-    pub fn fs_usage_delta(&self) -> c::bch_fs_usage_base {
+    pub fn fs_usage_delta(&self) -> bch_fs_usage_base {
         self.trans.fs_usage_delta.get()
     }
 
-    pub fn fs_usage_delta_add(&self, d: c::bch_fs_usage_base) {
+    pub fn fs_usage_delta_add(&self, d: bch_fs_usage_base) {
         self.trans.fs_usage_delta_add(d)
     }
 
@@ -500,7 +505,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn commit_lazy_if_full(&self, flags: impl Into<CommitOpts>) -> Result<(), BchError> {
         // disk_accounting_mod allocations grow by powers of 2; max / 2 is too
         // small of a limit to avoid hitting ENOMEMs
-        if self.trans.mem_with(|m| m.top_bytes()) < c::BTREE_TRANS_MEM_MAX as usize / 4 {
+        if self.trans.mem_with(|m| m.top_bytes()) < BTREE_TRANS_MEM_MAX as usize / 4 {
             return Ok(());
         }
         self.commit_lazy(None, flags)
@@ -771,7 +776,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 "{val_u64s} u64s of value, shorter than a {:?}'s {}", K::TYPE, K::MIN_VAL_SIZE);
         let mut k = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         k.as_mut_u64s().fill(0);
-        *k.k_mut() = c::bkey::new();
+        *k.k_mut() = bkey::new();
         k.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
         k.k_mut().type_ = K::TYPE.0 as u8;
         k.k_mut().p = pos;
@@ -856,7 +861,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let (b, mut n) = {
             let l = node_iter.peek(self)?.expect("the node a btree node pointer points to");
             (BtreeNodeRef::from(l.node()),
-             self.bkey_reassemble_room(l.key(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?.into())
+             self.bkey_reassemble_room(l.key(), BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?.into())
         };
         f(&mut n)?;
         self.btree_node_update_key(node_iter.iter(), b, n, CommitFlags::NO_ENOSPC, false)
@@ -959,7 +964,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         node:        BtreeNodeRef,
         target:      u32,
         flags:       impl Into<CommitOpts>,
-        write_flags: c::WriteFlags,
+        write_flags: WriteFlags,
     ) -> Result<(), BchError> {
         let trans = self.trans();
         super::interior::node_rewrite(self, &mut trans.paths(), iter, node, target,
@@ -974,7 +979,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         pos:         Bpos,
         target:      u32,
         flags:       impl Into<CommitOpts>,
-        write_flags: c::WriteFlags,
+        write_flags: WriteFlags,
     ) -> Result<(), BchError> {
         assert!(level > 0, "btree_node_rewrite_pos() of a leaf");
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, level + 1, level - 1, BtreeIterFlags::empty());
@@ -986,28 +991,28 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// its pointer; ENOENT if the node's been replaced since.
     pub fn btree_node_rewrite_key<V: ?Sized + BkeyVal>(&self, btree: Btree, level: u32, k: BkeySC<'_, V>,
                                                        flags: impl Into<CommitOpts>) -> Result<(), BchError> {
-        let mut node_iter = BtreeNodeIter::new(self, btree, k.k.p, c::BTREE_MAX_DEPTH, level, BtreeIterFlags::empty());
+        let mut node_iter = BtreeNodeIter::new(self, btree, k.k.p, BTREE_MAX_DEPTH, level, BtreeIterFlags::empty());
         let b = node_iter.peek(self)?
             .filter(|l| btree_ptr_hash_val(l.key()) == btree_ptr_hash_val(k))
             .map(|l| BtreeNodeRef::from(l.node()));
         match b {
-            Some(b) => self.btree_node_rewrite(node_iter.iter(), b, 0, flags, c::WriteFlags::empty()),
-            None    => self.fs().throw(c::Errcode::ENOENT_btree_node_rewrite_key),
+            Some(b) => self.btree_node_rewrite(node_iter.iter(), b, 0, flags, WriteFlags::empty()),
+            None    => self.fs().throw(Errcode::ENOENT_btree_node_rewrite_key),
         }
     }
 }
 
 impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
-    pub fn as_ptr(&self) -> *const c::bkey_i {
+    pub fn as_ptr(&self) -> *const bkey_i {
         self.room.elems().as_ptr().cast()
     }
 
-    pub fn as_mut_ptr(&mut self) -> *mut c::bkey_i {
+    pub fn as_mut_ptr(&mut self) -> *mut bkey_i {
         self.room.elems_mut().as_mut_ptr().cast()
     }
 
     /// Where the key is, and its room, in u64s - for an update to queue.
-    pub(crate) fn as_raw(&mut self) -> (NonNull<c::bkey_i>, u32) {
+    pub(crate) fn as_raw(&mut self) -> (NonNull<bkey_i>, u32) {
         let u64s = self.buf_u64s();
         (NonNull::from(&mut *self.room).cast(), u64s)
     }
@@ -1038,11 +1043,11 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
         TransBkey { room: &mut *self.room, t: PhantomData, v: PhantomData }
     }
 
-    pub fn k(&self) -> &c::bkey {
+    pub fn k(&self) -> &bkey {
         &self.room.k
     }
 
-    pub fn k_mut(&mut self) -> &mut c::bkey {
+    pub fn k_mut(&mut self) -> &mut bkey {
         &mut self.room.k
     }
 
@@ -1051,7 +1056,7 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
     pub fn set_deleted(mut self) {
         let k = self.k_mut();
         k.set_key_type(BkeyType::deleted);
-        k.u64s  = c::BKEY_U64s as u8;
+        k.u64s  = BKEY_U64s as u8;
     }
 
     /// Its buffer, all buf_u64s of it - the room the key has, not its u64s.
@@ -1122,7 +1127,7 @@ impl<'a, 't> TransBkey<'a, 't> {
     /// # Safety
     /// @ptr is a key valid and the caller's to edit while @t's attempt runs,
     /// and @buf_u64s u64s there are its.
-    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'_, '_>, ptr: *mut c::bkey_i, buf_u64s: u32) -> Self {
+    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'_, '_>, ptr: *mut bkey_i, buf_u64s: u32) -> Self {
         assert!(!ptr.is_null(), "a key with room");
         let room = core::ptr::slice_from_raw_parts_mut(ptr.cast::<u64>(), buf_u64s as usize);
         let k = TransBkey { room: unsafe { &mut *DstRoom::from_elems_raw(room) }, t: PhantomData, v: PhantomData };
@@ -1169,7 +1174,7 @@ impl<V: ?Sized + BkeyVal> BkeyVMut for TransBkey<'_, '_, V> {
 }
 
 /// The header, and where the value starts.
-fn room_sc(room: &DstRoom<BkeyI>) -> (&c::bkey, *const c::bch_val) {
+fn room_sc(room: &DstRoom<BkeyI>) -> (&bkey, *const bch_val) {
     let BkeyI { k, v } = &**room;
     (k, (&raw const *v).cast())
 }
@@ -1237,18 +1242,18 @@ impl CommitOpts {
         CommitOpts((self.0 & !Self::WATERMARK_MASK) | (w as u32 & Self::WATERMARK_MASK))
     }
 
-    pub(crate) fn get_watermark(self) -> c::Watermark {
-        c::Watermark::from_bits(self.0 & Self::WATERMARK_MASK)
+    pub(crate) fn get_watermark(self) -> Watermark {
+        Watermark::from_bits(self.0 & Self::WATERMARK_MASK)
     }
 
-    pub(crate) const fn to_c(self) -> c::TransCommitFlags {
-        c::TransCommitFlags::from_bits_retain(self.0)
+    pub(crate) const fn to_c(self) -> TransCommitFlags {
+        TransCommitFlags::from_bits_retain(self.0)
     }
 
     /// A btree update's watermark: copygc's becomes btree_copygc, and below
     /// btree, btree - btree_update_set_watermark_hipri().
     pub fn watermark_hipri(self) -> Self {
-        use c::Watermark as wm;
+        use crate::alloc::foreground::Watermark as wm;
         let w = match wm::from_bits(self.0 & Self::WATERMARK_MASK) {
             wm::copygc                         => wm::btree_copygc,
             w if (w as u32) < wm::btree as u32 => wm::btree,
@@ -1267,7 +1272,7 @@ impl From<CommitFlags> for CommitOpts {
 impl ToText for CommitOpts {
     fn to_text(&self, out: &mut Printbuf) {
         let watermark = self.get_watermark();
-        let flags = c::TransCommitFlags::from_bits_retain(self.0 & !Self::WATERMARK_MASK);
+        let flags = TransCommitFlags::from_bits_retain(self.0 & !Self::WATERMARK_MASK);
 
         crate::prt!(out, "watermark={watermark}");
         if !flags.is_empty() {
@@ -1276,8 +1281,8 @@ impl ToText for CommitOpts {
     }
 }
 
-impl From<c::TransCommitFlags> for CommitOpts {
-    fn from(flags: c::TransCommitFlags) -> Self {
+impl From<TransCommitFlags> for CommitOpts {
+    fn from(flags: TransCommitFlags) -> Self {
         CommitOpts(flags.bits())
     }
 }

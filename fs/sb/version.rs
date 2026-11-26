@@ -5,10 +5,9 @@
 //! options and the version say - with the passes each needs run.
 
 use crate::init::passes::RecoveryPass;
-use crate::c;
-use crate::c::FsFlag as Flag;
-use crate::c::VersionUpgradeOpt as Upgrade;
-use crate::format::{Btree, MetadataVersion};
+use crate::fs::FsFlag as Flag;
+use crate::format::VersionUpgradeOpt as Upgrade;
+use crate::format::{Btree, MetadataVersion, ErrorAction};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes::{passes_from_stable, passes_to_stable, prt_stable};
 use crate::prt;
@@ -26,7 +25,7 @@ use crate::util::Printbuf;
 const REQUIRED_UPGRADE_BELOW: MetadataVersion = MetadataVersion::btree_node_accounting;
 
 fn check_version_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, out: &mut Printbuf) -> bool {
-    let latest_version = c::MetadataVersion::CURRENT;
+    let latest_version = MetadataVersion::CURRENT;
     let latest_compatible = latest_version.min(fs.sb.version.get().latest_compatible());
     let old_version = fs.sb.version_upgrade_complete.get();
     let upgrade = Upgrade(fs.opts().version_upgrade.get().into());
@@ -130,7 +129,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
             prt!(out, "Version downgrade required");
 
             let passes = ext(&mut sb).recovery_passes_required[0].get();
-            sb_set_downgrade(&mut sb, c::MetadataVersion::CURRENT.minor(), fs.sb.version.get().minor());
+            sb_set_downgrade(&mut sb, MetadataVersion::CURRENT.minor(), fs.sb.version.get().minor());
             let passes = ext(&mut sb).recovery_passes_required[0].get() & !passes;
             if passes != 0 {
                 prt!(out, ", running recovery passes: ");
@@ -147,7 +146,7 @@ pub fn prep_for_start(fs: &Fs, out: &mut Printbuf) {
     fs.opts_writer(&mut sb).recovery_passes.set(recovery_passes);
 
     if fs.sb.version_upgrade_complete.get() < MetadataVersion::autofix_errors {
-        sb.sb_mut().set_error_action(c::ErrorAction::fix_safe);
+        sb.sb_mut().set_error_action(ErrorAction::fix_safe);
     }
 
     let extent_bp_shift_needed = (fs.opts().encoded_extent_max.get() >> 9).ilog2() + 1;

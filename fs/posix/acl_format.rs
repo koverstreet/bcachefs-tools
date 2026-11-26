@@ -7,7 +7,6 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
 use crate::types::{Le16, Le32};
 use cstruct_macros::{tagged_union, MaybeZeroable, Plain, TypeInfo};
 
@@ -36,15 +35,16 @@ pub struct bch_acl_header {
 
 /* The tags are <uapi/linux/posix_acl.h>'s ACL_*, which C has from there: */
 tagged_union! {
-    #[storage(c::bch_acl_entry_short)]
+    in crate::posix::acl_format;
+    #[storage(crate::posix::acl_format::bch_acl_entry_short)]
     #[tag(e_tag: u16)]
     #[size(arm)]
     pub enum acl_entry {
-        user_obj(c::bch_acl_entry_short)  = 0x01,
-        user(c::bch_acl_entry)            = 0x02,
-        group_obj(c::bch_acl_entry_short) = 0x04,
-        group(c::bch_acl_entry)           = 0x08,
-        mask(c::bch_acl_entry_short)      = 0x10,
-        other(c::bch_acl_entry_short)     = 0x20,
+        user_obj(crate::posix::acl_format::bch_acl_entry_short)  = 0x01,
+        user(crate::posix::acl_format::bch_acl_entry)            = 0x02,
+        group_obj(crate::posix::acl_format::bch_acl_entry_short) = 0x04,
+        group(crate::posix::acl_format::bch_acl_entry)           = 0x08,
+        mask(crate::posix::acl_format::bch_acl_entry_short)      = 0x10,
+        other(crate::posix::acl_format::bch_acl_entry_short)     = 0x20,
     }
 }

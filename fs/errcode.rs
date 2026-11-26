@@ -84,6 +84,7 @@ xmacro! {
 }
 
 xmacro! {
+    in crate::errcode;
     BCH_ERRCODES {
         (EIO, blockdev_io_error, 0),
         BLK_ERRS((n, nr) => (blockdev_io_error, concat(BLK_STS_, n), nr)),
@@ -910,17 +911,22 @@ pub mod status {
     pub const BLK_STS_REMOVED: u8 = 128;
 }
 
-pub fn blk_status_to_bch_err(err: u8) -> c::Errcode {
+pub fn blk_status_to_bch_err(err: u8) -> Errcode {
+    // The block layer's statuses, and the one that's ours.
+    mod sts {
+        pub(super) use crate::c::*;
+        pub(super) use crate::errcode::status::BLK_STS_REMOVED;
+    }
     macro_rules! statuses {
         ($(($n:ident, $nr:tt)),* $(,)?) => { ::paste::paste! {
             match err {
                 0 => Errcode(0),
-                $(c::[<BLK_STS_ $n>] => Errcode::[<BLK_STS_ $n>],)*
+                $(sts::[<BLK_STS_ $n>] => Errcode::[<BLK_STS_ $n>],)*
                 _ => Errcode::BLK_STS_UNKNOWN,
             }
         } };
     }
-    c::BLK_ERRS!(statuses)
+    BLK_ERRS!(statuses)
 }
 
 const START: u32 = Errcode::START.0;
@@ -938,7 +944,7 @@ mod class {
             pub(super) const $err: u32 = super::Errcode::$err.0;
         )* };
     }
-    crate::c::BCH_ERRCODES!(codes);
+    BCH_ERRCODES!(codes);
 }
 
 macro_rules! class_of {
@@ -955,7 +961,7 @@ macro_rules! errcode_table {
         };
     };
 }
-c::BCH_ERRCODES!(errcode_table);
+BCH_ERRCODES!(errcode_table);
 
 fn errcode(err: u32) -> Option<(&'static str, u32)> {
     ERRCODES.get(err.checked_sub(START)? as usize).copied().flatten()

@@ -1,17 +1,16 @@
 use core::ffi::CStr;
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
-use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::dst_array::DstArray;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::alloc::Global;
 use crate::util::alloc::Vec;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::thin::ThinBox;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
-use crate::format::Bpos;
+use crate::format::{Bpos, __uuid_t};
 
 /// A printbuf's buffer: its capacity the array's count.
 type Buf = ThinBox<DstArray<(), u8, u32>>;
@@ -747,7 +746,7 @@ impl ToText for Bpos {
 crate::display_via_to_text!(Bpos);
 
 /// As printk's %pU: lowercase, hyphenated.
-impl ToText for c::__uuid_t {
+impl ToText for __uuid_t {
     fn to_text(&self, out: &mut Printbuf) {
         for (i, b) in self.b.iter().enumerate() {
             write!(out, "{}{b:02x}", if matches!(i, 4 | 6 | 8 | 10) { "-" } else { "" });
@@ -833,8 +832,8 @@ impl ToText for DateTime {
 /// and KiB MiB ... are powers of 1024, kB MB ... powers of 1000. One trailing
 /// newline, as sysfs stores have.
 pub fn parse_human_u64(s: &str) -> Result<u64, BchError> {
-    let einval = || BchError::from(c::Errcode::EINVAL_parse_human_u64);
-    let erange = || BchError::from(c::Errcode::ERANGE_parse_human_u64);
+    let einval = || BchError::from(Errcode::EINVAL_parse_human_u64);
+    let erange = || BchError::from(Errcode::ERANGE_parse_human_u64);
 
     let digits = |s: &[u8]| -> Result<(u64, usize), BchError> {
         let n = s.iter().take_while(|c| c.is_ascii_digit()).count();

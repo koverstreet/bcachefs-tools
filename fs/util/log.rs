@@ -12,8 +12,10 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
+#[cfg(kernel)]
 use crate::c;
+use crate::fs::Dev;
+use crate::opts::bch_opts;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::ratelimit::Ratelimit;
@@ -83,7 +85,7 @@ pub fn log_no_fs(level: LogLevel, msg: &dyn ToText) {
 /// @msg at @level, as it stands, where @opts says: its stdio redirect,
 /// in-kernel, if it has one - a fsck through the ioctl's - else printk().
 /// Of no filesystem, before there's one: bch2_print_opts().
-pub fn log_opts(opts: &c::bch_opts, level: LogLevel, msg: &dyn ToText) {
+pub fn log_opts(opts: &bch_opts, level: LogLevel, msg: &dyn ToText) {
     #[cfg(kernel)]
     if opts.stdio != 0 {
         let mut buf = Printbuf::new();

@@ -9,10 +9,10 @@ use super::format::{bkey_fields, fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS
 use super::packed::BkeyPHeader;
 use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
-use crate::c;
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::format::BkeyField::{self, *};
-use crate::format::{bkey_format, Bpos, BkeyType};
+use crate::format::{bkey_format, Bpos, BkeyType, bkey, bkey_format_bits, bkey_packed,
+    KEY_FORMAT_CURRENT, KEY_FORMAT_LOCAL_BTREE, KEY_PACKED_BITS_START};
 use crate::os::kernel::unlikely;
 use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut};
 use crate::util::{Printbuf, ToText};
@@ -34,7 +34,7 @@ use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
 #[derive(Clone, Copy, MaybeZeroable, Plain)]
 pub struct bkey_packed_padded {
     pub _pad: [u8; 8],
-    pub k: c::bkey_packed,
+    pub k: bkey_packed,
 }
 
 #[bch_enum(closed)]
@@ -49,7 +49,7 @@ const POS_FIELDS: [BkeyField; 3] = [BKEY_FIELD_INODE, BKEY_FIELD_OFFSET, BKEY_FI
 
 /// Where a packed key's position bits start in its high word: past the header,
 /// on big endian.
-pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { c::KEY_PACKED_BITS_START };
+pub const HIGH_BIT_OFFSET: u32 = if cfg!(target_endian = "little") { 0 } else { KEY_PACKED_BITS_START };
 
 /* byte order helpers */
 
@@ -74,7 +74,7 @@ fn word(k: &[u64], p: u32) -> u64 {
     k.get(p as usize).copied().unwrap_or(0)
 }
 
-fn bkey_words(k: &c::bkey) -> [u64; BKEY_U64S] {
+fn bkey_words(k: &bkey) -> [u64; BKEY_U64S] {
     let mut w = [0u64; BKEY_U64S];
     plain_bytes_mut(&mut w).copy_from_slice(plain_bytes(k));
     w
@@ -87,7 +87,7 @@ fn packed(k: &[u64]) -> &BkeyP {
 fn set_pos_header(w: &mut u64, key_u64s: u8) {
     let h = BkeyPHeader::of_mut(w);
     h.u64s  = key_u64s;
-    h.format_bits.set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
+    h.format_bits.set_format(KEY_FORMAT_LOCAL_BTREE as u8);
     h.type_ = BkeyType::deleted.0 as u8;
 }
 
@@ -193,23 +193,23 @@ impl<'a> UnpackState<'a> {
 }
 
 impl bkey_format {
-    pub fn unpack_key(&self, k: &BkeyP<impl ?Sized>) -> c::bkey {
+    pub fn unpack_key(&self, k: &BkeyP<impl ?Sized>) -> bkey {
         self.unpack_key_words(k.as_slice())
     }
 
-    fn unpack_key_words(&self, k: &[u64]) -> c::bkey {
+    fn unpack_key_words(&self, k: &[u64]) -> bkey {
         let h = BkeyPHeader::of(&k[0]);
         let mut s = UnpackState::new(self, k);
 
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
         ebug_assert!(h.u64s >= self.key_u64s);
-        ebug_assert!(h.format_bits.format() as u32 == c::KEY_FORMAT_LOCAL_BTREE);
+        ebug_assert!(h.format_bits.format() as u32 == KEY_FORMAT_LOCAL_BTREE);
         ebug_assert!(h.u64s as u32 - self.key_u64s as u32 + BKEY_U64S as u32 <= u8::MAX as u32);
 
-        let mut out = c::bkey {
+        let mut out = bkey {
             u64s:        (h.u64s as u32 - self.key_u64s as u32 + BKEY_U64S as u32) as u8,
-            format_bits: c::bkey_format_bits::new()
-                .with_format(c::KEY_FORMAT_CURRENT as u8)
+            format_bits: bkey_format_bits::new()
+                .with_format(KEY_FORMAT_CURRENT as u8)
                 .with_needs_whiteout(h.format_bits.needs_whiteout()),
             type_:       h.type_,
             ..Default::default()
@@ -229,7 +229,7 @@ impl bkey_format {
 
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
         ebug_assert!(k.u64s() >= self.key_u64s as usize);
-        ebug_assert!(k.format() as u32 == c::KEY_FORMAT_LOCAL_BTREE);
+        ebug_assert!(k.format() as u32 == KEY_FORMAT_LOCAL_BTREE);
 
         let inode    = s.get_inc_field(BKEY_FIELD_INODE);
         let offset   = s.get_inc_field(BKEY_FIELD_OFFSET);
@@ -238,9 +238,9 @@ impl bkey_format {
     }
 
     /// Just the key, not the value: false if it doesn't fit.
-    pub fn pack_key(&self, out: &mut [u64], k: &c::bkey) -> bool {
+    pub fn pack_key(&self, out: &mut [u64], k: &bkey) -> bool {
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
-        ebug_assert!(k.format_bits.format() as u32 == c::KEY_FORMAT_CURRENT);
+        ebug_assert!(k.format_bits.format() as u32 == KEY_FORMAT_CURRENT);
 
         out[0] = 0;
 
@@ -258,7 +258,7 @@ impl bkey_format {
 
         let h = BkeyPHeader::of_mut(&mut out[0]);
         h.u64s  = (self.key_u64s as u32 + k.u64s as u32 - BKEY_U64S as u32) as u8;
-        h.format_bits.set_format(c::KEY_FORMAT_LOCAL_BTREE as u8);
+        h.format_bits.set_format(KEY_FORMAT_LOCAL_BTREE as u8);
         h.format_bits.set_needs_whiteout(k.format_bits.needs_whiteout());
         h.type_ = k.type_;
 
@@ -270,7 +270,7 @@ impl bkey_format {
 
     #[cold]
     #[inline(never)]
-    fn pack_verify(&self, packed: &[u64], unpacked: &c::bkey) {
+    fn pack_verify(&self, packed: &[u64], unpacked: &bkey) {
         let h = BkeyPHeader::of(&packed[0]);
 
         assert!(h.u64s >= self.key_u64s, "packed to {} u64s, under its format's {}", h.u64s, self.key_u64s);
@@ -600,7 +600,7 @@ fn unpack_field_fast(bytes: &[u8], k: u32, uf: &BkeyUnpackField, offset: u64) ->
     (raw >> (uf.shift_right & 63)).wrapping_add(offset)
 }
 
-impl c::bkey_packed_padded {
+impl bkey_packed_padded {
     /// Its key, as the fast paths take one: a buffer, and its offset there.
     pub fn as_buf_mut(&mut self) -> (&mut [u64], u16) {
         let buf = cast_plain_slice_mut(plain_bytes_mut(self)).expect("a bkey_packed_padded is whole u64s");
@@ -667,7 +667,7 @@ impl NodeContents {
 
     /// Just the key at @at in @buf, not the value: by the node's unpack
     /// constants, if it's packed and the format's byte aligned.
-    pub fn unpack_key_at(&self, buf: &[u64], at: u16) -> c::bkey {
+    pub fn unpack_key_at(&self, buf: &[u64], at: u16) -> bkey {
         let k = packed(&buf[at as usize..]);
 
         if unlikely(!k.is_packed()) {
@@ -681,7 +681,7 @@ impl NodeContents {
          * overflow byte 0 and corrupt the format byte (carry from u64s into
          * format would silently break things).
          */
-        ebug_assert!(k.format() as u32 == c::KEY_FORMAT_LOCAL_BTREE);
+        ebug_assert!(k.format() as u32 == KEY_FORMAT_LOCAL_BTREE);
         ebug_assert!(k.u64s() - self.format.key_u64s as usize + BKEY_U64S <= u8::MAX as usize);
 
         /* fall back to slow path if format has fields that don't fit a single load */
@@ -708,9 +708,9 @@ impl NodeContents {
          */
         let hdr = (u32::from_le_bytes(bytes[kb as usize - 1..][..4].try_into().unwrap()) >> 8)
             .wrapping_add((BKEY_U64S as u32).wrapping_sub(self.format.key_u64s as u32) |
-                          ((c::KEY_FORMAT_CURRENT - c::KEY_FORMAT_LOCAL_BTREE) << 8));
+                          ((KEY_FORMAT_CURRENT - KEY_FORMAT_LOCAL_BTREE) << 8));
 
-        let mut out = c::bkey::default();
+        let mut out = bkey::default();
         plain_bytes_mut(&mut out)[..4].copy_from_slice(&hdr.to_le_bytes());
 
         macro_rules! unpack_fields {
@@ -750,7 +750,7 @@ impl NodeContents {
 
         ebug_assert!(self.format.nr_fields as usize == NR_FIELDS);
         ebug_assert!(k.u64s() >= self.format.key_u64s as usize);
-        ebug_assert!(k.format() as u32 == c::KEY_FORMAT_LOCAL_BTREE);
+        ebug_assert!(k.format() as u32 == KEY_FORMAT_LOCAL_BTREE);
 
         if unlikely(!self.byte_aligned_fields) {
             return self.format.unpack_pos(k);
@@ -913,7 +913,7 @@ impl NodeContents {
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 pub fn pack_test() {
-    let t = c::bkey { p: Bpos { inode: 4134, offset: 1250629070527416633, snapshot: 0 }, ..c::bkey::new() };
+    let t = bkey { p: Bpos { inode: 4134, offset: 1250629070527416633, snapshot: 0 }, ..bkey::new() };
     let t_words = bkey_words(&t);
     let mut p = [0u64; BKEY_U64S];
 

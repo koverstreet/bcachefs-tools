@@ -28,7 +28,11 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
-use crate::c;
+use crate::data::ec::format::Stripe;
+use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_END, BCH_LRU_BUCKET_FRAGMENTATION_OLD,
+    BCH_LRU_BUCKET_FRAGMENTATION_START, BCH_LRU_READ_MAX, BCH_LRU_STRIPE_FRAGMENTATION,
+    BCH_LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
+use crate::btree::bbpos::bbpos;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -56,15 +60,15 @@ impl From<u16> for LruId {
     fn from(id: u16) -> Self {
         let id32 = u32::from(id);
 
-        if id32 < c::BCH_LRU_READ_MAX {
+        if id32 < BCH_LRU_READ_MAX {
             Self::Read { dev: id32 }
-        } else if (c::BCH_LRU_BUCKET_FRAGMENTATION_START..c::BCH_LRU_BUCKET_FRAGMENTATION_END).contains(&id32) {
-            Self::Fragmentation { dev: id32 - c::BCH_LRU_BUCKET_FRAGMENTATION_START }
-        } else if id32 == c::BCH_LRU_BUCKET_FRAGMENTATION_OLD {
+        } else if (BCH_LRU_BUCKET_FRAGMENTATION_START..BCH_LRU_BUCKET_FRAGMENTATION_END).contains(&id32) {
+            Self::Fragmentation { dev: id32 - BCH_LRU_BUCKET_FRAGMENTATION_START }
+        } else if id32 == BCH_LRU_BUCKET_FRAGMENTATION_OLD {
             Self::FragmentationOld
-        } else if id32 == c::BCH_LRU_STRIPE_FRAGMENTATION {
+        } else if id32 == BCH_LRU_STRIPE_FRAGMENTATION {
             Self::StripeFragmentation
-        } else if id32 == c::BCH_LRU_STRIPE_REUSE {
+        } else if id32 == BCH_LRU_STRIPE_REUSE {
             Self::StripeReuse
         } else {
             Self::Unknown(id)
@@ -77,10 +81,10 @@ impl LruId {
     pub fn id(self) -> u16 {
         let id = match self {
             Self::Read { dev }          => dev,
-            Self::Fragmentation { dev } => c::BCH_LRU_BUCKET_FRAGMENTATION_START + dev,
-            Self::FragmentationOld      => c::BCH_LRU_BUCKET_FRAGMENTATION_OLD,
-            Self::StripeFragmentation   => c::BCH_LRU_STRIPE_FRAGMENTATION,
-            Self::StripeReuse           => c::BCH_LRU_STRIPE_REUSE,
+            Self::Fragmentation { dev } => BCH_LRU_BUCKET_FRAGMENTATION_START + dev,
+            Self::FragmentationOld      => BCH_LRU_BUCKET_FRAGMENTATION_OLD,
+            Self::StripeFragmentation   => BCH_LRU_STRIPE_FRAGMENTATION,
+            Self::StripeReuse           => BCH_LRU_STRIPE_REUSE,
             Self::Unknown(id)           => u32::from(id),
         } as u16;
 
@@ -90,8 +94,8 @@ impl LruId {
 
     /// Its type, an unknown id's being read, as lru_type() has it: its
     /// entries' targets are read as buckets.
-    pub fn lru_type(self) -> c::LruType {
-        use c::LruType as T;
+    pub fn lru_type(self) -> LruType {
+        use crate::alloc::lru_format::LruType as T;
 
         match self {
             Self::Read { .. } | Self::Unknown(_)           => T::read,
@@ -114,7 +118,7 @@ pub struct LruPos {
 
 impl LruPos {
     pub fn new(id: u16, time: u64, target: u64) -> Self {
-        debug_assert!(time <= c::LRU_TIME_MAX);
+        debug_assert!(time <= LRU_TIME_MAX);
         Self { id, time, target }
     }
 
@@ -122,19 +126,19 @@ impl LruPos {
     /// bits.
     pub fn from_bpos(p: Bpos) -> Self {
         Self {
-            id:     (p.inode >> c::LRU_TIME_BITS) as u16,
-            time:   p.inode & c::LRU_TIME_MAX,
+            id:     (p.inode >> LRU_TIME_BITS) as u16,
+            time:   p.inode & LRU_TIME_MAX,
             target: p.offset,
         }
     }
 
     pub fn to_bpos(self) -> Bpos {
-        pos(u64::from(self.id) << c::LRU_TIME_BITS | self.time, self.target)
+        pos(u64::from(self.id) << LRU_TIME_BITS | self.time, self.target)
     }
 
     /// Every position of lru @id: lru_start()..=lru_end().
     pub fn range(id: LruId) -> RangeInclusive<Self> {
-        Self::new(id.id(), 0, 0)..=Self::new(id.id(), c::LRU_TIME_MAX, u64::MAX)
+        Self::new(id.id(), 0, 0)..=Self::new(id.id(), LRU_TIME_MAX, u64::MAX)
     }
 
     pub fn lru_id(self) -> LruId {
@@ -142,13 +146,13 @@ impl LruPos {
     }
 
     /// The key the entry is for: lru_pos_to_bp().
-    pub fn backing(self) -> c::bbpos {
+    pub fn backing(self) -> bbpos {
         match self.lru_id().lru_type() {
-            c::LruType::stripe_fragmentation | c::LruType::stripe_reuse => c::bbpos {
+            LruType::stripe_fragmentation | LruType::stripe_reuse => bbpos {
                 btree: Btree::stripes,
                 pos:   pos(0, self.target),
             },
-            _ => c::bbpos {
+            _ => bbpos {
                 btree: Btree::alloc,
                 pos:   u64_to_bucket(self.target),
             },
@@ -160,7 +164,7 @@ impl LruPos {
 //
 // An lru entry is a KEY_TYPE_set; KEY_TYPE_lru, with an idx, is obsolete.
 
-impl BkeyOps for c::Lru {
+impl BkeyOps for Lru {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         bkey_fsck_err_on!(v, LruPos::from_bpos(v.k.k.p).time == 0, id::lru_entry_at_time_0,
                           "lru entry at time=0")
@@ -168,7 +172,7 @@ impl BkeyOps for c::Lru {
 
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        write!(out, "idx {}", k.arm::<c::Lru>().expect("an lru key").v().idx.get());
+        write!(out, "idx {}", k.arm::<Lru>().expect("an lru key").v().idx.get());
     }
 }
 
@@ -230,7 +234,7 @@ pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
     crate::btree_trans!(fs).write_buffer_flush_sync()?;
 
     let dev = u32::from(ca.dev_idx);
-    if dev < c::BCH_LRU_READ_MAX {
+    if dev < BCH_LRU_READ_MAX {
         dev_remove_lru_range(fs, LruId::Read { dev })?;
         dev_remove_lru_range(fs, LruId::Fragmentation { dev })?;
     } else {
@@ -278,8 +282,8 @@ pub(crate) fn lru_check_set(
 
 /// The time @k says its entry in an lru of type @ty is at - 0, none:
 /// bkey_lru_type_idx().
-fn expected_time(fs: &Fs, ty: c::LruType, k: BkeySC<'_>) -> u64 {
-    use c::LruType as T;
+fn expected_time(fs: &Fs, ty: LruType, k: BkeySC<'_>) -> u64 {
+    use crate::alloc::lru_format::LruType as T;
 
     match ty {
         T::read => alloc_to_v4(k).lru_idx_read(),
@@ -288,8 +292,8 @@ fn expected_time(fs: &Fs, ty: c::LruType, k: BkeySC<'_>) -> u64 {
             let rcu = read_lock();
             fs.dev_rcu(k.k.p.inode as u32, &rcu).map_or(0, |ca| a.lru_idx_fragmentation(ca))
         }
-        T::stripe_fragmentation => k.arm::<c::Stripe>().map_or(0, |s| s.v().fragmentation_lru_pos()),
-        T::stripe_reuse => k.arm::<c::Stripe>().map_or(0, |s| s.v().reuse_lru_pos()),
+        T::stripe_fragmentation => k.arm::<Stripe>().map_or(0, |s| s.v().fragmentation_lru_pos()),
+        T::stripe_reuse => k.arm::<Stripe>().map_or(0, |s| s.v().reuse_lru_pos()),
         t => unreachable!("lru type {}", t.0),
     }
 }
@@ -326,8 +330,8 @@ fn check_lru_key(
     // fs-wide fragmentation lru after the upgrade.
     let bucket_dev = u64_to_bucket(pos.target).inode as u16;
     let want_id = match ty {
-        c::LruType::read          => bucket_dev,
-        c::LruType::fragmentation => (c::BCH_LRU_BUCKET_FRAGMENTATION_START as u16).wrapping_add(bucket_dev),
+        LruType::read          => bucket_dev,
+        LruType::fragmentation => (BCH_LRU_BUCKET_FRAGMENTATION_START as u16).wrapping_add(bucket_dev),
         _                         => pos.id,
     };
 
@@ -359,8 +363,8 @@ fn pin_backing(trans: &TransGuard<'_>, pins: &BtreeCachePins<'_>, lru: LruId) ->
         }
     };
     let mask = 1 << btree.0;
-    let end = c::bbpos { btree, pos: end };
-    let pinned_end = pins.pin(trans, mask, mask, c::bbpos { btree, pos: start }..=end)?;
+    let end = bbpos { btree, pos: end };
+    let pinned_end = pins.pin(trans, mask, mask, bbpos { btree, pos: start }..=end)?;
 
     if pinned_end != end {
         let fs = trans.fs();

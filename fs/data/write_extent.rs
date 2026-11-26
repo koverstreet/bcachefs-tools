@@ -6,27 +6,31 @@
 use crate::alloc::sector_alloc::LockedWritePoint;
 use crate::util::alloc::flags;
 use crate::c;
-use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src};
+use crate::data::extents::bch_extent_crc_unpacked;
+use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
+use crate::data::update::data_update_index;
+use crate::data::compress::{bio_bounce, bio_compress, bounce_alloc, buf_uncompress, decompress_err, map_or_bounce, Src,
+    bch_compression_opt};
 use crate::data::ptrs::{crc_is_compressed, extent_crc_append, extent_nonce};
-use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData};
+use crate::data::write::{write_op_error, ExtentBio, ExtentBuf, ExtentData, bch_write_op};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::os::bio::{pages, BioRange, BioSubmit, Buffer, Pages};
 use crate::util::volatile::Out;
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
-use c::WriteFlags as w;
+use crate::data::write::WriteFlags as w;
 use core::ffi::c_void;
-use crate::format::{Bversion, BkeyType};
+use crate::format::{Bversion, BkeyType, bch_csum, bkey, CompressionType, CsumType};
 
-type Op = c::bch_write_op;
+type Op = bch_write_op;
 
-fn csum_differs(a: c::bch_csum, b: c::bch_csum) -> bool {
+fn csum_differs(a: bch_csum, b: bch_csum) -> bool {
     ((a.lo.get() ^ b.lo.get()) | (a.hi.get() ^ b.hi.get())) != 0
 }
 
 fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bversion,
-                      crc: c::bch_extent_crc_unpacked) {
+                      crc: bch_extent_crc_unpacked) {
     /*
      * The key covers the crc's live data, not all of it: an extent that won't
      * decompress is written as is, untrimmed - its crc's offset and
@@ -35,12 +39,12 @@ fn init_append_extent(op: &mut Op, wp: &mut LockedWritePoint<'_>, version: Bvers
     op.pos.offset += u64::from(crc.live_size);
 
     let (pos, cached) = (op.pos, op.has(w::cached));
-    op.insert_keys.push_with(c::BKEY_EXTENT_U64s_MAX as usize, |e| {
-        e.k = c::bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
-                               ..c::bkey::new() };
+    op.insert_keys.push_with(BKEY_EXTENT_U64s_MAX as usize, |e| {
+        e.k = bkey { type_: BkeyType::extent.0 as u8, p: pos, bversion: version,
+                            ..bkey::new() };
         e.k.size = crc.live_size;
 
-        if crc.csum_type != c::CsumType::none || crc.compression_type != c::CompressionType::none || crc.nonce != 0 {
+        if crc.csum_type != CsumType::none || crc.compression_type != CompressionType::none || crc.nonce != 0 {
             extent_crc_append(e, &crc).unwrap_or_else(|err| panic!("an extent's crc past its room: {err}"));
         }
 
@@ -106,10 +110,10 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
     bounce
 }
 
-fn write_rechecksum(fs: &Fs, op: &mut Op, data: &mut BioRange<'_>, mut new_csum_type: c::CsumType)
+fn write_rechecksum(fs: &Fs, op: &mut Op, data: &mut BioRange<'_>, mut new_csum_type: CsumType)
     -> Result<(), BchError>
 {
-    let mut new_crc = c::bch_extent_crc_unpacked::default();
+    let mut new_crc = bch_extent_crc_unpacked::default();
 
     /* bch2_rechecksum_bio() can't encrypt or decrypt data: */
 
@@ -136,7 +140,7 @@ fn write_rechecksum(fs: &Fs, op: &mut Op, data: &mut BioRange<'_>, mut new_csum_
  * @bio and @op->crc are untouched unless this returns 0, so a caller that can't
  * use the plaintext still has the extent exactly as it arrived.
  */
-fn write_op_decode(op: &mut Op, data: &mut BioRange<'_>, update: Option<&c::data_update_index>)
+fn write_op_decode(op: &mut Op, data: &mut BioRange<'_>, update: Option<&data_update_index>)
     -> Result<(), BchError>
 {
     let fs = op.fs();
@@ -191,19 +195,19 @@ fn write_op_decode(op: &mut Op, data: &mut BioRange<'_>, update: Option<&c::data
     }
 
     let crc = &mut op.crc;
-    crc.csum_type.set(c::CsumType::none);
-    crc.compression_type.set(c::CompressionType::none);
+    crc.csum_type.set(CsumType::none);
+    crc.compression_type.set(CompressionType::none);
     crc.compressed_size   = crc.live_size;
     crc.uncompressed_size = crc.live_size;
     crc.offset            = 0;
-    crc.csum              = c::bch_csum::default();
+    crc.csum              = bch_csum::default();
     Ok(())
 }
 
-fn csum_err(op: &Op, update: Option<&c::data_update_index>, csum: c::bch_csum) -> BchError {
+fn csum_err(op: &Op, update: Option<&data_update_index>, csum: bch_csum) -> BchError {
     let fs = op.fs();
     let ty = op.crc.csum_type.get();
-    let ty_name: &dyn core::fmt::Display = if ty.0 < c::CsumType::NR { &ty } else { &"(unknown)" };
+    let ty_name: &dyn core::fmt::Display = if ty.0 < CsumType::NR { &ty } else { &"(unknown)" };
     write_op_error(op, update, op.pos.offset, format_args!(
         "error verifying existing checksum while moving existing data (memory corruption?)\n  \
          expected {:0x}:{:0x} got {:0x}:{:0x} type {}",
@@ -212,7 +216,7 @@ fn csum_err(op: &Op, update: Option<&c::data_update_index>, csum: c::bch_csum) -
 }
 
 #[inline(never)]
-fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<&c::data_update_index>,
+fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<&data_update_index>,
                            wp: &LockedWritePoint<'_>)
     -> Result<(), BchError>
 {
@@ -225,7 +229,7 @@ fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<
        op.crc.uncompressed_size <= fs.opts().encoded_extent_max.get() >> 9 &&
        op.crc.compressed_size <= wp.sectors_free() &&
        op.crc.csum_type.get().is_encryption() == op.bits.csum_type().is_encryption() &&
-       (op.crc.compression_type == c::bch_compression_opt::to_type(op.bits.compression_opt(), fs) ||
+       (op.crc.compression_type == bch_compression_opt::to_type(op.bits.compression_opt(), fs) ||
         op.bits.incompressible() != 0) {
         if op.crc.csum_type != op.bits.csum_type() {
             if !crc_is_compressed(&op.crc) {
@@ -341,8 +345,8 @@ fn write_prep_encoded_data(op: &mut Op, data: &mut BioRange<'_>, update: Option<
 
         fs.encrypt_range(nonce, *data)?;
 
-        op.crc.csum_type.set(c::CsumType::none);
-        op.crc.csum = c::bch_csum::default();
+        op.crc.csum_type.set(CsumType::none);
+        op.crc.csum = bch_csum::default();
     }
 
     Ok(())
@@ -361,7 +365,7 @@ pub(crate) struct Extent<'a> {
 /// written out at @wp: its extents' keys appended, and what to submit - a bio
 /// of its own made with @opf - or an error, and no keys appended.
 pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
-                               update: Option<&c::data_update_index>, wp: &mut LockedWritePoint<'_>)
+                               update: Option<&data_update_index>, wp: &mut LockedWritePoint<'_>)
     -> Result<Extent<'a>, BchError>
 {
     let fs = op.fs();
@@ -406,7 +410,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
 
     if !ec_buf.is_null() ||
        op.bits.compression_opt() != 0 ||
-       (op.bits.csum_type() != c::CsumType::none && !op.has(w::pages_stable)) ||
+       (op.bits.csum_type() != CsumType::none && !op.has(w::pages_stable)) ||
        (op.bits.csum_type().is_encryption() && !op.has(w::pages_owned)) {
         dst = Some(write_bio_alloc(fs, wp, data.len(), opf, &mut short, ec_buf));
     }
@@ -423,7 +427,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
 
     let ret = (|| -> Result<(), BchError> {
         loop {
-            let mut crc = c::bch_extent_crc_unpacked::default();
+            let mut crc = bch_extent_crc_unpacked::default();
             let mut version = op.version;
             let (mut dst_len, mut src_len) = (0u32, 0u32);
             let src_size = data.len();
@@ -442,7 +446,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
             assert!(!(op.bits.compression_opt() != 0 && !bounce), "compressing without bouncing");
 
             crc.compression_type.set(if op.bits.incompressible() != 0 {
-                c::CompressionType::incompressible
+                CompressionType::incompressible
             } else if op.bits.compression_opt() != 0 {
                 let (mut d, mut s) = (0usize, 0usize);
                 let dst_r = out.expect("compressing into a bio of its own");
@@ -451,14 +455,14 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
                 (dst_len, src_len) = (d as u32, s as u32);
                 t
             } else {
-                c::CompressionType::none
+                CompressionType::none
             });
 
             if !crc_is_compressed(&crc) {
                 dst_len = room(&out, data).min(src_size);
                 dst_len = dst_len.min(wp.sectors_free() << 9);
 
-                if op.bits.csum_type() != c::CsumType::none {
+                if op.bits.csum_type() != CsumType::none {
                     dst_len = dst_len.min(fs.opts().encoded_extent_max.get());
                 }
 
@@ -552,7 +556,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
             if !(room(&out, data) != 0 &&
                  data.len() != 0 &&
                  wp.sectors_free() != 0 &&
-                 op.insert_keys.reserve(c::BKEY_EXTENT_U64s_MAX as usize).is_ok()) {
+                 op.insert_keys.reserve(BKEY_EXTENT_U64s_MAX as usize).is_ok()) {
                 return Ok(());
             }
         }

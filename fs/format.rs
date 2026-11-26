@@ -71,7 +71,10 @@
 #![allow(non_camel_case_types)]
 
 
-use crate::cstructs::c;
+use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
+use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::data::extents_format::bch_extent_ptr;
+use crate::data::reconcile::format::ReconcileWorkId;
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut,
                             floored_by_self, from_bytes_mut, Head, Unvalidated,
@@ -269,7 +272,7 @@ pub struct bkey_packed {
      * and it's legal to cast a bkey to a bkey_packed  - so padding it out
      * to the same size as struct bkey should hopefully be safest.
      */
-    pub pad: [u8; core::mem::size_of::<c::bkey>() - 3],
+    pub pad: [u8; core::mem::size_of::<bkey>() - 3],
 }
 
 #[repr(C)]
@@ -280,11 +283,11 @@ pub struct bch_le128 {
 }
 
 #[allow(non_upper_case_globals)]
-pub const BKEY_U64s: usize = size_of::<c::bkey>() / size_of::<u64>();
+pub const BKEY_U64s: usize = size_of::<bkey>() / size_of::<u64>();
 #[allow(non_upper_case_globals)]
 pub const BKEY_U64s_MAX: u8 = u8::MAX;
 #[allow(non_upper_case_globals)]
-pub const BKEY_VAL_U64s_MAX: usize = c::BKEY_U64s_MAX as usize - c::BKEY_U64s;
+pub const BKEY_VAL_U64s_MAX: usize = BKEY_U64s_MAX as usize - BKEY_U64s;
 
 pub const KEY_PACKED_BITS_START: u32 = 24;
 
@@ -309,8 +312,8 @@ pub enum BkeyField {
 pub struct bkey_i {
     pub _data: [u64; 0],
 
-    pub k: c::bkey,
-    pub v: c::bch_val,
+    pub k: bkey,
+    pub v: bch_val,
 }
 
 #[bch_enum(flags)]
@@ -356,142 +359,142 @@ pub enum BkeyType {
     /// Transient during btree updates; inserting a deleted key removes any
     /// existing key at that position. Stripped during btree node writes.
     #[flags(extent, generic)]
-    deleted(c::Deleted) = 0,
+    deleted(crate::format::Deleted) = 0,
     /// Blocks visibility of ancestor snapshot versions of a key
     #[flags(extent, generic)]
-    whiteout(c::Whiteout) = 1,
+    whiteout(crate::format::Whiteout) = 1,
     /// Marks an extent as containing unrecoverable errors: a read of it
     /// fails, as the data was lost with a failed device; a write over it
     /// replaces it
     #[flags(extent, allocation, generic)]
-    error(c::Error) = 2,
+    error(crate::format::Error) = 2,
     /// Used by reconcile to track option changes via incrementing version
     /// numbers in the reconcile_scan btree
     #[flags(extent, generic)]
-    cookie(c::Cookie) = 3,
+    cookie(crate::format::Cookie) = 3,
     /// Whiteout for hash table btrees (dirents, xattrs) that preserves hash
     /// chain integrity
-    hash_whiteout(c::HashWhiteout) = 4,
+    hash_whiteout(crate::format::HashWhiteout) = 4,
     /// Btree node pointer (v1, legacy)
     #[flags(ptrs, ptrs_mut, btree_ptr)]
-    btree_ptr(c::BtreePtr) = 5,
+    btree_ptr(crate::data::extents_format::BtreePtr) = 5,
     /// File data extent with device pointers, checksums, and optional
     /// compression metadata
     #[flags(ptrs, ptrs_mut, extent, allocation, data, user_data)]
-    extent(c::Extent) = 6,
+    extent(crate::data::extents_format::Extent) = 6,
     /// Disk space reservation for a file region
     #[flags(extent, allocation, user_data)]
-    reservation(c::Reservation) = 7,
+    reservation(crate::data::extents_format::Reservation) = 7,
     /// Inode metadata (v1, legacy)
     #[flags(inode)]
-    inode(c::Inode) = 8,
+    inode(crate::posix::inode_format::Inode) = 8,
     /// Tracks generation numbers for deleted inodes
-    inode_generation(c::InodeGeneration) = 9,
+    inode_generation(crate::posix::inode_format::InodeGeneration) = 9,
     /// Directory entry with name hash, inode number, and type
-    dirent(c::Dirent) = 10,
+    dirent(crate::posix::dirent_format::Dirent) = 10,
     /// Extended attribute with name hash and value
-    xattr(c::Xattr) = 11,
+    xattr(crate::posix::xattr_format::Xattr) = 11,
     /// Bucket allocation metadata (v1, legacy)
-    alloc(c::Alloc) = 12,
+    alloc(crate::alloc::format::Alloc) = 12,
     /// Quota counters for a user, group, or project
-    quota(c::Quota) = 13,
+    quota(crate::posix::quota_format::Quota) = 13,
     /// Erasure code stripe metadata with parity pointers
     #[flags(ptrs)]
-    stripe(c::Stripe) = 14,
+    stripe(crate::data::ec::format::Stripe) = 14,
     /// Pointer from the extents btree to an indirect extent in the reflink
     /// btree
     #[flags(extent, allocation, data)]
-    reflink_p(c::ReflinkP) = 15,
+    reflink_p(crate::data::reflink_format::ReflinkP) = 15,
     /// Indirect extent with refcount in the reflink btree
     #[flags(ptrs, ptrs_mut, extent, indirect, allocation, data)]
-    reflink_v(c::ReflinkV) = 16,
+    reflink_v(crate::data::reflink_format::ReflinkV) = 16,
     /// Small file data stored inline in the btree
     #[flags(extent, allocation, data, user_data, inline_data)]
-    inline_data(c::InlineData) = 17,
+    inline_data(crate::data::extents_format::InlineData) = 17,
     /// Btree node pointer (v2) with sequence number and min_key for more
     /// efficient traversal
     #[flags(ptrs, ptrs_mut, btree_ptr)]
-    btree_ptr_v2(c::BtreePtrV2) = 18,
+    btree_ptr_v2(crate::data::extents_format::BtreePtrV2) = 18,
     /// Reflinked inline data with refcount
     #[flags(extent, indirect, allocation, data, inline_data)]
-    indirect_inline_data(c::IndirectInlineData) = 19,
+    indirect_inline_data(crate::data::reflink_format::IndirectInlineData) = 19,
     /// Bucket allocation metadata (v2, legacy)
-    alloc_v2(c::AllocV2) = 20,
+    alloc_v2(crate::alloc::format::AllocV2) = 20,
     /// Subvolume metadata with root inode and snapshot ID
-    subvolume(c::Subvolume) = 21,
+    subvolume(crate::snapshots::format::Subvolume) = 21,
     /// Snapshot tree node with parent, children, and subvolume references
-    snapshot(c::Snapshot) = 22,
+    snapshot(crate::snapshots::format::Snapshot) = 22,
     /// Inode metadata (v2) with journal sequence number
     #[flags(inode)]
-    inode_v2(c::InodeV2) = 23,
+    inode_v2(crate::posix::inode_format::InodeV2) = 23,
     /// Bucket allocation metadata (v3, legacy)
-    alloc_v3(c::AllocV3) = 24,
+    alloc_v3(crate::alloc::format::AllocV3) = 24,
     /// Empty value; presence of the key is the information
     #[flags(extent, generic)]
-    set(c::Set) = 25,
+    set(crate::format::Set) = 25,
     /// LRU tracking entry for cache eviction
-    lru(c::Lru) = 26,
+    lru(crate::alloc::lru_format::Lru) = 26,
     /// Bucket allocation metadata (v4, current)
-    alloc_v4(c::AllocV4) = 27,
+    alloc_v4(crate::alloc::format::AllocV4) = 27,
     /// Reverse pointer from a bucket back to the extent referencing it
-    backpointer(c::Backpointer) = 28,
+    backpointer(crate::format::Backpointer) = 28,
     /// Inode metadata (v3, current) with compact encoding
     #[flags(inode)]
-    inode_v3(c::InodeV3) = 29,
+    inode_v3(crate::posix::inode_format::InodeV3) = 29,
     /// Packed bucket generation numbers (256 per key)
-    bucket_gens(c::BucketGens) = 30,
+    bucket_gens(crate::alloc::format::BucketGens) = 30,
     /// Root entry for a snapshot tree structure
-    snapshot_tree(c::SnapshotTree) = 31,
+    snapshot_tree(crate::snapshots::format::SnapshotTree) = 31,
     /// Logged truncate operation for crash recovery
-    logged_op_truncate(c::LoggedOpTruncate) = 32,
+    logged_op_truncate(crate::posix::logged_ops_format::LoggedOpTruncate) = 32,
     /// Logged file insert/collapse operation for crash recovery
-    logged_op_finsert(c::LoggedOpFinsert) = 33,
+    logged_op_finsert(crate::posix::logged_ops_format::LoggedOpFinsert) = 33,
     /// Disk accounting delta (replicas, compression, device usage)
-    accounting(c::Accounting) = 34,
+    accounting(crate::alloc::accounting_format::Accounting) = 34,
     /// Per-CPU inode number allocation cursor
-    inode_alloc_cursor(c::InodeAllocCursor) = 35,
+    inode_alloc_cursor(crate::posix::inode_format::InodeAllocCursor) = 35,
     /// Whiteout specific to the extents btree, blocking visibility of
     /// ancestor snapshot extent versions
     #[flags(extent)]
-    extent_whiteout(c::ExtentWhiteout) = 36,
+    extent_whiteout(crate::format::ExtentWhiteout) = 36,
     /// Logged stripe creation/update operation for crash recovery
-    logged_op_stripe_update(c::LoggedOpStripeUpdate) = 37,
+    logged_op_stripe_update(crate::posix::logged_ops_format::LoggedOpStripeUpdate) = 37,
     /// Errors that damaged an inode, recorded in the same transaction as
     /// the repair that did the damage: a sorted list of SbErrorId
-    damage(c::Damage) = 38,
+    damage(crate::init::damage_format::Damage) = 38,
     /// Logged propagation of inode io options to ancestor snapshot versions
-    logged_op_inode_opt_propagate(c::LoggedOpInodeOptPropagate) = 39,
+    logged_op_inode_opt_propagate(crate::posix::logged_ops_format::LoggedOpInodeOptPropagate) = 39,
     /// Small file data stored inline in the btree, with its own checksum
     #[flags(extent, allocation, data, user_data, inline_data)]
-    inline_data_v2(c::InlineDataV2) = 40,
+    inline_data_v2(crate::data::extents_format::InlineDataV2) = 40,
     /// Reflinked inline data with refcount and its own checksum
     #[flags(extent, indirect, allocation, data, inline_data)]
-    indirect_inline_data_v2(c::IndirectInlineDataV2) = 41,
+    indirect_inline_data_v2(crate::data::reflink_format::IndirectInlineDataV2) = 41,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Deleted {
-    pub v: c::bch_val,
+    pub v: bch_val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Whiteout {
-    pub v: c::bch_val,
+    pub v: bch_val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct ExtentWhiteout {
-    pub v: c::bch_val,
+    pub v: bch_val,
 }
 
 #[grown(from = err, bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct Error {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub err: u8,
     pub pad: [u8; 7],
 }
@@ -535,20 +538,20 @@ pub enum ErrorKeyReason {
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Cookie {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub cookie: Le64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct HashWhiteout {
-    pub v: c::bch_val,
+    pub v: bch_val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]
 pub struct Set {
-    pub v: c::bch_val,
+    pub v: bch_val,
 }
 
 /* 128 bits, sufficient for cryptographic MACs: */
@@ -562,7 +565,7 @@ pub struct bch_csum {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers)]
 pub struct Backpointer {
-    pub v: c::bch_val,
+    pub v: bch_val,
     pub btree_id: u8,
     pub level: u8,
     pub data_type: u8,
@@ -592,7 +595,7 @@ pub struct BackpointerFlags {
      * rb_work_id_phys() equals PHYS. Every path that mutates reconcile_opts on an
      * extent must keep the bp's PHYS flag in sync.
      */
-    #[bits(2)] reconcile_phys:  c::ReconcileWorkId,
+    #[bits(2)] reconcile_phys:  ReconcileWorkId,
     erasure_coded:              bool,
     stripe_ptr:                 bool,
     __:                         u28,
@@ -762,54 +765,55 @@ crate::display_via_to_text!(Btree);
 
 /* A superblock field is one of its sections, by its type: */
 tagged_union! {
-    #[storage(c::bch_sb_field)]
+    in crate::format;
+    #[storage(crate::format::bch_sb_field)]
     #[tag(type_: u32)]
     #[tag_enum(SbFieldType: u32, nr)]
     #[size(header)]
     pub enum bch_sb_field {
         /// Journal bucket list for this device
-        journal(c::bch_sb_field_journal) = 0,
+        journal(crate::format::bch_sb_field_journal) = 0,
         /// Member device list (v1)
-        members_v1(c::bch_sb_field_members_v1) = 1,
+        members_v1(crate::sb::members_format::bch_sb_field_members_v1) = 1,
         /// Encryption key and KDF settings
-        crypt(c::bch_sb_field_crypt) = 2,
+        crypt(crate::format::bch_sb_field_crypt) = 2,
         /// Replica entries (v0)
-        replicas_v0(c::bch_sb_field_replicas_v0) = 3,
+        replicas_v0(crate::alloc::replicas_format::bch_sb_field_replicas_v0) = 3,
         /// Quota timelimit and warnlimit fields
-        quota(c::bch_sb_field_quota) = 4,
+        quota(crate::posix::quota_format::bch_sb_field_quota) = 4,
         /// Device label strings and label path tree structure
-        disk_groups(c::bch_sb_field_disk_groups) = 5,
+        disk_groups(crate::alloc::disk_groups_format::bch_sb_field_disk_groups) = 5,
         /// Clean shutdown: btree roots and usage counters, allowing journal
         /// replay to be skipped
-        clean(c::bch_sb_field_clean) = 6,
+        clean(crate::format::bch_sb_field_clean) = 6,
         /// Replica entries: lists of devices with extents replicated across
         /// them
-        replicas(c::bch_sb_field_replicas) = 7,
+        replicas(crate::alloc::replicas_format::bch_sb_field_replicas) = 7,
         /// Blacklisted journal sequence numbers
-        journal_seq_blacklist(c::bch_sb_field_journal_seq_blacklist) = 8,
+        journal_seq_blacklist(crate::journal::seq_blacklist_format::bch_sb_field_journal_seq_blacklist) = 8,
         /// Journal bucket list (v2)
-        journal_v2(c::bch_sb_field_journal_v2) = 9,
+        journal_v2(crate::format::bch_sb_field_journal_v2) = 9,
         /// Persistent counters: IO statistics, error counts, and cumulative
         /// metrics across mounts
-        counters(c::bch_sb_field_counters) = 10,
+        counters(crate::sb::counters_format::bch_sb_field_counters) = 10,
         /// Member device list (v2)
-        members_v2(c::bch_sb_field_members_v2) = 11,
+        members_v2(crate::sb::members_format::bch_sb_field_members_v2) = 11,
         /// Persistent error log: records errors detected during operation or
         /// fsck so they survive across mounts
-        errors(c::bch_sb_field_errors) = 12,
+        errors(crate::sb::errors_format::bch_sb_field_errors) = 12,
         /// Extended superblock: required recovery passes, accumulated silenced
         /// errors, and other flags
-        ext(c::bch_sb_field_ext) = 13,
+        ext(crate::format::bch_sb_field_ext) = 13,
         /// Minimum on-disk format version for safe downgrade, with required
         /// recovery passes
-        downgrade(c::bch_sb_field_downgrade) = 14,
+        downgrade(crate::sb::downgrade_format::bch_sb_field_downgrade) = 14,
         /// Tracks which recovery passes have been run successfully
-        recovery_passes(c::bch_sb_field_recovery_passes) = 15,
+        recovery_passes(crate::init::passes_format::bch_sb_field_recovery_passes) = 15,
         /// Per-extent-type size limits
-        extent_type_u64s(c::bch_sb_field_extent_type_u64s) = 16,
+        extent_type_u64s(crate::data::extents_sb_format::bch_sb_field_extent_type_u64s) = 16,
         /// Persistent error log, v2: adds the time of first occurrence to each
         /// entry
-        errors_v2(c::bch_sb_field_errors_v2) = 17,
+        errors_v2(crate::sb::errors_format::bch_sb_field_errors_v2) = 17,
     }
 }
 
@@ -818,8 +822,8 @@ tagged_union! {
  * not:
  */
 pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
-    (1 << c::SbFieldType::journal.0) |
-    (1 << c::SbFieldType::journal_v2.0);
+    (1 << SbFieldType::journal.0) |
+    (1 << SbFieldType::journal_v2.0);
 
 /* BCH_SB_FIELD_journal: */
 
@@ -837,11 +841,11 @@ pub struct bch_sb_field_journal_v2_entry {
     pub nr: Le64,
 }
 
-#[whole(tail = d: [c::bch_sb_field_journal_v2_entry])]
+#[whole(tail = d: [bch_sb_field_journal_v2_entry])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2 {
-    pub d: [c::bch_sb_field_journal_v2_entry; 0],
+    pub d: [bch_sb_field_journal_v2_entry; 0],
 }
 
 /* BCH_SB_FIELD_crypt: */
@@ -862,7 +866,87 @@ pub struct bch_key {
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_encrypted_key {
     pub magic: Le64,
-    pub key: c::bch_key,
+    pub key: bch_key,
+}
+
+impl bch_sb_field_crypt {
+    pub fn key(&self) -> &bch_encrypted_key {
+        &self.key
+    }
+}
+
+// ── Encryption key material ─────────────────────────────────────
+//
+// bch_key/bch_encrypted_key hold the filesystem encryption key. They're
+// kept out of DERIVE_READD (see codegen.rs) so they derive neither Copy (a
+// Drop type can't be Copy) nor Debug (don't leak key bytes). The key is
+// wiped on drop — via the `zeroize` crate in userspace, and a hand-rolled
+// volatile memset in-kernel, which can't pull in the `zeroize` crate.
+
+impl Clone for bch_key {
+    fn clone(&self) -> Self {
+        Self { key: self.key }
+    }
+}
+
+impl Clone for bch_encrypted_key {
+    fn clone(&self) -> Self {
+        Self { magic: self.magic, key: self.key.clone() }
+    }
+}
+
+impl bch_encrypted_key {
+    pub const MAGIC: &[u8; 8] = b"bch**key";
+
+    /// Plaintext (unencrypted) key for the crypt field (remove-passphrase).
+    pub fn new_unencrypted(key: bch_key) -> Self {
+        Self { magic: u64::from_le_bytes(*Self::MAGIC).into(), key }
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.magic.get() != u64::from_le_bytes(*Self::MAGIC)
+    }
+
+    pub fn into_key(self) -> bch_key {
+        self.key.clone()
+    }
+}
+
+#[cfg(feature = "std")]
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+#[cfg(feature = "std")]
+impl Zeroize for bch_key {
+    fn zeroize(&mut self) { self.key.zeroize(); }
+}
+#[cfg(feature = "std")]
+impl Drop for bch_key {
+    fn drop(&mut self) { self.zeroize(); }
+}
+#[cfg(feature = "std")]
+impl ZeroizeOnDrop for bch_key {}
+
+#[cfg(feature = "std")]
+impl Zeroize for bch_encrypted_key {
+    fn zeroize(&mut self) {
+        self.magic.zeroize();
+        self.key.zeroize();
+    }
+}
+#[cfg(feature = "std")]
+impl Drop for bch_encrypted_key {
+    fn drop(&mut self) { self.zeroize(); }
+}
+#[cfg(feature = "std")]
+impl ZeroizeOnDrop for bch_encrypted_key {}
+
+#[cfg(not(feature = "std"))]
+impl Drop for bch_key {
+    fn drop(&mut self) { crate::util::wipe(&mut self.key); }
+}
+#[cfg(not(feature = "std"))]
+impl Drop for bch_encrypted_key {
+    fn drop(&mut self) { crate::util::wipe(self); }
 }
 
 /*
@@ -880,7 +964,7 @@ pub struct bch_sb_field_crypt {
     pub flags: bch_sb_field_crypt_flags,
     #[members]
     pub kdf_flags: bch_sb_field_crypt_kdf_flags,
-    pub key: c::bch_encrypted_key,
+    pub key: bch_encrypted_key,
 }
 
 #[bitfield(Le64)]
@@ -1140,7 +1224,7 @@ pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_sb_layout {
-    pub magic: c::__uuid_t, /* bcachefs superblock UUID */
+    pub magic: __uuid_t, /* bcachefs superblock UUID */
     pub layout_type: u8,
     pub sb_max_size_bits: u8, /* base 2 of 512 byte sectors */
     pub nr_superblocks: u8,
@@ -1174,14 +1258,14 @@ pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct bch_sb {
-    pub csum: c::bch_csum,
+    pub csum: bch_csum,
     pub version: Le16<MetadataVersion>,
     pub version_min: Le16<MetadataVersion>,
     pub pad: [Le16; 2],
-    pub magic: c::__uuid_t,
-    pub uuid: c::__uuid_t,
-    pub user_uuid: c::__uuid_t,
-    pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
+    pub magic: __uuid_t,
+    pub uuid: __uuid_t,
+    pub user_uuid: __uuid_t,
+    pub label: [u8; BCH_SB_LABEL_SIZE as usize],
     pub offset: Le64,
     pub seq: Le64,
 
@@ -1202,15 +1286,15 @@ pub struct bch_sb {
     #[members] pub flags5: bch_sb_flags5,
     #[members] pub flags6: bch_sb_flags6,
     pub write_time: Le64,
-    pub features: Le64<c::SbFeatures>,
+    pub features: Le64<SbFeatures>,
     /* features 64 on: there are none yet */
     pub features_hi: Le64,
-    pub compat: Le64<c::SbCompats>,
+    pub compat: Le64<SbCompats>,
     pub compat_hi: Le64,
 
-    pub layout: c::bch_sb_layout,
+    pub layout: bch_sb_layout,
 
-    pub start: [Head<c::bch_sb_field>; 0],
+    pub start: [Head<bch_sb_field>; 0],
     pub _data: [Le64; 0],
 }
 
@@ -1584,50 +1668,51 @@ pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
 
 /* Journal */
 #[allow(non_upper_case_globals)]
-pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
+pub const JSET_KEYS_U64s: usize = size_of::<Head<jset_entry>>() / size_of::<u64>();
 
 /* A journal entry is the type its type says: */
 tagged_union! {
-    #[storage(c::jset_entry)]
+    in crate::format;
+    #[storage(crate::format::jset_entry)]
     #[tag(type_: u8)]
     #[tag_enum(JsetEntryType: u32, nr)]
     #[size(header)]
     pub enum jset_entry {
         /// Btree key updates
-        btree_keys(c::jset_entry_btree_keys) = 0,
+        btree_keys(crate::format::jset_entry_btree_keys) = 0,
         /// Btree root pointers, recorded every journal write
-        btree_root(c::jset_entry_btree_root) = 1,
+        btree_root(crate::format::jset_entry_btree_root) = 1,
         /// Legacy, no longer used
-        prio_ptrs(c::jset_entry_prio_ptrs) = 2,
+        prio_ptrs(crate::format::jset_entry_prio_ptrs) = 2,
         /// Blacklist a single journal sequence number
-        blacklist(c::jset_entry_blacklist) = 3,
+        blacklist(crate::format::jset_entry_blacklist) = 3,
         /// Blacklist a range of journal sequence numbers
-        blacklist_v2(c::jset_entry_blacklist_v2) = 4,
+        blacklist_v2(crate::format::jset_entry_blacklist_v2) = 4,
         /// Maximum key version for encryption nonce derivation
-        usage(c::jset_entry_usage) = 5,
+        usage(crate::format::jset_entry_usage) = 5,
         /// Legacy: usage accounting moved to accounting btree
-        data_usage(c::jset_entry_data_usage) = 6,
+        data_usage(crate::format::jset_entry_data_usage) = 6,
         /// IO clock: total reads and writes in sectors since filesystem
         /// creation
-        clock(c::jset_entry_clock) = 7,
+        clock(crate::format::jset_entry_clock) = 7,
         /// Legacy: per-device usage moved to accounting btree
-        dev_usage(c::jset_entry_dev_usage) = 8,
+        dev_usage(crate::format::jset_entry_dev_usage) = 8,
         /// Free-form log message for fsck actions and diagnostic events
-        log(c::jset_entry_log) = 9,
+        log(crate::format::jset_entry_log) = 9,
         /// Old value being overwritten, for debugging and journal_rewind
-        overwrite(c::jset_entry_overwrite) = 10,
+        overwrite(crate::format::jset_entry_overwrite) = 10,
         /// Write buffer keys, transformed to btree_keys before writing to disk
-        write_buffer_keys(c::jset_entry_write_buffer_keys) = 11,
+        write_buffer_keys(crate::format::jset_entry_write_buffer_keys) = 11,
         /// Wall clock time at journal write
-        datetime(c::jset_entry_datetime) = 12,
+        datetime(crate::format::jset_entry_datetime) = 12,
         /// Structured log entry containing a btree key
-        log_bkey(c::jset_entry_log_bkey) = 13,
+        log_bkey(crate::format::jset_entry_log_bkey) = 13,
         /// Oldest journal seq safe for rewind (discards may have invalidated
         /// earlier seqs)
-        rewind_limit(c::jset_entry_rewind_limit) = 14,
+        rewind_limit(crate::format::jset_entry_rewind_limit) = 14,
         /// Rewind in progress: keys from entries in this seq range use
         /// overwrite entries
-        rewind(c::jset_entry_rewind) = 15,
+        rewind(crate::format::jset_entry_rewind) = 15,
     }
 }
 
@@ -1729,7 +1814,7 @@ pub struct jset_entry_usage {
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_data_usage {
     pub v: Le64,
-    pub r: Head<c::bch_replicas_entry_v1>,
+    pub r: Head<bch_replicas_entry_v1>,
 }
 
 #[whole]
@@ -1749,7 +1834,7 @@ pub struct jset_entry_dev_usage_type {
     pub fragmented: Le64,
 }
 
-#[whole(tail = d: [c::jset_entry_dev_usage_type])]
+#[whole(tail = d: [jset_entry_dev_usage_type])]
 #[repr(C)]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage {
@@ -1759,7 +1844,7 @@ pub struct jset_entry_dev_usage {
     pub _buckets_ec: Le64, /* No longer used */
     pub _buckets_unavailable: Le64, /* No longer used */
 
-    pub d: [c::jset_entry_dev_usage_type; 0],
+    pub d: [jset_entry_dev_usage_type; 0],
 }
 
 #[whole(tail = d: [u8])]
@@ -1809,7 +1894,7 @@ pub struct jset_entry_rewind {
 #[repr(C, align(8))]
 #[derive(Default, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct jset {
-    pub csum: c::bch_csum,
+    pub csum: bch_csum,
 
     pub magic: Le64,
     pub seq: Le64,
@@ -1827,7 +1912,7 @@ pub struct jset {
     /* Sequence number of oldest dirty journal entry */
     pub last_seq: Le64,
 
-    pub start: [Head<c::jset_entry>; 0],
+    pub start: [Head<jset_entry>; 0],
     pub _data: [u64; 0],
 }
 
@@ -1884,7 +1969,7 @@ pub struct bset {
     pub version: Le16<MetadataVersion>,
     u64s: Le16, /* count of d[] in u64s */
 
-    pub start: [c::bkey_packed; 0],
+    pub start: [bkey_packed; 0],
     pub _data: [u64; 0],
 }
 
@@ -1958,7 +2043,7 @@ pub struct bset_flags {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo, BitfieldMembers)]
 pub struct btree_node {
-    pub csum: c::bch_csum,
+    pub csum: bch_csum,
     pub magic: Le64,
 
     /* this flags field is encrypted, unlike bset->flags: */
@@ -1968,11 +2053,11 @@ pub struct btree_node {
     /* Closed interval: */
     pub min_key: Bpos,
     pub max_key: Bpos,
-    pub _ptr: c::bch_extent_ptr, /* not used anymore */
-    pub format: c::bkey_format,
+    pub _ptr: bch_extent_ptr, /* not used anymore */
+    pub format: bkey_format,
 
     /* C's vstruct macros find u64s and _data on the node itself: */
-    pub keys: Head<c::bset>,
+    pub keys: Head<bset>,
 }
 
 #[bitfield(Le64)]
@@ -2002,8 +2087,8 @@ impl btree_node_head {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
 pub struct btree_node_entry {
-    pub csum: c::bch_csum,
+    pub csum: bch_csum,
 
     /* C's vstruct macros find u64s and _data on the entry itself: */
-    pub keys: Head<c::bset>,
+    pub keys: Head<bset>,
 }

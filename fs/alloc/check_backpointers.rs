@@ -22,7 +22,7 @@
 //! again - see backpointers.rs.
 
 
-use crate::init::passes::RecoveryPass;
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::fs::Dev;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
@@ -38,7 +38,11 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
-use crate::c;
+use crate::alloc::format::AllocV4;
+use crate::btree::bbpos::bbpos;
+use crate::data::extents_format::BtreePtrV2;
+use crate::data::reflink_format::ReflinkP;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::data::extents::Extents;
 use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
@@ -60,7 +64,7 @@ use core::ops::{ControlFlow, RangeInclusive};
 use core::sync::atomic::Ordering;
 use cstruct_macros::{Init, MaybeZeroable};
 use pin_init::pin_data;
-use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType, MetadataVersion};
+use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType, MetadataVersion, Backpointer};
 
 /// A bucket_bitmap's words: replaced by a copy when the device grows.
 pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::bitmap::AtomicULong>;
@@ -70,7 +74,7 @@ crate::published! {
     /// check sets and frees them - so they're atomic words under RCU.
     #[derive(MaybeZeroable)]
     pub struct BucketBits {
-        pub buckets: c::BucketBitmapWords,
+        pub buckets: BucketBitmapWords,
         /// Bits set
         pub nr:      crate::util::projections::Volatile<u64>,
     }
@@ -145,12 +149,12 @@ crate::recovery_pass!(check_btree_backpointers => check_btree_backpointers);
 
 // ── fsck: an extent's backpointer ────────────────────────────────────────
 
-fn bp_missing(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
+fn bp_missing(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<Backpointer>,
               bp_found: BkeySC<'_>) -> Result<(), BchError> {
     let fs = t.fs();
     let mut buf = Printbuf::new();
     prt!(&mut buf, "missing backpointer\nfor:  {}", extent.to_text(fs));
-    prt!(&mut buf, "\nwant: {}", BkeySC::<c::Backpointer>::from(&*bp).to_text(fs));
+    prt!(&mut buf, "\nwant: {}", BkeySC::<Backpointer>::from(&*bp).to_text(fs));
     if !bp_found.k.key_type().is_deleted() {
         prt!(&mut buf, "\ngot:  {}", bp_found.to_text(fs));
     }
@@ -186,7 +190,7 @@ fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: Btree, level: u8, k: 
 /// the walk restarts, its keys stale. The bucket gc left `multiple` is
 /// check_extents_to_backpointers()'s to recompute, at its end.
 fn double_allocation_dropped(t: &TransAttempt<'_, '_>, winner: BkeySC<'_>,
-                             mut winner_bp: BkeyI<c::Backpointer>) -> Result<(), BchError> {
+                             mut winner_bp: BkeyI<Backpointer>) -> Result<(), BchError> {
     let winner_k = BkeyBuf::from_key(winner);
 
     // the drop may pad the key back to its durability, charged to a reservation
@@ -222,7 +226,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
     iter1.traverse(t)?;
 
     // With room for the reflink_p make_extent_indirect() makes it, in place
-    let mut k1_mut = t.bkey_reassemble_room(e1.k, size_of::<BkeyI<c::ReflinkP>>())?;
+    let mut k1_mut = t.bkey_reassemble_room(e1.k, size_of::<BkeyI<ReflinkP>>())?;
     {
         let mut e = k1_mut.as_mut().arm::<Extents>().expect("an extent");
         e.cut_front_in_place(fs, spos(p1.inode, e1.overlap.start, p1.snapshot));
@@ -235,7 +239,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
     let mut iter2 = BtreeIter::new_level(t, e2.btree, p2, e2.level.into(), BtreeIterFlags::INTENT);
     iter2.traverse(t)?;
 
-    let mut rp = t.bkey_alloc_typed::<c::ReflinkP>()?;
+    let mut rp = t.bkey_alloc_typed::<ReflinkP>()?;
     let k = rp.k_mut();
     k.p = spos(p2.inode, e2.overlap.end, p2.snapshot);
     k.size = overlap_size;
@@ -245,8 +249,8 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
     t.update(&iter2, rp, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
-fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<c::Backpointer>,
-                other_bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
+fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<Backpointer>,
+                other_bp: BkeySC<'_, Backpointer>) -> Result<(), BchError> {
     let fs = t.fs();
     let dev = bp.k.p.inode as u32;
     let btree = Btree(bp.v.btree_id.into());
@@ -368,12 +372,12 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
 
 /// Repairs as check_extents_to_backpointers does: makes a missing one, resolves
 /// one that's someone else's.
-pub fn check_bp_exists(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<c::Backpointer>,
+pub fn check_bp_exists(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<Backpointer>,
                        mut last_flushed: WbFlush<'_>) -> Result<(), BchError> {
     let mut bp_iter = BtreeIter::new(t, bp.v.bp_btree(), bp.k.p, BtreeIterFlags::empty());
     let bp_found = bp_iter.peek_slot(t)?.expect("a slot always has a key");
 
-    match bp_found.arm::<c::Backpointer>() {
+    match bp_found.arm::<Backpointer>() {
         None => {
             last_flushed.maybe_flush(t, extent.into())?;
             bp_missing(t, extent.into(), bp, bp_found)
@@ -404,11 +408,11 @@ struct BucketSectors {
 }
 
 impl BucketSectors {
-    fn of(a: &c::AllocV4) -> Self {
+    fn of(a: &AllocV4) -> Self {
         Self { dirty: a.dirty_sectors, cached: a.cached_sectors, stripe: a.stripe_sectors }
     }
 
-    fn add(&mut self, bp: &c::Backpointer) {
+    fn add(&mut self, bp: &Backpointer) {
         let counter = match DataType(bp.data_type.into()) {
             DataType::btree | DataType::user    => &mut self.dirty,
             DataType::cached                       => &mut self.cached,
@@ -464,7 +468,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
 
     let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
     iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
-        let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(ControlFlow::Continue(())) };
+        let Some(bp) = bp_k.arm::<Backpointer>() else { return Ok(ControlFlow::Continue(())) };
         let v = *bp.v();
 
         if before_bucket_gen && (v.bucket_gen != a.generation || v.flags.into_bits() != 0) {
@@ -602,9 +606,9 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
          { ca.mi.get().nbuckets });
 
     let flags = if nr < allowed {
-        c::RunRecoveryPassFlags::ratelimit
+        RunRecoveryPassFlags::ratelimit
     } else {
-        c::RunRecoveryPassFlags::from_bits_retain(0)
+        RunRecoveryPassFlags::from_bits_retain(0)
     };
     // as C's: the message says whether it's scheduled
     let _ = passes::run_explicit(fs, &mut buf,
@@ -632,7 +636,7 @@ fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpSta
         let mut bp = extent_ptr_to_bp(fs, btree, level, k, &d);
         let dev = u32::from(d.p.ptr.dev());
 
-        if dev == c::BCH_SB_MEMBER_INVALID {
+        if dev == BCH_SB_MEMBER_INVALID {
             if d.p.has_ec {
                 check_bp_exists(t, kp, &mut bp, s.last_flushed.borrow())?;
             }
@@ -739,7 +743,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> 
     let mut mixed = false;
     let mut iter = BtreeIter::new(t, Btree::backpointers, *bp_range.start(), BtreeIterFlags::empty());
     iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
-        let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(ControlFlow::Continue(())) };
+        let Some(bp) = bp_k.arm::<Backpointer>() else { return Ok(ControlFlow::Continue(())) };
         if bp.v().bucket_gen != a.generation {
             return Ok(ControlFlow::Continue(()));
         }
@@ -772,7 +776,7 @@ fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
     match k.k.key_type() {
         BkeyType::btree_ptr_v2 => {
             let rcu = read_lock();
-            let mut p = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v().min_key;
+            let mut p = k.arm::<BtreePtrV2>().expect("a btree_ptr_v2").v().min_key;
 
             while p.inode <= k.k.p.inode && p.inode < u64::from(fs.sb.nr_devices.get()) {
                 if let Some(ca) = fs.dev_rcu(p.inode as u32, &rcu) {
@@ -932,8 +936,8 @@ crate::recovery_pass!(check_extents_to_backpointers => check_extents_to_backpoin
 
 // ── fsck: check_backpointers_to_extents ──────────────────────────────────
 
-fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbpos>,
-                         bp: BkeySC<'_, c::Backpointer>, last_flushed: WbFlush<'_>)
+fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<bbpos>,
+                         bp: BkeySC<'_, Backpointer>, last_flushed: WbFlush<'_>)
     -> Result<(), BchError>
 {
     if !range.contains(&bp.v().target()) {
@@ -953,14 +957,14 @@ fn check_bucket_backpointers_to_extents(trans: &TransGuard<'_>, ca: &Dev, bucket
 
     BpScanIter::new(Btree::backpointers, *range.start(), None)
         .for_each(trans, *range.end(), last_flushed, |t, bp, last_flushed| {
-            check_one_backpointer(t, &(c::bbpos::MIN..=c::bbpos::MAX), bp, last_flushed)
+            check_one_backpointer(t, &(bbpos::MIN..=bbpos::MAX), bp, last_flushed)
         })?;
 
     // make sure bad backpointers that were deleted are visible
     trans.write_buffer_flush_sync()
 }
 
-fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<c::bbpos>)
+fn check_backpointers_to_extents_pass(fs: &Fs, trans: &TransGuard<'_>, range: RangeInclusive<bbpos>)
     -> Result<(), BchError>
 {
     let mut last_flushed = WbMaybeFlush::new();
@@ -980,24 +984,24 @@ fn check_backpointers_to_extents(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let pins = fs.btree_cache_pins();
     let leaves = 1 << Btree::extents.0 | 1 << Btree::reflink.0;
-    let mut start = c::bbpos::MIN;
+    let mut start = bbpos::MIN;
 
     loop {
-        let end = pins.pin(&trans, leaves, !0, start..=c::bbpos::MAX)?;
+        let end = pins.pin(&trans, leaves, !0, start..=bbpos::MAX)?;
 
-        if start == c::bbpos::MIN && end != c::bbpos::MAX {
+        if start == bbpos::MIN && end != bbpos::MAX {
             crate::bch_verbose!(fs, "bch2_check_backpointers_to_extents(): extents do not fit in ram, \
                                      running in multiple passes with {} nodes per pass",
                                 pins.budget() / u64::from(fs.opts.btree_node_size.get()));
         }
 
-        if start != c::bbpos::MIN || end != c::bbpos::MAX {
+        if start != bbpos::MIN || end != bbpos::MAX {
             crate::bch_verbose!(fs, "check_backpointers_to_extents(): {start}-{end}");
         }
 
         check_backpointers_to_extents_pass(fs, &trans, start..=end)?;
 
-        if end == c::bbpos::MAX {
+        if end == bbpos::MAX {
             return Ok(());
         }
         start = end.successor();
@@ -1008,7 +1012,7 @@ crate::recovery_pass!(check_backpointers_to_extents => check_backpointers_to_ext
 
 // ── Bucket bitmaps ───────────────────────────────────────────────────────
 
-impl c::bucket_bitmap {
+impl bucket_bitmap {
     pub fn nr(&self) -> u64 {
         self.bits.nr.get()
     }

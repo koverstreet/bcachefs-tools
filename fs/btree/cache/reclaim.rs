@@ -6,17 +6,19 @@ use crate::btree::path::LockedNode;
 use super::{BtreeCacheNotFreedReason as NotFreed, BtreeCacheGuard};
 use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{node_write, BtreeWriteFlags};
-use crate::c;
+use crate::btree::cache::bch_fs_btree_cache;
+use crate::journal::journal::JournalFlag;
+use crate::util::time_stats::TimeStat;
 use crate::data_structures::list::Walk;
 use crate::debug::params::btree_shrinker_disabled;
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::os::kernel::local_clock;
 use bitflags::bitflags;
-use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 
 /*
  * Dirty nodes are journal reclaim's to write - but during journal replay it
@@ -27,12 +29,12 @@ use c::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
  * what it can't free it writes (btree_cache_replay_write()).
  */
 fn replay_writeback(fs: &Fs) -> bool {
-    !fs.journal.flags.get(c::JournalFlag::replay_done) &&
-        fs.flags.get(c::FsFlag::rw) &&
-        !fs.flags.get(c::FsFlag::going_ro)
+    !fs.journal.flags.get(JournalFlag::replay_done) &&
+        fs.flags.get(FsFlag::rw) &&
+        !fs.flags.get(FsFlag::going_ro)
 }
 
-impl c::bch_fs_btree_cache {
+impl bch_fs_btree_cache {
     fn can_free(&self, idx: usize) -> usize {
         let can_free = self.lock.live_nr[idx].nr_clean.get();
         if idx == 0 { can_free.saturating_sub(self.lock.nr_reserve.get()) } else { can_free }
@@ -191,7 +193,7 @@ impl Fs {
         lists.nr_freed     += freed;
         lists.nr_requested += nr;
 
-        self.times.get(c::TimeStat::btree_node_cache_scan as usize).update(start_time);
+        self.times.get(TimeStat::btree_node_cache_scan as usize).update(start_time);
 
         self.event_inc_trace(events::btree_cache_scan, |out| {
             prt!(out, "scanned {nr_to_scan} nodes, can free {can_free}, freed {freed}, writing {writeback}")

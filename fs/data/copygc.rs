@@ -54,19 +54,25 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::Dev;
+use crate::fs::{Dev, FsFlag};
 use crate::alloc::accounting;
 use crate::alloc::accounting_mem::MarkHeld;
 use crate::alloc::background::alloc_to_v4;
-use crate::alloc::buckets::u64_to_bucket;
+use crate::alloc::buckets::{u64_to_bucket, bch_dev_usage};
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::c::Errcode;
+use crate::data::ec::format::Stripe;
+use crate::alloc::foreground::Watermark;
+use crate::alloc::write_point::{write_point, write_point_specifier};
+use crate::btree::update::TransCommitFlags;
+use crate::data::update::{data_update_opts, DataUpdateType};
+use crate::init::dev::{AtomicDevsMask, DevsMask};
+use crate::errcode::Errcode;
 use crate::data::ec::stripe::STRIPE_LRU_POS_EMPTY;
-use crate::data::moving::{BucketMoves, MoveStats, MovingCtxt};
+use crate::data::moving::{BucketMoves, MoveStats, MovingCtxt, move_bucket_key};
 use crate::util::gather::Gather;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -105,8 +111,8 @@ pub struct bch_fs_copygc {
     #[init(Daemon::new())]
     pub(crate) thread: Daemon,
     #[pin]
-    #[init(c::write_point::init(DataType::user))]
-    pub write_point: c::write_point,
+    #[init(write_point::init(DataType::user))]
+    pub write_point: write_point,
     /* The thread's, read unlocked - foreground.c's to_text, move.c: */
     pub wait_at: Volatile<i64>,
     pub wait: Volatile<i64>,
@@ -122,14 +128,14 @@ pub struct bch_fs_copygc {
      *
      * Not cleared when copygc is disabled: the devices are still full.
      */
-    pub wants_space: c::AtomicDevsMask,
+    pub wants_space: AtomicDevsMask,
 
     /*
      * Devices getting full, on a looser threshold than wants_space above -
      * a superset of it, same lifetime and locking. Read by EC stripe reuse;
      * see EC_REUSE_FREE_THRESHOLD_PCT.
      */
-    pub low_on_space: c::AtomicDevsMask,
+    pub low_on_space: AtomicDevsMask,
 
     /* Dedicated workqueue for btree updates: */
     #[late(Workqueue::new(c"bcachefs_copygc",
@@ -172,7 +178,7 @@ impl Drop for DevInFlight<'_> {
 #[derive(Detach)]
 struct InFlight<'f> {
     #[pin]
-    reg:  Registration<c::move_bucket_key, InFlight<'f>, SipHash13Key, 2, Private>,
+    reg:  Registration<move_bucket_key, InFlight<'f>, SipHash13Key, 2, Private>,
     _dev: DevInFlight<'f>,
     /// The moves off it, each with a ref
     #[pin]
@@ -191,7 +197,7 @@ impl PinnedDrop for InFlight<'_> {
 type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>, SipHash13Key, 2, Private>;
 
 impl<'f> InFlight<'f> {
-    fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: c::move_bucket_key)
+    fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: move_bucket_key)
         -> impl PinInit<Self, RegisterError> + use<'f, 'w>
     {
         pin_init!(&this in InFlight::<'f> {
@@ -205,7 +211,7 @@ impl<'f> InFlight<'f> {
         }? RegisterError)
     }
 
-    fn key(&self) -> &c::move_bucket_key {
+    fn key(&self) -> &move_bucket_key {
         self.reg.key()
     }
 
@@ -214,7 +220,7 @@ impl<'f> InFlight<'f> {
     }
 }
 
-crate::keyed_by!(InFlight<'_>, |f| f.key() => c::move_bucket_key);
+crate::keyed_by!(InFlight<'_>, |f| f.key() => move_bucket_key);
 
 type Batch<'f> = Vec<Pin<KBox<InFlight<'f>>>>;
 
@@ -255,7 +261,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
     let fs = ca.fs();
     let usage_full = ca.usage_full_read_fast();
-    let mut usage = c::bch_dev_usage::default();
+    let mut usage = bch_dev_usage::default();
     for (b, d) in usage.buckets.iter_mut().zip(&usage_full.d) {
         *b = d.buckets;
     }
@@ -281,7 +287,7 @@ pub(crate) fn dev_wait_amount(ca: &Dev, mark: &impl MarkHeld) -> (i64, bool) {
         return (wait, low_on_space);
     }
 
-    let watermark = c::Watermark::stripe;
+    let watermark = Watermark::stripe;
     let fragmented_allowed = (ca.free_buckets_at(&usage, watermark).wrapping_add(ca.buckets_reserved(watermark))
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) >> 1) as i64;
     let fragmented = usage_full.d.iter().enumerate()
@@ -354,8 +360,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
     #[inline(never)]
     fn dev_list(&self, devs: &mut Vec<CopygcDev>) -> Result<u64, BchError> {
         let fs = self.fs;
-        let mut wants_space = c::DevsMask::default();
-        let mut low_on_space = c::DevsMask::default();
+        let mut wants_space = DevsMask::default();
+        let mut low_on_space = DevsMask::default();
         let mut wait = u64::MAX;
 
         devs.clear();
@@ -453,7 +459,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         -> Result<bool, BchError>
     {
         let Some(generation) = Self::bucket_is_movable(t, bucket, time)? else { return Ok(false) };
-        let key = c::move_bucket_key { bucket, generation };
+        let key = move_bucket_key { bucket, generation };
 
         batch.reserve(1)?;
         let b = match kbox_pin_init(InFlight::new(self.fs, self.set, key)) {
@@ -530,7 +536,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let lru = LruPos::from_bpos(lru_k);
         iter.set_pos(pos(0, lru.target));
         let s_k = iter.peek_slot(t)?.expect("a slot always has a key");
-        let Some(s) = s_k.arm::<c::Stripe>() else { return Ok(None) };
+        let Some(s) = s_k.arm::<Stripe>() else { return Ok(None) };
 
         /* write buffer race? */
         Ok((s.v().fragmentation_lru_pos() == lru.time).then_some(s))
@@ -648,9 +654,9 @@ impl<'f, 'w> Copygc<'f, 'w> {
     fn pick_and_evacuate(&mut self, batch: &mut Batch<'f>, picked: &mut usize, devs: &mut Vec<CopygcDev>)
         -> Result<(), BchError>
     {
-        let data_opts = c::data_update_opts {
-            type_:        c::DataUpdateType::copygc,
-            commit_flags: c::TransCommitFlags::from_bits_retain(c::Watermark::copygc as u32),
+        let data_opts = data_update_opts {
+            type_:        DataUpdateType::copygc,
+            commit_flags: TransCommitFlags::from_bits_retain(Watermark::copygc as u32),
             ..::pin_init::zeroed()
         };
 
@@ -749,14 +755,14 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
      * start (logged_ops::note_unfinished()).
      */
     let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-        || (fs.flags.get(c::FsFlag::rw) || Kthread::should_stop()).then_some(()));
+        || (fs.flags.get(FsFlag::rw) || Kthread::should_stop()).then_some(()));
     if Kthread::should_stop() {
         return Ok(());
     }
 
     let stats = MoveStats::default();
     stats.reset();
-    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, c::write_point_specifier::COPYGC, false),
+    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, write_point_specifier::COPYGC, false),
                             "allocating copygc's moving context")?;
     let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
     let clock = &fs.io_clock[WRITE];

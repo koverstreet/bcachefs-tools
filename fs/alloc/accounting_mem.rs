@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::init::passes::RecoveryPass;
+use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::alloc::accounting::{self, accounting_bkey, is_mem, key_to_text,
                         replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
 use crate::alloc::buckets::bch_fs_usage_base;
@@ -10,10 +10,16 @@ use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
                          TransAttempt};
 use crate::btree::trans::TransGuard;
-use crate::c;
+use crate::alloc::capacity::MarkLockAt;
+use crate::alloc::replicas_format::bch_replicas_entry_v1;
+use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
+use crate::btree::journal_overlay::journal_keys;
+use crate::init::dev::bch_devs_mask;
+use crate::journal::journal::journal_res;
+use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType};
-use crate::fs::Fs;
+use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType, bkey, DegradedAction};
+use crate::fs::{Fs, FsFlag};
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
 use crate::init::passes;
 use crate::init::recovery::NotRw;
@@ -42,10 +48,10 @@ impl<'a> From<BkeySC<'a, Accounting<Validated>>> for Delta<'a> {
     }
 }
 
-pub(crate) type MarkRead<'a> = SharedGuard<'a, Noio<PercpuRwSem>, (), (), Shared, c::MarkLockAt>;
-pub(crate) type MarkWrite<'a> = ExclusiveGuard<'a, Noio<PercpuRwSem>, (), (), Exclusive, c::MarkLockAt>;
+pub(crate) type MarkRead<'a> = SharedGuard<'a, Noio<PercpuRwSem>, (), (), Shared, MarkLockAt>;
+pub(crate) type MarkWrite<'a> = ExclusiveGuard<'a, Noio<PercpuRwSem>, (), (), Exclusive, MarkLockAt>;
 
-pub(crate) trait MarkHeld: Guard<Name = c::MarkLockAt> {
+pub(crate) trait MarkHeld: Guard<Name = MarkLockAt> {
     fn insert(&mut self, fs: &Fs, a: Delta<'_>) -> Result<(), BchError>;
 }
 
@@ -330,7 +336,7 @@ pub(crate) fn gc_accounting_done(fs: &Fs) -> Result<(), BchError> {
             accounting::mod_normal(t, &acc_k, d)
         }))?;
 
-        if !fs.flags.get(c::FsFlag::may_go_rw) {
+        if !fs.flags.get(FsFlag::may_go_rw) {
             let a = Delta { p: acc_k.to_bpos(), d };
             let usage = mem_add(fs, a, false, &mut mark)
                 .expect("an existing entry: entries are only removed by gc_free and exit");
@@ -354,13 +360,13 @@ fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchE
 
     if let Some(r) = replicas_entry(&pos).filter(|_| d.iter().any(|&v| v != 0)) {
         let flags = match fs.opts().degraded() {
-            c::DegradedAction::very => c::BCH_FORCE_IF_DEGRADED | c::BCH_FORCE_IF_LOST,
-            c::DegradedAction::yes  => c::BCH_FORCE_IF_DEGRADED,
+            DegradedAction::very => BCH_FORCE_IF_DEGRADED | BCH_FORCE_IF_LOST,
+            DegradedAction::yes  => BCH_FORCE_IF_DEGRADED,
             _ => 0,
         };
 
         let mut buf = Printbuf::new();
-        if !can_read_with_devs(r, &c::bch_devs_mask { d: fs.devs_online.load() }, flags, Some(&mut buf)) {
+        if !can_read_with_devs(r, &bch_devs_mask { d: fs.devs_online.load() }, flags, Some(&mut buf)) {
             fs.missing_devs_to_text(&mut buf);
             print_str(fs, LogLevel::ERR, &mut buf);
             return Err(fs.err(Errcode::insufficient_devices_to_start));
@@ -397,7 +403,7 @@ fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchE
 
 /// Journal key @i's newer deltas, the keys after it at its position, added
 /// into it and marked overwritten: the index past them.
-fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, not_rw: &mut NotRw<'_>, i: usize)
+fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &journal_keys, not_rw: &mut NotRw<'_>, i: usize)
     -> Result<usize, BchError>
 {
     let keys = jk.keys();
@@ -448,7 +454,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &c::journal_keys, not_rw
     Ok(end)
 }
 
-fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal_keys, not_rw: &mut NotRw<'_>,
+fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &journal_keys, not_rw: &mut NotRw<'_>,
                        entries: &mut Vec<Entry>, i: usize) -> Result<usize, BchError>
 {
     let next = accumulate_newer(ctx, fs, journal_keys, not_rw, i)?;
@@ -456,7 +462,7 @@ fn accumulate_and_read(ctx: &impl FsckErrCtx, fs: &Fs, journal_keys: &c::journal
     Ok(next)
 }
 
-fn read_walk(trans: &TransGuard<'_>, journal_keys: &c::journal_keys, not_rw: &mut NotRw<'_>,
+fn read_walk(trans: &TransGuard<'_>, journal_keys: &journal_keys, not_rw: &mut NotRw<'_>,
              entries: &mut Vec<Entry>) -> Result<(), BchError>
 {
     let fs = trans.fs();
@@ -543,7 +549,7 @@ fn validate_late(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos<Unvalidated>,
     let fs = t.fs();
 
     if let Some(r) = replicas_entry(pos) {
-        let missing = r.devs.iter().find(|&&d| u32::from(d) != c::BCH_SB_MEMBER_INVALID && !fs.dev_exists(d.into()));
+        let missing = r.devs.iter().find(|&&d| u32::from(d) != BCH_SB_MEMBER_INVALID && !fs.dev_exists(d.into()));
         if let Some(&dev) = missing {
             return invalid_dev(t, pos, v, dev.into());
         }
@@ -679,7 +685,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
         let log = count_fsck_err(fs, id::accounting_key_underflow, &mut underflow_err);
         underflow_err.set_suppressed(!log);
         passes::run_explicit(fs, &mut underflow_err, RecoveryPass::check_allocations,
-                             c::RunRecoveryPassFlags::empty())?;
+                             RunRecoveryPassFlags::empty())?;
     }
     Ok(())
 }
@@ -750,7 +756,7 @@ crate::recovery_pass!(accounting_read => read);
 
 /// Whether accounting is kept for @e - or it's an entry no accounting
 /// position here holds, a newer version's, and not ours to drop.
-pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &c::bch_replicas_entry_v1) -> bool {
+pub(crate) fn has_replicas(fs: &Fs, mark: &impl MarkHeld, e: &bch_replicas_entry_v1) -> bool {
     let Some(pos) = try_replicas_acct(e.data_type.get(), e.nr_required, &e.devs) else { return true };
     fs.accounting_mem(mark).find(pos.to_bpos()).is_some()
 }
@@ -825,7 +831,7 @@ pub(crate) fn mem_add<M: MarkHeld>(fs: &Fs, a: Delta<'_>, gc: bool, mark: &mut M
     }).0)
 }
 
-fn journal_pos_to_bversion(res: &c::journal_res, offset: usize) -> Bversion {
+fn journal_pos_to_bversion(res: &journal_res, offset: usize) -> Bversion {
     ebug_assert!(res.ref_);
 
     Bversion {
@@ -841,8 +847,8 @@ fn applies(flags: CommitOpts) -> bool {
 /// A committing transaction's accounting key - @k and its counters @d, @offset
 /// u64s into the transaction's accounting keys - going into journal
 /// reservation @res.
-pub(crate) fn trans_commit_hook(t: &TransAttempt<'_, '_>, mark: &mut MarkRead<'_>, res: &c::journal_res,
-                                k: &mut c::bkey, d: &[u64], offset: usize, flags: CommitOpts)
+pub(crate) fn trans_commit_hook(t: &TransAttempt<'_, '_>, mark: &mut MarkRead<'_>, res: &journal_res,
+                                k: &mut bkey, d: &[u64], offset: usize, flags: CommitOpts)
     -> Result<(), BchError>
 {
     k.bversion = journal_pos_to_bversion(res, offset);

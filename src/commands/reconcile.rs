@@ -13,7 +13,7 @@ use crossterm::{
 
 use crate::util::run_tui;
 use crate::wrappers::accounting::{DiskAccountingType, ReconcileType};
-use bcachefs_kernel::c::DiskAccountingPosRef as Acct;
+use bcachefs_kernel::alloc::accounting_format::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::names::{self, Names};

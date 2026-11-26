@@ -35,6 +35,8 @@ use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, Bt
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
+use crate::alloc::format::BucketGens;
+use crate::btree::bbpos::bbpos;
 use crate::errcode::BchError;
 use crate::fs::{Fs, WriteRef};
 use crate::init::error::id;
@@ -44,8 +46,8 @@ use crate::sb::errors::FsckFlags;
 use crate::sb::members::DevRef;
 use crate::os::kernel::{local_clock, READ};
 use crate::{bch_err, bch_info, bch_verbose, fsck_err, fsck_err_flags, fsck_err_on};
-use crate::c::Errcode;
-use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature};
+use crate::errcode::Errcode;
+use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature, Set};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
 
@@ -248,10 +250,10 @@ fn check_alloc_key<'t>(
     if fsck_err_on!(t, a.v().generation != bucket_gen, id::bucket_gens_key_wrong,
                     "incorrect gen in bucket_gens btree (got {} should be {})\n{}",
                     bucket_gen, a.v().generation, alloc_k.to_text(fs))? {
-        let mut g = match k.arm::<c::BucketGens>() {
+        let mut g = match k.arm::<BucketGens>() {
             Some(g) => t.bkey_reassemble(g)?,
             None => {
-                let mut g = t.bkey_alloc_typed::<c::BucketGens>()?;
+                let mut g = t.bkey_alloc_typed::<BucketGens>()?;
                 g.k_mut().p = gens_pos.key;
                 g
             }
@@ -294,7 +296,7 @@ fn check_alloc_hole_freespace<'t>(
                     { p.inode }, { p.offset }, { end.offset })? {
         let size = (end.offset - p.offset).min(u32::MAX.into());
 
-        let mut u = t.bkey_alloc_typed::<c::Set>()?;
+        let mut u = t.bkey_alloc_typed::<Set>()?;
         u.k_mut().p = pos(p.inode, p.offset + size);
         u.k_mut().size = size as u32;
         t.update(freespace_iter, u, UpdateTriggerFlags::empty())?;
@@ -320,10 +322,10 @@ fn check_alloc_hole_bucket_gens<'t>(
     let gens_end = if bkey_eq(start_pos.key, end_pos.key) {
         end_pos.idx
     } else {
-        c::BucketGens::NR
+        BucketGens::NR
     };
 
-    if let Some(g) = k.arm::<c::BucketGens>() {
+    if let Some(g) = k.arm::<BucketGens>() {
         let mut gens = g.v().gens;
         let mut need_update = false;
 
@@ -531,7 +533,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
 fn delete_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck) -> BchError {
     let fs = t.fs();
     if who == FreespaceCheck::Allocator {
-        let pos = c::bbpos { btree: iter.btree(), pos: iter.pos() };
+        let pos = bbpos { btree: iter.btree(), pos: iter.pos() };
         // No write ref - the filesystem is going read-only - and it is left for fsck
         let _ = fs.spawn_write(async move |fs: &WriteRef| {
             let _ = crate::bch_err_fn!(&**fs, recheck_freespace_key(fs, pos));
@@ -558,7 +560,7 @@ fn repair_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
 
 /// The allocator's repair: the freespace entry at @pos checked again, in a
 /// transaction of its own, if it's still there.
-fn recheck_freespace_key(fs: &Fs, pos: c::bbpos) -> Result<(), BchError> {
+fn recheck_freespace_key(fs: &Fs, pos: bbpos) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
         let mut iter = BtreeIter::new(t, pos.btree, pos.pos, BtreeIterFlags::empty());
@@ -577,7 +579,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
     -> Result<(), BchError>
 {
     let fs = t.fs();
-    let g = k.arm::<c::BucketGens>().expect("only bucket_gens keys in the bucket_gens btree");
+    let g = k.arm::<BucketGens>().expect("only bucket_gens keys in the bucket_gens btree");
     let start = BucketGensPos { key: k.k.p, idx: 0 }.bucket().offset;
     let end = BucketGensPos { key: k.k.p.nosnap_successor(), idx: 0 }.bucket().offset;
 
@@ -601,7 +603,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
     let mut need_update = false;
 
     for b in (start..first_bucket).chain(nbuckets..end) {
-        let i = (b & c::BucketGens::MASK) as usize;
+        let i = (b & BucketGens::MASK) as usize;
         if fsck_err_on!(t, gens[i] != 0, id::bucket_gens_nonzero_for_invalid_buckets,
                         "bucket_gens key has nonzero gen for invalid bucket")? {
             gens[i] = 0;
@@ -745,7 +747,7 @@ fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &Dev, iter: &mut Bt
             iter.advance();
         }
         KeyOrHole::Hole { start, end } => {
-            let mut freespace = t.bkey_alloc_typed::<c::Set>()?;
+            let mut freespace = t.bkey_alloc_typed::<Set>()?;
             freespace.k_mut().p = end;
             freespace.k_mut().size = (end.offset - start.offset) as u32;
 

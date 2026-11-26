@@ -16,7 +16,7 @@
 //! errors are returned by the dispatch, as their class.
 
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::util::alloc::Vec;
 use crate::util::ioctl::{dir, Ioctl};
 use crate::util::vstructs::{CountedHead, DstHead, Head, Unsized};
@@ -119,7 +119,7 @@ impl UserStr {
         let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
             .strcpy_into_buf(&mut buf)?.to_bytes().len();
         if len >= max {
-            return Err(c::Errcode::EINVAL_user_str_too_long.into());
+            return Err(Errcode::EINVAL_user_str_too_long.into());
         }
         buf.truncate(len + 1);
         Ok(UserStr(buf))

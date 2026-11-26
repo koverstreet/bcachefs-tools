@@ -11,8 +11,8 @@
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use bcachefs_kernel::c;
-use bcachefs_kernel::btree::journal_overlay::JournalKeysRef;
+use bcachefs_kernel::format::jset;
+use bcachefs_kernel::btree::journal_overlay::{JournalKeysRef, journal_replay};
 use bcachefs_kernel::fs::Fs;
 
 /// The journal's replays, from the journal read: in seq order, pinned until
@@ -40,12 +40,12 @@ impl<'a> JournalReplays<'a> {
 /// One journal replay: its fields, and its jset.
 #[derive(Clone, Copy)]
 pub struct Replay<'a> {
-    r: &'a c::journal_replay,
-    j: &'a c::jset,
+    r: &'a journal_replay,
+    j: &'a jset,
 }
 
 impl<'a> Replay<'a> {
-    pub fn jset(&self) -> &'a c::jset {
+    pub fn jset(&self) -> &'a jset {
         self.j
     }
 
@@ -55,9 +55,9 @@ impl<'a> Replay<'a> {
 }
 
 impl Deref for Replay<'_> {
-    type Target = c::journal_replay;
+    type Target = journal_replay;
 
-    fn deref(&self) -> &c::journal_replay {
+    fn deref(&self) -> &journal_replay {
         self.r
     }
 }

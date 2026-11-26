@@ -389,8 +389,10 @@ pub fn whole(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 /// An entry can be another list, SUB(), or another list's entries mapped,
 /// SUB((params) => (args)). Then NAME!(cb) is a chain of macros, one per
 /// list it splices in: each is SUB! handed the entries so far, which adds
-/// SUB's, mapped, and those after, and calls the next; the last calls cb!. They're named by path, through
-/// crate::cstructs::c - NAME is expanded wherever it's used.
+/// SUB's, mapped, and those after, and calls the next; the last calls cb!.
+/// NAME is expanded wherever it's used, so they're named by path: such a
+/// list says where it's declared, xmacro! { in MODULE; NAME { .. } }, and
+/// the lists it splices in are MODULE's too.
 #[proc_macro]
 pub fn xmacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expand("xmacro!", || xmacro::xmacro_expand(input.into()))

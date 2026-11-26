@@ -11,7 +11,8 @@
 
 use anyhow::{anyhow, Result};
 use crate::wrappers::fs::FsExt;
-use bcachefs_kernel::c;
+use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::sb::members_format::bch_sb_field_members_v2;
 use bcachefs_kernel::sb::SbFieldType;
 use clap::Parser;
 
@@ -65,7 +66,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         print_default_fields = false;
     }
 
-    let mut fs_opts = c::bch_opts::default();
+    let mut fs_opts = bch_opts::default();
     fs_opts.set_noexcl(true);
     fs_opts.set_nochanges(true);
     fs_opts.set_no_version_check(true);
@@ -83,7 +84,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
         let mut fields = fields;
         if print_default_fields {
-            if sb.field::<c::bch_sb_field_members_v2>().is_some() {
+            if sb.field::<bch_sb_field_members_v2>().is_some() {
                 fields |= SbFieldType::members_v2.bit();
             } else {
                 fields |= SbFieldType::members_v1.bit();

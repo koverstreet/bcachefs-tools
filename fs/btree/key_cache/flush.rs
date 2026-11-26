@@ -8,17 +8,20 @@ use crate::btree::path::{LockedNode, NodePtr, PathIdx, PathNode, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trans_attempt::TransAttempt;
 use crate::c;
+use crate::btree::key_cache::{bkey_cached, BKEY_CACHED_DIRTY, bkey_cached_key};
+use crate::btree::update::btree_insert_entry;
+use crate::journal::journal::JournalFlag;
 use crate::data_structures::sort::heapsort_by;
 use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::journal::pins::PinHolder;
 use crate::util::alloc::{flags, Vec};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::{fs_fatal_error, prt};
-use c::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
-use c::SixLockType::SIX_LOCK_intent;
+use crate::journal::pins::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
+use crate::locking::six::SixLockType::SIX_LOCK_intent;
 use core::ffi::c_int;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
@@ -33,7 +36,7 @@ use core::sync::atomic::Ordering::Relaxed;
  */
 #[cold]
 #[inline(never)]
-fn bkey_cached_pin_warn(fs: &Fs, ck: LockedNode<'_, c::bkey_cached>, what: &str) {
+fn bkey_cached_pin_warn(fs: &Fs, ck: LockedNode<'_, bkey_cached>, what: &str) {
     let mut buf = LogMsg::new(fs);
     let key = ck.key.get();
     prt!(buf, "{} {}: dirty {} seq {} pin seq {}, journal last_seq {}",
@@ -42,7 +45,7 @@ fn bkey_cached_pin_warn(fs: &Fs, ck: LockedNode<'_, c::bkey_cached>, what: &str)
     crate::warn_once!(true, fs, "cached key {what}: {}", buf.as_str());
 }
 
-fn bkey_cached_check_pin(fs: &Fs, ck: LockedNode<'_, c::bkey_cached>) {
+fn bkey_cached_check_pin(fs: &Fs, ck: LockedNode<'_, bkey_cached>) {
     let pin_seq = ck.journal.seq();
 
     if ck.dirty() {
@@ -59,11 +62,11 @@ fn bkey_cached_check_pin(fs: &Fs, ck: LockedNode<'_, c::bkey_cached>) {
 }
 
 fn journal_low_on_space(fs: &Fs) -> bool {
-    fs.journal.flags.get(c::JournalFlag::low_on_space) ||
-        fs.journal.flags.get(c::JournalFlag::low_on_pin)
+    fs.journal.flags.get(JournalFlag::low_on_space) ||
+        fs.journal.flags.get(JournalFlag::low_on_pin)
 }
 
-fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, journal_seq: u64,
+fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: bkey_cached_key, journal_seq: u64,
                              commit_flags: CommitFlags, evict: bool) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = t.fs();
@@ -143,7 +146,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
     if !evict {
         let ck = paths[path].locked_key_cached().expect("a flushed cached path not locked");
         if ck.dirty() {
-            ck.clear_flag(c::BKEY_CACHED_DIRTY);
+            ck.clear_flag(BKEY_CACHED_DIRTY);
             bc.nr_dirty.fetch_sub(1, Relaxed);
         }
         bkey_cached_check_pin(fs, ck);
@@ -157,9 +160,9 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
         trans.node_lock_write_nofail(&mut paths, path, 0);
 
         let (node, held) = paths[path].take_level(0).expect("a flushed cached path not locked");
-        let mut ck = LockedEntry::new(c::bkey_cached::from_common(node).expect("a flushed path's btree node"), held);
+        let mut ck = LockedEntry::new(bkey_cached::from_common(node).expect("a flushed path's btree node"), held);
         if ck.dirty() {
-            ck.clear_flag(c::BKEY_CACHED_DIRTY);
+            ck.clear_flag(BKEY_CACHED_DIRTY);
             bc.nr_dirty.fetch_sub(1, Relaxed);
         }
         bkey_cached_check_pin(fs, ck.held());
@@ -172,7 +175,7 @@ fn btree_key_cache_flush_pos(t: &TransAttempt<'_, '_>, key: c::bkey_cached_key, 
     Ok(())
 }
 
-impl PinHolder<crate::field!(journal)> for c::bkey_cached {
+impl PinHolder<crate::field!(journal)> for bkey_cached {
     fn journal_flush(&self, fs: &Fs, seq: u64) -> Result<(), BchError> {
         let _srcu = fs.btree.trans.barrier.read_lock();
 
@@ -252,7 +255,7 @@ impl Fs {
 
         let srcu = self.btree.trans.barrier.read_lock();
         let trans = crate::btree_trans!(self);
-        let mut keys: Vec<c::bkey_cached_key> = Vec::new();
+        let mut keys: Vec<bkey_cached_key> = Vec::new();
         let mut any_done = false;
 
         /*
@@ -312,7 +315,7 @@ impl Fs {
 
 /// @i is the transaction's, its path a cached one traversed to its entry, and
 /// write locked.
-pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, i: &c::btree_insert_entry) {
+pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, i: &btree_insert_entry) {
     let fs = t.fs();
     let bc = &fs.btree.key_cache;
     let mut ck = paths[i.path].locked_key_cached_mut().expect("a cached update's entry, write locked");
@@ -324,8 +327,8 @@ pub fn bch2_btree_insert_key_cached(t: &TransAttempt<'_, '_>, paths: &mut Paths<
     ck.contents_mut().set_key(BkeySC::from(insert));
 
     if !ck.dirty() {
-        ebug_assert!(!fs.flags.get(c::FsFlag::clean_shutdown));
-        ck.set_flag(c::BKEY_CACHED_DIRTY);
+        ebug_assert!(!fs.flags.get(FsFlag::clean_shutdown));
+        ck.set_flag(BKEY_CACHED_DIRTY);
         bc.nr_dirty.fetch_add(1, Relaxed);
 
         if bc.nr_keys_need_flush() != 0 {
@@ -377,7 +380,7 @@ pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Path
     let fs = trans.fs();
     let bc = &fs.btree.key_cache;
     let (dropped, held) = paths[idx].take_level(0).expect("a key cache drop of an entry not locked");
-    let mut ck = LockedEntry::new(c::bkey_cached::from_common(dropped).expect("a key cache drop of a btree node"), held);
+    let mut ck = LockedEntry::new(bkey_cached::from_common(dropped).expect("a key cache drop of a btree node"), held);
     let dropped = ptr::from_ref(dropped);
 
     /*
@@ -385,7 +388,7 @@ pub unsafe fn bch2_btree_key_cache_drop(trans: &BtreeTrans<'_>, paths: &mut Path
      * cache key is now stale and must be dropped, even if dirty:
      */
     if ck.dirty() {
-        ck.clear_flag(c::BKEY_CACHED_DIRTY);
+        ck.clear_flag(BKEY_CACHED_DIRTY);
         bc.nr_dirty.fetch_sub(1, Relaxed);
         fs.journal.pin_drop(&ck.journal);
     }

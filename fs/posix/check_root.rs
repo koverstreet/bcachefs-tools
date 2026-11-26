@@ -17,6 +17,8 @@ use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, Subvolume, SubvolumeState};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -32,8 +34,8 @@ fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchErro
                                   BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<c::Snapshot>().map(|k| k.v()) {
-            Some(s) if s.subvol.get() == c::BCACHEFS_ROOT_SUBVOL && s.children[0].get() == 0 =>
+        match k.arm::<Snapshot>().map(|k| k.v()) {
+            Some(s) if s.subvol.get() == BCACHEFS_ROOT_SUBVOL && s.children[0].get() == 0 =>
                 ControlFlow::Break(k.k.p.offset as u32),
             _ => ControlFlow::Continue(()),
         }))
@@ -42,7 +44,7 @@ fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchErro
 fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let (snapshot, inum) = match subvolume::get(t, c::BCACHEFS_ROOT_SUBVOL, false).found()? {
+    let (snapshot, inum) = match subvolume::get(t, BCACHEFS_ROOT_SUBVOL, false).found()? {
         Some(s) => (s.snapshot.get(), s.inode.get()),
         None => {
             // Inside the caller's commit_do(): restarts propagate out to it.
@@ -54,15 +56,15 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             }
 
             let snapshot = if root_snapshot != 0 { root_snapshot } else { u32::MAX };
-            let inum = c::BCACHEFS_ROOT_INO as u64;
+            let inum = BCACHEFS_ROOT_INO as u64;
 
-            let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
-            k.k_mut().p = pos(0, c::BCACHEFS_ROOT_SUBVOL as u64);
+            let mut k = t.bkey_alloc_typed::<Subvolume>()?;
+            k.k_mut().p = pos(0, BCACHEFS_ROOT_SUBVOL as u64);
             let v = k.v_mut();
             v.flags    = Default::default();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();
-            v.set_state(c::SubvolumeState::live);
+            v.set_state(SubvolumeState::live);
 
             t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())?;
             (snapshot, inum)
@@ -71,7 +73,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
 
     let root_dir_mode = (c::S_IFDIR | 0o755) as c::umode_t;
 
-    match inode::find_by_inum_snapshot(t, c::BCACHEFS_ROOT_INO as u64, snapshot,
+    match inode::find_by_inum_snapshot(t, BCACHEFS_ROOT_INO as u64, snapshot,
                                        BtreeIterFlags::empty()).found()? {
         None => {
             if mustfix_fsck_err!(t, id::root_dir_missing, "root directory missing")? {

@@ -26,8 +26,7 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{BchError, Errcode};
 use crate::os::module::ModuleExit;
 use crate::util::alloc::KBox;
 use crate::util::rcu::FreeAnytime;
@@ -132,7 +131,7 @@ impl DebugOut {
     /// buffer is full. For a print_each() that fills the buffer under a lock.
     pub fn try_flush(&mut self) -> Result<ControlFlow<()>, BchError> {
         if self.buf.allocation_failure() {
-            return Err(c::Errcode::ENOMEM_debugfs_flush.into());
+            return Err(Errcode::ENOMEM_debugfs_flush.into());
         }
 
         let u = unsafe { &mut *self.u };
@@ -143,7 +142,7 @@ impl DebugOut {
             self.buf.drop_front(copied);
 
             if copied != want {
-                return Err(c::Errcode::EFAULT_debugfs_flush.into());
+                return Err(Errcode::EFAULT_debugfs_flush.into());
             }
         }
 

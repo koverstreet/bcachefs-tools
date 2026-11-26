@@ -119,7 +119,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
     let name = f.name;
     let a = &f.attr;
     let o = quote!(crate::opts);
-    let names = |t: &Expr| quote!(crate::names_by_value!(c::#t));
+    let names = |t: &Expr| quote!(crate::names_by_value!(#t));
 
     let (ty, min, max) = match (a.kind.to_string().as_str(), a.args.as_slice()) {
         ("bool", []) => (quote!(#o::OptType::Bool), quote!(0), quote!(1)),
@@ -144,13 +144,13 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         ("str_member", [m]) => (quote!(#o::OptType::StrMember {
             get: |m| &m.#m,
             get_mut: |m| &mut m.#m,
-            size: #o::size_of_field::<c::bch_member, _>(|m| &m.#m),
+            size: #o::size_of_field::<crate::sb::members_format::bch_member, _>(|m| &m.#m),
         }), quote!(0), quote!(0)),
         (kind, _) => return Err(Error::new_spanned(&a.kind, format!("{name}: #[opt]: {kind}: not an option type"))),
     };
 
     let flags = &a.flags;
-    let flags = quote!(0 #(| c::OptFlags::#flags.bits())*);
+    let flags = quote!(0 #(| #o::OptFlags::#flags.bits())*);
     // the head: what either state of a superblock has its fields on
     let head = |host: &Ident| match host == "bch_sb" {
         true => crate::tokens::derived(host, "head"),
@@ -160,7 +160,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         None => quote!(None),
         Some(SbField::Field { host, field }) => {
             let host = head(host);
-            quote!(Some(&#o::Field::<c::#host> {
+            quote!(Some(&#o::Field::<#host> {
                 get: |t| u64::from(t.#field.get()),
                 set: |t, v| Ok(t.#field.set(v.try_into().map_err(|_| ())?)),
             } as &dyn #o::SbOpt))
@@ -174,7 +174,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
                 true  => quote!(match v { 0 => false, 1 => true, _ => return Err(()) }.into()),
                 false => quote!(v.try_into().map_err(|_| ())?),
             };
-            quote!(Some(&#o::Field::<c::#host> {
+            quote!(Some(&#o::Field::<#host> {
                 get: |t| u64::from(t.#getter()),
                 set: |t, v| t.#setter(#v),
             } as &dyn #o::SbOpt))
@@ -198,7 +198,7 @@ fn option(f: &Opt<'_>) -> syn::Result<TokenStream> {
         #o::Opt {
             id:    OptId::#name,
             name:  #label,
-            flags: c::OptFlags::from_bits_retain(#flags),
+            flags: #o::OptFlags::from_bits_retain(#flags),
             ty:    #ty,
             min:   #min,
             max:   #max,
@@ -224,7 +224,7 @@ fn accessor(f: &Opt<'_>) -> (TokenStream, Conv, TokenStream) {
         // it around the parser
         ("str" | "str_nolimit", [e]) => {
             let e = e.clone();
-            (quote!(c::#e), Box::new(move |x| quote!(c::#e::from_bits(#x as _))), quote!(v.into_bits() as #ty))
+            (quote!(#e), Box::new(move |x| quote!(#e::from_bits(#x as _))), quote!(v.into_bits() as #ty))
         }
         _ => (quote!(#ty), Box::new(|x| x), quote!(v)),
     }

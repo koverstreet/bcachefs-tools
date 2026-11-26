@@ -14,11 +14,11 @@
 //! I_FREEING set - waits for it to go.
 
 use crate::btree::iter::TransAttempt;
-use crate::c;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::data_structures::cuckoo::{Cuckoo, CuckooMultimap, Entry};
 use crate::errcode::{Errcode, BchError};
 use crate::format::Bpos;
-use crate::fs::Fs;
+use crate::fs::{Fs, FsFlag};
 use crate::locking::MemallocFlags;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::Vec;
@@ -45,7 +45,7 @@ impl Cached {
     }
 }
 
-crate::keyed_by!(Cached, |e| &e.0.ei_inum => c::subvol_inum);
+crate::keyed_by!(Cached, |e| &e.0.ei_inum => subvol_inum);
 
 #[derive(Default)]
 pub struct InodeCache {
@@ -58,7 +58,7 @@ impl InodeCache {
     /// @inum's, if it's in: referenced. One being freed is waited for - up to
     /// ten seconds, then looked up again - unlocking @t, if there's one: a
     /// restart, then.
-    pub fn find(&self, t: Option<&TransAttempt<'_, '_>>, inum: c::subvol_inum)
+    pub fn find(&self, t: Option<&TransAttempt<'_, '_>>, inum: subvol_inum)
         -> Result<Option<InodeRef>, BchError>
     {
         loop {
@@ -163,19 +163,19 @@ impl InodeCache {
     }
 
     /// @inum held, for or_descendents_is_open(), until the guard's dropped.
-    pub fn hold(&self, fs: &Fs, inum: c::subvol_inum) -> Result<Held<'_>, BchError> {
+    pub fn hold(&self, fs: &Fs, inum: subvol_inum) -> Result<Held<'_>, BchError> {
         self.add_holder(fs, inum)?;
         Ok(Held { cache: self, inum })
     }
 
     /// @inum held by an inode in the cache - or by a Held.
-    fn add_holder(&self, fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
+    fn add_holder(&self, fs: &Fs, inum: subvol_inum) -> Result<(), BchError> {
         let _noio = MemallocFlags::noio();
         let (i, subvol) = holder(inum);
         self.by_inum.add(i, subvol).map_err(|_| fs.err(Errcode::ENOMEM_inode_cache_insert))
     }
 
-    fn remove_holder(&self, inum: c::subvol_inum) {
+    fn remove_holder(&self, inum: subvol_inum) {
         let (i, subvol) = holder(inum);
         let was = self.by_inum.remove(&i, &subvol);
         assert!(was, "inode cache: {}:{} not held by its subvolume", inum.subvol, inum.inum);
@@ -223,7 +223,7 @@ impl ToText for InodeCache {
 /// that.
 pub struct Held<'c> {
     cache: &'c InodeCache,
-    inum:  c::subvol_inum,
+    inum:  subvol_inum,
 }
 
 impl Drop for Held<'_> {
@@ -233,7 +233,7 @@ impl Drop for Held<'_> {
 }
 
 /// @inum as by_inum has it: its inode number, held by its subvolume.
-fn holder(inum: c::subvol_inum) -> (u64, u32) {
+fn holder(inum: subvol_inum) -> (u64, u32) {
     (inum.inum, inum.subvol as u32)
 }
 
@@ -241,7 +241,7 @@ fn holder(inum: c::subvol_inum) -> (u64, u32) {
 /// open - so fsck mustn't delete it.
 pub fn or_descendents_is_open(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<bool, BchError> {
     let fs = t.fs();
-    if !fs.flags.get(c::FsFlag::started) {
+    if !fs.flags.get(FsFlag::started) {
         return Ok(false);
     }
 

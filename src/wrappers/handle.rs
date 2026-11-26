@@ -3,21 +3,15 @@ use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
-use bcachefs_kernel::c::{
-    bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2,
-    bch_ioctl_disk, bch_ioctl_disk_v2,
-    bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2,
-    bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
-    bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
-    bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
-    bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super,
-    BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE, MemberState,
-};
+use bcachefs_kernel::bcachefs_ioctl::{bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2, bch_ioctl_disk, bch_ioctl_disk_v2, bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2, bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2, bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2, bch_ioctl_subvolume, bch_ioctl_subvolume_v2, bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super, BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE};
+use bcachefs_kernel::sb::members_format::MemberState;
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
-use bcachefs_kernel::c::{self, bch_sb};
+use bcachefs_kernel::c;
+use bcachefs_kernel::opts::bch_opts;
+use bcachefs_kernel::format::bch_sb;
 use bcachefs_kernel::util::vstructs::{read_past, Head};
-use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::errcode::{BchError, Errcode};
 use bcachefs_kernel::format::{DataType, MetadataVersion};
 use bcachefs_kernel::path_to_cstr;
 use rustix::io::Errno;
@@ -199,18 +193,18 @@ impl BcachefsHandle {
     /// these are.
     pub(crate) fn member_devices(&self) -> Result<Vec<std::path::PathBuf>, BchError> {
         let sysfs_path = sysfs::sysfs_path_from_fd(self.sysfs_fd())
-            .map_err(|_| BchError::from(c::Errcode::EIO_handle_sysfs_path))?;
+            .map_err(|_| BchError::from(Errcode::EIO_handle_sysfs_path))?;
 
         let mut devs = Vec::new();
         for d in sysfs::fs_get_devices(&sysfs_path, sysfs::DeviceNameMode::Raw)
-                .map_err(|_| BchError::from(c::Errcode::EIO_handle_fs_get_devices))? {
+                .map_err(|_| BchError::from(Errcode::EIO_handle_fs_get_devices))? {
             if d.online {
                 devs.push(std::path::PathBuf::from(format!("/dev/{}", d.dev)));
             }
         }
 
         if devs.is_empty() {
-            return Err(BchError::from(c::Errcode::ENOENT_handle_no_member_devices));
+            return Err(BchError::from(Errcode::ENOENT_handle_no_member_devices));
         }
         Ok(devs)
     }
@@ -221,7 +215,7 @@ impl BcachefsHandle {
         let sysfs_fd = if let Ok(fs_path) = unsafe { rustix::ioctl::ioctl(&ioctl_fd, GetFsSysfsPath::new()) } {
             let name_len = fs_path.len as usize;
             let name = std::str::from_utf8(&fs_path.name[..name_len])
-                .map_err(|_| BchError::from(c::Errcode::EINVAL_fs_sysfs_path_utf8))?;
+                .map_err(|_| BchError::from(Errcode::EINVAL_fs_sysfs_path_utf8))?;
             let sysfs = format!("/sys/fs/{}", name);
             rustix::fs::open(
                 sysfs.as_str(),
@@ -277,7 +271,7 @@ impl BcachefsHandle {
     fn open_via_superblock(path: &Path) -> Result<Self, BchError> {
         use bcachefs_kernel::c;
 
-        let mut opts = c::bch_opts::default();
+        let mut opts = bch_opts::default();
         opts.set_noexcl(true);
         opts.set_nochanges(true);
 

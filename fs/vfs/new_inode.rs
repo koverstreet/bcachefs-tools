@@ -10,10 +10,14 @@
 //! evict.
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
-use crate::c::{self, InodeQuota, InodeReserved, InodeReservedRange};
+use crate::c;
+use crate::posix::inode::bch_inode_unpacked;
+use crate::snapshots::format::Subvolume;
+use crate::snapshots::subvolume::subvol_inum;
+use crate::vfs::inode::{InodeQuota, InodeReserved, InodeReservedRange, InodeInfoFlag};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::locking::MemallocFlags;
+use crate::locking::{MemallocFlags, two_state_lock_t};
 use crate::new_lock;
 use crate::util::alloc::{flags, AllocError, Flags};
 use crate::os::module::{Quiesced, ThisModule};
@@ -46,7 +50,7 @@ impl NewInode {
                                                           ei_reserved_end: Zeroable::zeroed() },
                                      "&inode->ei_reserved_lock"),
             ei_update_lock <- new_lock!((), "&inode->ei_update_lock"),
-            ei_pagecache_lock: c::two_state_lock_t::new(),
+            ei_pagecache_lock: two_state_lock_t::new(),
             ei_quota <- new_lock!(InodeQuota { ei_qid: Default::default(), ei_quota_reserved: 0 },
                                   "&inode->ei_quota_lock"),
             ei_writeback_timer <- crate::new_delayed_work!(run_raw::<InodeInfo>, "&inode->ei_writeback_timer"),
@@ -74,8 +78,8 @@ impl NewInode {
     }
 
     /// Made from @bi - inode @inum, in @subvol.
-    pub fn init(&mut self, trans: &BtreeTrans<'_>, inum: c::subvol_inum, bi: &c::bch_inode_unpacked,
-                subvol: &c::Subvolume) {
+    pub fn init(&mut self, trans: &BtreeTrans<'_>, inum: subvol_inum, bi: &bch_inode_unpacked,
+                subvol: &Subvolume) {
         let block_bytes = self.fs().block_bytes();
 
         self.v.set_ino(inum.inum);
@@ -89,7 +93,7 @@ impl NewInode {
 
         *self.ei_quota.get_mut() = InodeQuota { ei_qid: crate::posix::quota::qid(bi), ei_quota_reserved: 0 };
         if subvol.snap() {
-            self.ei_flags.set(c::InodeInfoFlag::EI_INODE_SNAPSHOT, true);
+            self.ei_flags.set(InodeInfoFlag::EI_INODE_SNAPSHOT, true);
         }
 
         match self.v.mode() as u32 & c::S_IFMT {

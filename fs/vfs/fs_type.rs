@@ -29,9 +29,12 @@ use core::ffi::{c_int, CStr};
 use core::ptr::NonNull;
 
 use crate::c;
+use crate::format::{BCACHEFS_STATFS_MAGIC, bch_key};
+use crate::opts::bch_opts;
+use crate::snapshots::subvolume::subvol_inum;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::fs::{Claimed, OpenFs};
+use crate::fs::{Claimed, OpenFs, FsFlag};
 use crate::util::refcount::RefGuard;
 use crate::init::registry::{self, Claim, FsHandle, Key, Opener, Opening};
 use crate::OptId;
@@ -68,7 +71,7 @@ impl SuperData for OpenFs {
 /// A mount's or reconfigure's parameters, as parse_param has them so far:
 /// fc->fs_private, from new_context() until the context's free.
 pub(crate) struct MountParams {
-    opts:        c::bch_opts,
+    opts:        bch_opts,
     /// The options that can't be parsed until the filesystem is open: start()
     /// parses them, after Claimed::open().
     parse_later: Printbuf,
@@ -79,7 +82,7 @@ pub(crate) struct MountParams {
     status:      Option<StatusFile>,
     /// "user_key"'s key, made in place, so no copy of it is left behind: a
     /// bch_key wipes itself when it's dropped.
-    user_key:    Option<c::bch_key>,
+    user_key:    Option<bch_key>,
 }
 
 /// A device's path, NUL-terminated.
@@ -99,8 +102,8 @@ impl DevPath {
 }
 
 /// @opts' defined options, as the mount's.
-fn set_mount_opts(fs: &Fs, opts: &c::bch_opts) {
-    for id in (0..crate::opts::NR).filter(|&id| opts.defined(c::OptId(id as u32))) {
+fn set_mount_opts(fs: &Fs, opts: &bch_opts) {
+    for id in (0..crate::opts::NR).filter(|&id| opts.defined(OptId(id as u32))) {
         fs.mount_opts.set(id);
     }
 }
@@ -153,16 +156,16 @@ impl Bcachefs {
     // Out of line: @later is a bch_opts, which inlined would stay in the frame
     // under all of recovery
     #[inline(never)]
-    fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
+    fn open_opts(p: &MountParams, claimed: Claimed, opts: &mut bch_opts) -> Result<OpenFs, BchError> {
         let fs = claimed.open(opts, p.user_key.as_ref())?;
 
         if opts.defined(OptId::discard) {
-            fs.flags.set(c::FsFlag::discard_mount_opt_set, true);
+            fs.flags.set(FsFlag::discard_mount_opt_set, true);
         }
         set_mount_opts(&fs, opts);
 
         // Some options can't be parsed until after the fs is started:
-        let mut later: c::bch_opts = Default::default();
+        let mut later: bch_opts = Default::default();
         crate::opts::parse_mount_opts_into(Some(&fs), &mut later, None, p.parse_later.as_bytes(), false)?;
         fs.opts_writer(&mut fs.sb_lock()).apply(&later);
         set_mount_opts(&fs, &later);
@@ -170,7 +173,7 @@ impl Bcachefs {
     }
 
     /// Open and start the filesystem, no superblock existing yet.
-    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut c::bch_opts) -> Result<OpenFs, BchError> {
+    fn start(fc: &mut FsContext<Self>, claimed: Claimed, opts: &mut bch_opts) -> Result<OpenFs, BchError> {
         let p = fc.ctx();
         let fs = Self::open_opts(p, claimed, opts)?;
 
@@ -214,7 +217,7 @@ impl Bcachefs {
             sb.set_quotactl(&crate::posix::quota::QUOTACTL_OPS,
                             c::QTYPE_MASK_USR | c::QTYPE_MASK_GRP | c::QTYPE_MASK_PRJ);
             sb.set_xattr_handlers(&crate::posix::xattr::XATTR_HANDLERS);
-            sb.set_magic(c::BCACHEFS_STATFS_MAGIC as _);
+            sb.set_magic(BCACHEFS_STATFS_MAGIC as _);
 
             let units = fs.sb.time_units_per_sec.get() as i64;
             sb.set_time(fs.sb.nsec_per_time_unit.get(), i64::MIN / units + 1, i64::MAX / units);
@@ -242,7 +245,7 @@ impl Bcachefs {
             #[cfg(CONFIG_UNICODE)]
             sb.set_encoding(|fs| fs.cf_encoding.as_ref());
 
-            let root = InodeInfo::get_warn(fs, c::subvol_inum::ROOT, c"bch2_fs_get_tree")
+            let root = InodeInfo::get_warn(fs, subvol_inum::ROOT, c"bch2_fs_get_tree")
                 .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
 
             Ok(sb.fill(root)
@@ -354,12 +357,12 @@ impl FsType for Bcachefs {
                 let ok = hex2bin(plain_bytes_mut(k), s);
 
                 // the VFS frees it with kfree(), not kfree_sensitive()
-                c::wipe(s);
+                crate::util::wipe(s);
 
                 if !ok {
                     fc.ctx().user_key = None;
                     return Err(fc.invalf(format_args!("user_key: expected {} hex digits",
-                                                      size_of::<c::bch_key>() * 2)));
+                                                      size_of::<bch_key>() * 2)));
                 }
                 Ok(0)
             }
@@ -435,7 +438,7 @@ impl FsType for Bcachefs {
         // fc->sb_flags, not c->opts.read_only: emergency ro stops the
         // filesystem without rewriting the option, so that would find nothing
         // to do and report success, read-only.
-        if !rdonly && fs.flags.get(c::FsFlag::emergency_ro) {
+        if !rdonly && fs.flags.get(FsFlag::emergency_ro) {
             fc.errorfc(format_args!("cannot go read-write: filesystem is in emergency read-only"));
             return fs.throw(Errcode::emergency_ro);
         }

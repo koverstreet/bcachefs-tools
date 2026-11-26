@@ -29,13 +29,14 @@ use core::ffi::CStr;
 
 
 use crate::alloc::accounting;
-use crate::c;
+use crate::sb::counters_format::{PersistentCounter, PersistentCounter_arms};
+use crate::util::time_stats::{TimeStat, TimeStat_arms};
 use crate::errcode::{Errcode, BchError};
 use crate::format::{CompressionType, DataType};
-use crate::fs::{Fs, WriteRef};
+use crate::fs::{Fs, WriteRef, FsFlag};
 use crate::init::passes;
 use crate::locking::MemallocFlags;
-use crate::opts::{self, OptChange, OptType};
+use crate::opts::{self, OptChange, OptType, bch_opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
 use crate::sb::counters::COUNTERS;
 use crate::sb::members;
 use crate::prt;
@@ -247,12 +248,12 @@ macro_rules! file_name {
 
 macro_rules! time_stat_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const TIME_STAT_NAMES: [&CStr; c::TimeStat::NR as usize] = [$(file_name!($name),)*];
+        const TIME_STAT_NAMES: [&CStr; crate::util::time_stats::TimeStat::NR as usize] = [$(file_name!($name),)*];
     };
 }
-c::TimeStat_arms!(time_stat_names);
+TimeStat_arms!(time_stat_names);
 
-const TIME_STATS_NR: usize = c::TimeStat::NR as usize;
+const TIME_STATS_NR: usize = TimeStat::NR as usize;
 
 const TIME_STATS: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, &[0o644; TIME_STATS_NR],
     |c, i, out| Ok(c.times.get(i).to_text(out)),
@@ -268,12 +269,12 @@ const TIME_STATS_JSON: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, 
 
 macro_rules! counter_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const COUNTER_NAMES: [&CStr; c::PersistentCounter::NR as usize] = [$(file_name!($name),)*];
+        const COUNTER_NAMES: [&CStr; crate::sb::counters_format::PersistentCounter::NR as usize] = [$(file_name!($name),)*];
     };
 }
-c::PersistentCounter_arms!(counter_names);
+PersistentCounter_arms!(counter_names);
 
-const COUNTERS_NR: usize = c::PersistentCounter::NR as usize;
+const COUNTERS_NR: usize = PersistentCounter::NR as usize;
 
 const COUNTER_FILES: [Attr<Fs>; COUNTERS_NR] = Attr::list(&COUNTER_NAMES, &[0o644; COUNTERS_NR],
     |c, i, out| Ok(counter_to_text(c, i, out)),
@@ -302,7 +303,7 @@ const OPT_MODES: [u16; opts::NR] = {
     let mut modes = [0o444; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        if c::bch_opts::TABLE[i].flags.bits() & c::OptFlags::runtime.bits() != 0 {
+        if bch_opts::TABLE[i].flags.bits() & OptFlags::runtime.bits() != 0 {
             modes[i] = 0o644;
         }
         i += 1;
@@ -310,14 +311,14 @@ const OPT_MODES: [u16; opts::NR] = {
     modes
 };
 
-const FS_OPT_FILES: [Attr<Fs>; opts::NR] = Attr::list(&crate::cstr_names!(c::OptId), &OPT_MODES,
-    |c, i, out| opt_show(c, None, c::OptId(i as u32), out),
-    |c, i, s| opt_store(c, None, c::OptId(i as u32), s));
-const DEV_OPT_FILES: [Attr<Dev>; opts::NR] = Attr::list(&crate::cstr_names!(c::OptId), &OPT_MODES,
-    |ca, i, out| opt_show(ca.fs(), Some(ca), c::OptId(i as u32), out),
-    |ca, i, s| opt_store(ca.fs(), Some(ca), c::OptId(i as u32), s));
+const FS_OPT_FILES: [Attr<Fs>; opts::NR] = Attr::list(&crate::cstr_names!(OptId), &OPT_MODES,
+    |c, i, out| opt_show(c, None, OptId(i as u32), out),
+    |c, i, s| opt_store(c, None, OptId(i as u32), s));
+const DEV_OPT_FILES: [Attr<Dev>; opts::NR] = Attr::list(&crate::cstr_names!(OptId), &OPT_MODES,
+    |ca, i, out| opt_show(ca.fs(), Some(ca), OptId(i as u32), out),
+    |ca, i, s| opt_store(ca.fs(), Some(ca), OptId(i as u32), s));
 
-fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
+fn opt_show(c: &Fs, ca: Option<&Dev>, id: OptId, out: &mut Printbuf)
     -> Result<(), BchError>
 {
     let opt = id.opt();
@@ -335,25 +336,25 @@ fn opt_show(c: &Fs, ca: Option<&Dev>, id: c::OptId, out: &mut Printbuf)
             return Ok(());
         }
         Some(ca) => {
-            if !(opt.has(c::OptFlags::device) && opt.member_field().is_some()) {
+            if !(opt.has(OptFlags::device) && opt.member_field().is_some()) {
                 return c.throw(Errcode::EINVAL_sysfs_opt_not_found);
             }
             opts::opt_from_sb(sb.sb().as_unvalidated(), id, Some(ca.dev_idx.into()))
         }
         None => {
-            if !opt.has(c::OptFlags::fs) {
+            if !opt.has(OptFlags::fs) {
                 return c.throw(Errcode::EINVAL_sysfs_opt_not_found);
             }
             c.opts.get(id)
         }
     };
 
-    opts::opt_to_text(out, Some(c), None, opt, v, c::OPT_SHOW_FULL_LIST);
+    opts::opt_to_text(out, Some(c), None, opt, v, OPT_SHOW_FULL_LIST);
     out.write_bytes(b"\n");
     Ok(())
 }
 
-fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::OptId, s: &str) -> Result<(), BchError> {
+fn opt_store(c: &Fs, ca: Option<&Dev>, id: OptId, s: &str) -> Result<(), BchError> {
     let opt = id.opt();
     // strim()
     let val = s.trim_matches(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')).as_bytes();
@@ -377,11 +378,11 @@ fn opt_store(c: &Fs, ca: Option<&Dev>, id: c::OptId, s: &str) -> Result<(), BchE
 /// - but none that's hidden.
 const fn opts_with_files(fs: bool) -> [bool; opts::NR] {
     let (hidden, fs_opt, dev_opt) =
-        (c::OptFlags::hidden.bits(), c::OptFlags::fs.bits(), c::OptFlags::device.bits());
+        (OptFlags::hidden.bits(), OptFlags::fs.bits(), OptFlags::device.bits());
     let mut which = [false; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        let flags = c::bch_opts::TABLE[i].flags.bits();
+        let flags = bch_opts::TABLE[i].flags.bits();
         /*
          * For options that are both fs and device (currently only
          * @discard), expose only the per-device sysfs entry: the FS-level
@@ -482,7 +483,7 @@ const DEV: &[Attr<Dev>] = &[
 #[cold]
 fn io_done_to_text(ca: &Dev, out: &mut Printbuf) {
     let done = ca.io_done.sum();
-    let nr = c::DataType::NR as usize;
+    let nr = DataType::NR as usize;
 
     writeln!(out, "{{");
     for (rw, name) in ["read", "write"].into_iter().enumerate() {
@@ -514,7 +515,7 @@ pub(crate) static DEV_GROUPS: Groups<DevDir, 2> = Groups::new([&DEV_GROUP]);
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn started(c: &Fs) -> Result<(), BchError> {
-    if c.flags.get(c::FsFlag::started) {
+    if c.flags.get(FsFlag::started) {
         Ok(())
     } else {
         c.throw(Errcode::EPERM_sysfs_not_started)
@@ -540,7 +541,7 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
     out.tabstops(&[12, 16, 16, 24]);
     write!(out, "type\tcompressed\runcompressed\raverage extent size\r\n");
 
-    for t in (1..c::CompressionType::NR).map(CompressionType) {
+    for t in (1..CompressionType::NR).map(CompressionType) {
         let v = accounting::read(c, accounting::Compression { type_: t.into() });
 
         prt!(out, "{}\t{}\r{}\r{}\r\n", t,
