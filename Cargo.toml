@@ -26,7 +26,6 @@ fiemap = { path = "fs/vendor/fiemap" }
 libc = "0.2.69"
 rsblkid = "0.4.1"
 uuid = { version = "1.2.2", features = ["v4"] }
-either = "1.5"
 bcachefs-kernel = { path = "fs" }
 linux-keyutils = { version = "0.2", features = ["std"] }
 pin-init = { path = "os/linux_user/shim/pin-init" }

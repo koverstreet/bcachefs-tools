@@ -199,7 +199,6 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
- "either",
  "env_logger",
  "fiemap",
  "fuser",
