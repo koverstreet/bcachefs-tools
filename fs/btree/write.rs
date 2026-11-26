@@ -46,7 +46,7 @@ use crate::util::{rcu, HumanReadable, Printbuf};
 use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
 use core::mem::offset_of;
 use core::pin::Pin;
-use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed, SeqCst}};
+use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
 use cstruct_macros::{bch_enum, in_place};
 
 /*
@@ -77,7 +77,6 @@ pub fn pools_exit(q: &Quiesced<'_>) {
 #[repr(u32)]
 pub enum BtreeWriteFlagBit {
     only_if_need = cs::BTREE_WRITE_TYPE_BITS,
-    already_started,
 }
 
 const HEADER: &str = "a btree node or node entry header, in its write's buffer";
@@ -86,14 +85,29 @@ fn bset_at(buf: &mut [u8], keys_at: usize) -> &mut Head<c::bset> {
     cast_plain_mut(&mut buf[keys_at..]).expect("a bset header, in its write's buffer")
 }
 
-fn write_started(f: BtreeNodeFlags) -> BtreeNodeFlags {
-    f.with_dirty(false)
-        .with_need_write(false)
-        .with_write_in_flight(true)
+/*
+ * We may only have a read lock on the btree node - the cmpxchg of this is our
+ * "lock" against racing with other threads that may be trying to start a
+ * write: we do a write iff it sets write_in_flight. Since dirtying the node
+ * requires a write lock, we can't race with other threads redirtying it.
+ */
+fn start_next_write(f: BtreeNodeFlags, only_if_need: bool, written: bool) -> Option<BtreeNodeFlags> {
+    if !f.dirty() ||
+       (only_if_need && !f.need_write()) ||
+       f.never_write() ||
+       f.write_blocked() ||
+       (written && f.will_make_reachable()) ||
+       f.write_in_flight() {
+        return None;
+    }
+
+    Some(f.with_write_in_flight(true)
         .with_write_in_flight_inner(true)
         .with_just_written(true)
+        .with_dirty(false)
+        .with_need_write(false)
         .with_write_idx((f.write_idx() + 1) % NR_WRITES)
-        .with_write_type(BtreeWriteType::initial)
+        .with_write_type(BtreeWriteType::initial))
 }
 
 fn write_done(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
@@ -106,17 +120,14 @@ fn write_done(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
 
     fs.journal.pin_drop(w);
 
-    let rearm = |f: BtreeNodeFlags| f.dirty() && f.need_write() && !f.never_write() &&
-        !f.write_blocked() && !f.will_make_reachable();
-    let (Ok(old) | Err(old)) = b.flags.fetch_update(SeqCst, Relaxed, |f| Some(if rearm(f) {
-        write_started(f)
-    } else {
-        f.with_write_in_flight(false).with_write_in_flight_inner(false)
-    }));
+    let done = |f: BtreeNodeFlags| f.with_write_in_flight(false).with_write_in_flight_inner(false);
+    let (Ok(old) | Err(old)) = b.flags.fetch_update(SeqCst, Relaxed, |f| {
+        Some(start_next_write(done(f), true, true).unwrap_or(done(f)))
+    });
 
-    if rearm(old) {
+    if start_next_write(done(old), true, true).is_some() {
         /* Re-arm: bit stays set across the new write, no counter change. */
-        node_write(fs, b, old.write_type(), BtreeWriteFlags::already_started);
+        submit_write(fs, b, old, old.write_type(), local_clock());
     } else {
         fs.btree.cache.nr_in_flight.fetch_sub(1, Relaxed);
         fs.btree_node_write_done_clean(&b);
@@ -317,27 +328,30 @@ fn validate_bset_for_write<H: BsetHolder + ?Sized>(fs: &Fs, b: &BtreeNode, conte
     ret
 }
 
-/// @b's write, if it's to be written: claimed, its unwritten bsets sorted into
-/// a bounce and sealed under the caller's lock, then the rest its task's.
+/// @b's next write, if it's to be written: started, then submitted.
 pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWriteType, flags: BtreeWriteFlags) {
     let start_time = local_clock();
+    let only_if_need = flags.contains(BtreeWriteFlags::only_if_need);
+    let written = b.written.get() != 0;
 
-    if !flags.contains(BtreeWriteFlags::already_started) {
-        let only_if_need = flags.contains(BtreeWriteFlags::only_if_need);
-        let Some(old) = claim(&b, only_if_need) else { return };
+    let Ok(old) = b.flags.fetch_update(SeqCst, Relaxed, |f| start_next_write(f, only_if_need, written)) else { return };
 
-        if only_if_need {
-            ty = old.write_type();
-        }
-
-        fs.btree.cache.nr_in_flight.fetch_add(1, Relaxed);
+    if only_if_need {
+        ty = old.write_type();
     }
 
+    fs.btree.cache.nr_in_flight.fetch_add(1, Relaxed);
+    submit_write(fs, b, old, ty, start_time);
+}
+
+/// The write started from flags @old: sorted into a bounce and sealed under the
+/// caller's lock, then the rest its task's.
+fn submit_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, old: BtreeNodeFlags, ty: BtreeWriteType, start_time: u64) {
     assert!((ty == BtreeWriteType::initial) == (b.written.get() == 0));
     assert!(!b.is_fake());
 
     if unlikely(b.will_make_reachable.update().is_some() != (b.written.get() == 0)) {
-        lifecycle_violated(fs, &b, ty, flags);
+        lifecycle_violated(fs, &b, ty, old);
     }
 
     let contents = b.contents();
@@ -427,31 +441,11 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     };
 }
 
-/*
- * We may only have a read lock on the btree node - the dirty bit is our
- * "lock" against racing with other threads that may be trying to start
- * a write, we do a write iff we clear the dirty bit. Since setting the
- * dirty bit requires a write lock, we can't race with other threads
- * redirtying it:
- */
-fn claim(b: &BtreeNode, only_if_need: bool) -> Option<BtreeNodeFlags> {
-    b.flags.fetch_update(Acquire, Relaxed, |f| {
-        (f.dirty() &&
-         (!only_if_need || f.need_write()) &&
-         !f.never_write() &&
-         !f.write_blocked() &&
-         !(b.written.get() != 0 && f.will_make_reachable()) &&
-         !f.write_in_flight())
-            .then(|| write_started(f))
-    }).ok()
-}
-
 #[cold]
-fn lifecycle_violated(fs: &Fs, b: &BtreeNode, ty: BtreeWriteType, flags: BtreeWriteFlags) -> ! {
+fn lifecycle_violated(fs: &Fs, b: &BtreeNode, ty: BtreeWriteType, old: BtreeNodeFlags) -> ! {
     panic!("btree node write lifecycle invariant violated at {}\n  written: {}\n  will_make_reachable: {:x}\n  \
-            flags: {}\n  write_type: {}\n  already_started: {}",
-           b.pos_to_text(fs), b.written.get(), b.will_make_reachable.raw(), b.flags, ty as u32,
-           flags.contains(BtreeWriteFlags::already_started) as u32);
+            flags: {}\n  started from: {:?}\n  write_type: {}",
+           b.pos_to_text(fs), b.written.get(), b.will_make_reachable.raw(), b.flags, old, ty as u32);
 }
 
 /// A node's unwritten bsets and whiteouts, sorted into one bset in a bounce
