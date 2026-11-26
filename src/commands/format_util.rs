@@ -163,6 +163,13 @@ pub fn format(
         ));
     }
 
+    if fs_opts.defined(c::OptId::btree_node_size) && fs_opts.btree_node_size < BTREE_NODE_SIZE_MIN {
+        die(&format!(
+            "btree node size ({}) too small, must be at least {}",
+            fs_opts.btree_node_size, BTREE_NODE_SIZE_MIN
+        ));
+    }
+
     // Calculate bucket sizes
     let fs_bucket_size = pick_bucket_size(&fs_opts, dev_slice);
 
@@ -437,6 +444,24 @@ pub(crate) fn format_opts_default() -> FormatOpts<'static> {
     }
 }
 
+/*
+ * Every small bset write takes a whole block: with fewer blocks than this per
+ * node, nodes fill faster than they can be compacted - and compacting one
+ * allocates, which dirties more nodes. Going read-only, flushing the journal
+ * never finishes.
+ */
+const BTREE_NODE_SIZE_MIN: u32 = 64 << 10;
+
+/// The btree node size buckets must hold: the one given, or the smallest
+/// allowed.
+fn btree_node_size_min(opts: &c::bch_opts) -> u64 {
+    if opts.defined(c::OptId::btree_node_size) {
+        opts.btree_node_size as u64
+    } else {
+        BTREE_NODE_SIZE_MIN as u64
+    }
+}
+
 /// Clamp fs-wide bucket size for a specific device that may be too small.
 ///
 /// Prefer at least 2048 buckets per device (512 is the absolute minimum
@@ -446,10 +471,8 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
     let min_nr_nbuckets = c::BCH_MIN_NR_NBUCKETS as u64;
 
     // Largest bucket size that still gives >= 2048 buckets
-    let mut max_size = rounddown_pow_of_two(dev_size / (min_nr_nbuckets * 4));
-    if fs_opts.defined(c::OptId::btree_node_size) {
-        max_size = max_size.max(fs_opts.btree_node_size as u64);
-    }
+    let max_size = rounddown_pow_of_two(dev_size / (min_nr_nbuckets * 4))
+        .max(btree_node_size_min(&fs_opts));
     if max_size * min_nr_nbuckets > dev_size {
         die(&format!("bucket size {} too big for device size", max_size));
     }
@@ -507,10 +530,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
 /// Returns the bucket size in bytes.
 pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     // Hard minimum: bucket must hold a btree node
-    let mut bucket_size = opts.block_size as u64;
-    if opts.defined(c::OptId::btree_node_size) {
-        bucket_size = bucket_size.max(opts.btree_node_size as u64);
-    }
+    let mut bucket_size = (opts.block_size as u64).max(btree_node_size_min(opts));
 
     let min_dev_size = c::BCH_MIN_NR_NBUCKETS as u64 * bucket_size;
     for dev in devs {
@@ -568,12 +588,12 @@ pub fn check_bucket_size(opts: &c::bch_opts, dev: &DevOpts) {
         ));
     }
 
-    if opts.defined(c::OptId::btree_node_size)
-        && dev.opts.bucket_size < opts.btree_node_size
-    {
+    if (dev.opts.bucket_size as u64) < btree_node_size_min(opts) {
         die(&format!(
-            "Bucket size ({}) cannot be smaller than btree node size ({})",
-            dev.opts.bucket_size, opts.btree_node_size
+            "Bucket size ({}) cannot be smaller than {}btree node size ({})",
+            dev.opts.bucket_size,
+            if opts.defined(c::OptId::btree_node_size) { "" } else { "the minimum " },
+            btree_node_size_min(opts)
         ));
     }
 
