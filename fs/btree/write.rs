@@ -10,7 +10,7 @@ use crate::btree::node::sort::{
     sort_whiteouts, CompactMode, WriteSortRuns,
 };
 use crate::btree::node::bset::MAX_BSETS;
-use crate::btree::node::{BtreeNode, NodeContents, NodeKey};
+use crate::btree::node::{BtreeNode, NodeContents, NodeKey, NR_WRITES};
 use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_READ_LOCKED;
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::trans::BtreeTrans;
@@ -92,7 +92,7 @@ fn write_started(f: BtreeNodeFlags) -> BtreeNodeFlags {
         .with_write_in_flight(true)
         .with_write_in_flight_inner(true)
         .with_just_written(true)
-        .with_write_idx(!f.write_idx())
+        .with_write_idx((f.write_idx() + 1) % NR_WRITES)
         .with_write_type(BtreeWriteType::initial)
 }
 

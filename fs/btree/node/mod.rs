@@ -95,6 +95,10 @@ pub struct BkeyUnpackField {
     pub shift_right: u8, /* 64 - bits, or 64 if field has no bits in packed */
 }
 
+/// A node's writes[]: one in flight, and up to two not yet written, each with
+/// its journal pin.
+pub const NR_WRITES: u8 = 3;
+
 #[pin_data]
 #[repr(C)]
 #[derive(Init)]
@@ -124,8 +128,8 @@ pub struct BtreeNode {
     #[init(LockedBy::new(NodeContents::new(), PublishedKey::new()))]
     pub contents: LockedBy<NodeContents, PublishedKey, NodeLock<BtreeNode>>,
 
-    /* the journal pins of its current write and the one before */
-    pub writes: [Pin; 2],
+    /* the journal pins of its writes, back from write_idx: accumulating, in flight */
+    pub writes: [Pin; 3],
 
     /*
      * XXX: add a delete sequence number, so when bch2_btree_node_relock()
@@ -563,12 +567,17 @@ impl BtreeNode {
         want.then(|| u16::try_from(bne).expect("a bset offset in a node's u16 range"))
     }
 
+    fn write_slot(&self, back: u8) -> &Pin {
+        let writes: &[Pin; NR_WRITES as usize] = &self.writes;
+        &writes[usize::from((self.flags.write_idx() + NR_WRITES - back) % NR_WRITES)]
+    }
+
     pub fn current_write(&self) -> &Pin {
-        &self.writes[self.flags.write_idx() as usize]
+        self.write_slot(0)
     }
 
     pub fn prev_write(&self) -> &Pin {
-        &self.writes[self.flags.write_idx() as usize ^ 1]
+        self.write_slot(1)
     }
 }
 

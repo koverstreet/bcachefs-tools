@@ -157,7 +157,7 @@ impl InteriorUpdate<'_> {
          * oldest pin of any of the nodes we're freeing. We'll release the pin
          * when the new nodes are persistent and reachable on disk:
          */
-        for w in [b.current_write(), b.prev_write()] {
+        for w in &b.writes {
             fs.journal.pin_copy(&self.journal, w, c::JournalPinType::JOURNAL_PIN_TYPE_other);
             fs.journal.pin_drop(w);
         }

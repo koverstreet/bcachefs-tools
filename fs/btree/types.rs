@@ -914,7 +914,7 @@ pub struct BtreeNodeFlags {
     write_blocked: bool,
     will_make_reachable: bool,
     noevict: bool,
-    write_idx: bool,
+    #[bits(2)] write_idx: u8,
     accessed: bool,
     write_in_flight: bool,
     write_in_flight_inner: bool,
@@ -927,7 +927,7 @@ pub struct BtreeNodeFlags {
     never_write: bool,
     pinned: bool,
     permanent: bool,
-    __: u9,
+    __: u8,
 }
 
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
