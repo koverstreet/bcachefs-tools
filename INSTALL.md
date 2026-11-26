@@ -20,16 +20,6 @@ the minimum supported Rust version (MSRV).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
 ```
 
-`bindgen` must also be on `$PATH` — the build runs it to generate the bindings
-to the kernel headers. It is not pulled in by `cargo build`, and it is a
-separate package from the `bindgen` library:
-
-``` shell
-cargo install bindgen-cli
-```
-
-Set `$BINDGEN` if it lives somewhere `$PATH` will not find.
-
 Debian Trixie or later: install the userspace build dependencies with the
 following command. On Ubuntu and other Debian derivatives, use releases or
 backports with equivalent dependencies. Bookworm's stock liburcu 0.13.2 lacks
@@ -44,7 +34,9 @@ apt install -y pkg-config libblkid-dev \
 ```
 
 The kernel module and DKMS build also require the kernel's headers, and Rust:
-rustc (>= 1.89), rust-src and bindgen. If the kernel was built with Rust and
+rustc (>= 1.89), rust-src and bindgen - the command, `cargo install
+bindgen-cli`, which the build runs on the kernel's headers; set `$BINDGEN` if
+`$PATH` won't find it. If the kernel was built with Rust and
 your rustc matches the one it was built with, the module uses the kernel's own
 Rust support; otherwise it builds bcachefs's vendored copy, which is what needs
 rust-src. Installing the userspace dependencies does not by itself establish

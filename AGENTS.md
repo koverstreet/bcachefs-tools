@@ -2,10 +2,10 @@
 
 bcachefs-tools is the userspace component of bcachefs, a modern
 copy-on-write filesystem for Linux. It provides formatting, mounting,
-fsck, and administrative commands. The codebase is a mix of Rust (command
-dispatch, argument parsing, most user-facing logic) and C (kernel-internal
-operations that use kernel data structures directly, plus the FUSE mount
-command).
+fsck, and administrative commands. It's Rust: the commands in `src/`, and
+in `fs/` the filesystem itself, built into both the tools and the kernel
+module. The C that remains is what it links against - the kernel's, and in
+userspace liburcu, libblkid and the compression libraries.
 
 The primary maintainer is Kent Overstreet.
 
@@ -188,12 +188,15 @@ clean and make it easy to compare old vs new or revert.
   implementations (`src/commands/`), and the tools' userspace-only
   wrappers (`src/wrappers/`): over the fs crate, and over a mounted
   filesystem's ioctls and sysfs
-- **Commands**: All subcommands are now implemented in Rust.
 - `fs/` is the `bcachefs-kernel` crate, built into both the tools and the
-  module. Its C bindings are bindgen's: `os/linux_user/shim`'s build
-  script generates userspace's, `os/linux_kernel/codegen.rs` the module's
-- Typed bkey dispatch (`BkeyValSC`, `BkeyValS`) is code-generated from
-  the `KEY_TYPE_*` x-macro
+  module; `os/` is what it runs on, a port per build - `os/linux_user`
+  for userspace, `os/linux_kernel` for the module. Its `c::` is its own
+  types, and bindgen's bindings to the C it calls: `os/linux_user/shim`'s
+  build script binds userspace's libraries, `os/linux_kernel/codegen.rs`
+  the kernel's headers
+- Typed bkey dispatch is the key type union's, from the `BCH_BKEY_TYPES`
+  x-macro: `k.arm::<T>()` for one type, `NAME_match!` / `NAME_by_tag!` for
+  each (cstruct-macros' tagged_union.rs)
 - Transaction restart handling uses `lockrestart_do` / `for_each`
   patterns that retry on restart errors
 
@@ -201,4 +204,3 @@ clean and make it easy to compare old vs new or revert.
 
 - [doc/build.md](doc/build.md) — build commands and tips
 - [doc/testing.md](doc/testing.md) — ktest usage
-- [doc/x-macro-mechanism.md](doc/x-macro-mechanism.md) — importing C x-macros into Rust
