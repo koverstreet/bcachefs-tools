@@ -214,6 +214,115 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
     t.update(&iter2, rp, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
+/// A direct extent's overlap with an existing reflink_v - @overlap, relative to
+/// its start; @reflink_overlap_start into the reflink_v - becomes a reflink_p
+/// to that reflink_v. The reflink_v's live range stays covered, by front and
+/// back padding; the rest of the extent stays an extent, split off when the
+/// reflink_p is inserted. Only for physical mappings that are 1:1 with the
+/// logical: @direct and @reflink_v uncompressed, their disk sectors their
+/// sizes - or it can't be repaired here.
+fn extent_to_existing_reflink(t: &TransAttempt<'_, '_>, direct: &DupExtent<'_>,
+                              reflink_v: BkeySC<'_, Ptrs>, reflink_overlap_start: u64)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let overlap_size = direct.overlap.end - direct.overlap.start;
+    assert!(overlap_size != 0, "an overlap of no size");
+
+    let v_start = reflink_v.k.start_offset();
+    let idx = v_start.checked_add(reflink_overlap_start);
+    let v_end = idx.and_then(|idx| idx.checked_add(overlap_size));
+    let (Some(idx), Some(v_end)) = (idx, v_end) else { return fs.throw(Errcode::fsck_repair_unimplemented) };
+    if direct.overlap.end > u64::from(direct.k.k.size) || v_end > reflink_v.k.p.offset {
+        return fs.throw(Errcode::fsck_repair_unimplemented);
+    }
+
+    let p = direct.k.k.p;
+    let mut iter = BtreeIter::new_level(t, direct.btree, p, direct.level.into(), BtreeIterFlags::INTENT);
+    iter.traverse(t)?;
+
+    let logical_end = direct.k.k.start_offset() + direct.overlap.end;
+    let mut rp = t.bkey_alloc_typed::<c::ReflinkP>()?;
+    let k = rp.k_mut();
+    k.p = spos(p.inode, logical_end, p.snapshot);
+    k.size = overlap_size as u32;
+    k.bversion = direct.k.k.bversion;
+    let v = rp.v_mut();
+    v.set_idx(idx);
+    v.front_pad = ((idx - v_start) as u32).into();
+    v.back_pad = ((reflink_v.k.p.offset - v_end) as u32).into();
+
+    t.update(&iter, &rp, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+}
+
+/// check_bp_dup()'s direct extent and reflink_v, each with its backpointer
+/// - the extent's btree too: the extent's overlap converted to a reflink_p.
+fn dup_extent_and_reflink_v(t: &TransAttempt<'_, '_>,
+                            (direct, direct_btree, direct_bp): (BkeySC<'_, Ptrs>, Btree, &BkeyI<c::Backpointer>),
+                            (reflink_v, reflink_bp): (BkeySC<'_, Ptrs>, &BkeyI<c::Backpointer>))
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let dev = direct_bp.k.p.inode as u32;
+
+    let (direct_sub, reflink_sub) = {
+        let rcu = read_lock();
+        let Some(ca) = fs.dev_rcu(dev, &rcu) else { return Ok(()) };
+        (BackpointerPos::from_bpos(fs, direct_bp.k.p).bucket_and_offset(ca).1,
+         BackpointerPos::from_bpos(fs, reflink_bp.k.p).bucket_and_offset(ca).1)
+    };
+
+    // as C's: u32s
+    let overlap_sub_start = direct_sub.max(reflink_sub);
+    let overlap_sub_end = direct_sub.wrapping_add(direct_bp.v.bucket_len)
+        .min(reflink_sub.wrapping_add(reflink_bp.v.bucket_len));
+    if overlap_sub_end <= overlap_sub_start {
+        return Ok(()); // bps don't actually overlap
+    }
+
+    // Backpointer offsets are physical sectors, bkey offsets logical: the
+    // same only for 1:1 mappings, which compressed extents aren't
+    fn one_to_one(fs: &Fs, dev: u32, k: BkeySC<'_, Ptrs>, bp: &BkeyI<c::Backpointer>) -> bool {
+        let p = k.has_device_decode(fs, dev).expect("a pointer to the backpointer's device").p;
+        !crc_is_compressed(&p.crc) && bp.v.bucket_len == k.k.size
+    }
+    if !one_to_one(fs, dev, direct, direct_bp) || !one_to_one(fs, dev, reflink_v, reflink_bp) {
+        return fs.throw(Errcode::fsck_repair_unimplemented);
+    }
+
+    // The same sectors must decode the same: the file will read through the
+    // reflink_v's encoding and nonce, not its own
+    {
+        let crc = |k: BkeySC<'_, Ptrs>| k.has_device_decode(fs, dev).expect("a pointer to the device").p.crc;
+        let (dc, rc) = (crc(direct), crc(reflink_v));
+        if dc.csum_type != rc.csum_type || dc.nonce != rc.nonce {
+            return fs.throw(Errcode::fsck_repair_unimplemented);
+        }
+    }
+
+    let direct_overlap = u64::from(overlap_sub_start - direct_sub)..u64::from(overlap_sub_end - direct_sub);
+    let reflink_overlap_start = u64::from(overlap_sub_start - reflink_sub);
+
+    let mut buf = Printbuf::new();
+    prt!(&mut buf, "duplicate extent and reflink_v pointing to overlapping space on dev {dev}, \
+                    converting direct extent overlap to reflink_p\n{}\n{}",
+         direct.to_text(fs), reflink_v.to_text(fs));
+
+    if inode_fsck_err!(t, direct.k.p, id::dup_extents_to_reflink, "{}", buf)? {
+        extent_to_existing_reflink(t,
+            &DupExtent { btree: direct_btree, level: direct_bp.v.level, k: direct.into(),
+                         overlap: direct_overlap },
+            reflink_v, reflink_overlap_start)?;
+
+        // Replacing the direct extent deleted its backpointer - at the
+        // reflink_v's position if they collide, which the reflink_v's
+        // unchanged pointer doesn't recreate: committed on its own, the
+        // reflink_v's written back after, and the walk restarted
+        return double_allocation_dropped(t, reflink_v.into(), BkeyI { k: reflink_bp.k, v: reflink_bp.v });
+    }
+    Ok(())
+}
+
 fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<c::Backpointer>,
                 other_bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
     let fs = t.fs();
@@ -268,7 +377,8 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
     // a regular extent.
     //
     // Only valid for leaf extents; btree pointers can't be reflinked.
-    let is_extent = |k: BkeySC<'_, Ptrs>| k.k.key_type() == BkeyType::extent;
+    fn is_extent(k: BkeySC<'_, Ptrs>) -> bool { k.k.key_type() == BkeyType::extent }
+    fn is_reflink_v(k: BkeySC<'_, Ptrs>) -> bool { k.k.key_type() == BkeyType::reflink_v }
     if is_extent(extent) && is_extent(other_extent) {
         let (bp_sub, other_bp_sub) = {
             let rcu = read_lock();
@@ -327,6 +437,17 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
                              overlap: k2_start..k2_start + overlap_len })?;
         }
         return Ok(());
+    }
+
+    // A direct extent and an existing reflink_v: one side has been made the
+    // shared indirect extent already, the other still points to the same
+    // physical sectors directly. Just the direct extent's overlapping slice
+    // becomes a reflink_p of that reflink_v.
+    if is_extent(extent) && is_reflink_v(other_extent) {
+        return dup_extent_and_reflink_v(t, (extent, btree, &extent_bp), (other_extent, &other_bp));
+    }
+    if is_reflink_v(extent) && is_extent(other_extent) {
+        return dup_extent_and_reflink_v(t, (other_extent, other_btree, &other_bp), (extent, &extent_bp));
     }
 
     let mut msg = LogMsg::new(fs);
