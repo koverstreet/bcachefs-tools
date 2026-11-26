@@ -48,7 +48,7 @@ impl Keyring {
     }
 }
 
-#[derive(Clone, Debug, Default, clap::ValueEnum, strum::Display)]
+#[derive(Clone, Debug, Default, clap::ValueEnum)]
 pub enum UnlockPolicy {
     /// Don't ask for passphrase, if the key cannot be found in the keyring just
     /// fail
@@ -108,6 +108,14 @@ impl Unlocked {
             }
             Self::InKeyring => Ok(()),
         }
+    }
+}
+
+/// As -k takes it.
+impl std::fmt::Display for UnlockPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use clap::ValueEnum;
+        f.write_str(self.to_possible_value().expect("no UnlockPolicy is skipped").get_name())
     }
 }
 

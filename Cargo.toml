@@ -30,8 +30,6 @@ either = "1.5"
 bcachefs-kernel = { path = "fs" }
 linux-keyutils = { version = "0.2", features = ["std"] }
 pin-init = { path = "os/linux_user/shim/pin-init" }
-strum = { version = "0.26", features = ["derive"] }
-strum_macros = "0.26"
 zeroize = { version = "1", features = ["std", "zeroize_derive"] }
 rustix = { version = "1.1.4", features = ["event", "fs", "mount", "net", "param", "pipe", "process", "stdio", "system", "termios", "try_close"] }
 owo-colors = "4"
