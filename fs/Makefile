@@ -18,7 +18,9 @@ CONFIG_BCACHEFS_FS :=
 bcachefs-prebuilt := y
 endif
 # The module's version, in its .modinfo: init/module.rs
-RUSTFLAGS_mod.o += --cfg bch_version -Zunstable-options --env-set BCACHEFS_VERSION=$(bcachefs-version)
+# (--env-set dropped: not accepted by every rustc; env! reads the process env too)
+RUSTFLAGS_mod.o += --cfg bch_version
+$(obj)/mod.o: export BCACHEFS_VERSION := $(bcachefs-version)
 else
 $(warning bcachefs: no version in $(src)/version.h - the module will carry none, and we're not looking for a prebuilt one (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
 endif
