@@ -210,9 +210,11 @@ pub(crate) fn prt(PrtInput { krate, out, fmt, args }: PrtInput) -> syn::Result<T
 
                 body.push(match spec.is_empty() {
                     true => quote!((&#krate::util::printbuf::prt_arg::Arg(#arg)).prt(__bch_out);),
+                    // the argument itself, not its reference: {:p} of a
+                    // reference is where the reference is
                     false => {
                         let lit = lit_at(&format!("\"{{:{spec}}}\""), fmt_span)?;
-                        quote!(::core::write!(__bch_out, #lit, #arg);)
+                        quote!(::core::write!(__bch_out, #lit, *#arg);)
                     }
                 });
             }

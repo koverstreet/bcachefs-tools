@@ -1133,6 +1133,15 @@ mod tests {
     }
 
     #[test]
+    fn prt_pointer() {
+        let x = 0u64;
+        let p = &raw const x;
+        let mut out = Printbuf::new();
+        prt!(&mut out, "{:p} {p:p}", p);
+        assert_eq!(out.as_str(), format!("{p:p} {p:p}"));
+    }
+
+    #[test]
     fn strtou64_h() {
         for (s, ret, v) in [(c"4k", 0, 4096), (c"1.5M", 0, 1572864), (c"2KiB", 0, 2048),
                             (c"2MiB", 0, 2097152), (c"10MB", 0, 10000000), (c"1kB", 0, 1000),
