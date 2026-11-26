@@ -43,9 +43,10 @@ pub enum AsyncObjKind {
 pub struct AsyncObjList {
     #[pin]
     #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_async_obj_init))]
-    pub list: FastList,
+    pub list: FastList<c_void>,
 }
 
+use core::ffi::c_void;
 use core::ptr::NonNull;
 
 // ── Listing an object ────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ pub unsafe trait AsyncObj {
 
 /// An object's place on its list.
 pub struct AsyncObjSlot {
-    list: Option<NonNull<FastList>>,
+    list: Option<NonNull<FastList<c_void>>>,
     idx:  u32,
 }
 

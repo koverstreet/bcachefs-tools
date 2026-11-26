@@ -19,7 +19,7 @@ use crate::fs::Fs;
 use crate::locking::MemallocFlags;
 use crate::os::bio::{pages, BioRange, BioSubmit, Buffer, Pages};
 use crate::os::kernel::{unlikely, PAGE_SIZE, WRITE};
-use core::ffi::c_void;
+use core::ptr::NonNull;
 use crate::format::{Bversion, BkeyType, Csum, Bkey, CompressionType, CsumType};
 
 type Op = WriteOp;
@@ -63,23 +63,23 @@ struct AllocShort {
 /// A bio of the extent's own for @len bytes of the op's data, written with
 /// @opf: bounced into pages of its own, or the write point's stripe buffer.
 fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u32, short: &mut AllocShort,
-                   buf: *mut c_void) -> ExtentBio {
+                   buf: Option<NonNull<[u8]>>) -> ExtentBio {
     /*
      * bio_alloc_bioset() is limited to BIO_MAX_VECS: bounce pages are high
      * order, but the stripe buffer is mapped a page a bvec - and a vmalloc'd
      * one not on a page boundary takes a page more than its size:
      */
-    let max = match buf.is_null() {
-        true  => pages::max_size(c::BIO_MAX_VECS as u16) as u32,
-        false => c::BIO_MAX_VECS * PAGE_SIZE as u32 - (buf.addr() & (PAGE_SIZE - 1)) as u32,
+    let max = match buf {
+        None    => pages::max_size(c::BIO_MAX_VECS as u16) as u32,
+        Some(b) => c::BIO_MAX_VECS * PAGE_SIZE as u32 - (b.as_ptr().addr() & (PAGE_SIZE - 1)) as u32,
     };
     let output_available = (wp.sectors_free() << 9).min(len).min(max);
 
     let block_size = u32::from(fs.opts().block_size.get());
     assert!(output_available & (block_size - 1) == 0, "a write bio of {output_available} bytes, not whole blocks");
 
-    if !buf.is_null() {
-        let buf = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), output_available as usize) };
+    if let Some(mut buf) = buf {
+        let buf = unsafe { &mut buf.as_mut()[..output_available as usize] };
         return fs.bio_write.alloc(Buffer::nr_vecs(&buf), opf,
                                   |b| b.init_from(|bio| Ok(ExtentBuf::Stripe(Buffer::fill(bio, buf)))))
             .unwrap_or_else(|e: BchError| panic!("a write's bio for its stripe: its bioset waits, but {e}"));
@@ -391,7 +391,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
             Err(e) if e.matches(Errcode::write_encoded_as_is) => {
                 let all = *data;
                 data.advance(all.len());
-                let extent = if !ec_buf.is_null() {
+                let extent = if ec_buf.is_some() {
                     let stripe = write_bio_alloc(fs, wp, all.len(), opf, &mut short, ec_buf);
                     stripe.range().copy_from_range(all);
                     ExtentData::Own(stripe)
@@ -407,7 +407,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
         }
     }
 
-    if !ec_buf.is_null() ||
+    if ec_buf.is_some() ||
        op.bits.compression_opt() != 0 ||
        (op.bits.csum_type() != CsumType::none && !op.has(w::pages_stable)) ||
        (op.bits.csum_type().is_encryption() && !op.has(w::pages_owned)) {

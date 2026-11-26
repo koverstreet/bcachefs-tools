@@ -401,9 +401,9 @@ impl LockedWritePoint<'_> {
 }
 
 impl<'f> LockedWritePoint<'f> {
-    /// Where its write goes in its stripe's buffer, if one of its buckets is
-    /// a block of a stripe being made: NULL if none is.
-    pub fn ec_buf(&self) -> *mut core::ffi::c_void {
+    /// Where its writes go in its stripe's buffer, if one of its buckets is a
+    /// block of a stripe being made.
+    pub fn ec_buf(&self) -> Option<core::ptr::NonNull<[u8]>> {
         crate::data::ec::stripe_new::writepoint_ec_buf(self.fs, self.guard())
     }
 

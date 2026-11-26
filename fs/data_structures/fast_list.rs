@@ -26,7 +26,6 @@ use crate::errcode::BchError;
 use crate::util::{alloc::AllocError, rcu::ReadGuard};
 use crate::os::percpu::{IrqGuard, PerCpu};
 use crate::data_structures::{array_vec::ArrayVec, genradix::SharedGenRadix, ida::Ida};
-use core::ffi::c_void;
 use core::iter;
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
@@ -39,21 +38,25 @@ use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 #[repr(C)]
 #[pin_data(PinnedDrop)]
 #[derive(MaybeZeroable)]
-pub struct FastList {
+pub struct FastList<T> {
     /* the items, by slot: allocated by any CPU at once */
-    pub items: SharedGenRadix<Item>,
+    pub items: SharedGenRadix<Item<T>>,
     #[pin]
     pub slots_allocated: Ida,
     buffer: PerCpu<Cache>,
 }
 
-/// A slot's item, C's void *: other CPUs change it as it's read.
+/// A slot's item: other CPUs change it as it's read.
 #[repr(transparent)]
-pub struct Item(AtomicPtr<c_void>);
+pub struct Item<T>(AtomicPtr<T>);
 
 // SAFETY: zeroed is null, no item
-unsafe impl ::pin_init::Zeroable for Item {}
-crate::genradix_entry!(Item);
+unsafe impl<T> ::pin_init::Zeroable for Item<T> {}
+
+// genradix_entry!()'s, which can't size a generic leaf: every Item is a pointer
+impl<T> crate::data_structures::genradix::Entry for Item<T> {
+    type Leaf = [Item<T>; crate::data_structures::genradix::NODE_SIZE / size_of::<AtomicPtr<()>>()];
+}
 
 /// What a refill gets, and a full cache spills: half of it.
 const BATCH: usize = 16;
@@ -65,7 +68,7 @@ struct Cache(ArrayVec<u32, 31>);
 // MaybeUninits
 unsafe impl ::pin_init::Zeroable for Cache {}
 
-impl FastList {
+impl<T> FastList<T> {
     /// @f on this CPU's cache, interrupts off.
     fn with_cache<R>(&self, f: impl FnOnce(&mut ArrayVec<u32, 31>) -> R) -> R {
         let irq = IrqGuard::new();
@@ -81,7 +84,7 @@ impl FastList {
     }
 
     /// @idx's slot: get_idx() allocated its node.
-    fn slot(&self, idx: u32) -> &AtomicPtr<c_void> {
+    fn slot(&self, idx: u32) -> &AtomicPtr<T> {
         &self.items.get(idx as usize).expect("a fast_list slot get_idx() didn't allocate").0
     }
 
@@ -89,11 +92,11 @@ impl FastList {
     /// slots as it's read: each is read once, atomically.
     ///
     /// XXX: an item is only safe to use if it's freed a grace period after
-    /// removal, and nothing here says so. Once the owners are Rust: fast_list<T>,
-    /// items &'g T, with an unsafe marker on T the owner asserts that with.
-    /// async_objs' items don't hold to it today: see debug/async_objs.rs.
+    /// removal, and nothing here says so. Next: items &'g T, with an unsafe
+    /// marker on T the owner asserts that with. async_objs' items don't hold to
+    /// it today: see debug/async_objs.rs.
     pub fn items_from<'g>(&'g self, idx: usize, _rcu: &'g ReadGuard)
-        -> impl Iterator<Item = (usize, NonNull<c_void>)> + 'g
+        -> impl Iterator<Item = (usize, NonNull<T>)> + 'g
     {
         self.items.iter_from(idx).filter_map(|(i, slot)| NonNull::new(slot.0.load(Acquire)).map(|item| (i, item)))
     }
@@ -110,7 +113,7 @@ impl FastList {
 
     /// A slot for an item to be set later, its allocation failing now if it's
     /// to fail - as the caller's memalloc scope allows.
-    pub fn get_slot(&self) -> Result<Slot<'_>, AllocError> {
+    pub fn get_slot(&self) -> Result<Slot<'_, T>, AllocError> {
         Ok(Slot { list: self, idx: self.get_idx()? })
     }
 
@@ -146,12 +149,12 @@ impl FastList {
     }
 
     /// @item in a new slot: the slot, for remove().
-    pub fn add(&self, item: NonNull<c_void>) -> Result<u32, AllocError> {
+    pub fn add(&self, item: NonNull<T>) -> Result<u32, AllocError> {
         Ok(self.get_slot()?.set(item))
     }
 
     /// @item in slot @idx, a Slot's into_idx().
-    pub fn set(&self, idx: u32, item: NonNull<c_void>) {
+    pub fn set(&self, idx: u32, item: NonNull<T>) {
         self.slot(idx).store(item.as_ptr(), Release);
     }
 
@@ -180,7 +183,7 @@ impl FastList {
 
 /// Every item should be off it.
 #[pinned_drop]
-impl PinnedDrop for FastList {
+impl<T> PinnedDrop for FastList<T> {
     fn drop(self: Pin<&mut Self>) {
         // SAFETY: no CPU's using it
         for lp in self.buffer.get().cpus() {
@@ -196,14 +199,14 @@ impl PinnedDrop for FastList {
 
 /// A slot had before its item, empty: given back if it's dropped so.
 #[must_use = "a slot dropped is given back"]
-pub struct Slot<'l> {
-    list: &'l FastList,
+pub struct Slot<'l, T> {
+    list: &'l FastList<T>,
     idx:  u32,
 }
 
-impl Slot<'_> {
+impl<T> Slot<'_, T> {
     /// @item in it: its index, for remove().
-    pub fn set(self, item: NonNull<c_void>) -> u32 {
+    pub fn set(self, item: NonNull<T>) -> u32 {
         let list = self.list;
         let idx = self.into_idx();
         list.set(idx, item);
@@ -217,7 +220,7 @@ impl Slot<'_> {
     }
 }
 
-impl Drop for Slot<'_> {
+impl<T> Drop for Slot<'_, T> {
     fn drop(&mut self) {
         self.list.put_idx(self.idx)
     }

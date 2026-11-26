@@ -31,7 +31,7 @@ pub mod writeback;
 
 use crate::data_structures::fast_list::FastList;
 use crate::errcode::Errcode;
-use crate::vfs::pagecache::BCH_WRITEPAGE_BUF_BYTES;
+use crate::vfs::{inode::InodeInfo, pagecache::BCH_WRITEPAGE_BUF_BYTES};
 use crate::os::{workqueue::{Workqueue, WqFlags}, bio::BioSet};
 use crate::util::{late::Late, mempool::Mempool};
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
@@ -43,7 +43,7 @@ use pin_init::pin_data;
 pub struct FsVfs {
     #[pin]
     #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_fs_other_alloc))]
-    pub inodes: FastList,
+    pub inodes: FastList<InodeInfo>,
     /* every VFS inode of ours, and which subvolumes hold an inode number */
     #[pin]
     #[init(crate::vfs::inode_cache::InodeCache::default())]

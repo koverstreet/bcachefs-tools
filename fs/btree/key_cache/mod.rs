@@ -206,7 +206,7 @@ pub struct FsBtreeKeyCache {
     /* what's in the table, to walk: an entry's slot is from insert to evict */
     #[pin]
     #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_fs_btree_key_cache_init))]
-    pub(crate) keys: FastList,
+    pub(crate) keys: FastList<BkeyCached>,
 
     #[pin]
     pub(crate) shrinker: BtreeKeyCacheShrinker,
@@ -345,7 +345,7 @@ impl FsBtreeKeyCache {
         -> impl Iterator<Item = (usize, &'s BkeyCached)> + 'r
     {
         ebug_assert!(ptr::eq(srcu.srcu(), &self.fs().btree.trans.barrier));
-        self.keys.items_from(idx, rcu).map(|(i, ck)| (i, unsafe { ck.cast::<BkeyCached>().as_ref() }))
+        self.keys.items_from(idx, rcu).map(|(i, ck)| (i, unsafe { ck.as_ref() }))
     }
 
     /*
@@ -354,7 +354,7 @@ impl FsBtreeKeyCache {
      * later - so the walks never see one that's been freed.
      */
     fn bkey_cached_keys_add(&self, ck: &mut LockedEntry<'_>) -> Result<(), BchError> {
-        ck.contents_mut().keys_idx = self.keys.add(NonNull::from(ck.ck.node()).cast())
+        ck.contents_mut().keys_idx = self.keys.add(NonNull::from(ck.ck.node()))
             .map_err(|_| BchError::from(Errcode::ENOMEM_btree_key_cache_create))?;
         Ok(())
     }

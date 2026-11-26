@@ -163,7 +163,6 @@ use crate::util::projections::Volatile;
 use crate::util::{HumanReadable, Nsecs, Printbuf};
 use crate::{new_lock, published, prt};
 use crate::data_structures::array_vec::ArrayVec;
-use core::ffi::c_void;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -716,19 +715,17 @@ impl StripeNew {
     }
 }
 
-/// Where @wp's write goes in its stripe's buffer, if one of its open buckets
-/// is a block of a stripe being made: NULL if none is.
-pub(crate) fn writepoint_ec_buf(fs: &Fs, wp: &WritePointLocked) -> *mut c_void {
+/// Where @wp's writes go in its stripe's buffer - its free space in its block -
+/// if one of its open buckets is a block of a stripe being made.
+pub(crate) fn writepoint_ec_buf(fs: &Fs, wp: &WritePointLocked) -> Option<NonNull<[u8]>> {
     // the write point's pins, which its lock keeps
-    let Some((ob, s)) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.into_ref().stripe()?))) else {
-        return core::ptr::null_mut()
-    };
+    let (ob, s) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.into_ref().stripe()?)))?;
 
     let offset = u32::from(ob.ca().mi.get().bucket_size) - ob.sectors_free.get();
     let mut s = s.lock();
     let buf = s.new_buf.as_mut().expect("a stripe with blocks claimed has its buffer");
     // its writer's to write, at its write point's free space
-    buf.block_mut(usize::from(ob.ec_idx.get()))[(offset as usize) << 9..].as_mut_ptr().cast()
+    Some(NonNull::from(&mut buf.block_mut(usize::from(ob.ec_idx.get()))[(offset as usize) << 9..]))
 }
 
 

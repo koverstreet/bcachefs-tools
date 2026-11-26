@@ -819,12 +819,12 @@ impl Fs {
             let waiting = {
                 let rcu = rcu::read_lock();
                 nodes.items_from(idx, &rcu)
-                    .find(|(_, b)| flag(&unsafe { b.cast::<BtreeNode>().as_ref() }.flags.load()))
+                    .find(|(_, b)| flag(&unsafe { b.as_ref() }.flags.load()))
             };
             let Some((i, b)) = waiting else { return ret };
 
             // a node isn't freed while the fs runs
-            unsafe { b.cast::<BtreeNode>().as_ref() }.wait_on_flag(flag);
+            unsafe { b.as_ref() }.wait_on_flag(flag);
             ret = true;
             idx = i + 1;
         }

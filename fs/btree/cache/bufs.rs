@@ -10,7 +10,6 @@ use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, Gl
 use crate::os::kernel::is_vmalloc_addr;
 use crate::util::maybe_rcu_alloc::alloc_at;
 use core::alloc::Layout;
-use core::ffi::c_void;
 use core::ptr::NonNull;
 use cstruct_macros::MaybeZeroable;
 
@@ -40,7 +39,7 @@ impl<'f> Bounce<'f> {
         let _noio = MemallocFlags::noio();
         let gfp = flags::NOWAIT | flags::ACCOUNT | flags::RECLAIMABLE;
         let (p, mempool) = match NonNull::new(alloc_raw(Mem::Kvmalloc, bytes, gfp)) {
-            Some(p) => (p.cast(), false),
+            Some(p) => (p, false),
             None    => (fs.btree.bounce_pool.alloc_raw().expect("a bounce buffer outside NORECLAIM").cast(), true),
         };
         Self { fs, p, bytes, mempool }
@@ -63,9 +62,9 @@ impl<'f> Bounce<'f> {
         assert!(self.bytes == b.buf_bytes(), "swapping a {} byte bounce for a {} byte node buffer",
                 self.bytes, b.buf_bytes());
 
-        let old = core::mem::replace(&mut contents.bufs.data, self.p.as_ptr().cast());
-        btree_node_buf_swap_account(self.fs, b, old.cast(), contents.bufs.data.cast());
-        self.p = NonNull::new(old.cast()).expect("a node's buffer");
+        let old = core::mem::replace(&mut contents.bufs.data, self.p.as_ptr());
+        btree_node_buf_swap_account(self.fs, b, old, contents.bufs.data);
+        self.p = NonNull::new(old).expect("a node's buffer");
     }
 }
 
@@ -98,7 +97,7 @@ impl Drop for Bounce<'_> {
         if self.mempool {
             unsafe { self.fs.btree.bounce_pool.free_raw(self.p.cast()) }
         } else {
-            unsafe { free_raw(self.p.as_ptr().cast(), self.bytes) }
+            unsafe { free_raw(self.p.as_ptr(), self.bytes) }
         }
     }
 }
@@ -117,7 +116,7 @@ enum Mem {
 }
 
 /// @bytes of @mem, not zeroed, with @gfp: free_raw()'s to take back.
-fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
+fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut u64 {
     let Ok(layout) = kv_layout(bytes) else { return core::ptr::null_mut() };
     let p = match mem {
         Mem::Vmalloc  => Vmalloc.allocate_gfp(layout, gfp),
@@ -132,7 +131,7 @@ fn alloc_raw(mem: Mem, bytes: usize, gfp: Flags) -> *mut c_void {
 ///
 /// # Safety
 /// @p is alloc_raw()'s, of @bytes, or null, and nothing uses it after.
-unsafe fn free_raw(p: *mut c_void, bytes: usize) {
+unsafe fn free_raw(p: *mut u64, bytes: usize) {
     if let Some(p) = NonNull::new(p) {
         unsafe { KVmalloc.deallocate(p.cast(), kv_layout(bytes).expect("its allocation's layout")) }
     }
@@ -142,8 +141,8 @@ unsafe fn free_raw(p: *mut c_void, bytes: usize) {
 /// aux_data, for a node of 1 << byte_order bytes.
 #[derive(MaybeZeroable)]
 pub struct NodeBufs {
-    pub(crate) data:     *mut c_void,
-    pub(crate) aux_data: *mut c_void,
+    pub(crate) data:     *mut u64,
+    pub(crate) aux_data: *mut u64,
     byte_order:          u32,
 }
 
@@ -264,7 +263,7 @@ pub(super) fn cache_node_struct_alloc(fs: &Fs, pcpu_read_locks: bool, gfp: Flags
     let flags = if pcpu_read_locks { SixLockInitFlags::pcpu } else { SixLockInitFlags::empty() };
     let b = alloc_at::<_, Global, BchError>(BtreeNode::init(fs, flags, gfp), gfp).ok()?;
     unsafe {
-        (*b.as_ptr()).nodes_idx = slot.set(b.cast());
+        (*b.as_ptr()).nodes_idx = slot.set(b);
         Some(cached_node(fs, b.as_ptr()))
     }
 }
@@ -298,7 +297,7 @@ pub unsafe fn node_mem_free(fs: &Fs, b: NonNull<BtreeNode>) {
 
 /// @b's buffer swapped, @old for @new: the cache counts the vmalloc'd of its
 /// hashed nodes - an unhashed node's is counted when it's hashed.
-fn btree_node_buf_swap_account(fs: &Fs, b: &BtreeNode, old: *const c_void, new: *const c_void) {
+fn btree_node_buf_swap_account(fs: &Fs, b: &BtreeNode, old: *const u64, new: *const u64) {
     let delta = is_vmalloc_addr(new) as isize - is_vmalloc_addr(old) as isize;
 
     if delta != 0 {

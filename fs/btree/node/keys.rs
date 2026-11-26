@@ -52,8 +52,8 @@ impl BtreeNode {
                 node:          self,
                 contents,
                 sets:          contents.sets(),
-                buf:           core::slice::from_raw_parts(contents.bufs.data.cast::<u64>(), self.buf_bytes() / size_of::<u64>()),
-                aux:           core::slice::from_raw_parts(contents.bufs.aux_data.cast::<u64>(), self.aux_data_u64s()),
+                buf:           core::slice::from_raw_parts(contents.bufs.data, self.buf_bytes() / size_of::<u64>()),
+                aux:           core::slice::from_raw_parts(contents.bufs.aux_data, self.aux_data_u64s()),
                 unpack_fn_len: contents.unpack_fn_len,
             }
         }
@@ -69,8 +69,8 @@ impl BtreeNode {
             KeysMut {
                 node: self,
                 contents,
-                buf:  core::slice::from_raw_parts_mut(data.cast::<u64>(), buf_u64s),
-                aux:  core::slice::from_raw_parts_mut(aux_data.cast::<u64>(), aux_u64s),
+                buf:  core::slice::from_raw_parts_mut(data, buf_u64s),
+                aux:  core::slice::from_raw_parts_mut(aux_data, aux_u64s),
             }
         }
     }

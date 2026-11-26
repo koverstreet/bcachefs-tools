@@ -207,7 +207,7 @@ impl DebugFile for CachedBtreeNodes {
             let rcu = rcu::read_lock();
             // a struct btree isn't freed while the cache is up, only reused
             let next = fs.btree.cache.nodes.items_from(idx, &rcu)
-                .map(|(i, b)| (i, unsafe { b.cast::<BtreeNode>().as_ref() }))
+                .map(|(i, b)| (i, unsafe { b.as_ref() }))
                 .find(|(_, b)| b.hash_val() != 0);
             let Some((i, b)) = next else { return Ok(false) };
 

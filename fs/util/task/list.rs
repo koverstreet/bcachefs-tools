@@ -19,7 +19,7 @@ use core::ffi::c_void;
 use core::ptr::NonNull;
 
 #[repr(transparent)]
-pub struct TaskList(FastList);
+pub struct TaskList(FastList<c_void>);
 
 /// Tasks of no filesystem's.
 pub static TASKS: TaskList = TaskList(::pin_init::zeroed());
@@ -27,7 +27,7 @@ pub static TASKS: TaskList = TaskList(::pin_init::zeroed());
 impl TaskList {
     /// A list made and torn down by its owner, as a filesystem's async object
     /// lists are.
-    pub fn of(list: &FastList) -> &TaskList {
+    pub fn of(list: &FastList<c_void>) -> &TaskList {
         unsafe { &*core::ptr::from_ref(list).cast::<TaskList>() }
     }
 

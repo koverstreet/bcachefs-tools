@@ -503,7 +503,7 @@ fn vfs_inodes_from<'g>(fs: &'g Fs, pos: usize, g: &'g ReadGuard)
     -> impl Iterator<Item = (usize, &'g InodeInfo)> + 'g
 {
     // freed a grace period after evict takes them off, as the VFS frees inodes
-    fs.vfs.inodes.items_from(pos, g).map(|(i, p)| (i, unsafe { p.cast::<InodeInfo>().as_ref() }))
+    fs.vfs.inodes.items_from(pos, g).map(|(i, p)| (i, unsafe { p.as_ref() }))
 }
 
 /// @inodes in address order, each once, with its lockdep subclass - as C's

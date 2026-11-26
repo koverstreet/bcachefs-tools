@@ -296,7 +296,7 @@ pub struct FsBtreeCache {
      */
     #[pin]
     #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_fs_btree_cache_init))]
-    pub nodes: FastList,
+    pub nodes: FastList<BtreeNode>,
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
     #[pin]
