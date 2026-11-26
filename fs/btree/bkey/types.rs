@@ -188,13 +188,6 @@ impl<'a, V: ?Sized + BkeyVal + ArmRef> BkeySC<'a, V> {
     }
 }
 
-impl<'a> BkeySC<'a> {
-    /// bkey_i_to_s_c(): a whole key, header and value.
-    pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {
-        BkeySC { k: &k.k, v: &k.v, iter: PhantomData, val: PhantomData }
-    }
-}
-
 impl<'a, V: ?Sized + BkeyVal> BkeyS<'a, V> {
     pub fn into_val_bytes_mut(self) -> &'a mut [u8] {
         // SAFETY: as val_bytes()'s, for 'a, whose borrow this consumes

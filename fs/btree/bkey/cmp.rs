@@ -71,14 +71,3 @@ pub fn bkey_ge(l: Bpos, r: Bpos) -> bool {
 pub fn bkey_min(l: Bpos, r: Bpos) -> Bpos {
     if bkey_lt(l, r) { l } else { r }
 }
-
-#[inline(always)]
-pub fn bkey_cmp(l: Bpos, r: Bpos) -> i32 {
-    if l.inode != r.inode {
-        if l.inode < r.inode { -1 } else { 1 }
-    } else if l.offset != r.offset {
-        if l.offset < r.offset { -1 } else { 1 }
-    } else {
-        0
-    }
-}

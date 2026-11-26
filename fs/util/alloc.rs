@@ -377,8 +377,6 @@ impl<T: ?Sized, const ALIGN: usize> Drop for AlignedBox<T, ALIGN> {
 pub use crate::data_structures::vec::{DrainAll, IntoIter, PushError, Vec};
 use crate::data_structures::array_vec::LenUint;
 
-pub type KVec<T> = Vec<T, Kmalloc>;
-
 /// A @T, kvmalloc()'d, the allocation failing with @err - @init with its own.
 pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::Errcode)
     -> Result<MaybeRcuAlloc<T, KVmalloc>, crate::errcode::BchError>
