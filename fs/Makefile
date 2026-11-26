@@ -31,28 +31,16 @@ bcachefs-config-cppflags := \
 	$(if $(CONFIG_QUOTA),-DCONFIG_BCACHEFS_QUOTA=1)
 endif
 
-# bindgen and rustc get these too (Makefile.rust): some change struct layouts
-# (CONFIG_BCACHEFS_DEBUG adds btree_iter.ip_allocated), and C and Rust
-# disagreeing on one is silent memory corruption.
-subdir-ccflags-y += $(bcachefs-config-cppflags)
-
-# Our includes are relative to fs/ ("alloc/background.h"), and the
-# generated header below is in $(obj); kbuild only adds these itself when
-# building out of the source tree.
-subdir-ccflags-y += -I$(src) -I$(obj)
+# The generated rust/extern.c includes our shim headers relative to fs/
+# ("../os/linux_kernel/shim.h"); kbuild only adds this itself when building
+# out of the source tree.
+subdir-ccflags-y += -I$(src)
 
 # BCACHEFS_WERROR=1: our warnings fatal, without CONFIG_WERROR for the whole
 # kernel. Per-file -Wno-* waivers still apply.
 ifeq ($(BCACHEFS_WERROR),1)
 subdir-ccflags-y += -Werror
 endif
-
-# Not fatal even with CONFIG_WERROR (Proxmox: CONFIG_FRAME_WARN=1024): the
-# functions that trip it run in kthreads and workqueues, on a full stack. The
-# trailing '=' is required: GCC 15 rejects -Wno-error=frame-larger-than.
-subdir-ccflags-y += -Wno-error=frame-larger-than=
-# "note: xyz changed in GCC X.X"
-subdir-ccflags-y += $(call cc-disable-warning, psabi)
 
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
