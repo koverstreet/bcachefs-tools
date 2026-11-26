@@ -7,7 +7,7 @@
 //!  - fs/ and os/, at DEST/src/fs/bcachefs and DEST/src/fs/os: what git has or
 //!    would have - tracked, or untracked and not ignored - or, outside a git
 //!    tree (a release tarball, made of what git tracked), all but dotfiles and
-//!    objects;
+//!    objects; but not os/'s userspace-only parts, USERSPACE_ONLY;
 //!  - the crates fs/Makefile.rust builds from crates.io and git - fs/Cargo.toml's
 //!    package.metadata.dkms.crates - whole, from wherever cargo has the source
 //!    of the version fs/ depends on: its registry, a git checkout, or what its
@@ -29,6 +29,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
 type Result<T> = std::result::Result<T, String>;
+
+/// What of os/ only userspace builds: its port, and the casefold the kernel
+/// has its own of.
+const USERSPACE_ONLY: &[&str] = &["os/linux_user", "os/unicode"];
 
 /// What we read of `cargo metadata`.
 #[derive(Deserialize)]
@@ -186,7 +190,7 @@ fn run() -> Result<()> {
     let src = dest.join("src/fs");
 
     for (dir, to) in [("fs", "bcachefs"), ("os", "os")] {
-        for f in files(top, dir)? {
+        for f in files(top, dir)?.into_iter().filter(|f| !USERSPACE_ONLY.iter().any(|d| f.starts_with(d))) {
             let rel = f.strip_prefix(dir).map_err(|_| format!("{}: not in {dir}/", f.display()))?;
             copy(&top.join(&f), &src.join(to).join(rel))?;
         }
