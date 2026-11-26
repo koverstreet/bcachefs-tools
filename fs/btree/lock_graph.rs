@@ -693,7 +693,7 @@ fn node_reuse_race(trans: &BtreeTrans<'_>, b: &BtreeNode) -> bool {
 
 /// The six lock's should_sleep_fn, for btree node locks: before @trans sleeps
 /// on @b's lock.
-pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCachedCommon) -> i32 {
+pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCachedCommon) -> Result<(), BchError> {
     /*
      * Store->load fence: orders publishing ourselves as a waiter (done by
      * six's WaitListLocked::insert() before should_sleep_fn ran) before the two
@@ -748,7 +748,7 @@ pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCached
      */
     if let Some(b) = BtreeNode::from_common(b) {
         if node_reuse_race(trans, b) {
-            return -trans.fs().err(Errcode::no_btree_node_reused).raw();
+            return Err(trans.fs().err(Errcode::no_btree_node_reused));
         }
     }
 
@@ -765,9 +765,8 @@ pub(crate) fn six_check_for_deadlock(trans: &BtreeTrans<'_>, b: &BtreeBkeyCached
         set_current_wake_cpu(shard_cpu.into());
     }
 
-    match check_for_deadlock(ptr::from_ref(trans).cast_mut(), None) {
-        Ok(())                 => 0,
-        Err(Cycle::Restart(e)) => -e.raw(),
-        Err(Cycle::Found)      => -1,
-    }
+    check_for_deadlock(ptr::from_ref(trans).cast_mut(), None).map_err(|c| match c {
+        Cycle::Restart(e) => e,
+        Cycle::Found      => unreachable!("check_for_deadlock() with no printbuf breaks a cycle, never only finds one"),
+    })
 }

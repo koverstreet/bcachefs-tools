@@ -385,7 +385,8 @@ impl BtreeTrans<'_> {
     /// @b's lock, by @lock: given the transaction's waiter, which the cycle
     /// detector reads, and the cycle detector to call.
     fn node_lock_nopath<H>(&self, b: &BtreeBkeyCachedCommon, lock_may_not_fail: bool,
-                           lock: impl FnOnce(&SixLockWaiter, &mut dyn FnMut() -> i32) -> Result<H, i32>)
+                           lock: impl FnOnce(&SixLockWaiter, &mut dyn FnMut() -> Result<(), BchError>)
+                                             -> Result<H, BchError>)
                            -> Result<H, BchError> {
         self.set_lock_may_not_fail(lock_may_not_fail);
         self.lock_must_abort.store(0, Relaxed);
@@ -398,11 +399,11 @@ impl BtreeTrans<'_> {
          * identity. 0 disables the check (lock_root, cached, relock). */
 
         let ret = lock(&self.locking_wait, &mut || six_check_for_deadlock(self, b)).map_err(|e| {
-            assert!(!lock_may_not_fail, "a lock that may not fail failed: {}", BchError::from_raw(e).msg());
-            if e == -(c::ENOMEM as i32) {
+            assert!(!lock_may_not_fail, "a lock that may not fail failed: {}", e.msg());
+            if e == BchError::from(c::ENOMEM) {
                 self.restart(Errcode::transaction_restart_lock_waitlist_alloc)
             } else {
-                BchError::from_raw(e)
+                e
             }
         });
 

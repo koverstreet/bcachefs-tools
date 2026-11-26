@@ -242,7 +242,9 @@ impl Paths<'_> {
     /// node set aside meanwhile. On failure, six's error: the lock's back to
     /// intent, and the caller marks the level so, after the wait.
     pub(crate) fn lock_write_marked(&self, idx: PathIdx, level: usize, wait: &SixLockWaiter,
-                                    should_sleep_fn: impl FnMut() -> i32, ip: usize) -> Result<(), i32> {
+                                    should_sleep_fn: impl FnMut() -> Result<(), BchError>, ip: usize)
+        -> Result<(), BchError>
+    {
         let (node, intent) = self[idx].hold_marked_write(level);
         let readers = self.trans.node_lock_counts(self, None, NonNull::from(node), level).n[SixLockType::SIX_LOCK_read as usize] as i32;
 
