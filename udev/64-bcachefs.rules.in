@@ -47,6 +47,6 @@ ENV{ID_FS_UUID_SUB_ENC}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID_SUB_ENC}"
 # holding a udev worker for the length of recovery, and bch2_dev_freespace_init()
 # is gated on !freespace_initialized, which a returning member never is.
 ENV{ID_FS_UUID}=="?*", TEST=="/sys/fs/bcachefs/$env{ID_FS_UUID}", \
-	RUN+="@sbindir@/bcachefs device online $devnode"
+	RUN+="@ROOT_SBINDIR@/bcachefs device online $devnode"
 
 LABEL="bcachefs_end"

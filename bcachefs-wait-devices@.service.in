@@ -4,4 +4,4 @@ Description=Every device in the Bcachefs filesystem with UUID %i is present
 [Service]
 Type=oneshot
 RemainAfterExit=true
-ExecStart=@sbindir@/bcachefs wait-devices UUID=%i
+ExecStart=@ROOT_SBINDIR@/bcachefs wait-devices UUID=%i

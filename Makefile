@@ -126,10 +126,6 @@ else
 systemd_services=bcachefs-wait-devices@.service
 built_scripts+=bcachefs-wait-devices@.service
 
-%.service: %.service.in
-	@echo "    [SED]    $@"
-	$(Q)sed -e "s|@sbindir@|$(ROOT_SBINDIR)|g" < $< > $@
-
 optional_build+=$(systemd_services)
 optional_install+=install_systemd
 
@@ -146,7 +142,7 @@ optional_install+=install_systemd_generator
 endif	# PKGCONFIG_GENERATORDIR
 endif	# PKGCONFIG_SERVICEDIR
 
-built_scripts+=udev/64-bcachefs.rules
+built_scripts+=udev/64-bcachefs.rules initramfs/hook dkms/dkms.conf
 
 # dracut has no bcachefs support of its own; without this module a dracut
 # initramfs has no mount helper, no udev rules and no generator.
@@ -181,30 +177,15 @@ check:
 
 .PHONY: force
 
-.PHONY: dkms/dkms.conf
-dkms/dkms.conf: dkms/dkms.conf.in
-	@echo "    [SED]    $@"
-	$(Q)sed "s|@PACKAGE_VERSION@|$(VERSION)|g" dkms/dkms.conf.in > dkms/dkms.conf
-
-.PHONY: initramfs/hook
-initramfs/hook: initramfs/hook.in
+# Each from its .in, with where things are installed: absolute paths - udev,
+# for one, looks in /usr/lib/udev for a bare name, not $$PATH.
+.PHONY: $(built_scripts)
+$(built_scripts): %: %.in
 	@echo "    [SED]    $@"
 	$(Q)sed -e "s|@ROOT_SBINDIR@|$(ROOT_SBINDIR)|g" \
 		-e "s|@UDEVRULESDIR@|$(PKGCONFIG_UDEVRULESDIR)|g" \
 		-e "s|@GENERATORDIR@|$(PKGCONFIG_GENERATORDIR)|g" \
-		initramfs/hook.in > initramfs/hook
-
-.PHONY: dracut/90bcachefs/module-setup.sh
-dracut/90bcachefs/module-setup.sh: dracut/90bcachefs/module-setup.sh.in
-	@echo "    [SED]    $@"
-	$(Q)sed -e "s|@ROOT_SBINDIR@|$(ROOT_SBINDIR)|g" $< > $@
-
-# The hot-add rule runs the binary by absolute path: udev looks in
-# /usr/lib/udev for anything else, so this can't be left to $$PATH.
-.PHONY: udev/64-bcachefs.rules
-udev/64-bcachefs.rules: udev/64-bcachefs.rules.in
-	@echo "    [SED]    $@"
-	$(Q)sed "s|@sbindir@|$(ROOT_SBINDIR)|g" udev/64-bcachefs.rules.in > udev/64-bcachefs.rules
+		-e "s|@PACKAGE_VERSION@|$(VERSION)|g" $< > $@
 
 .PHONY: install
 BASH_COMPLETION_DIR?=$(shell $(PKG_CONFIG) --variable=completionsdir bash-completion 2>/dev/null || echo $(PREFIX)/share/bash-completion/completions)
@@ -336,7 +317,7 @@ dkms-reload-interactive:
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) dkms/dkms.conf build.vars $(DOCGENERATED) $(built_scripts)
+	$(Q)$(RM) build.vars $(DOCGENERATED) $(built_scripts)
 	$(Q)$(CARGO) clean $(if $(Q),--quiet)
 
 .PHONY: deb
