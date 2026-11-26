@@ -649,8 +649,15 @@ impl<'a> PinsRead<'a> {
                 break;
             }
 
+            /*
+             * Within an entry, as flush_done() orders a whole flush: the
+             * write buffer and key cache, then btree nodes leaf to root -
+             * flushing a pin dirties the nodes it inserts into at its own
+             * seq, and those go after it, or each one is written once per
+             * update
+             */
             let types = if seq <= seq_to_flush { below | above } else { above };
-            let pin = g.unflushed.iter().enumerate()
+            let pin = g.unflushed.iter().enumerate().rev()
                 .filter(|&(i, _)| types & (1 << i) != 0)
                 .find_map(|(_, list)| list.first());
 
