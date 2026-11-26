@@ -1,7 +1,6 @@
 {
   lib,
   pkgs,
-  stdenvNoCC,
 
   # build time
   jq,
@@ -89,13 +88,6 @@ let
       zstd
     ];
 
-    checkFlags = lib.optionals (stdenvNoCC.hostPlatform.isAarch64) [
-      "--skip=bcachefs::bindgen_test_layout_bch_replicas_padded__bindgen_ty_1"
-      "--skip=bcachefs::bindgen_test_layout_bch_replicas_padded__bindgen_ty_2"
-      "--skip=bcachefs::bindgen_test_layout_bch_replicas_padded__bindgen_ty_3"
-      "--skip=bcachefs::bindgen_test_layout_bch_replicas_padded__bindgen_ty_4"
-    ];
-
     checkPhaseCargoCommand = ''
       cargo test --profile release -- --nocapture $checkFlags
     '';
@@ -162,7 +154,7 @@ let
       buildPhaseCargoCommand = "";
 
       checkPhaseCargoCommand = ''
-        make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags libbcachefs.a
+        make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags version.h
         cargo test --profile release -- --nocapture $checkFlags
       '';
     }

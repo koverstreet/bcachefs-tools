@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! data_structures/cuckoo.rs's tests, run by perf_test, and by cargo test with
-//! EXTRA_CFLAGS=-DCONFIG_BCACHEFS_TESTS - built only with CONFIG_BCACHEFS_TESTS.
+//! BCACHEFS_CONFIG=CONFIG_BCACHEFS_TESTS - built only with CONFIG_BCACHEFS_TESTS.
 //! A lookup that misses is silent: these check every
 //! lookup against what it should find. Each runs on sets and on maps of
 //! entries (TestItem), by SipHash and by golden ratio, in two ways and three.

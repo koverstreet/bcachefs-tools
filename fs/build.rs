@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
-//! Userspace (cargo) build script: the build configuration's cfgs, and
-//! linking libbcachefs.a. The fs crate's C interface - its types, and the C
-//! functions it calls - is Rust's own (types/lib.rs), so nothing here reads
-//! the C.
+//! Userspace (cargo) build script: the build configuration's cfgs. The fs
+//! crate's C interface - its types, and the C functions it calls - is Rust's
+//! own (types/lib.rs), so nothing here reads the C.
 
 include!("build_config.rs");
-
-include!("../build-link.rs");
 
 /// The (major, minor) of the rustc cargo builds with.
 fn rustc_version() -> (u32, u32) {
@@ -33,14 +30,5 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(bch_version)");
     println!("cargo:rerun-if-changed=build_config.rs");
 
-    let src = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"); // = fs/
-    let root = std::path::Path::new(&src).parent().expect("fs crate has a parent dir");
     emit_userspace_config_cfgs();
-
-    println!("cargo:rerun-if-changed=../build-link.rs");
-    link_bcachefs(
-        &root.display().to_string(),
-        &root.join("libbcachefs.a").display().to_string(),
-        false,
-    );
 }

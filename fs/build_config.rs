@@ -1,25 +1,25 @@
 // The userspace build's configuration, as Rust cfgs - what the kernel's
-// rustc_cfg makes of a kernel build's .config: USERSPACE_CONFIG, and the -D/-U
-// in EXTRA_CFLAGS that make adds to it (make debug's CONFIG_BCACHEFS_DEBUG, or
-// the user's). fs/build.rs's.
+// rustc_cfg makes of a kernel build's .config: USERSPACE_CONFIG, and what
+// BCACHEFS_CONFIG changes of it (make debug's CONFIG_BCACHEFS_DEBUG, or the
+// user's). fs/build.rs's.
 
 /// What the userspace build sets.
 const USERSPACE_CONFIG: &[&str] = &["CONFIG_DEBUG_FS", "CONFIG_STACKTRACE", "CONFIG_UNICODE"];
 
-/// The -DFOO[=val] and -UFOO in EXTRA_CFLAGS, which make exports - not set
-/// when cargo is run directly, which builds the plain configuration.
-fn extra_cflags_defines() -> Vec<String> {
-    std::env::var("EXTRA_CFLAGS")
+/// The CONFIG_* names BCACHEFS_CONFIG sets, and the -CONFIG_* it unsets, as
+/// make exports it - not set when cargo is run directly, which builds the
+/// plain configuration.
+fn bcachefs_config() -> Vec<String> {
+    std::env::var("BCACHEFS_CONFIG")
         .unwrap_or_default()
         .split_whitespace()
-        .filter(|f| f.starts_with("-D") || f.starts_with("-U"))
         .map(String::from)
         .collect()
 }
 
-/// The CONFIG_* names a build can add through EXTRA_CFLAGS - make debug's -
-/// declared as cfgs whether or not this one does, so code conditional on
-/// them builds without them.
+/// The CONFIG_* names a build can add through BCACHEFS_CONFIG - make
+/// debug's - declared as cfgs whether or not this one does, so code
+/// conditional on them builds without them.
 const PER_BUILD_CONFIG: &[&str] = &["CONFIG_BCACHEFS_DEBUG"];
 
 /// The kernel's options the types and the kernel-only code test, which no
@@ -45,25 +45,22 @@ const KERNEL_CONFIG: &[&str] = &[
     "MODULE",
 ];
 
-/// The configuration's cfgs: every name USERSPACE_CONFIG or EXTRA_CFLAGS
+/// The configuration's cfgs: every name USERSPACE_CONFIG or BCACHEFS_CONFIG
 /// mentions is declared, set or not, and so are PER_BUILD_CONFIG and
 /// KERNEL_CONFIG.
 fn emit_userspace_config_cfgs() {
-    println!("cargo:rerun-if-env-changed=EXTRA_CFLAGS");
+    println!("cargo:rerun-if-env-changed=BCACHEFS_CONFIG");
 
     let mut set: Vec<String> = USERSPACE_CONFIG.iter().map(|n| n.to_string()).collect();
     let mut names = set.clone();
     names.extend(PER_BUILD_CONFIG.iter().chain(KERNEL_CONFIG).map(|n| n.to_string()));
 
-    for f in extra_cflags_defines() {
-        let (undef, def) = match f.strip_prefix("-U") {
-            Some(n) => (true, n),
-            None    => (false, &f[2..]),
+    for f in bcachefs_config() {
+        let (undef, name) = match f.strip_prefix('-') {
+            Some(n) => (true, n.to_string()),
+            None    => (false, f),
         };
-        let name = def.split('=').next().unwrap_or(def).to_string();
-        if !name.starts_with("CONFIG_") {
-            continue;
-        }
+        assert!(name.starts_with("CONFIG_"), "BCACHEFS_CONFIG: {name} isn't a CONFIG_ option");
         names.push(name.clone());
         set.retain(|n| *n != name);
         if !undef {

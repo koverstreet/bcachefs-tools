@@ -15,9 +15,5 @@ make -k -C ../.. O=.linux EXTRA_CFLAGS=-Werror W=1 fs/bcachefs/
 
 ## Notes
 
-- `cargo build` only rebuilds Rust code. C code requires `make`.
-- C `.o` files are ephemeral: `make` compiles `.c` to `.o`, archives
-  into `libbcachefs.a`, then `.o` may be deleted. After editing C files,
-  `touch` them and `make -j` to force recompilation.
-- To verify a symbol was compiled correctly:
-  `objdump -t libbcachefs.a | grep symbol_name`
+- `make` writes version.h, which the Rust include_str!s, then runs cargo:
+  after a `make`, `cargo build` alone is enough.

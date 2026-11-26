@@ -2,7 +2,7 @@
 
 //! util/rcu.rs's SRCU domains, as the kernel's and userspace's give them -
 //! built only with CONFIG_BCACHEFS_TESTS, run by perf_test, and by cargo test
-//! with EXTRA_CFLAGS=-DCONFIG_BCACHEFS_TESTS.
+//! with BCACHEFS_CONFIG=CONFIG_BCACHEFS_TESTS.
 //!
 //! test_srcu: a reader that sleeps holds off its domain's grace periods, and
 //! not another domain's; a callback waits for the readers before it, and

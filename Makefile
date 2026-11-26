@@ -18,7 +18,6 @@ VERSION:=$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select
 endif
 
 PREFIX?=/usr/local
-LIBEXECDIR?=$(PREFIX)/libexec
 DKMSDIR?=/usr/src/bcachefs-$(VERSION)
 PKG_CONFIG?=pkg-config
 INSTALL=install
@@ -74,7 +73,7 @@ bch-build-vars = ( :; $(foreach v,$(1),$(if $($(v)),printf '%s := %s\n' '$(v)' '
 
 # `make debug` is a convenience alias that sets:
 #   MAKE_DEBUG:        userspace `bcachefs` binary built with
-#                      -DCONFIG_BCACHEFS_DEBUG=y
+#                      CONFIG_BCACHEFS_DEBUG
 #   BCACHEFS_DEBUG:    DKMS kernel-module debug build (forwarded via
 #                      $(DKMSDIR)/build.vars and fs/Makefile's ifdef)
 #   BCACHEFS_TESTS:    in-kernel unit tests in the DKMS module
@@ -96,26 +95,12 @@ ifeq ($(filter debug,$(MAKECMDGOALS)),debug)
 endif
 
 ifdef MAKE_DEBUG
-    EXTRA_CFLAGS += -DCONFIG_BCACHEFS_DEBUG=y
+    BCACHEFS_CONFIG += CONFIG_BCACHEFS_DEBUG
 endif
 
-# Prevent recursive expansions of $(CFLAGS) to avoid repeatedly performing
-# compile tests
-CFLAGS:=$(CFLAGS)
-
-CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
-	-Wno-pointer-sign					\
-	-Wno-deprecated-declarations				\
-	-fno-strict-aliasing					\
-	-fno-delete-null-pointer-checks				\
-	$(EXTRA_CFLAGS)
-
-# Its -D/-U of CONFIG_* are the Rust's cfgs too: fs/build_config.rs.
-export EXTRA_CFLAGS
-
-# Intenionally not doing the above to $(LDFLAGS) because we rely on
-# recursive expansion here (CFLAGS is not yet completely built by this line)
-LDFLAGS+=$(CFLAGS) $(EXTRA_LDFLAGS)
+# CONFIG_* to set, or -CONFIG_* to unset, as the Rust's cfgs:
+# fs/build_config.rs.
+export BCACHEFS_CONFIG
 
 ifdef CARGO_TOOLCHAIN_VERSION
   CARGO_TOOLCHAIN = +$(CARGO_TOOLCHAIN_VERSION)
@@ -123,36 +108,12 @@ endif
 
 override CARGO_ARGS+=${CARGO_TOOLCHAIN}
 CARGO=cargo $(CARGO_ARGS)
-HOSTRUSTC?=rustc
-OBJCOPY?=objcopy
-CARGO_PROFILE=release
-# CARGO_PROFILE=debug
+CARGO_BUILD=$(CARGO) build --release
 
-ifeq ($(CARGO_PROFILE),debug)
-	CARGO_BUILD_ARGS=
-else
-ifeq ($(CARGO_PROFILE),release)
-	CARGO_BUILD_ARGS=--$(CARGO_PROFILE)
-else
-	CARGO_BUILD_ARGS=--profile $(CARGO_PROFILE)
-endif
-endif
-CARGO_BUILD=$(CARGO) build $(CARGO_BUILD_ARGS)
-
-CARGO_TEST=$(CARGO) test $(CARGO_BUILD_ARGS)
+CARGO_TEST=$(CARGO) test --release
 
 CARGO_CLEAN=$(CARGO) clean $(CARGO_CLEAN_ARGS)
 
-include Makefile.compiler
-
-CFLAGS+=$(call cc-disable-warning, unused-but-set-variable)
-CFLAGS+=$(call cc-disable-warning, stringop-overflow)
-CFLAGS+=$(call cc-disable-warning, zero-length-bounds)
-CFLAGS+=$(call cc-disable-warning, missing-braces)
-CFLAGS+=$(call cc-disable-warning, zero-length-array)
-CFLAGS+=$(call cc-disable-warning, shift-overflow)
-CFLAGS+=$(call cc-disable-warning, enum-conversion)
-CFLAGS+=$(call cc-disable-warning, gnu-variable-sized-type-not-at-end)
 # Cold paths out of line, as the module's are: fs/Makefile.rust
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries -C llvm-args=-hot-cold-split=true
 
@@ -163,13 +124,9 @@ PKGCONFIG_LIBS="blkid liburcu zlib liblz4 libzstd"
 NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf generate_version TAGS tags
 ifneq ($(filter-out $(NO_PKGCONFIG_TARGETS),$(or $(MAKECMDGOALS),all)),)
 
-PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
-ifeq (,$(PKGCONFIG_CFLAGS))
-    $(error pkg-config error, command: $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
-endif
-PKGCONFIG_LDLIBS:=$(shell $(PKG_CONFIG) --libs   $(PKGCONFIG_LIBS))
-ifeq (,$(PKGCONFIG_LDLIBS))
-    $(error pkg-config error, command: $(PKG_CONFIG) --libs $(PKGCONFIG_LIBS))
+# The libraries cargo links: missing, said here rather than mid-build
+ifeq (,$(shell $(PKG_CONFIG) --exists $(PKGCONFIG_LIBS) && echo y))
+    $(error pkg-config error, command: $(PKG_CONFIG) --exists $(PKGCONFIG_LIBS))
 endif
 PKGCONFIG_UDEVDIR:=$(shell $(PKG_CONFIG) --variable=udevdir udev)
 ifeq (,$(PKGCONFIG_UDEVDIR))
@@ -177,13 +134,7 @@ ifeq (,$(PKGCONFIG_UDEVDIR))
 endif
 PKGCONFIG_UDEVRULESDIR:=$(PKGCONFIG_UDEVDIR)/rules.d
 
-CFLAGS+=$(PKGCONFIG_CFLAGS)
-LDLIBS+=$(PKGCONFIG_LDLIBS)
-
 endif # NEEDS_PKGCONFIG
-
-LDLIBS+=-lm -lpthread -lrt -ldl
-LDLIBS+=$(EXTRA_LDLIBS)
 
 ifeq ($(PREFIX),/usr)
 	ROOT_SBINDIR?=/sbin
@@ -248,68 +199,21 @@ TAGS:
 tags:
 	ctags -R .
 
-# Not the kernel-only C: os/linux_kernel/vendor (the vendored kernel Rust
-# stack's helpers).
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './os/linux_kernel/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
-# Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
-SRCS:=$(patsubst ./%,%,$(SRCS))
-
-# Objects and depfiles live under build/, never beside the source. fs/*.c is
-# shared with the kernel module build, which compiles it -mcmodel=kernel (non-PIC);
-# keeping the userspace -fPIC objects out of the source tree means the two builds
-# can't contaminate each other, and a `cp -a` of the source stays clean.
-DEPS:=$(SRCS:%.c=build/%.d)
--include $(DEPS)
-
-# Old depfiles may mention headers that were removed or renamed. GCC's -MP
-# emits empty header rules for new depfiles; this keeps pre-existing stale
-# depfiles from failing before the object can be rebuilt.
-%.h:
-	@:
-
-OBJS:=$(SRCS:%.c=build/%.o)
-
-build/%.o: %.c
-	@echo "    [CC]     $@"
-	@mkdir -p $(@D)
-	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
-
-BCACHEFS_DEPS=libbcachefs.a
 # Whole crate dirs, not just their src/: a build script is a source file too,
 # and the shim's generates the bindings. Leaving one out meant editing it
 # changed nothing until something else happened to make cargo run - a stale
 # binary that looks like a rebuilt one.
 RUST_SRCS:=$(shell find src fs os -path os/linux_kernel -prune -o -type f -iname '*.rs' -print) build.rs
 
-bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
+# The Rust include_str!s version.h. (Order-only: the binary is rebuilt by
+# cargo when it changes.)
+bcachefs: $(RUST_SRCS) | version.h
 	$(Q)$(CARGO_BUILD)
 
-# The tests that exercise the bindgen-generated bindings. Same two steps the
-# nix flake check runs (crane-build.nix, checkPhaseCargoCommand) - having them
-# here means a packager hitting a bindings problem can run them without nix.
-#
-# Note this is the whole cargo test suite, not a bindgen-specific subset: the
-# bindings have no tests of their own, they're exercised by the tests in src/
-# that consume them.
-.PHONY: bindgen-test
-bindgen-test: $(BCACHEFS_DEPS)
+# The cargo test suite, as the nix check runs it (crane-build.nix).
+.PHONY: check
+check: | version.h
 	$(Q)$(CARGO_TEST) -- --nocapture
-
-# The objects' list, replaced only when it changes: an object that's newer
-# than the archive rebuilds it, but so must one that's gone - else a deleted
-# .c's object stays in it, and its symbols collide with what replaced them.
-build/objs: force
-	$(Q)mkdir -p $(dir $@)
-	$(Q)echo $(OBJS) > $@.new
-	$(Q)cmp -s $@.new $@ || mv $@.new $@
-
-# Cargo builds on this - and the Rust include_str!s version.h, so make it here
-# too: the nix checks run `make libbcachefs.a`, then cargo. (Order-only: the
-# archive doesn't change with it.)
-libbcachefs.a: $(OBJS) build/objs | version.h
-	@echo "    [AR]     $@"
-	$(Q)$(RM) $@
-	$(Q)$(AR) -rc $@ $(OBJS)
 
 .PHONY: force
 
@@ -495,8 +399,7 @@ dkms-reload-interactive: version.h
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) libbcachefs.a .version dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
-	$(Q)$(RM) -r build
+	$(Q)$(RM) .version dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
 	$(Q)$(CARGO_CLEAN)
 	$(Q)$(RM) -f $(built_scripts)
 

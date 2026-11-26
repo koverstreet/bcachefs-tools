@@ -1,10 +1,6 @@
 //! What util::task has to guarantee on the userspace workqueue shim,
 //! exercised end to end.
 //!
-//! These can't live beside `fs/util/task.rs`: a `cargo test -p
-//! bcachefs-kernel` binary doesn't link libbcachefs.a, the C the executor
-//! still calls into; this crate's build.rs links it whole-archive.
-//!
 //! One test is of the shim's workqueues' contract - par's workqueue jobs block,
 //! and rely on the queue having more than one worker; one of the executor's
 //! own - a task never polled twice at once, which its state word, not the

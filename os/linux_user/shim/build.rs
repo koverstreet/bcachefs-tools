@@ -44,6 +44,7 @@ fn main() {
     // comes before it
     println!("cargo:rustc-link-lib=z");
     println!("cargo:rustc-link-lib=lz4");
+    println!("cargo:rustc-link-lib=zstd");
 
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
     let target = std::env::var("TARGET").unwrap();
@@ -111,12 +112,6 @@ fn main() {
         wrappers.include(p);
     }
     wrappers.compile("bcachefs_shim_static_wrappers");
-
-    // And what the wrappers call in libbcachefs.a: linked after them too, as
-    // ld.bfd takes an archive's member only for what comes before it.
-    // -bundle, as fs/build.rs links it.
-    println!("cargo:rustc-link-search={}", root.display());
-    println!("cargo:rustc-link-lib=static:-bundle=bcachefs");
 
     // dh-cargo Built-Using (Debian): point at the workspace root (== the dpkg
     // build's $PWD) so dh-cargo-built-using sees this lib as built from our own

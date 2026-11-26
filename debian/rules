@@ -66,10 +66,6 @@ override_dh_auto_configure:
 override_dh_clean:
 	# HACK: breaks cargo checksumming by deleting some vendored files.
 
-override_dh_usrlocal:
-	# FIXME: fails with
-	# dh_usrlocal: error: debian/bcachefs-tools/usr/local/libexec/bcachefsck_all is not a directory
-
 override_dh_auto_test:
 
 # Generate (Static-)Built-Using
