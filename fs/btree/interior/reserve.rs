@@ -51,7 +51,7 @@ fn format_fits(b: LockedNode<'_, BtreeNode>, new_f: &c::bkey_format) -> bool {
 fn node_free(fs: &Fs, b: &BtreeNode) {
     fs.event_inc_trace(events::btree_node_free, |out| prt!(out, "{}", b.pos_to_text(fs)));
 
-    assert!(!b.flags.write_blocked(), "freeing a write blocked node");
+    assert!(!b.flags.write_blocked() && !b.flags.prev_write_blocked(), "freeing a write blocked node");
     assert!(!b.flags.need_write(), "freeing a node that needs writing");
     assert!(!fs.btree_id_root(b.c.btree_id.get().into()).is_some_and(|r| ptr::eq(r, b)), "freeing a root");
 

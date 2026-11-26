@@ -151,6 +151,7 @@ impl InteriorUpdate<'_> {
         b.flags.set_dirty(false);
         b.flags.set_need_write(false);
         b.flags.set_write_blocked(false);
+        b.flags.set_prev_write_blocked(false);
 
         /*
          * Does this node have unwritten data that has a pin on the journal?
@@ -481,13 +482,18 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
             let level = usize::from(b.c.level.get());
             trans.node_lock_write(paths, idx, level)?;
 
+            let pending = slot != b.flags.write_idx();
             let do_pin = {
                 let mut g = fs.btree.interior_updates.lock.lock();
                 let blocked = write_blocked(b, slot, &mut g);
 
                 unsafe { blocked.remove(u) };
                 if blocked.is_empty() {
-                    b.flags.set_write_blocked(false);
+                    if pending {
+                        b.flags.set_prev_write_blocked(false);
+                    } else {
+                        b.flags.set_write_blocked(false);
+                    }
                 }
 
                 /*
@@ -503,10 +509,12 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
             if do_pin {
                 assert!(b.c.level.get() != 0, "an interior update's node a leaf");
                 assert!(b.flags.dirty(), "an interior update's node not dirty");
+                assert!(!pending || b.flags.prev_write_pending(), "an interior update blocking a write gone");
 
                 if ret.is_ok() {
                     let mut w = paths[idx].locked_btree_node_mut(level).expect("an interior update's node, write locked");
-                    let t = *w.contents().last_set();
+                    /* the last of its write's bsets */
+                    let t = w.contents().set[usize::from(w.contents().nsets) - 1 - usize::from(pending)];
                     let mut keys = w.keys_mut();
                     let last = keys.bset_head_mut(t.data_offset);
 

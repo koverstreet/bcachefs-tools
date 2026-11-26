@@ -742,7 +742,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
 
     let u64s = update.parent_keys_u64s();
     let b = paths[path].locked_btree_node(level).expect("an interior update's node, write locked");
-    if !b.insert_fits(b.contents(), u64s) {
+    if !b.insert_fits(b.contents(), fs, u64s) {
         /*
          * We could attempt to avoid the transaction restart, by calling
          * bch2_btree_path_upgrade() and allocating more nodes:

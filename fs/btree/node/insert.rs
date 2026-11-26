@@ -220,6 +220,7 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
                 (f.dirty() && f.write_idx() as usize == I && self.writes[I].seq() == seq).then(|| {
                     f.with_write_type(BtreeWriteType::journal_reclaim)
                      .with_need_write(true)
+                     .with_pin_flushed(true)
                 })
             });
 

@@ -191,7 +191,7 @@ fn flush_one<'a>(
     }
 
     let b = paths[iter.path].locked_btree_node(0).expect("a traversed path has its leaf");
-    if !b.insert_fits(b.contents(), usize::from(wb.k.k.u64s)) {
+    if !b.insert_fits(b.contents(), fs, usize::from(wb.k.k.u64s)) {
         *write_locked = false;
         drop(paths);
         return flush_one_slowpath(t, iter, wb);

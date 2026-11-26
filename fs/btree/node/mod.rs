@@ -95,8 +95,8 @@ pub struct BkeyUnpackField {
     pub shift_right: u8, /* 64 - bits, or 64 if field has no bits in packed */
 }
 
-/// A node's writes[]: one in flight, and up to two not yet written, each with
-/// its journal pin.
+/// A node's writes[]: one in flight, and up to two not yet written - one
+/// pending, and the one accumulating - each with its journal pin.
 pub const NR_WRITES: u8 = 3;
 
 #[pin_data]
@@ -128,7 +128,7 @@ pub struct BtreeNode {
     #[init(LockedBy::new(NodeContents::new(), PublishedKey::new()))]
     pub contents: LockedBy<NodeContents, PublishedKey, NodeLock<BtreeNode>>,
 
-    /* the journal pins of its writes, back from write_idx: accumulating, in flight */
+    /* the journal pins of its writes, back from write_idx: accumulating, pending, in flight */
     pub writes: [Pin; 3],
 
     /*
@@ -503,6 +503,15 @@ impl BtreeNode {
         self.bset_written(contents.nsets as usize - 1)
     }
 
+    /* Where writing all that's unwritten can end on disk: room past it is room on disk */
+    fn unwritten_end(&self, contents: &NodeContents, fs: &Fs) -> usize {
+        let unwritten = usize::from(self.flags.nr_written_bsets())..;
+        let u64s = contents.sets()[unwritten].iter().map(BsetTree::u64s).sum::<usize>();
+        let bytes = offset_of!(Head<c::btree_node_entry>, keys) + size_of::<Head<c::bset>>() + u64s * size_of::<u64>();
+
+        self.written_end() + bytes.next_multiple_of(fs.block_bytes() as usize) / size_of::<u64>()
+    }
+
     pub fn unwritten_whiteouts(&self) -> Range<usize> {
         let end = self.buf_bytes() / size_of::<u64>();
         end - self.whiteout_u64s.get() as usize..end
@@ -525,9 +534,12 @@ impl BtreeNode {
     }
 
     /// Whether a key of @u64s goes in without a split, or a rewrite first:
-    /// bch2_btree_node_insert_fits().
-    pub fn insert_fits(&self, contents: &NodeContents, u64s: usize) -> bool {
-        !self.flags.need_rewrite() && u64s <= self.keys_u64s_remaining(contents)
+    /// bch2_btree_node_insert_fits(). Not when a write that needs a new bset
+    /// can't have one: the node's rewritten, and nothing more joins the write.
+    pub fn insert_fits(&self, contents: &NodeContents, fs: &Fs, u64s: usize) -> bool {
+        !self.flags.need_rewrite() &&
+            !(self.new_bset_wanted() && self.want_new_bset(contents, fs).is_none()) &&
+            u64s <= self.keys_u64s_remaining(contents)
     }
 
     /*
@@ -558,31 +570,47 @@ impl BtreeNode {
             i32::from(sib_u64s) + d <= i32::from(fs.btree.foreground_merge_threshold)
     }
 
-    pub fn want_new_bset(&self, contents: &NodeContents, fs: &Fs) -> Option<u16> {
+    /* The journal's waiting on a blocked write: it goes without what comes next */
+    fn new_bset_wanted(&self) -> bool {
+        let f = self.flags.load();
+        f.pin_flushed() && f.write_blocked() && !f.prev_write_pending()
+    }
+
+    /// Where a new bset would start, if one's wanted, and whether it makes the
+    /// bsets before it a pending write - which has no whiteouts.
+    pub fn want_new_bset(&self, contents: &NodeContents, fs: &Fs) -> Option<(u16, bool)> {
+        /* the written bset, the pending one and the one accumulating are MAX_BSETS */
+        if self.flags.prev_write_pending() {
+            return None;
+        }
+
+        let pending = self.new_bset_wanted();
         let t = contents.last_set();
-        let bne = self.written_end().max(t.end_offset as usize);
+        let bne = if pending { self.unwritten_end(contents, fs) } else { self.written_end() }
+            .max(t.end_offset as usize);
         let keys = (offset_of!(Head<c::btree_node_entry>, keys) + offset_of!(Head<c::bset>, _data)) / size_of::<u64>();
 
         let want = if self.last_bset_written(contents) {
             self.written.get() as u32 + fs.block_sectors() <= fs.btree_sectors()
+        } else if pending {
+            self.whiteout_u64s.get() == 0 && self.u64s_remaining(bne + keys) > 0
         } else {
             t.u64s() * size_of::<u64>() > WRITE_SET_BUFFER &&
                 self.u64s_remaining(bne + keys) > (WRITE_SET_BUFFER / size_of::<u64>()) as isize
         };
-        want.then(|| u16::try_from(bne).expect("a bset offset in a node's u16 range"))
+        want.then(|| (u16::try_from(bne).expect("a bset offset in a node's u16 range"), pending))
     }
 
-    fn write_slot(&self, back: u8) -> &Pin {
-        let writes: &[Pin; NR_WRITES as usize] = &self.writes;
-        &writes[usize::from((self.flags.write_idx() + NR_WRITES - back) % NR_WRITES)]
+    fn write_slot(&self, back: u8) -> usize {
+        usize::from((self.flags.write_idx() + NR_WRITES - back) % NR_WRITES)
     }
 
     pub fn current_write(&self) -> &Pin {
-        self.write_slot(0)
+        &self.writes[self.write_slot(0)]
     }
 
-    pub fn prev_write(&self) -> &Pin {
-        self.write_slot(1)
+    pub fn in_flight_write(&self) -> &Pin {
+        &self.writes[self.write_slot(1 + u8::from(self.flags.prev_write_pending()))]
     }
 }
 

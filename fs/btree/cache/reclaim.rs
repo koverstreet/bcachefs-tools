@@ -61,7 +61,7 @@ impl Fs {
             NotFreed::permanent
         } else if f.noevict() {
             NotFreed::noevict
-        } else if f.write_blocked() {
+        } else if f.write_blocked() || f.prev_write_blocked() {
             NotFreed::write_blocked
         } else if f.will_make_reachable() {
             NotFreed::will_make_reachable
@@ -230,7 +230,7 @@ impl Fs {
                 }
 
                 let f = b.flags.load();
-                if f.dirty() && !f.will_make_reachable() && !f.write_blocked() {
+                if f.dirty() && !f.will_make_reachable() && !f.write_blocked() && !f.prev_write_blocked() {
                     if let Some(held) = b.c.lock.try_lock_as(SIX_LOCK_read) {
                         return Some((b, held));
                     }

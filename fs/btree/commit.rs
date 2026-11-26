@@ -776,7 +776,7 @@ impl BtreeTrans<'_> {
 
             let ret = if !i.cached() {
                 let b = leaf(&pu.paths, i);
-                if b.insert_fits(b.contents(), u64s) {
+                if b.insert_fits(b.contents(), fs, u64s) {
                     Ok(())
                 } else {
                     fs.throw(Errcode::btree_insert_btree_node_full)

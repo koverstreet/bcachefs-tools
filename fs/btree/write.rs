@@ -45,6 +45,7 @@ use crate::util::names::Names;
 use crate::util::{rcu, HumanReadable, Printbuf};
 use crate::{fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
 use core::mem::offset_of;
+use core::ops::Range;
 use core::pin::Pin;
 use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
 use cstruct_macros::{bch_enum, in_place};
@@ -92,26 +93,37 @@ fn bset_at(buf: &mut [u8], keys_at: usize) -> &mut Head<c::bset> {
  * requires a write lock, we can't race with other threads redirtying it.
  */
 fn start_next_write(f: BtreeNodeFlags, only_if_need: bool, written: bool) -> Option<BtreeNodeFlags> {
+    /* a pending write is always wanted: the journal flushed it */
+    let pending = f.prev_write_pending();
+    let blocked = if pending { f.prev_write_blocked() } else { f.write_blocked() };
+
     if !f.dirty() ||
-       (only_if_need && !f.need_write()) ||
+       (only_if_need && !pending && !f.need_write()) ||
        f.never_write() ||
-       f.write_blocked() ||
+       blocked ||
        (written && f.will_make_reachable()) ||
        f.write_in_flight() {
         return None;
     }
 
-    Some(f.with_write_in_flight(true)
+    let f = f.with_write_in_flight(true)
         .with_write_in_flight_inner(true)
-        .with_just_written(true)
-        .with_dirty(false)
-        .with_need_write(false)
-        .with_write_idx((f.write_idx() + 1) % NR_WRITES)
-        .with_write_type(BtreeWriteType::initial))
+        .with_just_written(true);
+
+    /* the pending write leaves the node dirty, with the one accumulating */
+    Some(if pending {
+        f.with_prev_write_pending(false)
+    } else {
+        f.with_dirty(false)
+            .with_need_write(false)
+            .with_pin_flushed(false)
+            .with_write_idx((f.write_idx() + 1) % NR_WRITES)
+            .with_write_type(BtreeWriteType::initial)
+    })
 }
 
 fn write_done(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
-    let w = b.prev_write();
+    let w = b.in_flight_write();
 
     /* If this was the first write to a btree node, signal to the interior
      * update that the write is complete:
@@ -364,11 +376,15 @@ fn submit_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, old: BtreeNodeFlags, ty: 
     sort_whiteouts(fs, &b, unsafe { b.contents_mut() });
 
     let contents = b.contents();
+    /* a pending write: all but the bset accumulating, and no whiteouts */
+    let pending = old.prev_write_pending();
+    let sets = usize::from(b.flags.nr_written_bsets())..contents.nsets as usize - usize::from(pending);
+    let whiteouts = if pending { 0..0 } else { b.unwritten_whiteouts() };
     let fs_ref = unsafe { BackRef::new(fs) };
     /* the bounce is the task's */
-    let w = BsetWrite::build(unsafe { fs_ref.get() }, &b, contents);
+    let w = BsetWrite::build(unsafe { fs_ref.get() }, &b, contents, sets.clone(), whiteouts);
     /* written - or with nothing to put on disk, all their keys overwritten */
-    b.flags.set_nr_written_bsets(contents.nsets);
+    b.flags.set_nr_written_bsets(sets.end as u8);
 
     let Some(mut w) = w else {
         write_done(fs, b);
@@ -459,8 +475,9 @@ struct BsetWrite {
 }
 
 impl BsetWrite {
-    /// None if there's nothing to write.
-    fn build(fs: &'static Fs, b: &BtreeNode, contents: &NodeContents) -> Option<Self> {
+    /// Bsets @sets and whiteouts @whiteouts: None if there's nothing to write.
+    fn build(fs: &'static Fs, b: &BtreeNode, contents: &NodeContents, sets: Range<usize>,
+             whiteouts: Range<usize>) -> Option<Self> {
         let keys = b.keys(contents);
         let mut runs = WriteSortRuns::default();
 
@@ -471,14 +488,10 @@ impl BsetWrite {
             (size_of::<Head<c::btree_node_entry>>(), offset_of!(Head<c::btree_node_entry>, keys))
         };
 
-        bytes += b.whiteout_u64s.get() as usize * size_of::<u64>();
+        bytes += whiteouts.len() * size_of::<u64>();
 
         let mut seq = 0;
-        for (set, t) in contents.sets().iter().enumerate() {
-            if b.bset_written(set) {
-                continue;
-            }
-
+        for t in &contents.sets()[sets] {
             let i = keys.bset(t);
             bytes += i.u64s() * size_of::<u64>();
             runs.add(t.first_offset() as usize..t.end_offset as usize);
@@ -506,7 +519,7 @@ impl BsetWrite {
         i.journal_seq = Le64::new(seq);
         i.set_u64s(0);
 
-        runs.add(b.unwritten_whiteouts());
+        runs.add(whiteouts.clone());
         i.set_separate_whiteouts(false);
 
         let dst = cast_plain_slice_mut(&mut buf[keys_at + size_of::<Head<c::bset>>()..])
@@ -515,7 +528,7 @@ impl BsetWrite {
         let i = bset_at(buf, keys_at);
         i.set_u64s(i.u64s() + u64s);
 
-        b.whiteout_u64s.set(0);
+        b.whiteout_u64s.set(b.whiteout_u64s.get() - whiteouts.len() as u16);
 
         assert!(!first || i.u64s() == contents.data().keys.u64s());
 
@@ -597,17 +610,15 @@ pub fn post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> 
         return false;
     }
 
-    assert!(b.whiteout_u64s.get() == 0);
-
     b.flags.set_just_written(false);
 
     /*
      * XXX: decide if we really want to unconditionally sort down to a
      * single bset:
      */
-    let nsets = b.contents().nsets;
-    let invalidated_iter = if nsets > 1 {
-        btree_node_sort(fs, b.node(), b.contents_mut(), 0, nsets.into());
+    let written = b.flags.nr_written_bsets();
+    let invalidated_iter = if written > 1 {
+        btree_node_sort(fs, b.node(), b.contents_mut(), 0, written.into());
         true
     } else {
         drop_whiteouts(b.node(), b.contents_mut(), CompactMode::COMPACT_ALL)
@@ -620,12 +631,9 @@ pub fn post_write_cleanup(fs: &Fs, b: &mut LockedNode<'_, BtreeNode, Write>) -> 
      * to ensure this is still true:
      */
     let (b, contents) = (b.node(), b.contents_mut());
-    assert!(contents.last_set().end_offset as usize <= b.written_end());
+    assert!(contents.set[0].end_offset as usize <= b.written_end());
 
-    if let Some(bne) = b.want_new_bset(contents, fs) {
-        b.keys_mut(contents).bset_init_next(bne);
-    }
-
+    maybe_new_bset(fs, b, contents);
     build_aux_trees(b, contents);
 
     invalidated_iter
@@ -712,12 +720,26 @@ pub(in crate::btree) fn init_next(trans: &BtreeTrans<'_>, b: &mut LockedNode<'_,
     let (n, contents) = (b.node(), b.contents_mut());
     assert!((contents.nsets as u32) < MAX_BSETS);
 
-    if let Some(bne) = n.want_new_bset(contents, fs) {
-        n.keys_mut(contents).bset_init_next(bne);
-    }
-
+    maybe_new_bset(fs, n, contents);
     build_aux_trees(n, contents);
     reinit_iter
+}
+
+/* A new bset - and if it's for the journal, the bsets before it a pending write */
+fn maybe_new_bset(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents) {
+    let Some((bne, pending)) = b.want_new_bset(contents, fs) else { return };
+
+    b.keys_mut(contents).bset_init_next(bne);
+
+    if pending {
+        let _ = b.flags.fetch_update(SeqCst, Relaxed, |f| Some(f
+            .with_prev_write_pending(true)
+            .with_prev_write_blocked(f.write_blocked())
+            .with_need_write(false)
+            .with_write_blocked(false)
+            .with_pin_flushed(false)
+            .with_write_idx((f.write_idx() + 1) % NR_WRITES)));
+    }
 }
 
 impl Fs {

@@ -724,7 +724,7 @@ impl<'t> InteriorUpdate<'t> {
              * Always check for space for two keys, even if we won't have to
              * split at prior level - it might have been a merge instead:
              */
-            if b.insert_fits(b.contents(), c::BKEY_BTREE_PTR_U64s_MAX * 2) {
+            if b.insert_fits(b.contents(), fs, c::BKEY_BTREE_PTR_U64s_MAX * 2) {
                 break;
             }
 

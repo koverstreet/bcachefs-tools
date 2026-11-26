@@ -376,7 +376,9 @@ pub fn drop_whiteouts(b: &BtreeNode, contents: &mut NodeContents, mode: CompactM
 
     for set in 0..contents.nsets as usize {
         let t = contents.set[set];
-        let moved = (set != 0 && !b.bset_written(set))
+        /* the bset behind a pending write stays where that write can end on disk */
+        let behind_pending = b.flags.prev_write_pending() && set + 1 == contents.nsets as usize;
+        let moved = (set != 0 && !b.bset_written(set) && !behind_pending)
             .then(|| (t.data_offset as usize - ENTRY_KEYS, write_block.max(contents.set[set - 1].end_offset as usize)))
             .filter(|(src, dst)| src != dst);
 

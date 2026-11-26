@@ -928,7 +928,12 @@ pub struct BtreeNodeFlags {
     pinned: bool,
     permanent: bool,
     #[bits(2)] nr_written_bsets: u8,
-    #[bits(6)] __: u8,
+    /* the journal's flushed the accumulating write's pin */
+    pin_flushed: bool,
+    /* a write behind the accumulating one: one the journal's flushed */
+    prev_write_pending: bool,
+    prev_write_blocked: bool,
+    #[bits(3)] __: u8,
 }
 
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
