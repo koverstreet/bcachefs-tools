@@ -13,7 +13,7 @@ use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
                          TransBkey, UpdateTriggerFlags, Watermark};
-use crate::btree::node::BtreeNode;
+use crate::btree::node::{BtreeNode, NR_WRITES};
 use crate::btree::path::{LockedNode, Paths};
 use crate::btree::trigger::{deleted_room, key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
@@ -41,11 +41,12 @@ impl InteriorUpdate<'_> {
         assert!(b.flags.dirty(), "an interior update's node not dirty");
         assert!(b.c.level.get() != 0, "an interior update's node a leaf");
 
-        let mut g = self.make_visible(Mode::Node(BtreeNodeRef::from(b)));
+        let slot = b.flags.write_idx();
+        let mut g = self.make_visible(Mode::Node(BtreeNodeRef::from(b), slot));
         self.level_end.store(b.c.level.get(), Relaxed);
 
         b.flags.set_write_blocked(true);
-        unsafe { write_blocked(b.node(), &mut g).push_front(self) };
+        unsafe { write_blocked(b.node(), slot, &mut g).push_front(self) };
     }
 
     pub(super) fn updated_root(&self) {
@@ -134,16 +135,18 @@ impl InteriorUpdate<'_> {
          * write out our new nodes, but we won't make them visible until those
          * operations complete
          */
-        WriteBlocked::drain(&mut fs.btree.interior_updates.lock.lock(), |g| write_blocked(b.node(), g), |g, p| {
-            p.set_mode(g, Mode::Update);
-            fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other);
+        for slot in 0..NR_WRITES {
+            WriteBlocked::drain(&mut fs.btree.interior_updates.lock.lock(), |g| write_blocked(b.node(), slot, g), |g, p| {
+                p.set_mode(g, Mode::Update);
+                fs.journal.pin_copy(&self.journal, &p.journal, c::JournalPinType::JOURNAL_PIN_TYPE_other);
 
-            /*
-             * for flush_held_btree_writes() waiting on updates to flush or
-             * nodes to be writeable:
-             */
-            fs.btree.interior_updates.wait.wake();
-        });
+                /*
+                 * for flush_held_btree_writes() waiting on updates to flush or
+                 * nodes to be writeable:
+                 */
+                fs.btree.interior_updates.wait.wake();
+            });
+        }
 
         b.flags.set_dirty(false);
         b.flags.set_need_write(false);
@@ -447,7 +450,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
      * recheck under btree_update_lock below:
      */
     let mode = u.mode(&fs.btree.interior_updates.lock.lock());
-    if let Some(Mode::Node(r)) = mode {
+    if let Some(Mode::Node(r, slot)) = mode {
         let b = r.node(fs);
 
         /*
@@ -480,7 +483,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
 
             let do_pin = {
                 let mut g = fs.btree.interior_updates.lock.lock();
-                let blocked = write_blocked(b, &mut g);
+                let blocked = write_blocked(b, slot, &mut g);
 
                 unsafe { blocked.remove(u) };
                 if blocked.is_empty() {
@@ -494,7 +497,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
                  * journal pin work can happen outside the
                  * mutex.
                  */
-                u.mode(&g) == Some(Mode::Node(r))
+                u.mode(&g) == Some(Mode::Node(r, slot))
             };
 
             if do_pin {
@@ -509,7 +512,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
 
                     last.journal_seq = Le64::new(journal_seq.max(last.journal_seq.get()));
 
-                    b.add_journal_pin(fs, journal_seq);
+                    b.add_journal_pin(fs, usize::from(slot), journal_seq);
                 } else {
                     /*
                      * If we didn't get a journal sequence

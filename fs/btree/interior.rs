@@ -115,9 +115,10 @@ enum Mode {
      * existing interior node - @b. We can't write out the update to @b
      * until the new nodes we created are finished writing, so we block @b
      * from writing by putting this btree_interior update on the
-     * @b->write_blocked list with @write_blocked_list:
+     * @b->write_blocked list with @write_blocked_list - the list of the
+     * write its keys went in, by its slot of @b->writes[]:
      */
-    Node(BtreeNodeRef),
+    Node(BtreeNodeRef, u8),
     Root,
     /* the node it updated freed, by the update it's now waiting on */
     Update,
@@ -154,9 +155,9 @@ pub(crate) type CommitGuard<'a> = ExclusiveGuard<'a, Mutex, (), (), Exclusive, C
 pub(crate) type UpdatesLockAt = crate::at!(bch_fs_btree_interior_updates.lock);
 pub(crate) type CommitLockAt = crate::at!(bch_fs_btree_interior_updates.commit_lock);
 
-/// @b's updates blocking its write.
-fn write_blocked<'a>(b: &'a BtreeNode, updates: &'a mut UpdatesGuard<'_>) -> &'a mut WriteBlocked {
-    updates.get_mut_of(&b.write_blocked)
+/// @b's updates blocking the write in writes[@slot].
+fn write_blocked<'a>(b: &'a BtreeNode, slot: u8, updates: &'a mut UpdatesGuard<'_>) -> &'a mut WriteBlocked {
+    &mut updates.get_mut_of(&b.write_blocked)[usize::from(slot)]
 }
 
 #[placed(c::bch_fs_btree.interior_updates)]
@@ -471,10 +472,10 @@ impl BtreeUpdate {
              REWRITE_REASON_STRS[n.needed_rewrite as usize]);
 
         let mode = match mode {
-            None                => "none",
-            Some(Mode::Node(_)) => "node",
-            Some(Mode::Root)    => "root",
-            Some(Mode::Update)  => "update",
+            None                 => "none",
+            Some(Mode::Node(..)) => "node",
+            Some(Mode::Root)     => "root",
+            Some(Mode::Update)   => "update",
         };
         let pending = self.pending.load(Relaxed);
         prt!(out, "mode={} nodes_written={} pending={} journal_seq={}\n",

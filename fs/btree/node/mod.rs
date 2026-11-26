@@ -145,9 +145,10 @@ pub struct BtreeNode {
      * but then we must wait until the children have been written out before
      * the update to the parent can be written - this is a list of the
      * btree_updates that are blocking this node from being
-     * written:
+     * written - each write's, by its slot of writes[]:
      */
-    pub(crate) write_blocked: LockedBy<crate::btree::interior::WriteBlocked, (), crate::btree::interior::UpdatesLockAt>,
+    pub(crate) write_blocked: LockedBy<[crate::btree::interior::WriteBlocked; NR_WRITES as usize], (),
+                                       crate::btree::interior::UpdatesLockAt>,
 
     /*
      * Also for asynchronous splits/interior node updates:

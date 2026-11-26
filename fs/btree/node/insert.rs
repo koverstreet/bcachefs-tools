@@ -184,9 +184,10 @@ fn bset_insert(b: &mut LockedNode<'_, BtreeNode, Write>, node_iter: &KeyIter, in
 }
 
 impl BtreeNode {
+    /// @seq, pinned by the write in writes[@slot].
     #[inline]
-    pub fn add_journal_pin(&self, fs: &Fs, seq: u64) {
-        fs.journal.pin_add(seq, self.current_write(), journal_pin_type_btree(self.c.level.get()));
+    pub fn add_journal_pin(&self, fs: &Fs, slot: usize, seq: u64) {
+        fs.journal.pin_add(seq, &self.writes[slot], journal_pin_type_btree(self.c.level.get()));
     }
 }
 
@@ -383,7 +384,7 @@ impl BtreeTrans<'_> {
                 i.journal_seq = Le64::new(journal_seq.max(i.journal_seq.get()));
             }
 
-            b.add_journal_pin(fs, journal_seq);
+            b.add_journal_pin(fs, usize::from(b.flags.write_idx()), journal_seq);
 
             if unlikely(!b.flags.dirty()) {
                 fs.btree_node_set_dirty(b.node());
