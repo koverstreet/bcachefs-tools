@@ -3,10 +3,13 @@ use std::ops::ControlFlow;
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::prelude::*;
+use bcachefs_kernel::btree::bkey::AnyKeySC;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
+use bcachefs_kernel::data::ptrs::{BkeyVPtrs, Ptrs};
 use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::c::DegradedAction;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
@@ -16,6 +19,17 @@ use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 use bcachefs_kernel::format::{Bpos, Btree, BkeyType};
+
+fn extent_replicas(fs: &Fs, k: AnyKeySC<'_, Unvalidated>) -> u32 {
+    let Some(k) = k.arm::<Ptrs>() else { return 0 };
+
+    k.ptrs(fs)
+        .filter(|ptr| {
+            let dev = ptr.dev() as u32;
+            ptr.cached() == 0 && dev != c::BCH_SB_MEMBER_INVALID as u32 && fs.dev_exists(dev)
+        })
+        .count() as u32
+}
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
@@ -41,6 +55,13 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
         if let Some(ty) = opt.bkey_type {
             if k.k.type_ != ty.0 as u8 {
+                return Ok(ControlFlow::Continue(()));
+            }
+        }
+
+        if let Some(min_replicas) = opt.replicas_min {
+            let replicas = extent_replicas(fs, k.as_read());
+            if replicas < min_replicas {
                 return Ok(ControlFlow::Continue(()));
             }
         }
@@ -153,6 +174,13 @@ fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Resu
             }
         }
 
+        if let Some(min_replicas) = opt.replicas_min {
+            let replicas = extent_replicas(fs, k);
+            if replicas < min_replicas {
+                continue;
+            }
+        }
+
         println!("{}", k.to_text(fs));
     }
 
@@ -170,7 +198,7 @@ fn list_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()
     list_keys_online(handle, fs, opt)
 }
 
-#[derive(Clone, clap::ValueEnum, Debug)]
+#[derive(Clone, clap::ValueEnum, Debug, PartialEq, Eq)]
 enum Mode {
     Keys,
     Formats,
@@ -190,7 +218,9 @@ nodes-ondisk shows the raw on-disk representation.\n\n\
 Use -b to select a btree (default: extents), -s/-e for start/end \
 position, -l for btree depth, -k to filter by key type. With -c, \
 runs fsck before listing. Output is used for debugging filesystem \
-state, verifying btree contents, and inspecting on-disk layout.")]
+state, verifying btree contents, and inspecting on-disk layout.\n\n\
+Use --replicas-min with the extents btree to find file extents whose \
+stored data has at least the requested number of fully allocated replicas.")]
 pub struct Cli {
     #[arg(short, long, default_value = "keys")]
     mode: Mode,
@@ -215,6 +245,10 @@ pub struct Cli {
     #[arg(short, long, default_value = "SPOS_MAX")]
     end: Bpos,
 
+    /// Only list extents with at least this many fully allocated replicas
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    replicas_min: Option<u32>,
+
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
     fsck: bool,
@@ -233,6 +267,18 @@ pub struct Cli {
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
+    if opt.replicas_min.is_some() {
+        if opt.btree != Btree::extents {
+            bail!("--replicas-min can only be used with the extents btree");
+        }
+        if opt.mode != Mode::Keys {
+            bail!("--replicas-min can only be used with --mode keys");
+        }
+        if opt.level != 0 {
+            bail!("--replicas-min can only be used at leaf level");
+        }
+    }
+
     let mut fs_opts = c::bch_opts::default();
 
     fs_opts.set_noexcl(true);
@@ -290,3 +336,30 @@ fn list(opt: Cli) -> Result<()> {
 }
 
 pub const CMD: super::CmdDef = typed_cmd!("list", "List filesystem metadata", Cli, list);
+
+#[cfg(test)]
+mod tests {
+    use super::{cmd_list_inner, Cli};
+    use clap::Parser;
+
+    #[test]
+    fn replica_min_requires_a_positive_count() {
+        assert!(Cli::try_parse_from(["list", "--replicas-min", "0", "missing-device"]).is_err());
+        let opt = Cli::try_parse_from(["list", "--replicas-min", "2", "missing-device"]).unwrap();
+        assert_eq!(opt.replicas_min, Some(2));
+    }
+
+    #[test]
+    fn replica_min_rejects_unsupported_listing_before_opening_devices() {
+        for (flag, value, expected) in [
+            ("--btree", "inodes", "--replicas-min can only be used with the extents btree"),
+            ("--mode", "nodes", "--replicas-min can only be used with --mode keys"),
+            ("--level", "1", "--replicas-min can only be used at leaf level"),
+        ] {
+            let opt = Cli::try_parse_from([
+                "list", "--replicas-min", "2", flag, value, "missing-device",
+            ]).unwrap();
+            assert_eq!(cmd_list_inner(&opt).unwrap_err().to_string(), expected);
+        }
+    }
+}
