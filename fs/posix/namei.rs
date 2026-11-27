@@ -37,6 +37,7 @@ use crate::data::reconcile::format::ExtentReconcile;
 use crate::posix::{dirent_format, inode, str_hash};
 use crate::posix::dirent_format::DT_SUBVOL;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::dev::dev_t;
 use crate::posix::mode::umode_t;
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
@@ -108,7 +109,7 @@ pub fn create_trans(
     uid:              c::uid_t,
     gid:              c::gid_t,
     mode:             umode_t,
-    rdev:             c::dev_t,
+    rdev:             dev_t,
     default_acl:      Option<&PosixAcl>,
     acl:              Option<&PosixAcl>,
     mut snapshot_src: SubvolInum,

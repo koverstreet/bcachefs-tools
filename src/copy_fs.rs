@@ -21,6 +21,7 @@ use bcachefs_kernel::data::extents_format::{ExtentPtr, BKEY_EXTENT_U64s_MAX,
     BKEY_EXTENT_VAL_U64s_MAX};
 use bcachefs_kernel::data::reconcile::trigger::SetNeedsReconcileCtx;
 use bcachefs_kernel::posix::inode::InodeUnpacked;
+use bcachefs_kernel::posix::dev::dev_t;
 use bcachefs_kernel::posix::mode::{umode_t, S_IFREG};
 use bcachefs_kernel::snapshots::{format::Subvolume, subvolume};
 use bcachefs_kernel::btree;
@@ -224,7 +225,7 @@ fn create_or_update_file(
     uid: u32,
     gid: u32,
     mode: umode_t,
-    rdev: u64,
+    rdev: dev_t,
 ) -> Result<InodeUnpacked, BchError> {
     let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
@@ -241,7 +242,7 @@ fn create_or_update_file(
         child_inode.bi_mode = mode;
         child_inode.bi_uid = uid;
         child_inode.bi_gid = gid;
-        child_inode.bi_dev = rdev as u32;
+        child_inode.bi_dev = rdev.to_disk();
 
         // bch2_fsck_write_inode has its own commit_do loop internally —
         // don't wrap it in trans_commit_do or it double-nests.
@@ -267,7 +268,7 @@ fn create_or_update_file(
                     uid,
                     gid,
                     mode,
-                    rdev as _,
+                    rdev,
                     None,
                     None,
                     zeroed_subvol_inum(),
@@ -974,7 +975,7 @@ fn copy_dir(
         let mut inode = create_or_update_file(
             fs, dir_inum, dst, &d.name,
             d.stat.st_uid, d.stat.st_gid,
-            umode_t(d.stat.st_mode as u16), d.stat.st_rdev,
+            umode_t(d.stat.st_mode as u16), dev_t::from_user(d.stat.st_rdev),
         )?;
 
         let dst_child_inum = subvol_inum(inode.bi_inum);
@@ -1039,7 +1040,7 @@ fn reserve_old_fs_space(
     let name = CString::new("old_migrated_filesystem").unwrap();
     let mut dst = create_or_update_file(
         fs, root_inum, root_inode,
-        &name, 0, 0, S_IFREG | umode_t(0o400), 0,
+        &name, 0, 0, S_IFREG | umode_t(0o400), dev_t::NONE,
     )?;
     dst.bi_size = total_sectors << 9;
 

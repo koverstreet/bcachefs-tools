@@ -45,6 +45,7 @@ use crate::posix::inode_format::{BLOCKDEV_INODE_MAX, Inode, InodeAllocCursor, In
     InodeOptId, InodeV2, InodeV3, INODEv3_FIELDS_START_INITIAL, InodeOptId_arms, InodeFlags,
     BCH_INODE_FIELDS_v3};
 use crate::posix::logged_ops_format::LoggedOpsInum;
+use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_ISGID};
 use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::errcode::{Errcode, BchError, Found};
@@ -1646,13 +1647,13 @@ pub fn init_late(
     uid:    c::uid_t,
     gid:    c::gid_t,
     mode:   umode_t,
-    rdev:   c::dev_t,
+    rdev:   dev_t,
     parent: Option<&InodeUnpacked>,
 ) {
     inode.bi_mode  = mode;
     inode.bi_uid   = uid;
     inode.bi_gid   = gid;
-    inode.bi_dev   = rdev as _; // as C: bi_dev is 32 bits, dev_t 64 in userspace
+    inode.bi_dev   = rdev.to_disk();
     inode.bi_atime = now;
     inode.bi_mtime = now;
     inode.bi_ctime = now;
@@ -1689,7 +1690,7 @@ pub fn init(
     uid:    c::uid_t,
     gid:    c::gid_t,
     mode:   umode_t,
-    rdev:   c::dev_t,
+    rdev:   dev_t,
     parent: Option<&InodeUnpacked>,
 ) -> InodeUnpacked {
     let mut inode = InodeUnpacked::default();
@@ -1816,6 +1817,11 @@ impl InodeUnpacked {
 
     pub fn is_dir(&self) -> bool {
         self.bi_mode.is_dir()
+    }
+
+    /// The device a device inode is.
+    pub fn rdev(&self) -> dev_t {
+        dev_t::from_disk(self.bi_dev)
     }
 
     /// Whether it's a subvolume's root: deleting it is subvolume deletion's

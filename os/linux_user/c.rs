@@ -7,7 +7,7 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
 pub use super::bio::sys::{bio_vec, bvec_iter};
-pub use super::blkdev::{blk_holder_ops, MINORBITS};
+pub use super::blkdev::blk_holder_ops;
 pub use super::fs::*;
 pub use super::jump_label::static_key_false;
 pub use super::sched::{get_task_struct, put_task_struct, task_struct, wake_up_process,
@@ -26,7 +26,6 @@ pub use linux_raw_sys::errno::*;
 pub type gfp_t   = u32;
 pub type uid_t   = u32;
 pub type gid_t   = u32;
-pub type dev_t   = u64;
 
 pub const GFP_KERNEL: gfp_t = 2;
 pub const PAGE_ALLOC_COSTLY_ORDER: u32 = 6;

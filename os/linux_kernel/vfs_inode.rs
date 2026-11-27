@@ -25,10 +25,10 @@ use crate::locking::{ExclusiveGuard, Locked, RwSem, SpinLockIrq};
 use crate::os::dentry::Dentry;
 use crate::os::folio::Mapping;
 use crate::util::ffi::c_char;
-use crate::os::kernel::loff;
+use crate::os::kernel::{dev_from_kernel, dev_to_kernel, loff};
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::os::file::{Any, FileData, FileOps};
-use crate::posix::mode::umode_t;
+use crate::posix::{dev::dev_t, mode::umode_t};
 use crate::os::folio::FsMapping;
 use crate::os::inode_ops::InodeOps;
 use crate::os::super_block::{IsInode, SuperBlock, SuperOps};
@@ -145,8 +145,8 @@ impl<S, St> VfsInode<S, St> {
     }
 
     /// Set when it's made, and never changed.
-    pub fn rdev(&self) -> c::dev_t {
-        unsafe { (*self.as_ptr()).i_rdev }
+    pub fn rdev(&self) -> dev_t {
+        dev_from_kernel(unsafe { (*self.as_ptr()).i_rdev })
     }
 
     /// Its inode number, as the VFS has it: set when it's made, never changed.
@@ -388,8 +388,8 @@ impl<S, St> VfsInode<S, St> {
         unsafe { (*self.as_ptr()).i_ino = ino as _ }
     }
 
-    pub fn set_rdev(&mut self, rdev: c::dev_t) {
-        unsafe { (*self.as_ptr()).i_rdev = rdev }
+    pub fn set_rdev(&mut self, rdev: dev_t) {
+        unsafe { (*self.as_ptr()).i_rdev = dev_to_kernel(rdev) }
     }
 
     pub fn set_generation(&mut self, generation: u32) {
@@ -399,7 +399,7 @@ impl<S, St> VfsInode<S, St> {
     /// A device, fifo or socket's ops, from its mode and rdev:
     /// init_special_inode().
     pub fn init_special(&mut self) {
-        unsafe { c::init_special_inode(self.as_ptr(), self.i_mode(), self.rdev()) }
+        unsafe { c::init_special_inode(self.as_ptr(), self.i_mode(), (*self.as_ptr()).i_rdev) }
     }
 
     /// Its page cache in lowmem: inode_nohighmem(), as a symlink's is.

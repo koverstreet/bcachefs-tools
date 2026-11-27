@@ -7,6 +7,7 @@
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError, Errcode};
 use crate::os::{kobject::Kobject, bio::Bio};
+use crate::posix::dev::dev_t;
 use crate::util::{futex::EventCount, sleep::Sleep, Printbuf};
 use core::ffi::{c_void, CStr};
 use core::ptr;
@@ -15,9 +16,6 @@ use rustix::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use rustix::fs::{FileType, Mode, OFlags};
 use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
-
-/// A device number's minor's bits, as the kernel's dev_t has them.
-pub const MINORBITS: u32 = 20;
 
 /// The kernel's: what a block device's holder is called back with. Userspace
 /// has no holders to call.
@@ -34,7 +32,7 @@ fn io_err(e: rustix::io::Errno) -> BchError {
 /// its sysfs directory, which userspace's sysfs never has.
 pub struct BlockDevice {
     name: CString,
-    dev:  c::dev_t,
+    dev:  dev_t,
     fd:   OwnedFd,
     kobj: Kobject,
 }
@@ -106,14 +104,14 @@ pub fn open_by_path(path: &CStr, mode: c::blk_mode_t, _holder: *const c_void,
 
     Ok(BdevFile(Box::new(BlockDevice {
         name: CString::new(name).expect("a path's last component, a CStr's"),
-        dev:  st.st_rdev as c::dev_t,
+        dev:  dev_t::from_user(st.st_rdev),
         fd,
         kobj: ::pin_init::zeroed(),
     })))
 }
 
 /// Its number, major and minor: a file's is 0.
-pub fn dev(bdev: &BlockDevice) -> c::dev_t {
+pub fn dev(bdev: &BlockDevice) -> dev_t {
     bdev.dev
 }
 
@@ -130,7 +128,7 @@ pub fn kobj(bdev: &BlockDevice) -> &Kobject {
 }
 
 /// @path's device, by number: lookup_bdev(), which userspace hasn't got.
-pub fn lookup(_path: &CStr) -> Result<c::dev_t, BchError> {
+pub fn lookup(_path: &CStr) -> Result<dev_t, BchError> {
     Err(Errcode::EINVAL_lookup_bdev_userspace.into())
 }
 

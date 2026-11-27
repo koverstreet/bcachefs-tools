@@ -18,7 +18,7 @@ use crate::os::dentry::Dentry;
 use crate::os::fiemap::Fiemap;
 use crate::os::file::OpeningTmpfile;
 use crate::os::idmap::MntIdmap;
-use crate::posix::mode::umode_t;
+use crate::posix::{dev::dev_t, mode::umode_t};
 use crate::os::ops::IntoRaw;
 use crate::os::path::Path;
 use crate::os::posix_acl::{AclType, PosixAcl};
@@ -60,7 +60,7 @@ crate::vfs_ops! {
         -> Result<(), BchError>;
     fn rmdir(dir: &Self::Inode, dentry: Dentry<'_, Self::Inode>) -> Result<(), BchError>;
     fn mknod(idmap: MntIdmap<'_>, dir: &Self::Inode, dentry: Dentry<'_, Self::Inode>, mode: umode_t,
-                 rdev: c::dev_t) -> Result<(), BchError>;
+                 rdev: dev_t) -> Result<(), BchError>;
     fn rename(idmap: MntIdmap<'_>, src_dir: &Self::Inode, src: Dentry<'_, Self::Inode>,
                   dst_dir: &Self::Inode, dst: Dentry<'_, Self::Inode>, flags: u32) -> Result<(), BchError>;
     fn tmpfile(idmap: MntIdmap<'_>, dir: &Self::Inode, file: OpeningTmpfile<'_, Self::Inode>, mode: umode_t)

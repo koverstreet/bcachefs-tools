@@ -85,7 +85,7 @@ impl NewInode {
         self.update_after_write(trans, bi, !0);
 
         self.v.set_blocks(bi.bi_sectors);
-        self.v.set_rdev(bi.bi_dev as _);
+        self.v.set_rdev(bi.rdev());
         self.v.set_generation(bi.bi_generation);
         self.v.set_size(bi.bi_size);
 

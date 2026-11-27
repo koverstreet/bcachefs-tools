@@ -23,7 +23,7 @@
 
 
 use crate::posix::{acl, inode};
-use crate::os::{inode_ops::InodeAttrs, posix_acl::{AclType, PosixAcl}};
+use crate::os::{inode_ops::InodeAttrs, kernel::dev_to_kernel, posix_acl::{AclType, PosixAcl}};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
@@ -110,7 +110,7 @@ impl InodeAttrs for InodeInfo {
         stat.mode    = v.mode().0;
         stat.nlink   = v.nlink();
         (stat.uid, stat.gid) = idmap.owner(v);
-        stat.rdev    = v.rdev();
+        stat.rdev    = dev_to_kernel(v.rdev());
         stat.size    = v.size() as i64;
         if stat.size == 0 && v.is_dir() {
             stat.size = block_bytes as i64;

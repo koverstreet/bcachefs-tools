@@ -35,6 +35,7 @@
 
 use crate::init::passes::RecoveryPass;
 use crate::c;
+use crate::posix::dev::dev_t;
 use crate::bcachefs_ioctl::{BCH_BY_INDEX, BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED,
     BCH_FORCE_IF_METADATA_LOST, IoctlDataProgress, IoctlDevUsage,
     IoctlDevUsageType, IoctlDevUsageV2, IoctlDisk, IoctlDiskGetIdx,
@@ -375,20 +376,10 @@ fn read_super(fs: &Fs, arg: IoctlReadSuper) -> Result<(), BchError> {
     Ok(())
 }
 
-/// The dev_t userspace's encoding @dev names, as the kernel's
-/// huge_decode_dev(): new_decode_dev()'s layout, major in bits 8-19, minor
-/// in 0-7 and 20-31.
-fn huge_decode_dev(dev: u64) -> u32 {
-    let dev = dev as u32;
-    let major = (dev & 0xfff00) >> 8;
-    let minor = (dev & 0xff) | ((dev >> 12) & 0xfff00);
-    major << c::MINORBITS | minor
-}
-
 fn disk_get_idx(fs: &Fs, arg: IoctlDiskGetIdx) -> Result<i32, BchError> {
-    let dev = huge_decode_dev(arg.dev);
+    let dev = dev_t::from_user(arg.dev);
     admin(fs)?;
-    if dev == 0 {
+    if dev == dev_t::NONE {
         return fs.throw(Errcode::EINVAL_ioctl_disk_get_idx_bad_dev);
     }
 

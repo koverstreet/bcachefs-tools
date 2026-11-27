@@ -210,6 +210,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::posix::dev::dev_t;
 #[cfg(kernel)]
 use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
 use crate::alloc::buckets::{DevUsageFull, Bucket, BucketGensArray};
@@ -370,7 +371,7 @@ pub struct Dev {
     #[pin]
     #[init(None)]
     pub(crate) sb_read_scratch: Option<crate::util::alloc::KBox<crate::sb::io::SbReadScratch>>,
-    pub dev: crate::util::projections::Volatile<c::dev_t>,
+    pub dev: crate::util::projections::Volatile<dev_t>,
 
     pub self_mask: DevsMask,
 
@@ -869,13 +870,12 @@ impl Fs {
  * fall back to the parent disk via "..". Mirrors fd_to_dev_model() in the
  * userspace tools (src/wrappers/bdev.rs).
  */
-fn read_dev_sysfs_file(dev: c::dev_t, file: &str, ret: &mut [c_char]) -> bool {
-    let (major, minor) = (dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1));
+fn read_dev_sysfs_file(dev: dev_t, file: &str, ret: &mut [c_char]) -> bool {
     let ret = bytes_in(ret);
 
     for parent in ["", "../"] {
         let mut path = Printbuf::new();
-        prt!(&mut path, "/sys/dev/block/{major}:{minor}/{parent}{file}");
+        prt!(&mut path, "/sys/dev/block/{dev}/{parent}{file}");
 
         /* null terminate */
         let nr = read_file(path.as_c_str(), ret).unwrap_or(0).min(ret.len() - 1);

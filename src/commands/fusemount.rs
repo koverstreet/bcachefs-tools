@@ -66,6 +66,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::posix::dirent::RenameMode;
 use bcachefs_kernel::posix::inode::InodeUnpacked;
+use bcachefs_kernel::posix::dev::dev_t;
 use bcachefs_kernel::posix::mode::{umode_t, S_IFDIR, S_IFLNK, S_IRWXUGO};
 use bcachefs_kernel::posix::inode_opts::InodeOptChange;
 use bcachefs_kernel::posix::xattr_format::Xattr;
@@ -317,7 +318,7 @@ fn fuse_create_inode(
     dir:   SubvolInum,
     name:  &OsStr,
     mode:  umode_t,
-    rdev:  u64,
+    rdev:  dev_t,
 ) -> Result<InodeUnpacked, BchError> {
     let mut dir_u: InodeUnpacked = Default::default();
     let mut inode: InodeUnpacked = Default::default();
@@ -942,7 +943,7 @@ impl BcachefsFs {
             nlink,
             uid: bi.bi_uid,
             gid: bi.bi_gid,
-            rdev: bi.bi_dev,
+            rdev: bi.rdev().to_user() as u32,
             blksize,
             flags: 0,
         }
@@ -1216,7 +1217,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_mknod(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(fs, req, dir, name, umode_t(mode as u16), rdev as u64) {
+        let new_inode = match fuse_create_inode(fs, req, dir, name, umode_t(mode as u16), dev_t::from_user(rdev as u64)) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1274,7 +1275,7 @@ impl Filesystem for BcachefsFs {
 
         // Create the symlink inode
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(fs, req, dir, name, S_IFLNK | S_IRWXUGO, 0) {
+        let new_inode = match fuse_create_inode(fs, req, dir, name, S_IFLNK | S_IRWXUGO, dev_t::NONE) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1775,7 +1776,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_create(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(fs, req, dir, name, umode_t(mode as u16), 0) {
+        let new_inode = match fuse_create_inode(fs, req, dir, name, umode_t(mode as u16), dev_t::NONE) {
             Ok(inode) => inode,
             Err(e)    => {
                 eprintln!("  create -> err {}", e);

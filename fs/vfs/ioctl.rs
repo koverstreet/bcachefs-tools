@@ -34,6 +34,7 @@ use crate::bcachefs_ioctl::{IoctlPreadRaw, IoctlSubvolume, IoctlSubvolumeV2,
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, BCHFS_IOC_UNPOISON, FS_IOC_GOINGDOWN};
 use crate::data::{extents::ReadFlags, read::ReadErrReport};
 use crate::posix::dirent_format::BCH_NAME_MAX;
+use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL};
 use crate::snapshots::subvolume::SubvolInum;
@@ -308,7 +309,7 @@ fn create_subvolume(fs: &Fs, file: &File, a: IoctlSubvolume, err: &mut Printbuf)
             let umount = sb.umount().read();
             sb.sync_inodes(&umount);
         }
-        dir.create(idmap, dentry, mode | S_IFDIR, 0, snapshot_src, create_flags)?
+        dir.create(idmap, dentry, mode | S_IFDIR, dev_t::NONE, snapshot_src, create_flags)?
     };
 
     dentry.set_casefold_ops(inode.vfs());

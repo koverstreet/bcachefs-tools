@@ -164,6 +164,7 @@ pub mod posix {
     pub mod check_root;
     pub mod check_unreachable_inodes;
     pub mod check_xattrs;
+    pub mod dev;
     pub mod dirent;
     pub mod dirent_format;
     pub mod fix_reflink_p;

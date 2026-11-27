@@ -17,6 +17,7 @@ use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
+use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, Subvolume, SubvolumeState};
 use crate::errcode::{BchError, Found};
@@ -76,7 +77,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
                                        BtreeIterFlags::empty()).found()? {
         None => {
             if mustfix_fsck_err!(t, id::root_dir_missing, "root directory missing")? {
-                let mut root_inode = inode::init(fs, 0, 0, root_dir_mode, 0, None);
+                let mut root_inode = inode::init(fs, 0, 0, root_dir_mode, dev_t::NONE, None);
                 root_inode.bi_inum     = inum;
                 root_inode.bi_snapshot = snapshot;
 

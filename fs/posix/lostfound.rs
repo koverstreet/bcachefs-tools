@@ -19,6 +19,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
 use crate::posix::str_hash::HashInfo;
@@ -115,7 +116,7 @@ fn create_lostfound(
     namei::inum_to_path(t, root_inum, &mut msg)?;
     write!(msg, "/lost+found in subvol {} snapshot {snapshot}", root_inum.subvol);
 
-    let mut lostfound = inode::init(fs, 0, 0, S_IFDIR | umode_t(0o700), 0,
+    let mut lostfound = inode::init(fs, 0, 0, S_IFDIR | umode_t(0o700), dev_t::NONE,
                                     Some(root_inode));
     lostfound.bi_dir      = root_inode.bi_inum;
     lostfound.bi_snapshot = snapshot;

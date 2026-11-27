@@ -17,7 +17,7 @@
 use core::ffi::CStr;
 use core::ptr::NonNull;
 
-use crate::c;
+use crate::posix::dev::dev_t;
 use crate::format::__uuid_t;
 use crate::opts::Opts;
 use crate::errcode::{Errcode, BchError};
@@ -55,12 +55,12 @@ impl Opener {
 
 #[derive(Clone, Copy)]
 pub enum FsKey<'a> {
-    Devs(&'a [c::dev_t]),
+    Devs(&'a [dev_t]),
     Uuid([u8; 16]),
 }
 
 /// @paths' devices, by number: no IO, nothing claimed
-pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<c::dev_t>, BchError> {
+pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<dev_t>, BchError> {
     let mut devs = Vec::new();
     for path in paths {
         let dev = crate::os::blkdev::lookup(path).inspect_err(|e| {
@@ -81,8 +81,7 @@ impl ToText for FsKey<'_> {
             FsKey::Devs(devs) => {
                 prt!(out, "on device{}", if devs.len() > 1 { "s" } else { "" });
                 for (i, dev) in devs.iter().enumerate() {
-                    prt!(out, "{}{}:{}", if i > 0 { ", " } else { " " },
-                         dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1));
+                    prt!(out, "{}{dev}", if i > 0 { ", " } else { " " });
                 }
             }
             FsKey::Uuid(b) => __uuid_t { b }.to_text(out),
@@ -94,7 +93,7 @@ crate::display_via_to_text!(impl['a] FsKey<'a>);
 struct OpeningEntry {
     holder: Arc<Holder>,
     by:     Opener,
-    devs:   Vec<c::dev_t>,
+    devs:   Vec<dev_t>,
     uuid:   Option<[u8; 16]>,
 }
 
@@ -185,7 +184,7 @@ impl Drop for Opening {
 }
 
 impl FsHandle {
-    pub fn get(devs: &[c::dev_t], by: Opener) -> Result<FsHandle, BchError> {
+    pub fn get(devs: &[dev_t], by: Opener) -> Result<FsHandle, BchError> {
         loop {
             let seen = OPENING_DONE.snapshot();
             let mut registry = REGISTRY.lock();

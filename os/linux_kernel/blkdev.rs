@@ -4,6 +4,8 @@
 //! to it.
 
 use crate::c;
+use crate::os::kernel::dev_from_kernel;
+use crate::posix::dev::dev_t;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::os::kobject::Kobject;
 use crate::util::Printbuf;
@@ -92,8 +94,8 @@ pub unsafe fn bio_bdev<'a>(bio: &c::bio) -> Option<&'a BlockDevice> {
 }
 
 /// Its number, major and minor.
-pub fn dev(bdev: &BlockDevice) -> c::dev_t {
-    bdev.bd_dev
+pub fn dev(bdev: &BlockDevice) -> dev_t {
+    dev_from_kernel(bdev.bd_dev)
 }
 
 /// Its name, its sysfs directory's: its disk's and partition's - sda1,
@@ -110,10 +112,10 @@ pub fn kobj(bdev: &BlockDevice) -> &Kobject {
 }
 
 /// @path's device, by number: lookup_bdev() - no IO, nothing claimed.
-pub fn lookup(path: &CStr) -> Result<c::dev_t, BchError> {
+pub fn lookup(path: &CStr) -> Result<dev_t, BchError> {
     let mut dev = 0;
     ret_to_result_void(unsafe { c::lookup_bdev(path.as_ptr().cast(), &mut dev) })?;
-    Ok(dev)
+    Ok(dev_from_kernel(dev))
 }
 
 /// The device's size, in 512 byte sectors: get_capacity() of its disk.

@@ -9,6 +9,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::{inode::InodeUnpacked, inode, dirent::{Dirent, DirentTarget}};
+use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK};
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
 use crate::errcode::{Errcode, BchError, Found};
@@ -619,7 +620,7 @@ pub fn reconstruct_inode(
         _ => unreachable!("reconstruct_inode() for btree {}", { btree.0 }),
     };
 
-    let mut new = inode::init(fs, 0, 0, mode | umode_t(0o600), 0, None);
+    let mut new = inode::init(fs, 0, 0, mode | umode_t(0o600), dev_t::NONE, None);
     new.bi_size     = size;
     new.bi_inum     = inum;
     new.bi_snapshot = snapshot;

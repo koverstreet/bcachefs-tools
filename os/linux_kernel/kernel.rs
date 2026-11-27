@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::c;
+use crate::posix::{dev::dev_t, mode::umode_t};
 
 #[path = "../kernel.rs"]
 mod common;
@@ -166,8 +167,19 @@ pub fn current_fsgid() -> c::kgid_t {
 }
 
 /// The mode bits this task's new files are made without.
-pub fn current_umask() -> crate::posix::mode::umode_t {
-    crate::posix::mode::umode_t(unsafe { c::current_umask() } as u16)
+pub fn current_umask() -> umode_t {
+    umode_t(unsafe { c::current_umask() } as u16)
+}
+
+/// The kernel's device number @dev is: MAJOR() and MINOR(), whatever the
+/// kernel's layout.
+pub fn dev_from_kernel(dev: c::dev_t) -> dev_t {
+    dev_t::new(dev >> c::MINORBITS, dev & ((1 << c::MINORBITS) - 1))
+}
+
+/// @dev as the kernel's: MKDEV().
+pub fn dev_to_kernel(dev: dev_t) -> c::dev_t {
+    dev.major() << c::MINORBITS | dev.minor()
 }
 
 /// Whether this syscall is a 32-bit task's, on a 64-bit kernel.
