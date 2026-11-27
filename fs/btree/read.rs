@@ -31,7 +31,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, ValidateFlags, POS_MIN, SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
-use crate::btree::cache::{btree_id_level_to_text, Bounce, BtreeNodeCacheState};
+use crate::btree::cache::{btree_id_level_to_text, Bounce, BtreeNodeCacheState, OwnedNode};
 use crate::btree::node::sort::{build_aux_trees, SortRuns};
 use crate::btree::node::{BtreeNode, NodeContents, BtreeNodeFlags};
 use crate::btree::path::Paths;
@@ -56,7 +56,7 @@ use crate::fs::{Dev, Fs};
 use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
 use crate::sb::{errors::FsckFlags, members::DevIoRef};
 use crate::types::{Le32, Le64};
-use crate::locking::MemallocFlags;
+use crate::locking::{six::{SixHold, SixLockType::SIX_LOCK_write}, MemallocFlags};
 use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
@@ -74,6 +74,7 @@ use crate::{fs_fatal_error, ratelimit, prt};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Deref, Range};
 use core::pin::Pin;
+use core::ptr;
 use core::sync::atomic::{fence, Ordering::SeqCst};
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init};
@@ -83,13 +84,22 @@ pub struct ReadInFlightNode {
 }
 
 impl ReadInFlightNode {
-    /// # Safety
-    /// Nothing else touches @node's contents while this lives: it's write
-    /// locked now, and whoever locks it after waits on read_in_flight first.
-    /// And @node outlives this, as BackRef::new()'s.
-    pub unsafe fn new(node: &BtreeNode) -> Self {
+    /// A read of @node, a node in the cache, by @held: its write lock, under
+    /// which read_in_flight is set. Whoever locks it after waits on the bit
+    /// before touching its contents, and the cache frees no node with it set,
+    /// nor exits with one.
+    pub fn new(node: &BtreeNode, held: &SixHold<'_>) -> Self {
+        assert!(held.ty() == SIX_LOCK_write && ptr::eq(held.lock(), &node.c.lock),
+                "a node's read without its write lock");
         node.flags.set_read_in_flight(true);
         ReadInFlightNode { node: unsafe { BackRef::new(node) } }
+    }
+
+    /// new(), for a node the caller owns, write locked, and nothing else can
+    /// find or free - while @f runs, which its read can't outlive.
+    pub(crate) fn with_owned<R>(node: &mut OwnedNode, f: impl FnOnce(&mut Self) -> R) -> R {
+        node.flags.set_read_in_flight(true);
+        f(&mut ReadInFlightNode { node: unsafe { BackRef::new(&**node) } })
     }
 
     pub fn contents(&self) -> &NodeContents {
@@ -966,7 +976,7 @@ impl Fs {
         let (b, held) = n.hash(self, BtreeNodeCacheState::CLEAN)
             .unwrap_or_else(|e| panic!("hashing a btree root's node: {e}")).into_held(self);
 
-        let read = unsafe { ReadInFlightNode::new(b) };
+        let read = ReadInFlightNode::new(b, &held);
 
         /* we can't pass the trans to read_done() for fsck errors, so it must be unlocked */
         trans.unlock();

@@ -259,7 +259,7 @@ impl<'f> DevScan<'f> {
         b.locked().set_key(&*n.to_key());
 
         let mut err = Printbuf::new();
-        if read_done(fs, ca, &mut unsafe { ReadInFlightNode::new(b) }, None, &mut err).is_err() {
+        if ReadInFlightNode::with_owned(b, |read| read_done(fs, ca, read, None, &mut err)).is_err() {
             return Ok(());
         }
 

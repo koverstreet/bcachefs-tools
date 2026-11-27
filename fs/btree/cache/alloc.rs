@@ -403,7 +403,7 @@ impl BtreeTrans<'_> {
                  *
                  * and also cache coherency
                  */
-                let read = unsafe { ReadInFlightNode::new(b) };
+                let read = ReadInFlightNode::new(b, &held);
                 let intent = held.downgrade();
 
                 let held = if path.is_some() {
