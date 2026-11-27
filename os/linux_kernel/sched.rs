@@ -47,6 +47,12 @@ pub fn memalloc_flags() -> u32 {
     unsafe { (*current()).flags }
 }
 
+/// Not in an interrupt - where current is whoever was interrupted - nor a
+/// NORECLAIM scope, which every context of ours that can't sleep holds.
+pub fn may_sleep() -> bool {
+    !unsafe { c::rust_in_interrupt() } && memalloc_flags() & c::PF_MEMALLOC_NORECLAIM == 0
+}
+
 /// This task's state, @state, ordered before what it then checks:
 /// set_current_state().
 pub fn set_current_state(state: u32) {

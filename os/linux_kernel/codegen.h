@@ -209,6 +209,12 @@ const unsigned int RUST_CONST_HELPER_PF_MEMALLOC_NORECLAIM	= PF_MEMALLOC_NORECLA
 const unsigned int RUST_CONST_HELPER_PF_MEMALLOC_NOWARN	= PF_MEMALLOC_NOWARN;
 #endif
 
+/* a macro, over the preempt count - and with PREEMPT_RT, the task's softirq count */
+static inline bool rust_in_interrupt(void)
+{
+	return in_interrupt();
+}
+
 static inline struct folio *rust_page_folio(struct page *page)
 {
 	return page_folio(page);

@@ -16,7 +16,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::util::{loan::Loan, vstructs::plain_bytes, ioctl::Ioctl};
-use crate::util::{alloc::Arc, log::Only, thread_with_file::{Stdio, StdioFile, ThreadWithFile}};
+use crate::util::{alloc::Arc, log::Only, thread_with_file::{Reader, Stdio, StdioFile, ThreadWithFile}};
 use core::sync::atomic::Ordering::Relaxed;
 use core::ops::ControlFlow;
 use kernel::uaccess::{UserPtr, UserSlice};
@@ -99,7 +99,7 @@ impl StatusFile {
     pub(crate) fn open() -> Result<(i32, StatusFile), BchError> {
         let status = ThreadWithFile::new_stdio(pin_init!(StatusFd {
             fs <- Loan::new(),
-        }? BchError))?;
+        }? BchError), Reader::Optional)?;
         let (fd, stdio) = status.get_fd()?;
         Ok((fd, StatusFile(stdio)))
     }

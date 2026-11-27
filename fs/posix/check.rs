@@ -936,7 +936,7 @@ pub mod ioctl {
     use crate::opts::parse_mount_opts_cstr;
     use crate::os::kernel::{capable, Capability};
     use crate::util::refcount::TryRefcount;
-    use crate::util::{alloc::Arc, log::{print_str, Log, LogLevel, Only}, names::set, thread_with_file::{StdioRedirect, ThreadWithFile}};
+    use crate::util::{alloc::Arc, log::{print_str, Log, LogLevel, Only}, names::set, thread_with_file::{Reader, StdioRedirect, ThreadWithFile}};
     use crate::os::ioctl::{UserStr, UserVstruct};
 
     /// The options at user address @addr, or none if it's 0.
@@ -966,7 +966,7 @@ pub mod ioctl {
             devs.push(UserStr::read(user_devs.get(i)?, c::PATH_MAX as usize)?)?;
         }
 
-        let thr = ThreadWithFile::new_stdio(Ok(()))?;
+        let thr = ThreadWithFile::new_stdio(Ok(()), Reader::Waited)?;
 
         opts.set_read_only(true);
         opts.set_ratelimit_errors(false);
@@ -1049,7 +1049,7 @@ pub mod ioctl {
 
         let fs_ref = fs.require(fs.ro_ref.tryget(), Errcode::erofs_fsck_online_no_ro_ref)?;
 
-        let thr = ThreadWithFile::new_stdio(Ok(()))?;
+        let thr = ThreadWithFile::new_stdio(Ok(()), Reader::Waited)?;
         fs.log().err_fn(thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 

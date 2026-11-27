@@ -16,7 +16,9 @@
 //! The redirect, as C's:
 //!  - The thread is input's only reader: a line it's seen stays till it takes
 //!    it. Input may grow past STDIO_REDIRECT_BUFSIZE while it holds no whole
-//!    line; the thread's messages go in whole or not at all.
+//!    line. Output takes a message whole while it's below it; past it, a
+//!    writer waits for the reader if it may sleep, or the message is dropped -
+//!    and the filesystem's are, unless its Reader is waited for.
 //!  - done - the thread's finished, or the file's closing - closes both ways:
 //!    reads drain what's left, then EOF; writes get EPIPE. What the thread
 //!    returned is what close(2) returns.
@@ -45,6 +47,7 @@ use crate::util::futex::EventCount;
 use crate::os::kernel::{current_comm, HZ};
 use core::time::Duration;
 use crate::os::kthread::Kthread;
+use crate::os::sched::may_sleep;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
 use core::ops::{Deref, DerefMut};
@@ -178,6 +181,11 @@ impl Drop for BufGuard<'_> {
     }
 }
 
+/// Whether the filesystem's messages wait for room in output: fsck's tool reads
+/// all it prints; the status fd's reader, a boot splash, may never.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Reader { Waited, Optional }
+
 #[pin_data]
 pub struct StdioRedirect {
     #[pin]
@@ -185,14 +193,16 @@ pub struct StdioRedirect {
     #[pin]
     output: StdioBuf,
     done:   AtomicBool,
+    reader: Reader,
 }
 
 impl StdioRedirect {
-    fn new() -> Result<Arc<Self>, BchError> {
+    fn new(reader: Reader) -> Result<Arc<Self>, BchError> {
         Arc::try_pin_init(pin_init!(StdioRedirect {
             input  <- StdioBuf::new(),
             output <- StdioBuf::new(),
             done:     AtomicBool::new(false),
+            reader,
         }? BchError), GFP_KERNEL)
     }
 
@@ -219,15 +229,17 @@ impl StdioRedirect {
         self.has_room(&self.input) || self.input.lock().lines == 0
     }
 
-    /// The thread's output, written: @msg in whole, waiting for the reader to
-    /// make room if it must - EPIPE if the file's closed.
+    /// The thread's own output, or a question: @msg in whole, once output's
+    /// below the limit - waiting for the reader to make room if this context
+    /// may sleep, EAGAIN if not. EPIPE if the file's closed.
     pub fn write(&self, msg: &[u8]) -> Result<(), BchError> {
-        self.put(msg, true)
+        self.put(msg, may_sleep())
     }
 
-    /// write(), without waiting: EAGAIN rather than wait for room.
-    pub fn try_write(&self, msg: &[u8]) -> Result<(), BchError> {
-        self.put(msg, false)
+    /// A message of the filesystem's: as write(), but waiting only for a
+    /// Reader::Waited.
+    pub fn print(&self, msg: &[u8]) -> Result<(), BchError> {
+        self.put(msg, self.reader == Reader::Waited && may_sleep())
     }
 
     fn put(&self, msg: &[u8], wait: bool) -> Result<(), BchError> {
@@ -237,7 +249,7 @@ impl StdioRedirect {
                 return Err(Errcode::EPIPE_thread_with_file_write.into());
             }
 
-            let wrote = {
+            let wrote = self.has_room(out) && {
                 let mut b = out.lock();
                 b.data.reserve(msg.len()).is_ok() &&
                     b.data.extend_from_slice(msg).is_ok()
@@ -424,8 +436,8 @@ impl<T: StdioFile> ThreadFile for Stdio<T> {
 }
 
 impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
-    pub fn new_stdio(data: impl PinInit<T, BchError>) -> Result<Self, BchError> {
-        let redirect = StdioRedirect::new()?;
+    pub fn new_stdio(data: impl PinInit<T, BchError>, reader: Reader) -> Result<Self, BchError> {
+        let redirect = StdioRedirect::new(reader)?;
         Self::new(pin_init!(Stdio::<T> {
             redirect,
             ret:  AtomicI32::new(0),
