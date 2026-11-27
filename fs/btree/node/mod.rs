@@ -344,16 +344,6 @@ impl<'b, 'f> BtreeNode {
 }
 
 impl BtreeNode {
-    /// # Safety
-    /// The node lock is held for write, for as long as the reference lives,
-    /// and nothing else refers to them.
-    // XXX: node_write()'s sort_whiteouts() is the last caller, holding only the
-    // writer's claim, perhaps under a read lock: see written.
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn contents_mut(&self) -> &mut NodeContents {
-        unsafe { self.contents.protected_mut() }
-    }
-
     fn key_room<'a>(&'a self, contents: &'a NodeContents) -> &'a NodeKey {
         self.own_contents(contents);
         unsafe { &*ptr::from_ref(&*self.contents).cast::<NodeKey>() }

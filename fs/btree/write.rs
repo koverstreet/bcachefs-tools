@@ -369,6 +369,20 @@ pub(crate) fn node_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, mut ty: BtreeWri
     submit_write(fs, b, old, ty, start_time);
 }
 
+/// What a write start_next_write() claimed has of its node, beyond the
+/// caller's lock: submit_write()'s, whose callers made the claim.
+struct WriteClaim<'b>(&'b BtreeNode);
+
+impl WriteClaim<'_> {
+    /// The node's unwritten whiteouts: the write's alone, the rest of its
+    /// contents shared with the read lock's holders.
+    fn unwritten_whiteouts<'a>(&'a mut self, contents: &'a NodeContents) -> &'a mut [u64] {
+        assert!(core::ptr::eq(contents, self.0.contents.data_ptr()), "a write's whiteouts of another node's contents");
+        let r = self.0.unwritten_whiteouts();
+        unsafe { core::slice::from_raw_parts_mut(contents.bufs.data.add(r.start), r.len()) }
+    }
+}
+
 /// The write started from flags @old: sorted into a bounce and sealed under the
 /// caller's lock, then the rest its task's.
 fn submit_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, old: BtreeNodeFlags, ty: BtreeWriteType, start_time: u64) {
@@ -386,9 +400,9 @@ fn submit_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, old: BtreeNodeFlags, ty: 
     assert!(contents.data().magic.get() == fs.bset_magic());
     assert!(plain_bytes(&contents.data().format) == plain_bytes(&contents.format));
 
-    sort_whiteouts(fs, &b, unsafe { b.contents_mut() });
+    let mut claim = WriteClaim(&b);
+    sort_whiteouts(fs, &b, contents, |sorted| claim.unwritten_whiteouts(contents).copy_from_slice(sorted));
 
-    let contents = b.contents();
     /* a pending write: all but the bset accumulating, and no whiteouts */
     let pending = old.prev_write_pending();
     let sets = usize::from(b.flags.nr_written_bsets())..contents.nsets as usize - usize::from(pending);

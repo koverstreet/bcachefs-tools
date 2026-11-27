@@ -310,7 +310,8 @@ fn sort_bkey_ptrs(keys: &Keys<'_>, ptrs: &mut [u64]) {
     }
 }
 
-pub fn sort_whiteouts(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents) {
+/// @b's unwritten whiteouts sorted, handed to @put to store.
+pub fn sort_whiteouts(fs: &Fs, b: &BtreeNode, contents: &NodeContents, put: impl FnOnce(&[u64])) {
     let u64s = b.whiteout_u64s.get() as usize;
 
     if u64s == 0 {
@@ -345,8 +346,7 @@ pub fn sort_whiteouts(fs: &Fs, b: &BtreeNode, contents: &mut NodeContents) {
     }
 
     verify_no_dups(keys.contents(), buf, 0, u64s);
-
-    b.keys_mut(contents).buf[b.unwritten_whiteouts()].copy_from_slice(buf);
+    put(buf);
 }
 
 fn should_compact_bset_lazy(nr: &BtreeNrKeys, set: usize, t: &BsetTree) -> bool {
