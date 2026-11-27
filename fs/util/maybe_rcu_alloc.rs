@@ -19,7 +19,7 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Rele
 use pin_init::{pin_init_from_closure, PinInit};
 
 use crate::c;
-use crate::util::alloc::{flags, init_at, stateless, Alloc, AllocError, AllocGfp, Flags, Global};
+use crate::util::alloc::{flags, init_at, stateless, with_alloc_layout, Alloc, AllocError, AllocGfp, Flags, Global};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
                        RcuHead, RcuOwned, RcuWorkHead};
@@ -361,12 +361,14 @@ pub(crate) trait RcuFreeing {
     /// what a DST's maker allocates, for free() to free.
     fn layout_of(value: Layout) -> Result<(Layout, usize), AllocError>;
 
-    /// What's freed at once goes back to @a; what waits out readers, to
-    /// stateless() or kvfree_rcu(), none of @a's state kept till then.
+    /// What's freed at once goes back to @a - with @a's state before it, as
+    /// with_alloc_layout() has it; what waits out readers, to stateless() or
+    /// kvfree_rcu(), none of @a's state kept till then.
     ///
     /// # Safety
-    /// @p is @a's: alloc()'s, or a DST's at layout_of() its value's layout.
-    /// Nothing but RCU readers uses it after.
+    /// @p is @a's: alloc()'s, or a DST's at layout_of() of its value's layout
+    /// with @a's - with_alloc_layout()'s. Nothing but RCU readers uses it
+    /// after.
     unsafe fn free<A: Alloc>(p: NonNull<Self>, a: &A);
 
     /// Whether it's dropped at its free, nothing readers reach going with it,
@@ -481,9 +483,9 @@ impl<T: ?Sized + RcuHeadAt<RcuHead> + RcuHeadAt<RcuWorkHead> + DropAtomic + Drop
 
     unsafe fn free<A: Alloc>(p: NonNull<T>, a: &A) {
         unsafe {
-            let layout = Layout::for_value(p.as_ref());
+            let (layout, off) = with_alloc_layout::<A>(Layout::for_value(p.as_ref())).expect("a T's layout, with its allocator");
             core::ptr::drop_in_place(p.as_ptr());
-            a.deallocate(p.cast(), layout);
+            a.deallocate(p.byte_sub(off).cast(), layout);
         }
     }
 }

@@ -8,8 +8,8 @@
 //! heap it's a DstVec, a pointer, its low bit clear; inline, that word's low
 //! bytes are an @L holding the length shifted up past a set low bit, and the
 //! elements follow. So an inline length is at most @L's half, and N may be no
-//! more. Spilling is a DstVec's allocation, from @A - kept beside the union,
-//! which the DstVec is grown and freed by - and fallible: an AllocError, where
+//! more. Spilling is a DstVec's allocation, from @A - kept beside the union
+//! for it; the DstVec keeps its own - and fallible: an AllocError, where
 //! darray_make_room() is -ENOMEM. Once on the heap it stays there: shrinking
 //! back would move the elements again for nothing.
 //!
@@ -144,9 +144,8 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
 
     /// Its elements moved into @into, if it has more room - allocated before,
     /// as under a spinlock it must be - and what they were in freed, as they
-    /// say; else @into back. Only for an @A with no state: @into's then is its.
+    /// say; else @into back.
     pub fn grow_into(&mut self, mut into: DstVec<T, L, A>) -> Result<(), DstVec<T, L, A>> {
-        const { assert!(size_of::<A>() == 0, "InlineVec::grow_into() with an allocator with state: @into could be another's") };
         let len = self.len();
         if into.capacity() <= self.capacity() || !into.is_empty() {
             return Err(into);
@@ -157,9 +156,9 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
             into.set_len(len);
         }
         if self.spilled() {
-            let old = unsafe { ManuallyDrop::take(&mut self.repr.heap) };
+            let mut old = unsafe { ManuallyDrop::take(&mut self.repr.heap) };
             self.set_heap(into);
-            unsafe { old.free_moved_in(&self.alloc) };
+            unsafe { old.set_len(0) };
         } else {
             self.set_heap(into);
         }
@@ -196,7 +195,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
     /// inline: darray_make_room().
     pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
         if self.spilled() {
-            return unsafe { (*self.repr.heap).reserve_in(additional, &self.alloc) };
+            return unsafe { (*self.repr.heap).reserve(additional) };
         }
 
         let want = self.len().checked_add(additional).ok_or(AllocError)?;
@@ -215,7 +214,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
         }
 
         self.reserve(1)?;
-        unsafe { (*self.repr.heap).push_in(x, &self.alloc) }
+        unsafe { (*self.repr.heap).push(x) }
     }
 
     /// Empty, keeping what it's allocated: a darray's nr = 0.
@@ -269,7 +268,7 @@ impl<T, const N: usize, L: LenUint, A: Alloc + Copy> InlineVec<T, N, L, A> {
 impl<T, const N: usize, L: LenUint, A: Alloc + Copy> Drop for InlineVec<T, N, L, A> {
     fn drop(&mut self) {
         if self.spilled() {
-            unsafe { ManuallyDrop::take(&mut self.repr.heap).drop_in(&self.alloc) };
+            unsafe { ManuallyDrop::drop(&mut self.repr.heap) };
         } else {
             self.clear();
         }

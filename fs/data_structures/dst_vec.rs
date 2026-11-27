@@ -2,13 +2,12 @@
 
 //! DstVec<T, L, A>: a vector on a DstArray, its length the header and its
 //! capacity the count, owned by a ThinBox - so it's a single pointer, its low
-//! bit clear: InlineVec tags it. It keeps no allocator: one with no state
-//! frees it as it drops; one with state - a bio's BvecAlloc - is its holder's,
-//! handed to what allocates or frees: reserve_in(), push_in(), drop_in().
+//! bit clear: InlineVec tags it. Its allocator is kept before its buffer, so
+//! one with state - a bio's BvecAlloc - is what it grows from and frees to.
 
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::DstArray;
-use crate::util::alloc::{stateless, Alloc, AllocError, Global};
+use crate::util::alloc::{Alloc, AllocError, Global};
 use crate::util::thin::ThinBox;
 use crate::util::vstructs::{FlexArray, SelfSized};
 use core::marker::PhantomData;
@@ -54,10 +53,10 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
         Ok(Self { buf: Buf::<T, L>::alloc_in(cap, DstVecHead { len: L::ZERO }, &alloc)?, _t: PhantomData })
     }
 
-    /// What one with room for @cap is allocated as: a mempool's element, for
-    /// a pool of them.
+    /// What one with room for @cap is allocated as, its allocator before it:
+    /// a mempool's element, for a pool of them.
     pub fn alloc_size(cap: usize) -> usize {
-        Buf::<T, L>::layout(cap).expect("a DstVec's layout").0.size()
+        Buf::<T, L>::layout::<A>(cap).expect("a DstVec's layout").0.size()
     }
 
     pub fn len(&self) -> usize {
@@ -79,17 +78,9 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     }
 
     /// Room for @additional more: if there isn't, a new allocation at least
-    /// twice the size, from its allocator - none of its own, stateless().
-    pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
-        unsafe { self.reserve_in(additional, &stateless::<A>()) }
-    }
-
-    /// reserve(), from @a; what it's grown out of freed by @a, as its
+    /// twice the size, from its allocator; what it's grown out of freed as its
     /// elements say.
-    ///
-    /// # Safety
-    /// @a is what it was allocated from.
-    pub unsafe fn reserve_in(&mut self, additional: usize, a: &A) -> Result<(), AllocError> {
+    pub fn reserve(&mut self, additional: usize) -> Result<(), AllocError> {
         let len = self.len();
         let want = len.checked_add(additional).ok_or(AllocError)?;
         if want <= self.capacity() {
@@ -100,42 +91,18 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
         }
 
         let cap = want.max(self.capacity().saturating_mul(2)).min(L::MAX);
-        let new = unsafe { Buf::<T, L>::realloc_in(&self.buf, len, cap, DstVecHead { len: L::from_usize(len) }, a)? };
+        let a = *ThinBox::allocator(&self.buf);
+        let new = unsafe { Buf::<T, L>::realloc_in(&self.buf, len, cap, DstVecHead { len: L::from_usize(len) }, &a)? };
         // by a release: an RCU reader that sees @new sees what was copied
         let word = unsafe { AtomicPtr::from_ptr((&raw mut self.buf).cast::<*mut ()>()) };
         let old = word.swap(ThinBox::into_raw(new).as_ptr(), Release);
-        unsafe { ThinBox::drop_in(ThinBox::<Buf<T, L>, A>::from_raw(NonNull::new_unchecked(old)), a) };
+        drop(unsafe { ThinBox::<Buf<T, L>, A>::from_raw(NonNull::new_unchecked(old)) });
         Ok(())
     }
 
     /// Its buffer, owned by the caller, as a word: from_raw()'s to take back.
     pub(crate) fn into_raw(self) -> NonNull<()> {
-        ThinBox::into_raw(self.into_buf())
-    }
-
-    fn into_buf(self) -> ThinBox<Buf<T, L>, A> {
-        let this = ManuallyDrop::new(self);
-        // its own, read out of what's never dropped
-        unsafe { ptr::read(&this.buf) }
-    }
-
-    /// Its elements dropped and its buffer freed by @a: drop(), for an @A
-    /// with state.
-    ///
-    /// # Safety
-    /// @a is what it was allocated from.
-    pub(crate) unsafe fn drop_in(mut self, a: &A) {
-        self.clear();
-        unsafe { self.free_moved_in(a) }
-    }
-
-    /// Its buffer freed by @a, not its elements: they've been moved out.
-    ///
-    /// # Safety
-    /// @a is what it was allocated from; its first len() have been moved
-    /// out, and nothing but RCU readers uses it after.
-    pub(crate) unsafe fn free_moved_in(self, a: &A) {
-        unsafe { ThinBox::drop_in(self.into_buf(), a) }
+        ThinBox::as_ptr(&ManuallyDrop::new(self).buf)
     }
 
     /// The elements of the buffer at @p, as an RCU reader sees them, their
@@ -152,15 +119,7 @@ impl<T, L: LenUint, A: Alloc + Copy> DstVec<T, L, A> {
     }
 
     pub fn push(&mut self, x: T) -> Result<(), AllocError> {
-        unsafe { self.push_in(x, &stateless::<A>()) }
-    }
-
-    /// push(), growing from @a.
-    ///
-    /// # Safety
-    /// @a is what it was allocated from.
-    pub unsafe fn push_in(&mut self, x: T, a: &A) -> Result<(), AllocError> {
-        unsafe { self.reserve_in(1, a)? };
+        self.reserve(1)?;
         let len = self.len();
         unsafe {
             self.as_mut_ptr().add(len).write(x);
@@ -243,8 +202,9 @@ mod tests {
     fn freed_by_what_it_was_given() {
         let freed = core::cell::Cell::new(None);
         let v = DstVec::<u64, u16, _>::with_capacity_in(2, Rounding(&freed)).unwrap();
-        assert_eq!(v.capacity(), (256 - Buf::<u64, u16>::TAIL) / 8, "its room is what the allocator gave");
-        unsafe { v.drop_in(&Rounding(&freed)) };
+        assert_eq!(v.capacity(), (256 - size_of::<Rounding>() - Buf::<u64, u16>::TAIL) / 8,
+                   "its room is what the allocator gave, past the allocator kept before it");
+        drop(v);
         assert_eq!(freed.get(), Some(256), "freed as the size it was given, not asked for");
     }
 }

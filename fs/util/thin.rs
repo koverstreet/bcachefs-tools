@@ -6,18 +6,19 @@
 //! - ThinRef<'a, T>, ThinMut<'a, T>: a &T or &mut T, thin - for a slot that
 //!   has room for a word.
 //! - ThinBox<T, A>: an owned one, freed as T says (RcuFreeing): at once, or a
-//!   grace period on.
+//!   grace period on - to the allocator it keeps before it.
 //!
 //! Each is made from a reference or a box, and derefs back to the T through
 //! SelfSized::from_thin(): the value says how long it is, and nothing holding
 //! one can change that.
 
+use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
-use crate::util::alloc::{try_stateless, Alloc, Box};
+use crate::util::alloc::{with_alloc_layout, Alloc, Box};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::FreeAnytime;
 use crate::util::vstructs::SelfSized;
@@ -118,33 +119,30 @@ impl<T: ?Sized + SelfSized> DerefMut for ThinMut<'_, T> {
     }
 }
 
-/// A Box<T, A>, thin, T freed as its markers say, by its reference's size. It
-/// keeps no allocator: one with no state - stateless() - frees it as it
-/// drops; one with state, its holder's, by drop_in(), and dropping it is a
-/// bug - a panic, not a build error, which every unwind path holding one
-/// would be.
+/// A Box<T, A>, thin, T freed as its markers say, by its reference's size, to
+/// the A before it, as with_alloc_layout() has it.
 #[repr(transparent)]
 #[derive(cstruct_macros::NonZeroWord)]
-pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc = crate::os::alloc::Global> {
+pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc + Copy = crate::os::alloc::Global> {
     p:  NonNull<()>,
     _t: PhantomData<(Box<T, A>, A)>,
 }
 
 // a Box<T>'s
-unsafe impl<T: ?Sized + SelfSized + Send, A: Alloc> Send for ThinBox<T, A> {}
-unsafe impl<T: ?Sized + SelfSized + Sync, A: Alloc> Sync for ThinBox<T, A> {}
+unsafe impl<T: ?Sized + SelfSized + Send, A: Alloc + Copy> Send for ThinBox<T, A> {}
+unsafe impl<T: ?Sized + SelfSized + Sync, A: Alloc + Copy> Sync for ThinBox<T, A> {}
 
 // None is its pointer null - zeroed
-unsafe impl<T: ?Sized + SelfSized, A: Alloc> ::pin_init::ZeroableOption for ThinBox<T, A> {}
+unsafe impl<T: ?Sized + SelfSized, A: Alloc + Copy> ::pin_init::ZeroableOption for ThinBox<T, A> {}
 
-impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
+impl<T: ?Sized + SelfSized, A: Alloc + Copy> ThinBox<T, A> {
     /// FreeAnytime: a Box has no head before it, for what waits out readers
     /// with none of its own.
     pub fn new(b: Box<T, A>) -> Self
     where
         T: FreeAnytime,
     {
-        const { assert!(size_of::<A>() == 0, "a ThinBox from an allocator with state: it keeps none") };
+        const { assert!(size_of::<A>() == 0, "a ThinBox from a Box with an allocator with state: kept beside it, not before") };
         // the Box's allocation, ours: A has no state
         let mut b = ManuallyDrop::new(b);
         ThinBox { p: Box::as_non_null(&mut b).cast(), _t: PhantomData }
@@ -164,8 +162,8 @@ impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
 
     /// # Safety
     /// @p is a T that's had by nothing else: into_raw()'s, of a ThinBox<T, A>,
-    /// this the one from_raw() of it - or A's allocation of a T, at
-    /// RcuFreeing::layout_of() of its value's layout.
+    /// this the one from_raw() of it - or @A's allocation of a T, its A before
+    /// it as with_alloc_layout() has it, at RcuFreeing::layout_of() of that.
     pub unsafe fn from_raw(p: NonNull<()>) -> Self {
         ThinBox { p, _t: PhantomData }
     }
@@ -178,18 +176,15 @@ impl<T: ?Sized + SelfSized, A: Alloc> ThinBox<T, A> {
         ThinMut { p: self.p, _t: PhantomData }
     }
 
-    /// Freed by @a, as drop() frees by stateless(): for an A with state, which
-    /// its holder keeps.
-    ///
-    /// # Safety
-    /// @a is what @b was allocated from.
-    pub unsafe fn drop_in(b: Self, a: &A) {
-        let p = Self::into_raw(b);
-        unsafe { <T as RcuFreeing>::free(NonNull::new_unchecked(T::from_thin(p.as_ptr()).cast_mut()), a) }
+    /// What it was allocated from, before it: to grow it from.
+    pub fn allocator(b: &Self) -> &A {
+        let t: &T = b;
+        let (_, off) = with_alloc_layout::<A>(Layout::for_value(t)).expect("a ThinBox's layout");
+        unsafe { &*NonNull::from(t).cast::<u8>().sub(off).cast::<A>().as_ptr() }
     }
 }
 
-impl<T: ?Sized + SelfSized, A: Alloc> Deref for ThinBox<T, A> {
+impl<T: ?Sized + SelfSized, A: Alloc + Copy> Deref for ThinBox<T, A> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -198,18 +193,16 @@ impl<T: ?Sized + SelfSized, A: Alloc> Deref for ThinBox<T, A> {
     }
 }
 
-impl<T: ?Sized + SelfSized, A: Alloc> DerefMut for ThinBox<T, A> {
+impl<T: ?Sized + SelfSized, A: Alloc + Copy> DerefMut for ThinBox<T, A> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: a Box<T>'s address, ours
         unsafe { &mut *T::from_thin(self.p.as_ptr()).cast_mut() }
     }
 }
 
-impl<T: ?Sized + SelfSized, A: Alloc> Drop for ThinBox<T, A> {
+impl<T: ?Sized + SelfSized, A: Alloc + Copy> Drop for ThinBox<T, A> {
     fn drop(&mut self) {
-        let a = try_stateless::<A>()
-            .expect("a ThinBox from an allocator with state, dropped: its holder frees it, by drop_in()");
-        // SAFETY: a Box<T, A>'s, ours
-        unsafe { <T as RcuFreeing>::free(NonNull::new_unchecked(T::from_thin(self.p.as_ptr()).cast_mut()), &a) }
+        let a = *Self::allocator(self);
+        unsafe { <T as RcuFreeing>::free(NonNull::from(&mut **self), &a) }
     }
 }

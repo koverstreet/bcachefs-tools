@@ -18,7 +18,7 @@
 
 use crate::data_structures::array_vec::LenUint;
 use crate::os::alloc::Global;
-use crate::util::alloc::{flags, Alloc, AllocError, AllocGfp, Flags};
+use crate::util::alloc::{flags, with_alloc_layout, Alloc, AllocError, AllocGfp, Flags};
 use core::alloc::Layout;
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::HasRcuHead;
@@ -101,10 +101,10 @@ impl<H: HasRcuHead, T, L: LenUint> HasRcuHead for DstArray<H, T, L> {
 }
 
 impl<H, T, L: LenUint> DstArray<H, T, L> {
-    /// What one of @nr elements is allocated as - its header, count and the
-    /// array, after an rcu_head if it needs one it hasn't - and the header's
-    /// offset. An error past what its count holds.
-    pub fn layout(nr: usize) -> Result<(Layout, usize), AllocError> {
+    /// What one of @nr elements from @A is allocated as - its header, count
+    /// and the array, with A before them, after an rcu_head if it needs one it
+    /// hasn't - and the header's offset. An error past what its count holds.
+    pub fn layout<A>(nr: usize) -> Result<(Layout, usize), AllocError> {
         const { assert!(size_of::<T>() != 0, "a DstArray of a zero sized type") };
         const { assert!(Self::ALIGN <= 8, "kvzalloc() aligns to 8") };
 
@@ -114,17 +114,22 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
         let bytes = nr.checked_mul(size_of::<T>()).and_then(|b| b.checked_add(Self::TAIL)).ok_or(AllocError)?;
         // as Layout::for_value() has it, which its free goes by
         let value = Layout::from_size_align(bytes, Self::ALIGN).map_err(|_| AllocError)?.pad_to_align();
-        <Self as RcuFreeing>::layout_of(value)
+        let (with, at) = with_alloc_layout::<A>(value)?;
+        let (layout, offset) = <Self as RcuFreeing>::layout_of(with)?;
+        Ok((layout, offset + at))
     }
 
     /// @head, and a count of @nr, at @offset in @given - @a's, at layout() -
-    /// owned.
-    fn place<A: Alloc>(head: H, nr: usize, given: NonNull<[u8]>, offset: usize) -> ThinBox<Self, A> {
+    /// owned, @a before it.
+    fn place<A: Alloc + Copy>(head: H, nr: usize, given: NonNull<[u8]>, offset: usize, a: A) -> ThinBox<Self, A> {
         let p = unsafe { given.cast::<u8>().add(offset) };
         unsafe {
             p.cast::<H>().write(head);
             p.add(Self::NR).cast::<L>().write(L::from_usize(nr));
-            ThinBox::from_raw(p.cast())
+            let b = ThinBox::<Self, A>::from_raw(p.cast());
+            let (_, at) = with_alloc_layout::<A>(Layout::for_value(&*b)).expect("a DstArray's layout, just allocated");
+            p.sub(at).cast::<A>().write(a);
+            b
         }
     }
 
@@ -149,22 +154,22 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     where
         T: FromZeros,
     {
-        let (layout, offset) = Self::layout(nr)?;
+        let (layout, offset) = Self::layout::<Global>(nr)?;
         let given = Global.allocate_zeroed_gfp(layout, gfp)?;
-        Ok(Self::place(head, nr, given, offset))
+        Ok(Self::place(head, nr, given, offset, Global))
     }
 
-    /// alloc(), of room for @nr from @a, its count the room @a gave - which
-    /// may be more, and is what it's freed as: a mempool tells its elements by
-    /// their size.
-    pub fn alloc_in<A: Alloc>(nr: usize, head: H, a: &A) -> Result<ThinBox<Self, A>, AllocError>
+    /// alloc(), of room for @nr from @a, before it - its count the room @a
+    /// gave, which may be more, and is what it's freed as: a mempool tells its
+    /// elements by their size.
+    pub fn alloc_in<A: Alloc + Copy>(nr: usize, head: H, a: &A) -> Result<ThinBox<Self, A>, AllocError>
     where
         T: FromZeros,
     {
-        let (layout, offset) = Self::layout(nr)?;
+        let (layout, offset) = Self::layout::<A>(nr)?;
         let given = a.allocate_zeroed(layout)?;
         let room = (given.len() - offset - Self::TAIL) / size_of::<T>();
-        Ok(Self::place(head, room.min(L::MAX), given, offset))
+        Ok(Self::place(head, room.min(L::MAX), given, offset, *a))
     }
 
     /// One of room for @nr from @a, as alloc_in(), @old's first @keep elements
@@ -174,7 +179,7 @@ impl<H, T, L: LenUint> DstArray<H, T, L> {
     /// # Safety
     /// @keep is within both. @old's first @keep are moved, not copied: they're
     /// not to be dropped in @old.
-    pub unsafe fn realloc_in<A: Alloc>(old: &Self, keep: usize, nr: usize, head: H, a: &A)
+    pub unsafe fn realloc_in<A: Alloc + Copy>(old: &Self, keep: usize, nr: usize, head: H, a: &A)
         -> Result<ThinBox<Self, A>, AllocError>
     where
         T: FromZeros,

@@ -154,6 +154,16 @@ unsafe impl<A: AllocGfp> AllocGfp for WithFlags<A> {
     }
 }
 
+/// What a T of @t - sized or not - freed to an A is allocated as, A before it,
+/// and where in that the T is: so what holds only a pointer to the T frees it
+/// to where it came from. A zero-sized A is nothing, and it's @t.
+pub const fn with_alloc_layout<A>(t: Layout) -> Result<(Layout, usize), AllocError> {
+    match Layout::new::<A>().extend(t) {
+        Ok((l, off)) => Ok((l.pad_to_align(), off)),
+        Err(_)       => Err(AllocError),
+    }
+}
+
 /// An allocator by reference, with flags: a mempool's.
 unsafe impl<A: AllocGfp + ?Sized> AllocGfp for &A {
     fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
@@ -175,14 +185,7 @@ unsafe impl<A: AllocGfp + ?Sized> AllocGfp for &A {
 /// where it's used. Only those, for now.
 pub fn stateless<A: Alloc>() -> A {
     const { assert!(size_of::<A>() == 0, "an allocator with state, where nothing keeps it") };
-    try_stateless().expect("zero-sized")
-}
-
-/// stateless(), or None for an allocator with state: for a path a build
-/// makes whether or not it's taken - a drop an unwind may run - where an
-/// allocator with state is a bug only once it's reached.
-pub fn try_stateless<A: Alloc>() -> Option<A> {
-    (size_of::<A>() == 0).then(|| unsafe { NonNull::<A>::dangling().read() })
+    unsafe { NonNull::<A>::dangling().read() }
 }
 
 /// std's Box<T, A>, as much of it as is used, in both builds: the kernel has
