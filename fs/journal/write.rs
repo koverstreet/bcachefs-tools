@@ -1252,6 +1252,12 @@ fn write_start(w: &JournalBuf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, w
          * flushers can't wait on that entry, so there's no one to wake
          * early ahead of the deferred superblock write.
          */
+        // A noflush write's keys are durable once a flush write after it is:
+        // that one writes the accounting entries this one's intake added
+        if !w.must_not_flush() {
+            fs.replicas_write_unwritten()?;
+        }
+
         let pins = j.pins();
 
         if let Err(e) = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, written.devs)) {

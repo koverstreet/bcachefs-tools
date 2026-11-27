@@ -421,7 +421,9 @@ impl<'a> Intake<'a> {
                     if !accounting::is_zero(BkeySC::from(&a.k)) {
                         a.journal_seq = seq;
                         live_accounting_keys += 1;
-                        ret = self.key_to_wb_idx(idx, &a.k);
+                        ret = accounting::replicas_entry(&DiskAccountingPos::from_bpos(a.k.k.p))
+                            .map_or(Ok(()), |e| self.fs.mark_replicas_unwritten(e))
+                            .and_then(|()| self.key_to_wb_idx(idx, &a.k));
                         if ret.is_err() {
                             break;
                         }

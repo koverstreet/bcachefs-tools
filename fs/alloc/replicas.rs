@@ -473,15 +473,21 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &DevsMask, check: WriteCheck,
 // Journal entries are refcounted - a ref for each journal write holding one,
 // until reclaim puts it - and the last put kills the entry. The refs are
 // atomics beside the table, taken and put under the read lock.
+//
+// An accounting key's entry is added as the key goes into a journal write,
+// and reaches the superblock before the next flush write - the write that
+// makes the key durable: until then the table has entries the superblock
+// doesn't, @unwritten.
 
 pub struct ReplicasCpu {
-    entries: StridedBuf<Entry>,
-    refs:    Vec<AtomicI32>,
+    entries:   StridedBuf<Entry>,
+    refs:      Vec<AtomicI32>,
+    unwritten: bool,
 }
 
 impl ReplicasCpu {
     pub const fn new() -> Self {
-        ReplicasCpu { entries: StridedBuf::new(), refs: Vec::new() }
+        ReplicasCpu { entries: StridedBuf::new(), refs: Vec::new(), unwritten: false }
     }
 
     fn len(&self) -> usize {
@@ -506,7 +512,7 @@ impl ReplicasCpu {
         for _ in 0..nr {
             refs.push(AtomicI32::new(0))?;
         }
-        Ok(ReplicasCpu { entries: StridedBuf::zeroed(nr, stride)?, refs })
+        Ok(ReplicasCpu { entries: StridedBuf::zeroed(nr, stride)?, refs, unwritten: false })
     }
 
     /// The entries @walk yields that @keep keeps, each one's devices sorted -
@@ -546,8 +552,9 @@ impl ReplicasCpu {
     fn with(&self, e: &Entry) -> Result<Self, AllocError> {
         let e = e.as_bytes();
         let mut new = ReplicasCpu {
-            entries: self.entries.restrided(self.entries.stride().max(e.len()), 1)?,
-            refs:    Vec::with_capacity(self.len() + 1)?,
+            entries:   self.entries.restrided(self.entries.stride().max(e.len()), 1)?,
+            refs:      Vec::with_capacity(self.len() + 1)?,
+            unwritten: self.unwritten,
         };
         for r in self.refs.iter() {
             new.refs.push(AtomicI32::new(r.load(Ordering::Relaxed)))?;
@@ -639,8 +646,10 @@ impl ReplicasCpu {
     }
 
     /// to_sb(), no room an error.
-    fn write_sb(&self, fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), Errcode::ENOSPC_sb_replicas)
+    fn write_sb(&mut self, fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), Errcode::ENOSPC_sb_replicas)?;
+        self.unwritten = false;
+        Ok(())
     }
 
     /// Validated as a section is, its entries against @sb's members: none
@@ -786,7 +795,7 @@ impl Fs {
             let mut r = self.replicas.write();
             let mut dirty = false;
             if r.find(e).is_none() {
-                let new = r.with(e).map_err(|_| self.err(Errcode::ENOMEM_cpu_replicas))?;
+                let mut new = r.with(e).map_err(|_| self.err(Errcode::ENOMEM_cpu_replicas))?;
                 new.write_sb(self, &mut sb)?;
                 *r = new;
                 dirty = true;
@@ -805,6 +814,43 @@ impl Fs {
     /// @e marked in the superblock, if it isn't.
     pub fn mark_replicas(&self, e: &Entry) -> Result<(), BchError> {
         if likely(self.replicas_marked(e)) { Ok(()) } else { self.mark_replicas_slowpath(e, 0) }
+    }
+
+    /// @e, an accounting key's going into a journal write, added if it isn't
+    /// there - written by replicas_write_unwritten(), before the flush write
+    /// that makes the key durable.
+    pub fn mark_replicas_unwritten(&self, e: &Entry) -> Result<(), BchError> {
+        if likely(self.replicas_marked(e)) {
+            return Ok(());
+        }
+        verify_entry(e);
+
+        let mut r = self.replicas.write();
+        if r.find(e).is_none() {
+            let mut new = r.with(e).map_err(|_| self.err(Errcode::ENOMEM_cpu_replicas))?;
+            new.unwritten = true;
+            *r = new;
+        }
+        Ok(())
+    }
+
+    /// The entries mark_replicas_unwritten() added, written to the
+    /// superblock: before a journal flush write is submitted.
+    pub fn replicas_write_unwritten(&self) -> Result<(), BchError> {
+        if likely(!self.replicas.read().unwritten) {
+            return Ok(());
+        }
+
+        let mut sb = self.sb_lock();
+        {
+            let mut r = self.replicas.write();
+            if !r.unwritten {
+                return Ok(());
+            }
+            r.write_sb(self, &mut sb)?;
+        }
+        // write_super() takes the replicas lock for read: after it's dropped
+        self.write_super_replicas_ret(&mut sb)
     }
 
     /// Whether @e, a journal entry, has devices: only those are refcounted.
@@ -899,7 +945,7 @@ impl Fs {
             let mark = self.mark_lock().write();
             let mut r = self.replicas.write();
 
-            let new = r.filtered(|e| e.data_type == DataType::journal ||
+            let mut new = r.filtered(|e| e.data_type == DataType::journal ||
                     accounting_mem::has_replicas(self, &mark, e))
                 .map_err(|_| {
                     crate::bch_err!(self, "error allocating c->replicas_gc");
