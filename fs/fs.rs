@@ -55,7 +55,7 @@ use crate::os::kernel::READ;
 use crate::os::sched;
 use crate::os::kobject::{into_ref, GroupList, KobjOwner, Kobject};
 use crate::os::module::ModuleRef;
-use crate::util::log::{print_str, Log, LogLevel};
+use crate::util::log::{Log, LogLevel};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::{PlacedDrop, Placed};
 use crate::util::rcu::{read_lock, RcuPtrWriter};
@@ -1135,10 +1135,8 @@ impl Claimed {
 
         if fs.opts().nostart.get() == 0 {
             // opt_version_init()'s messages, before startup's
-            if !out.as_bytes().is_empty() {
-                print_str(&fs, LogLevel::INFO, out);
-                out.reset();
-            }
+            fs.log().print(LogLevel::INFO, out.as_bytes());
+            out.reset();
             fs.start_to(out)?;
         }
         Ok(fs)

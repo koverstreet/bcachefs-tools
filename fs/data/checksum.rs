@@ -449,12 +449,12 @@ impl Fs {
         // in constant time, as C's crc compare meant to be
         let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
         if differ && fs.opts().no_data_io.get() == 0 {
-            static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
-            if !fs.ratelimit_suppress(&RATELIMIT, &crate::here_str!()) {
-                fs.log().warn(crate::message!(
-                    "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
-                     expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
-                    crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get()));
+            let mut msg = crate::ratelimit!(fs.log()).msg().warn();
+            write!(msg, "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
+                         expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
+                   crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());
+            if !msg.is_suppressed() {
+                drop(msg);
                 crate::warn_on!(true);
             }
             return fs.throw(Errcode::recompute_checksum);

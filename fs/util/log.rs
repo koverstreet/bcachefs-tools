@@ -31,10 +31,12 @@ impl LogLevel {
     pub const NOTICE: Self = LogLevel(b'5');
     pub const INFO:   Self = LogLevel(b'6');
     pub const DEBUG:  Self = LogLevel(b'7');
+    /// KERN_CONT: the rest of the previous message's line, at its level.
+    pub const CONT:   Self = LogLevel(b'c');
 
-    /// As C's LOGLEVEL_* numbers.
-    fn num(self) -> u8 {
-        self.0 - b'0'
+    /// As C's LOGLEVEL_* numbers; CONT has none of its own.
+    fn num(self) -> Option<u32> {
+        self.0.is_ascii_digit().then(|| u32::from(self.0 - b'0'))
     }
 
     /// As C's KERN_* strings
@@ -98,10 +100,9 @@ impl<'a> Log<'a> {
         }
     }
 
-    /// Whether the ratelimit, if there is one, drops this message: with the
+    /// Whether @rs, over its limit, drops a message from @at: with the
     /// ratelimit_errors option, where there are options.
-    fn suppressed(&self) -> bool {
-        let Some((rs, at)) = self.ratelimit else { return false };
+    fn over(&self, rs: &Ratelimit, at: &dyn core::fmt::Display) -> bool {
         self.fs().is_none_or(|fs| fs.opts.ratelimit_errors.get() != 0) && !rs.allow(at)
     }
 
@@ -111,7 +112,7 @@ impl<'a> Log<'a> {
         let mut msg = Printbuf::new();
         msg.indent_add_nextline(2);
         self.prefix(&mut msg);
-        msg.set_suppressed(self.suppressed());
+        msg.set_suppressed(self.ratelimit.is_some_and(|(rs, at)| self.over(rs, at)));
         LogMsg { log: self, level: LogLevel::ERR, msg }
     }
 
@@ -131,12 +132,24 @@ impl<'a> Log<'a> {
         }
     }
 
-    /// @msg's bytes, at @level, where this log goes.
-    fn print(&self, level: LogLevel, msg: &[u8]) {
+    /// @msg as it stands, at @level, where this log goes: lines with no prefix,
+    /// as C's bch2_print_str().
+    pub fn print(&self, level: LogLevel, msg: &[u8]) {
         match self.fs() {
-            Some(fs) => print_bytes(fs, Some(level.num()), msg),
+            Some(fs) => print_bytes(fs, level, msg),
             None     => print_lines(&level.prefix(), msg),
         }
+    }
+
+    /// @msg for whoever's running fsck: their redirect, if they have one - else
+    /// the log, at err.
+    pub fn user(self, msg: &[u8]) {
+        #[cfg(kernel)]
+        if let Some(stdio) = self.fs().and_then(|fs| fs.stdio.get(true)) {
+            let _ = stdio.print(msg);
+            return;
+        }
+        self.print(LogLevel::ERR, msg)
     }
 
     pub fn at(self, level: LogLevel, msg: &dyn ToText) {
@@ -148,17 +161,20 @@ impl<'a> Log<'a> {
     /// @msg at info, with no newline: a line for cont() to finish, in one
     /// printk each - KERN_CONT. Not ratelimited, and a filesystem's.
     pub fn info_start(self, msg: &dyn ToText) {
-        match self.fs() {
-            Some(fs) => print(fs, LogLevel::INFO.0, true, msg, false),
-            None     => self.info(msg),
-        }
+        let Some(fs) = self.fs() else { return self.info(msg) };
+        let mut buf = Printbuf::new();
+        self.prefix(&mut buf);
+        msg.to_text(&mut buf);
+        print_one(fs, LogLevel::INFO, &buf);
     }
 
     /// The rest of the line info_start() began.
     pub fn cont(self, msg: &dyn ToText) {
-        if let Some(fs) = self.fs() {
-            print(fs, b'c', false, msg, true)
-        }
+        let Some(fs) = self.fs() else { return };
+        let mut buf = Printbuf::new();
+        msg.to_text(&mut buf);
+        buf.newline();
+        print_one(fs, LogLevel::CONT, &buf);
     }
 
     pub fn err(self, msg: &dyn ToText)     { self.at(LogLevel::ERR, msg) }
@@ -207,14 +223,6 @@ macro_rules! ratelimit {
     }};
 }
 
-impl Fs {
-    /// Whether to drop a message from @func, by @rs: only with the
-    /// ratelimit_errors option.
-    pub fn ratelimit_suppress(&self, rs: &Ratelimit, at: &dyn core::fmt::Display) -> bool {
-        self.opts.ratelimit_errors.get() != 0 && !rs.allow(at)
-    }
-}
-
 /// A message built up in pieces and printed when dropped - C's
 /// CLASS(bch_log_msg). Continuation lines are indented under the first and
 /// raw `\t`/`\r` columns aligned; it goes out whole, through
@@ -232,7 +240,15 @@ impl<'a> LogMsg<'a> {
         self.level = level;
     }
 
+    /// Suppressed if @rs is over its limit, as Log::ratelimited() is: for a
+    /// message that knows it's ratelimited only once it's begun.
+    #[track_caller]
+    pub fn ratelimit(&mut self, rs: &Ratelimit) {
+        self.msg.set_suppressed(self.log.over(rs, Location::caller()));
+    }
+
     pub fn with_level(mut self, level: LogLevel) -> Self { self.level = level; self }
+    pub fn warn(mut self) -> Self    { self.level = LogLevel::WARN; self }
     pub fn notice(mut self) -> Self  { self.level = LogLevel::NOTICE; self }
     pub fn info(mut self) -> Self    { self.level = LogLevel::INFO; self }
     pub fn verbose(mut self) -> Self { self.level = LogLevel::DEBUG; self }
@@ -267,14 +283,13 @@ impl Drop for LogMsg<'_> {
 // whole lines up to printk's limit, with the console held across them if it's
 // free, so a long message isn't interleaved with another's.
 
-/// The level a message at @level - None, the previous message's - prints at,
-/// if the filesystem's loglevel lets it through. A level given is the one
-/// what follows continues at.
-fn loglevel(fs: &Fs, level: Option<u8>) -> Option<u32> {
-    let level = match level {
+/// Whether a message at @level gets past the filesystem's loglevel: CONT's at
+/// the previous message's, which any other sets.
+fn loglevel(fs: &Fs, level: LogLevel) -> bool {
+    let level = match level.num() {
         Some(l) => {
-            fs.prev_loglevel.store(l.into(), Ordering::Relaxed);
-            u32::from(l)
+            fs.prev_loglevel.store(l, Ordering::Relaxed);
+            l
         }
         None => fs.prev_loglevel.load(Ordering::Relaxed),
     };
@@ -283,20 +298,17 @@ fn loglevel(fs: &Fs, level: Option<u8>) -> Option<u32> {
         0 => 6,
         l => l,
     };
-    (level <= max).then_some(level)
+    level <= max
 }
 
-/// @s at printk level @level - None, the previous message's - if the
-/// filesystem's loglevel lets it through. Indent left after the last newline
-/// isn't printed.
-fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
+/// @s at @level, if the filesystem's loglevel lets it through. Indent left
+/// after the last newline isn't printed.
+fn print_bytes(fs: &Fs, level: LogLevel, s: &[u8]) {
     let trimmed = s.len() - s.iter().rev().take_while(|&&b| b == b' ').count();
     let len = if trimmed == 0 || s[trimmed - 1] == b'\n' { trimmed } else { s.len() };
-    if len == 0 {
+    if len == 0 || !loglevel(fs, level) {
         return;
     }
-
-    let Some(level) = loglevel(fs, level) else { return };
 
     #[cfg(kernel)]
     if let Some(stdio) = fs.stdio.get(false) {
@@ -305,56 +317,27 @@ fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
     }
 
     #[cfg(kernel)]
-    let prefix: &[u8] = if level < 8 { &[0x01, b'0' + level as u8] } else { &[0x01] };
+    let prefix: &[u8] = &level.prefix();
     #[cfg(not(kernel))]
-    let prefix: &[u8] = { let _ = level; &[] };
+    let prefix: &[u8] = &[];
     print_lines(prefix, s)
 }
 
-/// @s for the person running the fsck - their redirect, if they have one,
-/// else the log at err.
-pub fn print_user(fs: &Fs, s: &[u8]) {
-    #[cfg(kernel)]
-    if let Some(stdio) = fs.stdio.get(true) {
-        let _ = stdio.print(s);
+/// @msg at @level, in one printk: Log::info_start() and cont()'s, a line a
+/// KERN_CONT finishes.
+fn print_one(fs: &Fs, level: LogLevel, msg: &Printbuf) {
+    if !loglevel(fs, level) {
         return;
-    }
-    print_bytes(fs, Some(LogLevel::ERR.num()), s)
-}
-
-/// Print @msg at @level as it stands, one line at a time with no prefix.
-pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
-    print_bytes(fs, Some(level.num()), msg.as_bytes())
-}
-
-/// @msg at printk level @level, after the filesystem's name if @prefix, and
-/// a newline if @newline, in one printk: Log::info_start() and cont()'s, a line
-/// a KERN_CONT finishes.
-fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
-    // KERN_CONT, anything not a digit, is at the previous level
-    if loglevel(fs, level.is_ascii_digit().then(|| level - b'0')).is_none() {
-        return;
-    }
-
-    let mut buf = Printbuf::new();
-    buf.write_bytes(&[0x01, level]);
-
-    #[cfg(kernel)]
-    if prefix {
-        write!(buf, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
-    }
-    #[cfg(not(kernel))]
-    let _ = prefix;
-    msg.to_text(&mut buf);
-    if newline {
-        buf.newline();
     }
 
     #[cfg(kernel)]
     if let Some(stdio) = fs.stdio.get(false) {
-        let _ = stdio.print(&buf.as_bytes()[2..]);
+        let _ = stdio.print(msg.as_bytes());
         return;
     }
+    let mut buf = Printbuf::new();
+    buf.write_bytes(&level.prefix());
+    buf.write_bytes(msg.as_bytes());
     crate::os::printk::printk(buf.as_c_str())
 }
 

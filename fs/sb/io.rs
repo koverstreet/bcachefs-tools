@@ -2519,7 +2519,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
     // prints.
     if !fatal {
         static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
-        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT, &"write_super_locked"));
+        msg.ratelimit(&RATELIMIT);
     }
 
     prt!(msg, "Error writing superblock, wrote to {nr_wrote}/{nr_members} devices:\n");

@@ -1169,7 +1169,7 @@ fn write_io_error_keys(op: &mut Op, update: Option<&DataUpdateIndex>) -> Result<
     } else {
         /* Separate ratelimit_states for hard and soft errors */
         static RATELIMIT: [Ratelimit; 2] = [const { Ratelimit::new() }; 2];
-        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[ret.is_err() as usize], &crate::here_str!()));
+        msg.ratelimit(&RATELIMIT[ret.is_err() as usize]);
     }
 
     let k = op.insert_keys.front().expect("an index update with no keys");

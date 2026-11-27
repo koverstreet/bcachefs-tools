@@ -40,7 +40,7 @@ use crate::{prt, new_lock};
 use crate::sb::errors::{FsckFlags, SbErrorId, SbErrorEntryCpu};
 use crate::util::alloc::Vec;
 use crate::os::{kernel::{jiffies, time_after, HZ}, workqueue::Queue};
-use crate::util::log::{print_str, LogLevel};
+use crate::util::log::LogLevel;
 use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
 use crate::util::{Printbuf, ToText};
@@ -403,7 +403,7 @@ fn ask_answer(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, q: &Question<'_, An
     use crate::util::prompt::Slow;
 
     let Some(p) = Prompt::for_fs(fs) else {
-        crate::util::log::print_user(fs, q.prompt.as_bytes());
+        fs.log().user(q.prompt.as_bytes());
         return Answer::No;
     };
 
@@ -426,7 +426,7 @@ fn ask_answer(fs: &Fs, _: Option<&TransAttempt<'_, '_>>, q: &Question<'_, Answer
     let reply = match Prompt::detect() {
         Some(p) => p.put(q, None).ok(),
         None => {
-            crate::util::log::print_user(fs, q.prompt.as_bytes());
+            fs.log().user(q.prompt.as_bytes());
             None
         }
     };
@@ -660,7 +660,7 @@ fn report(fs: &Fs, out: &mut Printbuf, s: Option<&mut FsckErrState>, cnt: Counte
         // possibly an empty line, from the indent
         let len = out.as_bytes().len() - out.as_bytes().iter().rev().take_while(|&&b| b == b' ').count();
         out.truncate(len);
-        crate::util::log::print_user(fs, out.as_bytes());
+        fs.log().user(out.as_bytes());
     }
 
     if let Some(s) = s {
@@ -938,7 +938,7 @@ impl Fs {
                 true
             }
             a::panic => {
-                print_str(self, LogLevel::ERR, out);
+                self.log().print(LogLevel::ERR, out.as_bytes());
                 panic_after_error(self)
             }
             e => panic!("errors option {}", e.0),

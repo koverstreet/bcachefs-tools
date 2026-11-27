@@ -936,7 +936,7 @@ pub mod ioctl {
     use crate::opts::parse_mount_opts_cstr;
     use crate::os::kernel::{capable, Capability};
     use crate::util::refcount::TryRefcount;
-    use crate::util::{alloc::Arc, log::{print_str, Log, LogLevel, Only}, names::set, thread_with_file::{Reader, StdioRedirect, ThreadWithFile}};
+    use crate::util::{alloc::Arc, log::{Log, LogLevel, Only}, names::set, thread_with_file::{Reader, StdioRedirect, ThreadWithFile}};
     use crate::os::ioctl::{UserStr, UserVstruct};
 
     /// The options at user address @addr, or none if it's 0.
@@ -998,7 +998,7 @@ pub mod ioctl {
     fn fsck_result(fs: &Fs) -> i32 {
         let mut buf = Printbuf::new();
         let ret = fs.fsck_errcode(&mut buf);
-        print_str(fs, LogLevel::ERR, &mut buf);
+        fs.log().print(LogLevel::ERR, buf.as_bytes());
         ret
     }
 
