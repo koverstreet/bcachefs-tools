@@ -20,7 +20,7 @@ use crate::btree::{bkey::{BkeySC, BkeyV}, iter::TransAttempt};
 use crate::data::update::{DataUpdateOpts, DataUpdateType};
 use crate::init::dev::DevsList;
 use crate::opts::InodeOpts;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::data::copygc;
 use crate::data::durability::{extent_ptr_durability, BkeyVDurability};
@@ -103,7 +103,7 @@ impl Fs {
         k.ptrs(self)
             .filter(|ptr| ptr.cached() == 0)
             .map(|ptr| u32::from(ptr.dev()))
-            .filter(|&dev| dev != BCH_SB_MEMBER_INVALID && devs.test(dev as usize))
+            .filter(|&dev| dev != MEMBER_INVALID && devs.test(dev as usize))
             .map(|dev| self.dev_durability(dev, &rcu))
             .sum()
     }
@@ -204,7 +204,7 @@ impl TransAttempt<'_, '_> {
             for d in k.ptrs_decoded(fs) {
                 let p = &d.p;
                 let dev = u32::from(p.ptr.dev());
-                if dev != BCH_SB_MEMBER_INVALID && bit & u32::from(data_opts.ptrs_kill) == 0 {
+                if dev != MEMBER_INVALID && bit & u32::from(data_opts.ptrs_kill) == 0 {
                     // a pointer only losing its stripe keeps its device's durability
                     keeping += if bit & u32::from(data_opts.ptrs_kill_ec) != 0 {
                         fs.dev_durability(dev, &read_lock())

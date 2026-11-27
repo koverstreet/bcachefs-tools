@@ -30,7 +30,7 @@ use crate::data::ec::format::Stripe;
 use crate::data::extents_format::BKEY_BTREE_PTR_U64s_MAX;
 use crate::data::reconcile::format::ReconcileWorkId;
 use crate::data::reconcile::work::ReconcileScan;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::ec::stripe::WidenCache;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
@@ -125,7 +125,7 @@ fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: Btree, k: BkeySC
     let Some(kp) = k.arm::<Ptrs>() else { return Ok(()) };
 
     for d in kp.ptrs_decoded(fs) {
-        if u32::from(d.p.ptr.dev()) == BCH_SB_MEMBER_INVALID {
+        if u32::from(d.p.ptr.dev()) == MEMBER_INVALID {
             continue;
         }
 

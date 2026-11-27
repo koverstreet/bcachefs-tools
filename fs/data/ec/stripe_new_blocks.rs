@@ -15,7 +15,7 @@ use crate::data::ec::head::{DevStripes, EcDevStripeState};
 use crate::data::extents_format::ExtentPtr;
 use crate::data::write::WriteFlags;
 use crate::init::dev::{DevsList, DevsMask};
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::copygc;
 use crate::data::ec::open::OpenStripe;
 use crate::data::ec::stripe::StripeKey;
@@ -28,7 +28,7 @@ use crate::types::Align8U64;
 use crate::util::{backref::BackRef, rcu::read_lock, vstructs::Validated};
 use crate::data_structures::bitmap::Bitmap;
 use core::sync::atomic::Ordering;
-use crate::format::{Btree, DataType, BCH_BKEY_PTRS_MAX, BKEY_VAL_U64s_MAX, CsumType};
+use crate::format::{Btree, DataType, BKEY_PTRS_MAX, BKEY_VAL_U64s_MAX, CsumType};
 
 // ── A new stripe's buckets ───────────────────────────────────────────────
 //
@@ -46,7 +46,7 @@ fn blocks_centroid(fs: &Fs, v: &Stripe<Validated>, blocks: &[Slot]) -> u64 {
     let (sum, nr) = blocks.iter().enumerate()
         .filter(|(i, b)| *i < usize::from(v.nr_blocks) && b.gotten())
         .map(|(i, _)| v.block_ptrs()[i])
-        .filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID)
+        .filter(|p| u32::from(p.dev()) != MEMBER_INVALID)
         .filter_map(|p| fs.dev_rcu(p.dev().into(), &rcu).map(|ca| ca.offset_to_frac(p.offset())))
         .fold((0u64, 0u64), |(sum, nr), f| (sum.wrapping_add(f), nr + 1));
     if nr != 0 { sum / nr } else { 0 }
@@ -110,7 +110,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripes: &mu
         let dev = v.block_ptrs()[i].dev();
         // a block on a failed or removed device isn't repaired here: that
         // needs its extents updated, by backpointer
-        if u32::from(dev) != BCH_SB_MEMBER_INVALID {
+        if u32::from(dev) != MEMBER_INVALID {
             req.devs_may_alloc.clear(dev.into());
             // the new blocks away from these' domains
             req.devs_chosen.set(dev.into());
@@ -139,7 +139,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, stripes: &mu
 #[inline(never)]
 fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut alloc_request, s: &mut InternalGuard<'_>,
                        had: &Bitmap) -> Result<(), BchError> {
-    const MAX: usize = BCH_BKEY_PTRS_MAX as usize;
+    const MAX: usize = BKEY_PTRS_MAX as usize;
     let fs = t.fs();
     let (s, block_devs) = s.parts();
 
@@ -150,7 +150,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut alloc_request, s: &mu
         let rcu = read_lock();
         for i in (0..MAX).filter(|&i| s.blocks[i].gotten()) {
             let Some(p) = v.block_ptrs().get(i) else { continue };
-            if u32::from(p.dev()) != BCH_SB_MEMBER_INVALID {
+            if u32::from(p.dev()) != MEMBER_INVALID {
                 frac[i] = fs.dev_rcu(p.dev().into(), &rcu).map(|ca| ca.offset_to_frac(p.offset()));
             }
         }

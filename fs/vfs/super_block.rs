@@ -11,9 +11,9 @@
 
 use crate::alloc::{accounting, capacity::avail_factor};
 use crate::c;
-use crate::format::{BCACHEFS_STATFS_MAGIC, BCH_REPLICAS_MAX};
+use crate::format::{BCACHEFS_STATFS_MAGIC, REPLICAS_MAX};
 use crate::opts::{OptsMask, OPT_SHOW_MOUNT_STYLE, OptFlags};
-use crate::posix::{dirent_format::BCH_NAME_MAX, inode_opts};
+use crate::posix::{dirent_format::DIRENT_NAME_MAX, inode_opts};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::{Fs, FsFlag};
 use crate::locking::Guard as _;
@@ -93,7 +93,7 @@ impl SuperOps for Fs {
         // whole free buckets - which applications size fallocate() from; and
         // never more than capacity less used
         let opts = inode_opts::get_inode(self, &inode.inode());
-        let nr_replicas = (opts.data_replicas as usize).clamp(1, BCH_REPLICAS_MAX as usize);
+        let nr_replicas = (opts.data_replicas as usize).clamp(1, REPLICAS_MAX as usize);
         let placeable = self.sectors_placeable().eventual[nr_replicas - 1];
         let avail = avail_factor(usage.free).min(placeable) / nr_replicas as u64;
 
@@ -105,7 +105,7 @@ impl SuperOps for Fs {
         buf.f_files   = accounting::nr_inodes(self) + avail_inodes;
         buf.f_ffree   = avail_inodes;
         buf.f_fsid    = uuid_to_fsid(&self.sb.user_uuid.each_ref().map(|b| b.get()));
-        buf.f_namelen = BCH_NAME_MAX as _;
+        buf.f_namelen = DIRENT_NAME_MAX as _;
         Ok(())
     }
 

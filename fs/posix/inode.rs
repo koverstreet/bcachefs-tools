@@ -40,7 +40,7 @@ use crate::os::{unicode::UnicodeMap, kernel::random_u64};
 use crate::util::vstructs::{plain_bytes_mut, Unvalidated, Validated};
 use crate::c;
 use crate::data::reconcile::format::ExtentReconcile;
-use crate::posix::dirent_format::{BCH_DT_MAX, DT_SUBVOL};
+use crate::posix::dirent_format::{DT_MAX, DT_SUBVOL};
 use crate::posix::inode_format::{BLOCKDEV_INODE_MAX, Inode, InodeAllocCursor, InodeGeneration,
     InodeOptId, InodeV2, InodeV3, INODEv3_FIELDS_START_INITIAL, InodeOptId_arms, InodeFlags,
     BCH_INODE_FIELDS_v3};
@@ -855,7 +855,7 @@ fn fields_to_text(out: &mut Printbuf, inode: &InodeUnpacked) {
     out.newline();
 
     let d_type = inode.bi_mode.d_type();
-    let d_type_name = if (d_type as u32) < BCH_DT_MAX {
+    let d_type_name = if (d_type as u32) < DT_MAX {
         dirent::d_type_str(d_type)
     } else {
         "unknown"
@@ -1852,17 +1852,17 @@ impl InodeUnpacked {
 }
 
 /// The most links an inode can have, as the VFS counts them.
-const BCH_LINK_MAX: u32 = u32::MAX;
+const LINK_MAX: u32 = u32::MAX;
 
 /// One more link to @inode - or none less, for an unlinked inode coming back.
-/// too_many_links at BCH_LINK_MAX.
+/// too_many_links at LINK_MAX.
 pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
     if inode.flag(InodeFlags::unlinked) {
         inode.set_flag(InodeFlags::unlinked, false);
     } else {
-        if inode.bi_nlink == BCH_LINK_MAX - inode.nlink_bias() {
+        if inode.bi_nlink == LINK_MAX - inode.nlink_bias() {
             return Err(BchError::from(Errcode::too_many_links));
         }
         nlink_add(t, inode, 1)?;

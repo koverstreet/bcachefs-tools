@@ -429,7 +429,7 @@ impl DebugFile for Tasks {
 /* Creating and removing them */
 
 /// /sys/kernel/debug/bcachefs/, if debugfs is up.
-static BCH_DEBUG: DebugRoot = DebugRoot::new();
+static DEBUG_ROOT: DebugRoot = DebugRoot::new();
 
 pub fn debug_exit(fs: &Fs) {
     drop(unsafe { (*fs.as_ptr()).fs_debug_dir.take() });
@@ -448,7 +448,7 @@ pub fn debug_init(fs: &Fs) {
         return;
     }
 
-    let Some(fs_dir) = BCH_DEBUG.subdir(name.as_c_str()) else { return };
+    let Some(fs_dir) = DEBUG_ROOT.subdir(name.as_c_str()) else { return };
     let dir = fs_dir.dir();
 
     // SAFETY, for each file: the filesystem outlives them - debug_exit()
@@ -486,11 +486,11 @@ pub fn debug_init(fs: &Fs) {
 }
 
 pub fn debug_module_exit(m: &ModuleExit) {
-    BCH_DEBUG.exit(m)
+    DEBUG_ROOT.exit(m)
 }
 
 pub fn debug_module_init() -> i32 {
-    BCH_DEBUG.init(c"bcachefs");
-    BCH_DEBUG.file::<Tasks>(c"tasks", &TASKS);
+    DEBUG_ROOT.init(c"bcachefs");
+    DEBUG_ROOT.file::<Tasks>(c"tasks", &TASKS);
     0
 }

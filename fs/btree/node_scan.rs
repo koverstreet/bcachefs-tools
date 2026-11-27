@@ -18,7 +18,7 @@ use crate::c;
 use crate::sb::{members_format::MemberErrorType, members::{DevIoRef, DevReadRefKind}};
 use crate::errcode::{Errcode, BchError};
 use crate::data::{extents_format::{BtreePtrV2, ExtentPtr}, ptrs::extent_ptr_to_text};
-use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion, BCH_REPLICAS_MAX,
+use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion, REPLICAS_MAX,
     BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, btree_node};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::locking::{Locked, Mutex};
@@ -47,7 +47,7 @@ pub(crate) struct FoundBtreeNode {
     cookie:          u64,
     min_key:         Bpos,
     max_key:         Bpos,
-    ptrs:            ArrayVec<ExtentPtr, { BCH_REPLICAS_MAX as usize }>,
+    ptrs:            ArrayVec<ExtentPtr, { REPLICAS_MAX as usize }>,
 }
 
 impl FoundBtreeNode {

@@ -21,7 +21,7 @@ use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::format::{btree_node, Deleted, JsetEntryType};
 use crate::journal::pins::JournalPinType;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
@@ -175,7 +175,7 @@ impl InteriorUpdate<'_> {
 fn has_reconcile(fs: &Fs, k: BkeySC<'_>) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.extent_entries(fs).any(|e| match e {
         ExtentEntry::reconcile(_) => true,
-        ExtentEntry::ptr(p)       => u32::from(p.dev()) == BCH_SB_MEMBER_INVALID,
+        ExtentEntry::ptr(p)       => u32::from(p.dev()) == MEMBER_INVALID,
         _                         => false,
     }))
 }

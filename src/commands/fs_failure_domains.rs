@@ -106,7 +106,7 @@ fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Result<Vec<Entry>> 
 
         let devs: Vec<u8> = r.devs.iter()
             .copied()
-            .filter(|&d| d != 255)  /* BCH_SB_MEMBER_INVALID: dead stripe blocks */
+            .filter(|&d| d != 255)  /* MEMBER_INVALID: dead stripe blocks */
             .collect();
         if devs.is_empty() {
             continue;

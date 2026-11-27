@@ -6,7 +6,7 @@ use crate::data::reconcile::format::{ExtentReconcile, ExtentReconcileBp};
 use crate::types::{Le8, Le16, Le32, Le64};
 use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 use nestify::nest;
-use crate::format::{Bpos, Csum, BCH_REPLICAS_MAX, Val, BKEY_U64s, CompressionType,
+use crate::format::{Bpos, Csum, REPLICAS_MAX, Val, BKEY_U64s, CompressionType,
     CsumType};
 
 /* DOC_LATEX(extent-checksums)
@@ -310,15 +310,15 @@ pub const BKEY_EXTENT_PTR_U64s_MAX: usize =
 /*
  * Maximum possible size of an entire extent value:
  *
- * BCH_REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
+ * REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
  * and don't count toward durability accounting, but their pointers remain
- * until the data is moved. Reconcile adds BCH_SB_MEMBER_INVALID placeholder
+ * until the data is moved. Reconcile adds MEMBER_INVALID placeholder
  * pointers to bring durability accounting up to the desired level, so both
  * sets of pointers coexist.
  */
 #[allow(non_upper_case_globals)]
 pub const BKEY_EXTENT_VAL_U64s_MAX: usize =
-    5 + BKEY_EXTENT_PTR_U64s_MAX * (BCH_REPLICAS_MAX as usize * 2 + 1);
+    5 + BKEY_EXTENT_PTR_U64s_MAX * (REPLICAS_MAX as usize * 2 + 1);
 
 /* Maximum possible size of an entire extent, key + value: */
 #[allow(non_upper_case_globals)]
@@ -327,16 +327,16 @@ pub const BKEY_EXTENT_U64s_MAX: usize = BKEY_U64s + BKEY_EXTENT_VAL_U64s_MAX;
 /*
  * Btree pointers don't carry around checksums:
  *
- * BCH_REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
+ * REPLICAS_MAX * 2 pointers because evacuating devices have durability=0
  * and don't count toward durability accounting, but their pointers remain
- * until the data is moved. Reconcile adds BCH_SB_MEMBER_INVALID placeholder
+ * until the data is moved. Reconcile adds MEMBER_INVALID placeholder
  * pointers to bring durability accounting up to the desired level, so both
  * sets of pointers coexist.
  */
 #[allow(non_upper_case_globals)]
 pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
     (size_of::<BtreePtrV2>() +
-     size_of::<ExtentPtr>() * BCH_REPLICAS_MAX as usize * 2 +
+     size_of::<ExtentPtr>() * REPLICAS_MAX as usize * 2 +
      size_of::<ExtentReconcile>() +
      size_of::<ExtentReconcileBp>()) / size_of::<u64>();
 #[allow(non_upper_case_globals)]

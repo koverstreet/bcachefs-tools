@@ -7,7 +7,7 @@
 
 use core::mem::{offset_of, size_of};
 use core::ops::{ControlFlow, Range};
-use crate::alloc::{accounting, capacity::DiskReservation, disk_groups_format::BCH_SB_LABEL_SIZE};
+use crate::alloc::{accounting, capacity::DiskReservation, disk_groups_format};
 use crate::{bch_warn, btree_trans};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};
@@ -41,7 +41,7 @@ use crate::format::{Btree, BkeyType, MetadataVersion};
 /// FS_IOC_GETFSLABEL's: the label, without its NUL - and if it fills its
 /// field, without its last byte, as C had it.
 pub fn get_label(fs: &Fs, user: UserArg<[u8; c::FSLABEL_MAX as usize]>) -> Result<(), BchError> {
-    const LABEL_SIZE: usize = BCH_SB_LABEL_SIZE as usize;
+    const LABEL_SIZE: usize = disk_groups_format::LABEL_SIZE as usize;
     const { assert!(LABEL_SIZE < c::FSLABEL_MAX as usize) };
 
     let label = fs.sb_lock().sb().label;

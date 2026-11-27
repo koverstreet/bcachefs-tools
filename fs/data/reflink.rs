@@ -58,7 +58,7 @@ use core::ops::Range;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use cstruct_macros::MaybeZeroable;
 use crate::format::{Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits, MetadataVersion, SbFeature,
-    BCH_REPLICAS_MAX, Bkey};
+    REPLICAS_MAX, Bkey};
 
 pub type IndirectTypes = ByFlag<{ BkeyTypeFlags_bits::indirect }>;
 
@@ -801,7 +801,7 @@ pub fn make_extent_indirect<'a, 't>(
         return fs.throw(Errcode::ENOSPC_reflink_idx_max);
     }
 
-    let r_v_buf_u64s = orig.k().u64s as u32 + 2 + BCH_REPLICAS_MAX;
+    let r_v_buf_u64s = orig.k().u64s as u32 + 2 + REPLICAS_MAX;
     let mut r_v = t.bkey_alloc(r_v_buf_u64s)?;
 
     let k = r_v.k_mut();

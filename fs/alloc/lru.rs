@@ -28,9 +28,9 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::data::ec::format::Stripe;
-use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_END, BCH_LRU_BUCKET_FRAGMENTATION_OLD,
-    BCH_LRU_BUCKET_FRAGMENTATION_START, BCH_LRU_READ_MAX, BCH_LRU_STRIPE_FRAGMENTATION,
-    BCH_LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
+use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_END, LRU_BUCKET_FRAGMENTATION_OLD,
+    LRU_BUCKET_FRAGMENTATION_START, LRU_READ_MAX, LRU_STRIPE_FRAGMENTATION,
+    LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
 use crate::btree::bbpos::Bbpos;
 use crate::errcode::BchError;
 use crate::init::{error::{id, BkeyValidate}, progress::Progress};
@@ -55,15 +55,15 @@ impl From<u16> for LruId {
     fn from(id: u16) -> Self {
         let id32 = u32::from(id);
 
-        if id32 < BCH_LRU_READ_MAX {
+        if id32 < LRU_READ_MAX {
             Self::Read { dev: id32 }
-        } else if (BCH_LRU_BUCKET_FRAGMENTATION_START..BCH_LRU_BUCKET_FRAGMENTATION_END).contains(&id32) {
-            Self::Fragmentation { dev: id32 - BCH_LRU_BUCKET_FRAGMENTATION_START }
-        } else if id32 == BCH_LRU_BUCKET_FRAGMENTATION_OLD {
+        } else if (LRU_BUCKET_FRAGMENTATION_START..LRU_BUCKET_FRAGMENTATION_END).contains(&id32) {
+            Self::Fragmentation { dev: id32 - LRU_BUCKET_FRAGMENTATION_START }
+        } else if id32 == LRU_BUCKET_FRAGMENTATION_OLD {
             Self::FragmentationOld
-        } else if id32 == BCH_LRU_STRIPE_FRAGMENTATION {
+        } else if id32 == LRU_STRIPE_FRAGMENTATION {
             Self::StripeFragmentation
-        } else if id32 == BCH_LRU_STRIPE_REUSE {
+        } else if id32 == LRU_STRIPE_REUSE {
             Self::StripeReuse
         } else {
             Self::Unknown(id)
@@ -76,10 +76,10 @@ impl LruId {
     pub fn id(self) -> u16 {
         let id = match self {
             Self::Read { dev }          => dev,
-            Self::Fragmentation { dev } => BCH_LRU_BUCKET_FRAGMENTATION_START + dev,
-            Self::FragmentationOld      => BCH_LRU_BUCKET_FRAGMENTATION_OLD,
-            Self::StripeFragmentation   => BCH_LRU_STRIPE_FRAGMENTATION,
-            Self::StripeReuse           => BCH_LRU_STRIPE_REUSE,
+            Self::Fragmentation { dev } => LRU_BUCKET_FRAGMENTATION_START + dev,
+            Self::FragmentationOld      => LRU_BUCKET_FRAGMENTATION_OLD,
+            Self::StripeFragmentation   => LRU_STRIPE_FRAGMENTATION,
+            Self::StripeReuse           => LRU_STRIPE_REUSE,
             Self::Unknown(id)           => u32::from(id),
         } as u16;
 
@@ -228,7 +228,7 @@ pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &Dev) -> Result<(), BchError> {
     crate::btree_trans!(fs).write_buffer_flush_sync()?;
 
     let dev = u32::from(ca.dev_idx);
-    if dev < BCH_LRU_READ_MAX {
+    if dev < LRU_READ_MAX {
         dev_remove_lru_range(fs, LruId::Read { dev })?;
         dev_remove_lru_range(fs, LruId::Fragmentation { dev })?;
     } else {
@@ -325,7 +325,7 @@ fn check_lru_key(
     let bucket_dev = u64_to_bucket(pos.target).inode as u16;
     let want_id = match ty {
         LruType::read          => bucket_dev,
-        LruType::fragmentation => (BCH_LRU_BUCKET_FRAGMENTATION_START as u16).wrapping_add(bucket_dev),
+        LruType::fragmentation => (LRU_BUCKET_FRAGMENTATION_START as u16).wrapping_add(bucket_dev),
         _                         => pos.id,
     };
 

@@ -23,8 +23,8 @@ use crate::btree::iter::{is_restart, TransAttempt};
 use crate::alloc::dev_select::DevStripeState;
 use crate::alloc::write_point::WritePointLocked;
 use crate::data::{write::WriteFlags, ec::head::{head_get, stripe_head_put}};
-use crate::format::BCH_REPLICAS_MAX;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::format::REPLICAS_MAX;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::debug::trace::events;
@@ -34,9 +34,9 @@ use core::sync::atomic::Ordering::Relaxed;
 
 /// Partial buckets taken while placement was restricted - their devices,
 /// and the copies the request had before each - traced once freelist_lock
-/// is dropped. Placement restricts only 2 to BCH_REPLICAS_MAX copies, so
+/// is dropped. Placement restricts only 2 to REPLICAS_MAX copies, so
 /// that's as many as there can be.
-type Restricted = ArrayVec<(u32, u32), { BCH_REPLICAS_MAX as usize }>;
+type Restricted = ArrayVec<(u32, u32), { REPLICAS_MAX as usize }>;
 
 impl alloc_request<'_, '_> {
     /// @ob, added: its device chosen, its durability counted, its pin in
@@ -218,7 +218,7 @@ impl TransAttempt<'_, '_> {
 
         ret?;
         let e = fs.err(Errcode::insufficient_devices);
-        req.trace_add(BCH_SB_MEMBER_INVALID as u8, Some(e), 0, 0, false);
+        req.trace_add(MEMBER_INVALID as u8, Some(e), 0, 0, false);
         Err(e)
     }
 

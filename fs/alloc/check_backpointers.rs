@@ -42,7 +42,7 @@ use crate::alloc::format::AllocV4;
 use crate::btree::bbpos::Bbpos;
 use crate::data::extents_format::BtreePtrV2;
 use crate::data::reflink_format::ReflinkP;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::extents::Extents;
 use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
@@ -634,7 +634,7 @@ fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpSta
         let mut bp = extent_ptr_to_bp(fs, btree, level, k, &d);
         let dev = u32::from(d.p.ptr.dev());
 
-        if dev == BCH_SB_MEMBER_INVALID {
+        if dev == MEMBER_INVALID {
             if d.p.has_ec {
                 check_bp_exists(t, kp, &mut bp, s.last_flushed.borrow())?;
             }

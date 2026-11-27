@@ -734,7 +734,7 @@ use crate::data::write_nocow::nocow_write;
 use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::format::{Bpos, Bversion, DataType, BkeyType, MetadataVersion, SbFeature,
-    BCH_BKEY_PTRS_MAX, BCH_REPLICAS_MAX, Bkey, CsumType};
+    BKEY_PTRS_MAX, REPLICAS_MAX, Bkey, CsumType};
 use crate::fs::Fs;
 use crate::types::NeBytes;
 use crate::locking::MemallocFlags;
@@ -971,10 +971,10 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
 
             /*
              * If we did a degraded write, bch2_bkey_set_needs_reconcile() will add
-             * pointers to BCH_SB_MEMBER_INVALID so the extent is accounted as
+             * pointers to MEMBER_INVALID so the extent is accounted as
              * degraded
              */
-            let room = (usize::from(k.k().u64s) + 1 + BCH_REPLICAS_MAX as usize) * size_of::<u64>();
+            let room = (usize::from(k.k().u64s) + 1 + REPLICAS_MAX as usize) * size_of::<u64>();
             let mut sk = t.bkey_reassemble_room(BkeySC::from(k), room)?;
 
             sk.k_mut().p.snapshot = subvolume::get_snapshot(t, subvol)?;
@@ -1056,7 +1056,7 @@ impl Typed for ExtentBuf {}
 
 /// A pass's extents of their own bios: their replicas, in flight, borrow them
 /// till the pass is waited on.
-pub(crate) type Owned = [Option<ExtentBio>; BCH_BKEY_PTRS_MAX as usize];
+pub(crate) type Owned = [Option<ExtentBio>; BKEY_PTRS_MAX as usize];
 
 impl ReplicaErrs {
     /// On @op: its failures - io_error, and
@@ -1465,7 +1465,7 @@ async fn __write(op: &mut Op, wbio: &mut WriteBio<'_>, of: WriteFor<'_>, at: Res
         op.failed.reset_devs();
 
         let (pass, pos) = {
-            let mut owned: Owned = [const { None }; BCH_BKEY_PTRS_MAX as usize];
+            let mut owned: Owned = [const { None }; BKEY_PTRS_MAX as usize];
             let bio = wbio.bio_mut();
             let (mut data, opf) = (bio.range(), bio.opf());
             let mut io = InFlight::new(fs);

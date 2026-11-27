@@ -34,11 +34,10 @@ use crate::commands::opts::{find_opt_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
-use bcachefs_kernel::format::MetadataVersion;
+use bcachefs_kernel::format::{MetadataVersion, REPLICAS_MAX};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::commands::format_util::SUPERBLOCK_SIZE_DEFAULT;
 
-const BCH_REPLICAS_MAX: u32 = 4;
 
 /// Parse a version string "major.minor" or just "minor" (major defaults to 0).
 pub(crate) fn version_parse(s: &str) -> Result<MetadataVersion> {
@@ -346,7 +345,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 "replicas" => {
                     let val = take_opt_value(inline_val, &argv, &mut i, raw_name)?;
                     let v: u32 = val.parse().map_err(|_| anyhow!("invalid replicas"))?;
-                    if v == 0 || v > BCH_REPLICAS_MAX {
+                    if v == 0 || v > REPLICAS_MAX {
                         bail!("invalid replicas");
                     }
                     fs_opts.set_metadata_replicas(v as u8);

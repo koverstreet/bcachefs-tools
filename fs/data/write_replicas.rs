@@ -10,12 +10,12 @@ use crate::data::ptrs::IoFailures;
 use crate::data::extents_format::ExtentPtr;
 use crate::errcode::{status::BLK_STS_REMOVED, BchError};
 use crate::init::dev::DevsMask;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::dev_bio::DevBio;
 use crate::data::nocow_locking::NocowKind;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::array_vec::ArrayVec;
-use crate::format::{DataType, BCH_BKEY_PTRS_MAX};
+use crate::format::{DataType, BKEY_PTRS_MAX};
 use crate::fs::{Dev, Fs};
 use crate::locking::MemallocFlags;
 use crate::os::kernel::WRITE;
@@ -25,7 +25,7 @@ use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
 use cstruct_macros::args_stored_once;
 
-const PTRS: usize = BCH_BKEY_PTRS_MAX as usize;
+const PTRS: usize = BKEY_PTRS_MAX as usize;
 
 /// What writes' replicas came to, by device - one key's, or each extent's of a
 /// data write's pass: the devices that failed, with their errors, and those a
@@ -121,7 +121,7 @@ impl<'a> InFlight<'a> {
          * invalid ptr, so cas_idx stays in sync with the iterator. */
         let devs: ArrayVec<ExtentPtr, PTRS> = {
             let ptrs = BkeySC::from(k).arm::<Ptrs>().expect("writing a key with no pointers");
-            ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID).copied().collect()
+            ptrs.ptrs(fs).filter(|p| u32::from(p.dev()) != MEMBER_INVALID).copied().collect()
         };
         assert!(!devs.is_empty(), "writing with no devices");
 

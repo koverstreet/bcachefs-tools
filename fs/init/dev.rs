@@ -219,7 +219,7 @@ use crate::data::reconcile::work::ReconcileScan;
 use crate::journal::buckets::JournalDevice;
 use crate::opts::Opts;
 use crate::sb::members_format::{Member, SbFieldMembersV2,
-    BCH_SB_MEMBERS_MAX, MemberErrorType};
+    MEMBERS_MAX, MemberErrorType};
 use crate::alloc::accounting::{self, dev_usage_init};
 use crate::btree::iter::{trans_commit_do, CommitFlags, UpdateTriggerFlags};
 use crate::sb::io::{SbFieldOps, read_super, SbReadScratch, SbWriteFlags};
@@ -233,7 +233,7 @@ use crate::debug::sysfs::{DevDir, DEV_GROUPS};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, StateLockWrite, FsFlag};
 use crate::format::{DataType, MemberInitialized, MemberState, MetadataVersion, SbFeatures, __uuid_t,
-    BCH_BKEY_PTRS_MAX, Sb, SbLayout, SbCompat};
+    BKEY_PTRS_MAX, Sb, SbLayout, SbCompat};
 use crate::locking::{Guard as _, Locked, LockedBy, MemallocFlags, Mutex};
 use crate::util::projections::Volatile;
 use crate::util::sharing::Unshared;
@@ -588,17 +588,17 @@ impl SbHandle {
 }
 
 /// A set of devices, by index.
-pub type DevsMask = BitArray<{ bits_to_longs(BCH_SB_MEMBERS_MAX as usize) }>;
+pub type DevsMask = BitArray<{ bits_to_longs(MEMBERS_MAX as usize) }>;
 
 /// One changed under readers - c->devs_online, the allocator's rw_devs[] -
 /// declared as such where it's a field.
-pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(BCH_SB_MEMBERS_MAX as usize) }>;
+pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(MEMBERS_MAX as usize) }>;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct DevsList {
     pub nr: u8,
-    pub data: [u8; BCH_BKEY_PTRS_MAX as usize],
+    pub data: [u8; BKEY_PTRS_MAX as usize],
 }
 
 fn may_add(fs: &Fs, sb: &Sb) -> Result<(), BchError> {

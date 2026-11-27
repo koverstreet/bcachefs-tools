@@ -63,7 +63,7 @@ use self::DataUpdateType as Type;
 use crate::data::read::{ReadFor, ReadDone, Rbio};
 use core::sync::atomic::AtomicBool;
 use nestify::nest;
-use crate::format::{Bpos, Btree, CompressionType, BCH_BKEY_PTRS_MAX, CsumType};
+use crate::format::{Bpos, Btree, CompressionType, BKEY_PTRS_MAX, CsumType};
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -237,7 +237,7 @@ impl Fs {
 pub(crate) struct Held {
     in_flight: Option<InFlightReg>,
     nocow:     Option<nocow_locking::Locked>,
-    devs:      [Option<DevRef>; BCH_BKEY_PTRS_MAX as usize],
+    devs:      [Option<DevRef>; BKEY_PTRS_MAX as usize],
 }
 
 // ── To text ──────────────────────────────────────────────────────────────

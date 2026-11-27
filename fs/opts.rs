@@ -32,7 +32,7 @@ use crate::fs::{Dev, Fs};
 use crate::c;
 use crate::alloc::accounting_format::DataTypes_bits;
 use crate::init::{dev::bch_sb_buf, passes_format::RecoveryPass};
-use crate::posix::dirent_format::{BCH_DT_MAX, DT_SUBVOL};
+use crate::posix::dirent_format::{DT_MAX, DT_SUBVOL};
 use crate::errcode::{Errcode, BchError};
 use crate::posix::inode_opts::InodeOpt;
 use crate::sb::{io::SbState, members, members_format::{MemberState, Member, MemberFlags}};
@@ -46,7 +46,7 @@ use crate::os::sysfs::parse_int;
 use core::ffi::CStr;
 use crate::posix::inode_format::InodeOptId_arms;
 use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt,
-    WriteDegradedAction, BCH_REPLICAS_MAX, Sb, SbHead, SbFieldExt,
+    WriteDegradedAction, REPLICAS_MAX, Sb, SbHead, SbFieldExt,
     SbFieldExtFlags0, DegradedAction, ScrubJournalOpt, DataType};
 use crate::types::bits_to_longs;
 use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
@@ -103,18 +103,18 @@ pub enum FsckErrOpt {
 }
 
 /* how many options a OptsMask has room for */
-pub const BCH_OPTS_MAX: u32 = 128;
+pub const OPTS_MAX: u32 = 128;
 
 /* options, by OptId: which are set */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct OptsMask {
-    pub d: [usize; bits_to_longs(BCH_OPTS_MAX as usize)],
+    pub d: [usize; bits_to_longs(OPTS_MAX as usize)],
 }
 
 /// A OptsMask that changes while it's read: PublishedOpts', and
 /// c->mount_opts.
-pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_to_longs(BCH_OPTS_MAX as usize) }>;
+pub type AtomicOptsMask = crate::data_structures::bitmap::AtomicBitArray<{ bits_to_longs(OPTS_MAX as usize) }>;
 
 /*
  * The options, a field each: its #[opt] - its type, when it may be set, its
@@ -157,7 +157,7 @@ pub struct Opts {
     pub write_error_timeout: u16,
 
     /// Number of metadata replicas (journal and btree)
-    #[opt(uint(1, BCH_REPLICAS_MAX),
+    #[opt(uint(1, REPLICAS_MAX),
           flags = fs | format | mount_old | runtime,
           sb = Sb::meta_replicas_want,
           default = 1,
@@ -165,14 +165,14 @@ pub struct Opts {
     pub metadata_replicas: u8,
 
     /// Number of journal replicas, if not metadata_replicas
-    #[opt(uint(0, BCH_REPLICAS_MAX),
+    #[opt(uint(0, REPLICAS_MAX),
           flags = fs | format | runtime,
           sb = SbFieldExt::journal_replicas,
           hint = "#")]
     pub journal_replicas: u8,
 
     /// Number of data replicas
-    #[opt(uint(1, BCH_REPLICAS_MAX),
+    #[opt(uint(1, REPLICAS_MAX),
           flags = fs | inode | format | mount_old | runtime,
           sb = Sb::data_replicas_want,
           default = 1,
@@ -708,8 +708,8 @@ pub fn data_type_str(t: DataType) -> &'static str {
 }
 
 /// The dirent d_types' names, by DT_*.
-pub const D_TYPES: [&str; BCH_DT_MAX as usize] = {
-    let mut t = [""; BCH_DT_MAX as usize];
+pub const D_TYPES: [&str; DT_MAX as usize] = {
+    let mut t = [""; DT_MAX as usize];
     t[c::DT_UNKNOWN as usize] = "unknown";
     t[c::DT_FIFO as usize]    = "fifo";
     t[c::DT_CHR as usize]     = "chr";

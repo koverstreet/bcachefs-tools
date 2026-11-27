@@ -24,7 +24,7 @@ use self::JournalPinType as PinType;
 use crate::alloc::replicas::SbEntry;
 use crate::data_structures::list::{List, ListLinks};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, BCH_REPLICAS_MAX};
+use crate::format::{DataType, REPLICAS_MAX};
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
 use crate::os::kernel::unlikely;
@@ -181,20 +181,20 @@ impl core::fmt::Display for Symbol {
 #[derive(Clone, Copy, Default, Zeroable, NoUninit)]
 pub struct PinDevs {
     nr:   u8,
-    devs: [u8; BCH_REPLICAS_MAX as usize],
-    _pad: [u8; 7 - BCH_REPLICAS_MAX as usize],
+    devs: [u8; REPLICAS_MAX as usize],
+    _pad: [u8; 7 - REPLICAS_MAX as usize],
 }
 
 impl PinDevs {
     /*
-     * @d is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write),
+     * @d is bounded by metadata_replicas <= REPLICAS_MAX (journal write),
      * and by replay_devs() (journal start)
      */
     fn new(d: &DevsList) -> Self {
-        debug_assert!(u32::from(d.nr) <= BCH_REPLICAS_MAX,
-                      "journal entry on {} devices, past BCH_REPLICAS_MAX", d.nr);
+        debug_assert!(u32::from(d.nr) <= REPLICAS_MAX,
+                      "journal entry on {} devices, past REPLICAS_MAX", d.nr);
         let devs = d.as_slice();
-        let devs = &devs[..devs.len().min(BCH_REPLICAS_MAX as usize)];
+        let devs = &devs[..devs.len().min(REPLICAS_MAX as usize)];
         let mut r = Self { nr: devs.len() as u8, ..Self::default() };
         r.devs[..devs.len()].copy_from_slice(devs);
         r

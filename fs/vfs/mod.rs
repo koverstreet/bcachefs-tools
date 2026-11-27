@@ -31,7 +31,7 @@ pub mod writeback;
 
 use crate::data_structures::fast_list::FastList;
 use crate::errcode::Errcode;
-use crate::vfs::{inode::InodeInfo, pagecache::BCH_WRITEPAGE_BUF_BYTES};
+use crate::vfs::{inode::InodeInfo, pagecache::WRITEPAGE_BUF_BYTES};
 use crate::os::{workqueue::{Workqueue, WqFlags}, bio::BioSet};
 use crate::util::{late::Late, mempool::Mempool};
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
@@ -51,7 +51,7 @@ pub struct FsVfs {
 
     #[late(BioSet::new(1), ENOMEM_nocow_flush_bioset_init)]
     pub nocow_flush_bioset: Late<BioSet<crate::data::dev_bio::DevBio>>,
-    #[late(Mempool::new(4, BCH_WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
+    #[late(Mempool::new(4, WRITEPAGE_BUF_BYTES), ENOMEM_writepage_buf_pool_init)]
     pub writepage_buf_pool: Late<Mempool>,
     #[late(Workqueue::new(c"bcachefs_vfs_writeback",
                           WqFlags::MEM_RECLAIM | WqFlags::FREEZABLE | WqFlags::UNBOUND, 1),

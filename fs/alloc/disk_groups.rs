@@ -66,11 +66,11 @@
 
 use crate::btree::bkey::ValidateFlags;
 use crate::alloc::disk_groups_format::{bch_disk_group, DiskGroupFlags,
-    SbFieldDiskGroups, BCH_SB_LABEL_SIZE};
+    SbFieldDiskGroups, LABEL_SIZE};
 use crate::init::dev::{DevsMask, bch_sb_buf};
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 use crate::init::dev::CONGESTED_MAX;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, Sb};
 use crate::fs::{Fs, SbLockGuard};
@@ -92,7 +92,7 @@ pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 pub struct DiskGroup {
     pub deleted: bool,
     pub parent: u16,
-    pub label: [u8; BCH_SB_LABEL_SIZE as usize],
+    pub label: [u8; LABEL_SIZE as usize],
     pub devs: DevsMask,
 }
 
@@ -133,7 +133,7 @@ impl Target {
 const DISK_PATH_MAX: usize = 32;
 
 /// NUL terminated only if shorter than the field.
-fn label_bytes(label: &[u8; BCH_SB_LABEL_SIZE as usize]) -> &[u8] {
+fn label_bytes(label: &[u8; LABEL_SIZE as usize]) -> &[u8] {
     let len = label.iter().position(|&b| b == 0).unwrap_or(label.len());
     &label[..len]
 }
@@ -198,7 +198,7 @@ fn path_labels(name: &[u8]) -> impl Iterator<Item = &[u8]> + Clone {
 }
 
 fn label_valid(name: &[u8]) -> bool {
-    !name.is_empty() && name.len() <= BCH_SB_LABEL_SIZE as usize
+    !name.is_empty() && name.len() <= LABEL_SIZE as usize
 }
 
 fn group_find(groups: &[bch_disk_group], parent: u32, name: &[u8]) -> Option<u32> {
@@ -329,7 +329,7 @@ impl Fs {
     }
 
     pub fn dev_in_target(&self, dev: u32, target: Target, rcu: &ReadGuard) -> bool {
-        if dev == BCH_SB_MEMBER_INVALID {
+        if dev == MEMBER_INVALID {
             return false;
         }
 
@@ -688,8 +688,8 @@ mod tests {
         }
     }
 
-    fn label(s: &str) -> [u8; BCH_SB_LABEL_SIZE as usize] {
-        let mut l = [0; BCH_SB_LABEL_SIZE as usize];
+    fn label(s: &str) -> [u8; LABEL_SIZE as usize] {
+        let mut l = [0; LABEL_SIZE as usize];
         l[..s.len()].copy_from_slice(s.as_bytes());
         l
     }
@@ -752,8 +752,8 @@ mod tests {
     #[test]
     fn disk_path_label_lengths() {
         let mut sb = new_sb();
-        let full = [b'x'; BCH_SB_LABEL_SIZE as usize];
-        let over = [b'x'; BCH_SB_LABEL_SIZE as usize + 1];
+        let full = [b'x'; LABEL_SIZE as usize];
+        let over = [b'x'; LABEL_SIZE as usize + 1];
 
         assert_eq!(sb.disk_path_find_or_create(&full).unwrap(), 0);
         assert_eq!(sb.disk_path_find(&full), Some(0));

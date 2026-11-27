@@ -286,7 +286,7 @@ pub struct BtreeTransactionStats {
     pub lock: Locked<Mutex, TransStatsLocked, TransStatsMax>,
 }
 
-pub const BCH_TRANSACTIONS_NR: u32 = 128;
+pub const TRANSACTIONS_NR: u32 = 128;
 
 #[placed(FsBtree.trans)]
 #[pin_data]
@@ -313,17 +313,17 @@ pub struct FsBtreeTrans {
 
     #[pin]
     #[init(::pin_init::pin_init_array_from_fn(|_| BtreeTransactionStats::init()))]
-    pub stats: [BtreeTransactionStats; BCH_TRANSACTIONS_NR as usize],
+    pub stats: [BtreeTransactionStats; TRANSACTIONS_NR as usize],
     /* each transaction function's, as stats[] */
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub duration: TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>,
+    pub duration: TimeStatsArray<TimeStats, { TRANSACTIONS_NR as usize }>,
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub lock_hold_times: TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>,
+    pub lock_hold_times: TimeStatsArray<TimeStats, { TRANSACTIONS_NR as usize }>,
     #[pin]
     #[init(TimeStatsArray::new())]
-    pub lock_wait_times: TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>,
+    pub lock_wait_times: TimeStatsArray<TimeStats, { TRANSACTIONS_NR as usize }>,
 
     #[pin]
     #[init(new_lock!(TransStatsJson { buf: Printbuf::new() }, "&c->btree.trans.stats_json_lock"))]
@@ -810,7 +810,7 @@ impl<'f> TransGuard<'f> {
             prefetch(roots.wrapping_add(i));
         }
 
-        let stats = (fn_idx < BCH_TRANSACTIONS_NR).then(|| &c.btree.trans.stats[fn_idx as usize]);
+        let stats = (fn_idx < TRANSACTIONS_NR).then(|| &c.btree.trans.stats[fn_idx as usize]);
 
         let t = &*trans;
 
@@ -1399,8 +1399,8 @@ impl BtreeTrans<'_> {
 
 /// Each btree_trans!() call site's name, by fn_idx: the transaction's, and its
 /// stats'. Slot 0 is never registered: it's "(unknown)".
-static TRANSACTION_FNS: [SetOnce<&'static str>; BCH_TRANSACTIONS_NR as usize] =
-    [const { SetOnce::new() }; BCH_TRANSACTIONS_NR as usize];
+static TRANSACTION_FNS: [SetOnce<&'static str>; TRANSACTIONS_NR as usize] =
+    [const { SetOnce::new() }; TRANSACTIONS_NR as usize];
 
 /// The name registered at @idx, if one is.
 pub fn transaction_fn(idx: usize) -> Option<&'static str> {
@@ -1429,7 +1429,7 @@ fn trans_get_fn_idx(name: &'static str) -> u32 {
 
     static WARNED: AtomicBool = AtomicBool::new(false);
     if !WARNED.swap(true, Ordering::Relaxed) {
-        log_no_fs(LogLevel::WARN, crate::message!("BCH_TRANSACTIONS_NR not big enough!"));
+        log_no_fs(LogLevel::WARN, crate::message!("TRANSACTIONS_NR not big enough!"));
     }
     0
 }

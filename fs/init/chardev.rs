@@ -41,7 +41,7 @@ use crate::bcachefs_ioctl::{IoctlFlags, IoctlDataProgress, IoctlDevUsage,
     IoctlDiskResize, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2,
     IoctlDiskResizeV2, IoctlDiskSetState, IoctlDiskSetStateV2,
     IoctlDiskV2, IoctlErrMsg, IoctlFsUsage, IoctlQueryAccounting,
-    BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR, IoctlQueryAccountingV2, IoctlQueryBtreeKeys,
+    QUERY_ACCOUNTING_FREE_NR, IoctlQueryAccountingV2, IoctlQueryBtreeKeys,
     QueryBtreeKeysFlags, IoctlQueryUuid,
     IoctlReadSuper, DataEvent, DataOp, DataProgressDataTypeSpecial,
     IoctlDataEventRet, IoctlData, BCH_IOCTL_DATA, IoctlDataEvent, BCH_IOCTL_DEV_USAGE,
@@ -85,7 +85,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use core::ffi::CStr;
 use cstruct_macros::vtable;
 use kernel::uaccess::{UserPtr, UserSlice};
-use crate::format::{Btree, DataType, MemberState, __uuid_t, BCH_REPLICAS_MAX, SbCompat};
+use crate::format::{Btree, DataType, MemberState, __uuid_t, REPLICAS_MAX, SbCompat};
 
 /* The dispatch */
 
@@ -267,8 +267,8 @@ fn query_accounting(fs: &Fs, arg: &mut IoctlQueryAccountingV2,
     arg.online_reserved = fs.online_reserved();
     arg.accounting_u64s = (keys.len() / size_of::<u64>()) as u32;
 
-    const R: usize = BCH_REPLICAS_MAX as usize;
-    const { assert!(R <= BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize) };
+    const R: usize = REPLICAS_MAX as usize;
+    const { assert!(R <= QUERY_ACCOUNTING_FREE_NR as usize) };
     let p = fs.sectors_placeable();
     arg.free     = Default::default();
     arg.free_now = Default::default();

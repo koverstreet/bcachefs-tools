@@ -25,7 +25,7 @@
 //! through the node it points to.
 //!
 //! A stripe with a block on the device is invalidated instead: the block's
-//! pointer set to BCH_SB_MEMBER_INVALID, by the same flags, and the stripe
+//! pointer set to MEMBER_INVALID, by the same flags, and the stripe
 //! marked for reconcile to rebuild - its blocks' extents recorded lost first,
 //! if it can't be. By the backpointer scan, which meets them, and after
 //! dev_data_drop(), by the device's buckets' bucket_to_stripe entries -
@@ -49,7 +49,7 @@ use crate::data::ec::format::Stripe;
 use crate::bcachefs_ioctl::ForceIf;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
@@ -141,7 +141,7 @@ impl DevDrop<'_> {
     }
 
     /// Stripe @k, at @iter, intent locked, without its blocks on the device -
-    /// their pointers to BCH_SB_MEMBER_INVALID - and marked for reconcile to
+    /// their pointers to MEMBER_INVALID - and marked for reconcile to
     /// rebuild them. Not if it's open, which @had_open says: the stripe being
     /// made, or repaired, is rewritten without the device anyway, and the
     /// scan goes again until it's empty.
@@ -176,7 +176,7 @@ impl DevDrop<'_> {
             for (i, p) in v.block_ptrs().iter().enumerate() {
                 let mut dev = u32::from(p.dev());
                 if dev == self.dev {
-                    dev = BCH_SB_MEMBER_INVALID;
+                    dev = MEMBER_INVALID;
                     newly_lost |= 1 << i;
                 }
                 let ca = fs.dev_rcu(dev, &rcu);
@@ -220,7 +220,7 @@ impl DevDrop<'_> {
             let mut nk: &mut BkeyI = n.as_mut();
             let mut s = nk.as_s().arm::<Stripe>().expect("a copy of a stripe");
             for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
-                p.set_dev(BCH_SB_MEMBER_INVALID as u8);
+                p.set_dev(MEMBER_INVALID as u8);
             }
 
             *recorded = idx;
@@ -245,7 +245,7 @@ impl DevDrop<'_> {
             accounting::add_at(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
 
             for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
-                p.set_dev(BCH_SB_MEMBER_INVALID as u8);
+                p.set_dev(MEMBER_INVALID as u8);
             }
             // degraded, so it needs rebuilding, whatever set_needs_reconcile()
             // made of the device

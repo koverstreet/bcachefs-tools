@@ -17,13 +17,13 @@ use crate::data::reconcile::format::{ExtentReconcile, ReconcileOpt, ReconcileOpt
 use crate::data::reconcile::work::ReconcileScan;
 use crate::init::{dev::DevsMask, error::id};
 use crate::opts::InodeOpts;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile,
     PerSnapshotIoOpts, SetNeedsReconcileCtx};
 use crate::errcode::{BchError, Errcode};
-use crate::format::{CompressionType, BkeyType, MetadataVersion, BCH_REPLICAS_MAX, Bkey, CsumType};
+use crate::format::{CompressionType, BkeyType, MetadataVersion, REPLICAS_MAX, Bkey, CsumType};
 use crate::fs::Fs;
 use crate::posix::inode_opts::get_io_opts;
 use crate::os::kernel::unlikely;
@@ -53,7 +53,7 @@ fn should_have_rb_opts(k: &Bkey, r: &ExtentReconcile) -> bool {
 /// What a key's reconcile state should be: needs_reconcile()'s.
 struct NeedsReconcile {
     r:            ExtentReconcile,
-    /// Padding pointers to BCH_SB_MEMBER_INVALID to drop, or - negative - to
+    /// Padding pointers to MEMBER_INVALID to drop, or - negative - to
     /// add, standing in for replicas the key is short.
     invalid_devs: i32,
 }
@@ -115,7 +115,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &InodeOp
                 r.background_target() != 0 &&
                 !fs.dev_in_target(dev, Target::decode(r.background_target().into()), &rcu) {
                 need(&mut r, o::background_target);
-                if dev != BCH_SB_MEMBER_INVALID {
+                if dev != MEMBER_INVALID {
                     r.set_ptr_moving(i);
                 }
             }
@@ -123,7 +123,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &InodeOp
             if evacuating {
                 need(&mut r, o::data_replicas);
                 r.set_hipri(1);
-                if dev != BCH_SB_MEMBER_INVALID {
+                if dev != MEMBER_INVALID {
                     r.set_ptr_moving(i);
                 }
             }
@@ -132,7 +132,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &InodeOp
                 ec_redundancy = ec_redundancy.max(p.ec.redundancy().into());
             }
             ec |= p.has_ec;
-            invalid += u32::from(dev == BCH_SB_MEMBER_INVALID);
+            invalid += u32::from(dev == MEMBER_INVALID);
         }
     }
 
@@ -178,7 +178,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &InodeOp
     let mut invalid_devs = (acct.max(ec_redundancy + 1) as i32 + invalid as i32 - replicas as i32)
         .min(invalid as i32);
 
-    // more than one pointer to BCH_SB_MEMBER_INVALID is an incompat feature
+    // more than one pointer to MEMBER_INVALID is an incompat feature
     if invalid_devs < 0 && fs.request_incompat_feature(MetadataVersion::reconcile).is_err() {
         invalid_devs = 0;
     }
@@ -223,7 +223,7 @@ fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Opti
     -> Result<bool, BchError>
 {
     let fs = t.fs();
-    let devs = || k.ptrs(fs).map(|p| u32::from(p.dev())).filter(|&dev| dev != BCH_SB_MEMBER_INVALID);
+    let devs = || k.ptrs(fs).map(|p| u32::from(p.dev())).filter(|&dev| dev != MEMBER_INVALID);
 
     if cache.as_deref().is_some_and(|m| devs().any(|dev| m.test(dev as usize))) {
         return Ok(true);
@@ -322,7 +322,7 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOp
 impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
     /// Its reconcile state brought in line with options @opts: a stripe's
     /// needs_reconcile bit; a data key's reconcile entry set, or dropped if
-    /// it needs none, and its padding pointers to BCH_SB_MEMBER_INVALID added
+    /// it needs none, and its padding pointers to MEMBER_INVALID added
     /// or dropped. New work must be allowed - new_needs_rb_allowed().
     /// Its room is what it's grown into.
     pub fn set_needs_reconcile(&mut self, t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>,
@@ -364,7 +364,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
 
         if unlikely(invalid_devs > 0) {
             k.drop_ptrs_noerror(fs, |p| {
-                let drop = p.p.ptr.dev() as u32 == BCH_SB_MEMBER_INVALID && !p.p.has_ec && invalid_devs > 0;
+                let drop = p.p.ptr.dev() as u32 == MEMBER_INVALID && !p.p.has_ec && invalid_devs > 0;
                 invalid_devs -= i32::from(drop);
                 drop
             });
@@ -375,7 +375,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
 
             for _ in 0..n {
                 let end = k.entries_end();
-                let ptr = ExtentPtr::new().with_dev(BCH_SB_MEMBER_INVALID as u8);
+                let ptr = ExtentPtr::new().with_dev(MEMBER_INVALID as u8);
                 k.insert_entry(end, &[ptr.into_bits().0]).expect("room for padding pointers: its caller's");
             }
         }
@@ -398,7 +398,7 @@ fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapsh
 
 /// What set_needs_reconcile() can grow a key by: a reconcile entry, and a
 /// padding pointer for each replica.
-const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + BCH_REPLICAS_MAX;
+const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + REPLICAS_MAX;
 
 /// The extent trigger's: the reconcile entry filled in on the key going in,
 /// so callers needn't - its room made here, as callers like extent split
@@ -440,7 +440,7 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapsho
 }
 
 /// @k's reconcile state taken off - its reconcile entries, and the padding
-/// pointers to BCH_SB_MEMBER_INVALID: for a node pointer whose triggers never
+/// pointers to MEMBER_INVALID: for a node pointer whose triggers never
 /// saw it.
 pub(crate) fn strip_reconcile(fs: &Fs, k: BkeyS<'_>) {
     if k.k.key_type().is_deleted() {
@@ -455,7 +455,7 @@ pub(crate) fn strip_reconcile(fs: &Fs, k: BkeyS<'_>) {
         kp.drop_entry(fs, at);
     }
 
-    kp.drop_ptrs_noerror(fs, |p| p.p.ptr.dev() as u32 == BCH_SB_MEMBER_INVALID);
+    kp.drop_ptrs_noerror(fs, |p| p.p.ptr.dev() as u32 == MEMBER_INVALID);
 
     assert!(kp.durability_safe(fs).nr_ptrs != 0, "a key with no pointers left once its reconcile state's off");
 }

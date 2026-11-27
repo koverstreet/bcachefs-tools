@@ -18,7 +18,7 @@ use self::JournalSpaceFrom::{self as SpaceFrom, *};
 use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, SbFeature, BCH_REPLICAS_MAX};
+use crate::format::{DataType, SbFeature, REPLICAS_MAX};
 use crate::fs::{Dev, FsFlag};
 use crate::journal::pins::{PinsRead, JournalEntryPin};
 use crate::locking::{ExclusiveGuard, Guard as _, MemallocFlags, Mutex};
@@ -250,11 +250,11 @@ impl Journal {
     fn space_available_from(&self, g: &JournalGuard<'_>, nr_devs_want: usize, from: SpaceFrom) -> JournalSpace {
         let fs = self.fs();
         /* one past: an insert comes before the truncate */
-        let mut largest = ArrayVec::<JournalSpace, { BCH_REPLICAS_MAX as usize + 1 }>::new();
+        let mut largest = ArrayVec::<JournalSpace, { REPLICAS_MAX as usize + 1 }>::new();
         let mut nr_devs = 0;
         let mut min_bucket_size = u32::MAX;
 
-        assert!(nr_devs_want <= BCH_REPLICAS_MAX as usize, "journal space for {nr_devs_want} devices");
+        assert!(nr_devs_want <= REPLICAS_MAX as usize, "journal space for {nr_devs_want} devices");
 
         let rcu = read_lock();
         for ca in fs.rw_devs_for_rcu(DataType::journal, &rcu) {

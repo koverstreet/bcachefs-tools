@@ -38,7 +38,7 @@ use crate::alloc::buckets::{FsPlaceable, FsUsageBase, FsUsageShort,
     ReservationFlags, RESERVE_FACTOR};
 use crate::alloc::foreground::open_bucket;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, BCH_REPLICAS_MAX, WriteDegradedAction};
+use crate::format::{DataType, WriteDegradedAction};
 use crate::init::{error::trans_inconsistent, dev::DevsMask};
 use crate::{percpu_field, new_lock};
 use crate::debug::trace::events;
@@ -64,7 +64,7 @@ use cstruct_macros::{Fieldwise, Init, MaybeZeroable, TypeInfo};
 pub struct FsCapacityCounters {
     pub usage: FsUsageBase,
     /* Indexed by disk_res_slot(); physical sectors, not data size */
-    pub online_reserved: [u64; BCH_REPLICAS_MAX as usize],
+    pub online_reserved: [u64; REPLICAS_MAX],
 }
 
 #[repr(C)]
@@ -75,7 +75,7 @@ pub struct FsCapacityPcpu {
      * The reservation caches, by disk_res_slot(): slots, each changed by
      * its own CPU and reset by a recompute's
      */
-    pub sectors_available: [Volatile<u64>; BCH_REPLICAS_MAX as usize],
+    pub sectors_available: [Volatile<u64>; REPLICAS_MAX],
 }
 
 /// See alloc/capacity.rs.
@@ -95,7 +95,7 @@ pub struct FsCapacity {
     pub capacity_gen: u32,
     pub bucket_size_max: crate::util::projections::Volatile<u32>,
 
-    pub sectors_available: [AtomicU64; BCH_REPLICAS_MAX as usize],
+    pub sectors_available: [AtomicU64; REPLICAS_MAX],
 
     /* the reservation caches' recompute, and the placement it decides */
     #[pin]
@@ -365,7 +365,7 @@ pub(crate) fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
 
 // ── Placeable space ──────────────────────────────────────────────────────
 
-const REPLICAS_MAX: usize = BCH_REPLICAS_MAX as usize;
+const REPLICAS_MAX: usize = crate::format::REPLICAS_MAX as usize;
 
 /// A device's free space, in sectors, net of its reserved_sectors - space the
 /// allocator will refuse isn't ours to promise.
@@ -652,12 +652,12 @@ pub use crate::alloc::buckets::DiskReservation;
 const SECTORS_CACHE: u64 = 1024;
 
 /// The slot a reservation at @nr_replicas lives in. Counts above
-/// BCH_REPLICAS_MAX are real - durability is per device - and share the last
+/// REPLICAS_MAX are real - durability is per device - and share the last
 /// slot, which is the conservative direction. 0 is a bug; the clamp only keeps
 /// it in bounds.
 fn disk_res_slot(nr_replicas: u32) -> usize {
     debug_assert!(nr_replicas != 0);
-    nr_replicas.clamp(1, BCH_REPLICAS_MAX) as usize - 1
+    nr_replicas.clamp(1, crate::format::REPLICAS_MAX) as usize - 1
 }
 
 impl Fs {

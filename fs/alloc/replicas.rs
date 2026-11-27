@@ -11,7 +11,7 @@
 //! list, the section zero padded after the last.
 //!
 //! An entry being built - from a key, a device list - is written into room
-//! for a key's worth of devices, BCH_BKEY_PTRS_MAX: C's bch_replicas_padded,
+//! for a key's worth of devices, BKEY_PTRS_MAX: C's bch_replicas_padded,
 //! or a disk_accounting_pos, whose replicas entry is that size exactly.
 
 #![allow(non_camel_case_types)]
@@ -24,9 +24,9 @@ use crate::alloc::replicas_format::{ReplicasEntryV0, ReplicasEntryV1,
     SbFieldReplicas, SbFieldReplicasV0};
 use crate::bcachefs_ioctl::ForceIf;
 use crate::init::{dev::{DevsList, DevsMask}, passes::RecoveryPass};
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, DataTypes, MetadataVersion, BCH_BKEY_PTRS_MAX, Sb, SbFieldType};
+use crate::format::{DataType, DataTypes, MetadataVersion, BKEY_PTRS_MAX, Sb, SbFieldType};
 use crate::fs::{Fs, SbLockGuard, FsFlag};
 use crate::sb::io::{entries_end, SbFieldOps, SbSection, SbState, SbResize};
 use crate::sb::members::member_exists;
@@ -126,7 +126,7 @@ impl SbEntry<'_> {
             return invalid(err, format_args!("bad nr_required"));
         }
         for &d in self.devs {
-            if u32::from(d) != BCH_SB_MEMBER_INVALID && !dev_ok(d) {
+            if u32::from(d) != MEMBER_INVALID && !dev_ok(d) {
                 return invalid(err, format_args!("invalid device {d}"));
             }
         }
@@ -149,7 +149,7 @@ impl Entry {
 
 /// An entry with room for a key's worth of devices, in bytes:
 /// bch_replicas_padded's.
-const ENTRY_BYTES: usize = DEVS + BCH_BKEY_PTRS_MAX as usize;
+const ENTRY_BYTES: usize = DEVS + BKEY_PTRS_MAX as usize;
 
 /// An entry being built in its room: its head, then the devices past it -
 /// what has the room sets the count.
@@ -368,9 +368,9 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &DevsMask, flags: ForceIf, err
         return true;
     }
 
-    let invalid = e.devs.iter().filter(|&&d| u32::from(d) == BCH_SB_MEMBER_INVALID).count();
+    let invalid = e.devs.iter().filter(|&&d| u32::from(d) == MEMBER_INVALID).count();
     let online = e.devs.iter()
-        .filter(|&&d| u32::from(d) != BCH_SB_MEMBER_INVALID && devs.test(d.into()))
+        .filter(|&&d| u32::from(d) != MEMBER_INVALID && devs.test(d.into()))
         .count();
 
     if invalid == e.devs.len() {
@@ -687,7 +687,7 @@ fn verify_entry(_e: &Entry) {
         let e = _e;
         assert!(!e.devs.is_empty());
         assert!(!(e.nr_required > 1 && usize::from(e.nr_required) >= e.devs.len()));
-        assert!(e.devs.windows(2).all(|w| u32::from(w[0]) == BCH_SB_MEMBER_INVALID || w[0] < w[1]));
+        assert!(e.devs.windows(2).all(|w| u32::from(w[0]) == MEMBER_INVALID || w[0] < w[1]));
     }
 }
 
@@ -1022,7 +1022,7 @@ mod tests {
     /// A section listing an entry twice is invalid.
     #[test]
     fn duplicate() {
-        let invalid = BCH_SB_MEMBER_INVALID as u8;
+        let invalid = MEMBER_INVALID as u8;
         let mut sb = SbHandle::default();
         sb.sb_realloc(0).unwrap();
 
@@ -1042,7 +1042,7 @@ mod tests {
     fn partial_entry() {
         type V0 = SbFieldReplicasV0;
         let validate = |write: bool| {
-            let invalid = BCH_SB_MEMBER_INVALID as u8;
+            let invalid = MEMBER_INVALID as u8;
             let mut sb = SbHandle::default();
             sb.sb_realloc(0).unwrap();
             assert!(ReplicasCpu::new().with(&entry(BTREE, 1, &[invalid])).unwrap().to_sb(&mut sb));

@@ -15,7 +15,7 @@ use crate::c;
 use crate::btree::bbpos::Bbpos;
 use crate::btree::key_cache::BkeyCached;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::btree::trans::BCH_TRANSACTIONS_NR;
+use crate::btree::trans::TRANSACTIONS_NR;
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::util::time_stats::TimeStats;
 use crate::btree::node::BtreeNodeFlags;
@@ -172,10 +172,10 @@ impl BtreeTrans<'_> {
     /// This transaction's function's, of @stats - one of the btree.trans
     /// time stats arrays - if it has one.
     #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-    fn fn_time_stats<'a>(&self, stats: &'a TimeStatsArray<TimeStats, { BCH_TRANSACTIONS_NR as usize }>)
+    fn fn_time_stats<'a>(&self, stats: &'a TimeStatsArray<TimeStats, { TRANSACTIONS_NR as usize }>)
         -> Option<TimeStatsRef<'a, TimeStats>> {
         let idx = self.fn_idx.get();
-        (u32::from(idx) < BCH_TRANSACTIONS_NR).then(|| stats.get(idx.into()))
+        (u32::from(idx) < TRANSACTIONS_NR).then(|| stats.get(idx.into()))
     }
 
     pub(crate) fn lock_hold_time_update(&self, path: &BtreePath, level: usize) {

@@ -28,10 +28,10 @@ use crate::btree::bkey::BkeyFamily;
 use core::marker::PhantomData;
 use core::ops::{BitAnd, BitOr, BitOrAssign};
 use crate::data::extents_format::ExtentPtr;
-use crate::format::BCH_BKEY_PTRS_MAX;
+use crate::format::BKEY_PTRS_MAX;
 use crate::opts::InodeOpts;
 
-const _: () = assert!(BCH_BKEY_PTRS_MAX <= u16::BITS);
+const _: () = assert!(BKEY_PTRS_MAX <= u16::BITS);
 
 /// An invariant lifetime, standing for one key.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -197,7 +197,7 @@ impl<'id, K: BkeyVMut<V: PtrsBkey>> Branded<'id, K> {
 
     /// drop_ec() for each pointer of @m.
     pub fn drop_ec_mask(&mut self, fs: &Fs, m: PtrMask<'id>) {
-        let devs: ArrayVec<u32, { BCH_BKEY_PTRS_MAX as usize }> =
+        let devs: ArrayVec<u32, { BKEY_PTRS_MAX as usize }> =
             self.ptrs_in(fs, m).map(|p| u32::from(p.dev())).collect();
 
         for dev in devs {
@@ -223,7 +223,7 @@ impl<'id, K: BkeyVMut<V: PtrsBkey>> Branded<'id, K> {
     /// devices before any is made cached - set_cached() can drop cached
     /// pointers anywhere in the key, moving the ones after them.
     pub fn set_ptrs_cached_mask(mut self, fs: &Fs, opts: &InodeOpts, m: PtrMask<'id>) -> K {
-        let devs: ArrayVec<u32, { BCH_BKEY_PTRS_MAX as usize }> =
+        let devs: ArrayVec<u32, { BKEY_PTRS_MAX as usize }> =
             self.ptrs_in(fs, m).map(|p| u32::from(p.dev())).collect();
 
         for dev in devs.into_iter().rev() {

@@ -105,7 +105,7 @@ nest! {
  * to MAX_PAGECACHE_ORDER pages, each contributing PAGE_SECTORS sector entries.
  * Used to size the writepage_buf_pool reserve.
  */
-pub const BCH_WRITEPAGE_BUF_BYTES: usize =
+pub const WRITEPAGE_BUF_BYTES: usize =
     ((crate::os::kernel::PAGE_SIZE >> 9) << crate::c::MAX_PAGECACHE_ORDER) * core::mem::size_of::<FolioSector>();
 
 /// A folio's sector state, under its bch_folio's lock: written by writeback

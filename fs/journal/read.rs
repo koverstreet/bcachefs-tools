@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::{bkey::ValidateFlags, journal_overlay::{JournalPtr, JournalReplay}};
-use crate::format::{Btree, MemberState, Nonce, Csum, BCH_REPLICAS_MAX, Jset, JsetEntry,
+use crate::format::{Btree, MemberState, Nonce, Csum, REPLICAS_MAX, Jset, JsetEntry,
     ScrubJournalOpt, JsetHead, JsetEntryRef};
 use crate::c;
 use crate::alloc::accounting_format::DataTypes;
@@ -10,7 +10,7 @@ use crate::journal::init::JournalStartInfo;
 use crate::journal::journal::{JournalRewindRange, JournalFlag};
 use crate::sb::{members_format::MemberErrorType, members::{DevIoRef, DevReadRefKind}};
 use crate::util::{Printbuf, ToText};
-use crate::data::checksum::{csum_vstruct, BCH_NONCE_JOURNAL};
+use crate::data::checksum::{csum_vstruct, NONCE_JOURNAL};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
 use crate::journal::buckets::{JournalRing, JournalBucketStage};
@@ -43,7 +43,7 @@ impl JsetHead {
                 Le32::new(0),
                 Le32::new(seq as u32),
                 Le32::new((seq >> 32) as u32),
-                Le32::new(BCH_NONCE_JOURNAL),
+                Le32::new(NONCE_JOURNAL),
             ],
         }
     }
@@ -121,16 +121,16 @@ impl JournalReplay {
 }
 
 /// The devices replay @i's copies are on, each once - or, said, none, for more
-/// than BCH_REPLICAS_MAX: no one write puts an entry on more, so they aren't
+/// than REPLICAS_MAX: no one write puts an entry on more, so they aren't
 /// its replicas, and a crafted image can claim any number.
 pub fn replay_devs(fs: &Fs, i: &JournalReplay) -> DevsList {
     let mut devs = DevsList::default();
     for p in i.ptrs() {
-        if !devs.has(p.dev) && u32::from(devs.nr) >= BCH_REPLICAS_MAX {
+        if !devs.has(p.dev) && u32::from(devs.nr) >= REPLICAS_MAX {
             let mut buf = Printbuf::new();
             journal_ptrs_to_text(&mut buf, fs, i);
             bch_err!(fs, "journal seq {} found on more than {} devices, not tracking its replicas:\n{}",
-                     i.j.seq.get(), BCH_REPLICAS_MAX, buf);
+                     i.j.seq.get(), REPLICAS_MAX, buf);
             return DevsList::default();
         }
         devs.add(p.dev);

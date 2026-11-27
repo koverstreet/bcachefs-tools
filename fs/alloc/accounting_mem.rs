@@ -15,7 +15,7 @@ use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::bcachefs_ioctl::ForceIf;
 use crate::btree::journal_overlay::JournalKeys;
 use crate::journal::journal::JournalRes;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType, Bkey, DegradedAction};
 use crate::fs::{Fs, FsFlag};
@@ -547,7 +547,7 @@ fn validate_late(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos<Unvalidated>,
     let fs = t.fs();
 
     if let Some(r) = replicas_entry(pos) {
-        let missing = r.devs.iter().find(|&&d| u32::from(d) != BCH_SB_MEMBER_INVALID && !fs.dev_exists(d.into()));
+        let missing = r.devs.iter().find(|&&d| u32::from(d) != MEMBER_INVALID && !fs.dev_exists(d.into()));
         if let Some(&dev) = missing {
             return invalid_dev(t, pos, v, dev.into());
         }

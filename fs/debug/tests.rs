@@ -18,7 +18,7 @@ use crate::util::par::{self, Backend};
 use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 
 use crate::util::{alloc::{kbox_pin_init, KBox, Vec}, place::{Container, PlacedInit}};
 use core::ops::ControlFlow;
@@ -526,7 +526,7 @@ fn test_btree_ptr_stale_dirty_key(
 
     let mut updated = false;
     for ptr_entry in update.ptrs_mut(t.fs()) {
-        if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != BCH_SB_MEMBER_INVALID as u64 {
+        if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
             ptr_entry.update_generation(|g| g.wrapping_sub(1));

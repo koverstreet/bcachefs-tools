@@ -23,7 +23,7 @@
 
 use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
-use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
+use crate::alloc::disk_groups_format;
 use crate::bcachefs_ioctl::{IoctlPreadRaw, IoctlSubvolume, IoctlSubvolumeV2,
     FSOP_GOING_FLAGS_DEFAULT, FSOP_GOING_FLAGS_LOGFLUSH, FSOP_GOING_FLAGS_NOLOGFLUSH,
     PreadRawFlags, BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
@@ -33,7 +33,7 @@ use crate::bcachefs_ioctl::{IoctlPreadRaw, IoctlSubvolume, IoctlSubvolumeV2,
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, BCHFS_IOC_READDIR_FLAGS, BCHFS_IOC_REINHERIT_ATTRS,
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, BCHFS_IOC_UNPOISON, FS_IOC_GOINGDOWN};
 use crate::data::{extents::ReadFlags, read::ReadErrReport};
-use crate::posix::dirent_format::BCH_NAME_MAX;
+use crate::posix::dirent_format::DIRENT_NAME_MAX;
 use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::posix::namei::CreateFlags;
@@ -67,7 +67,7 @@ use pin_init::stack_try_pin_init;
 use kernel::uaccess::UserPtr;
 
 const FSLABEL_MAX: usize = c::FSLABEL_MAX as usize;
-const LABEL_SIZE: usize = BCH_SB_LABEL_SIZE as usize;
+const LABEL_SIZE: usize = disk_groups_format::LABEL_SIZE as usize;
 
 pub struct FS_IOC_GETVERSION;
 impl Ioctl for FS_IOC_GETVERSION {
@@ -145,7 +145,7 @@ fn file_ioctl(file: &File, inode: &InodeInfo, regular: Option<&File<InodeFile>>,
                 || MntIdmap::of(file).owner_or_capable(inode.vfs()), a)),
         // The argument is the name's address
         <BCHFS_IOC_REINHERIT_ATTRS as Ioctl>::OPCODE => {
-            let name = UserStr::read(user.as_mut_ptr() as u64, BCH_NAME_MAX as usize + 1)?;
+            let name = UserStr::read(user.as_mut_ptr() as u64, DIRENT_NAME_MAX as usize + 1)?;
             reinherit_attrs(file, inode, OsStr::from_bytes(name.as_cstr().to_bytes()))
         }
         c::FS_IOC_SETVERSION => Err(Errcode::ENOTTY_setversion.into()),

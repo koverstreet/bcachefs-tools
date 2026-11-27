@@ -16,7 +16,7 @@ use bcachefs_kernel::data::inline_data::InlineDataMut;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::data::extents_format::{ExtentPtr, InlineDataCsum};
 use bcachefs_kernel::opts::{Opts, FsckErrOpt};
-use bcachefs_kernel::sb::members_format::BCH_SB_MEMBER_INVALID;
+use bcachefs_kernel::sb::members_format;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::read::{entry_type, JsetEntryType};
@@ -171,12 +171,12 @@ struct SanitizeOpts {
     single_replica:     bool,
 }
 
-/// A member index that names no device (`BCH_SB_MEMBER_INVALID`); the read
+/// A member index that names no device (`MEMBER_INVALID`); the read
 /// path skips ptrs pointing at it.
-const MEMBER_INVALID: u8 = BCH_SB_MEMBER_INVALID as u8;
+const MEMBER_INVALID: u8 = members_format::MEMBER_INVALID as u8;
 
 /// De-replicate a btree pointer key in place: keep the pointer on the lowest
-/// device index and set every other pointer's device to `BCH_SB_MEMBER_INVALID`.
+/// device index and set every other pointer's device to `MEMBER_INVALID`.
 /// Returns whether it changed anything. The surviving replica is the one the
 /// dump actually wrote, and the only one the read path will consider.
 fn derep(fs: &Fs, k: BkeyS<'_, FamilyVal<AllTypes, Unvalidated>>) -> bool {

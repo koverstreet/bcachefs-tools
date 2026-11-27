@@ -64,7 +64,7 @@ use crate::data::reconcile::work::ReconcileScan;
 use crate::data::update::{DataUpdateOpts, DataUpdateType};
 use crate::init::dev::DevsMask;
 use crate::opts::InodeOpts;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
@@ -239,7 +239,7 @@ fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>
         return Ok((k.where_(fs, |p| fs.dev_bad_or_evacuating(p.ptr.dev().into(), &rcu)), k.none()));
     }
 
-    let offline = |dev: u32| dev == BCH_SB_MEMBER_INVALID || !fs.devs_online.test(dev as usize);
+    let offline = |dev: u32| dev == MEMBER_INVALID || !fs.devs_online.test(dev as usize);
 
     let mut sim = Sim::new(k.key().untyped());
     let mut n = k.adopt(fs, sim.key_mut());
@@ -353,7 +353,7 @@ pub fn offline_devs(fs: &Fs, k: BkeySC<'_>) -> DevsMask {
     let mut devs = DevsMask::default();
     if let Some(kp) = k.arm::<Ptrs>() {
         for d in kp.ptrs(fs).map(|p| u32::from(p.dev())) {
-            if d != BCH_SB_MEMBER_INVALID && !fs.devs_online.test(d as usize) {
+            if d != MEMBER_INVALID && !fs.devs_online.test(d as usize) {
                 devs.set(d as usize);
             }
         }

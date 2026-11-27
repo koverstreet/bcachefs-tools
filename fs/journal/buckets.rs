@@ -22,7 +22,7 @@ use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation, Reserva
 use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, SbFeature, BCH_JOURNAL_BUCKETS_MIN, Sb, SbFieldJournal,
+use crate::format::{DataType, SbFeature, JOURNAL_BUCKETS_MIN, Sb, SbFieldJournal,
     SbFieldJournalV2};
 use crate::fs::{Dev, Fs, SbLockGuard, FsFlag};
 use crate::journal::sb::buckets_to_sb;
@@ -610,7 +610,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
 
     /* but no more than a quarter of RAM: */
     let ram = (totalram_bytes() as u64 / 4 / ca.bucket_bytes()) as u32;
-    let nr = nr.max(BCH_JOURNAL_BUCKETS_MIN).min(ram);
+    let nr = nr.max(JOURNAL_BUCKETS_MIN).min(ram);
 
     bch_err_fn_dev!(ca, set_nr_loop(fs, ca, nr, new_fs))
 }

@@ -378,7 +378,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #(#ids,)*
         }
 
-        const _: () = assert!(#nr <= BCH_OPTS_MAX as usize, "more options than BCH_OPTS_MAX");
+        const _: () = assert!(#nr <= OPTS_MAX as usize, "more options than OPTS_MAX");
 
         impl #name {
             /// Each option, by OptId.

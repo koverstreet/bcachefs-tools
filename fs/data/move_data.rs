@@ -52,7 +52,7 @@ use crate::btree::bbpos::Bbpos;
 use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
 use crate::data::reconcile::trigger::{PerSnapshotIoOpts, SetNeedsReconcileCtx};
 use crate::opts::InodeOpts;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode as err, ret_to_c, BchError};
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
 use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt, MoveBucketKey};
@@ -273,7 +273,7 @@ enum BpWalk {
     Dev(u32),
     /// Of block @block of stripe @idx, whose device was removed, in
     /// BTREE_ID_stripe_backpointers: their extents' pointers are
-    /// BCH_SB_MEMBER_INVALID, still holding the stripe
+    /// MEMBER_INVALID, still holding the stripe
     EcOrphan { idx: u64, block: u32 },
 }
 
@@ -477,11 +477,11 @@ impl Moving<'_> {
     /// pointers moved those that point to the block.
     pub fn evacuate_ec_orphan(&self, idx: u64, block: u32, start: u64, end: u64) -> Result<(), BchError> {
         let w = PhysWalk::new(BpWalk::EcOrphan { idx, block }, start, end);
-        // Every removed device's pointers are BCH_SB_MEMBER_INVALID: the
+        // Every removed device's pointers are MEMBER_INVALID: the
         // block's are the ones whose stripe pointer is to it
         self.move_data_phys(None, &w, "evacuate_ec_orphan_pred", &mut |t, _, k, io_opts, d| {
             evacuate_ptrs(t, k, io_opts, d, |p| {
-                u32::from(p.ptr.dev()) == BCH_SB_MEMBER_INVALID && p.has_ec &&
+                u32::from(p.ptr.dev()) == MEMBER_INVALID && p.has_ec &&
                     p.ec.idx() == idx && u32::from(p.ec.block()) == block
             })
         })

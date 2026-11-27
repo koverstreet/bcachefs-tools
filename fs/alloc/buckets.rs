@@ -19,7 +19,7 @@ use crate::alloc::background::BUCKET_GC_GEN_MAX;
 use crate::alloc::format::AllocV4;
 use crate::data::extents::ExtentPtrDecoded;
 use crate::data::extents_format::{ExtentPtr, Extent, Reservation};
-use crate::sb::{members_format::BCH_SB_MEMBER_INVALID, errors::SbErrorId};
+use crate::sb::{members_format::MEMBER_INVALID, errors::SbErrorId};
 use crate::errcode::{Errcode, BchError};
 use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
 use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
@@ -40,8 +40,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_enum, BitfieldMembers};
 use core::cell::Cell;
 use nestify::nest;
-use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType, BCH_BKEY_PTRS_MAX,
-    BCH_REPLICAS_MAX, Bkey, SbCompat, SbCompats};
+use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType, BKEY_PTRS_MAX,
+    REPLICAS_MAX, Bkey, SbCompat, SbCompats};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -54,7 +54,7 @@ pub const RESERVE_FACTOR: u32 = 6;
 
 /* A device position as a 32.32 fixed point fraction of its size: see
  * bch_dev::offset_to_frac() */
-pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
+pub const DEV_POS_FRAC_BITS: u32 = 32;
 
 /// A bucket's gc state, in memory: fsck has one for every bucket on every
 /// device, so it's 16 bytes, the lock one of them.
@@ -164,9 +164,9 @@ pub struct FsUsageShort {
 #[derive(Clone, Copy, Default, MaybeZeroable, TypeInfo)]
 pub struct FsPlaceable {
     /* waiting on copygc, if need be */
-    pub eventual: [u64; BCH_REPLICAS_MAX as usize],
+    pub eventual: [u64; REPLICAS_MAX as usize],
     /* free buckets only */
-    pub now: [u64; BCH_REPLICAS_MAX as usize],
+    pub now: [u64; REPLICAS_MAX as usize],
 }
 
 /*
@@ -265,13 +265,13 @@ impl Dev {
     /// the same fraction is about the same zone of rotational media.
     pub fn offset_to_frac(&self, offset: u64) -> u64 {
         let size = u128::from(self.bucket_to_sector(self.mi.get().nbuckets));
-        ((u128::from(offset) << BCH_DEV_POS_FRAC_BITS) / size) as u64
+        ((u128::from(offset) << DEV_POS_FRAC_BITS) / size) as u64
     }
 
     /// offset_to_frac()'s inverse: dev_frac_to_offset().
     pub fn frac_to_offset(&self, frac: u64) -> u64 {
         let size = u128::from(self.bucket_to_sector(self.mi.get().nbuckets));
-        ((u128::from(frac) * size) >> BCH_DEV_POS_FRAC_BITS) as u64
+        ((u128::from(frac) * size) >> DEV_POS_FRAC_BITS) as u64
     }
 }
 
@@ -506,7 +506,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
     let sectors = if insert { i64::from(bp.v.bucket_len) } else { -i64::from(bp.v.bucket_len) };
 
     let dev = u32::from(p.ptr.dev());
-    if unlikely(dev == BCH_SB_MEMBER_INVALID) {
+    if unlikely(dev == MEMBER_INVALID) {
         if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) && p.has_ec {
             if !insert {
                 bp.k.set_key_type(BkeyType::deleted);
@@ -630,7 +630,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
     let data_type = if k.k.is_btree_ptr() { DataType::btree } else { DataType::user };
 
     let mut replicas_sectors = 0i64;
-    let mut devs = [0u8; BCH_BKEY_PTRS_MAX as usize];
+    let mut devs = [0u8; BKEY_PTRS_MAX as usize];
     let mut nr_devs = 0;
     let mut nr_required = 1;
 

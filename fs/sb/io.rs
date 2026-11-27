@@ -149,10 +149,10 @@ use crate::sb::counters_format::SbFieldCounters;
 use crate::sb::downgrade_format::SbFieldDowngrade;
 use crate::sb::errors_format::SbFieldErrorsV2;
 use crate::sb::members::DevReadRefKind;
-use crate::sb::members_format::{SbFieldMembersV2, BCH_SB_MEMBERS_MAX, MemberErrorType};
+use crate::sb::members_format::{SbFieldMembersV2, MEMBERS_MAX, MemberErrorType};
 use crate::util::time_stats::TimeStat;
 use crate::format::{Sb, SbFieldCrypt, __uuid_t, Csum, Key, bch_sb_field, SbFieldExt, SbLayout,
-    BCH_SINGLE_DEVICE_SB_FIELDS,
+    SINGLE_DEVICE_SB_FIELDS,
     CsumType, DegradedAction, ErrorAction, SbCompat, bch_sb_field_by_tag, bch_sb_field_match,
     SbFieldExtWhole, SbHead, BCH_VERSION, SbCompats, SbFeatures, SbFieldType, Btree,
     DataType, Nonce, MetadataVersion, SbFeature};
@@ -246,7 +246,7 @@ pub struct SbCpu {
 pub trait SbField<S: State = Validated>: ArmOf<bch_sb_field<S>, Tag = u32> + ArmRef {
     const FIELD_TYPE: SbFieldType = SbFieldType(Self::TAG);
     /// Each device has its own: copy_super() leaves it.
-    const SINGLE_DEVICE: bool = BCH_SINGLE_DEVICE_SB_FIELDS & (1 << Self::TAG) != 0;
+    const SINGLE_DEVICE: bool = SINGLE_DEVICE_SB_FIELDS & (1 << Self::TAG) != 0;
 }
 
 impl<S: State, F: ArmOf<bch_sb_field<S>, Tag = u32> + ArmRef + ?Sized> SbField<S> for F {}
@@ -559,9 +559,9 @@ pub fn validate<'a>(sb: &'a mut Sb<Unvalidated>, opts: &Opts, read_offset: u64,
     sb_err_on!(out, sb.uuid.b == [0; 16], invalid_sb_uuid, "Bad internal UUID (got zeroes)")?;
     sb_err_on!(out, !write && sb.offset.get() != read_offset, invalid_sb_offset,
                "Bad sb offset (got {}, read from {read_offset})", sb.offset.get())?;
-    sb_err_on!(out, sb.nr_devices == 0 || u32::from(sb.nr_devices) > BCH_SB_MEMBERS_MAX,
+    sb_err_on!(out, sb.nr_devices == 0 || u32::from(sb.nr_devices) > MEMBERS_MAX,
                invalid_sb_too_many_members, "Bad number of member devices {} (max {})",
-               sb.nr_devices, BCH_SB_MEMBERS_MAX)?;
+               sb.nr_devices, MEMBERS_MAX)?;
     sb_err_on!(out, sb.dev_idx >= sb.nr_devices, invalid_sb_dev_idx,
                "Bad dev_idx (got {}, nr_devices {})", sb.dev_idx, sb.nr_devices)?;
 
@@ -2162,14 +2162,14 @@ impl DevSbMut<'_> {
 
 /// ca->sb_read_scratch's size: what a write reads back, the primary's
 /// header and then some.
-pub const BCH_SB_READ_SCRATCH_BUF_SIZE: u32 = 4096;
+pub const READ_SCRATCH_BUF_SIZE: u32 = 4096;
 
 /// ca->sb_read_scratch: read into by the write's own bio, so aligned as
 /// kmalloc() aligns its size - what O_DIRECT, in userspace, needs.
 #[repr(C, align(4096))]
 #[derive(::pin_init::Zeroable)]
 pub struct SbReadScratch {
-    buf: core::cell::UnsafeCell<[u8; BCH_SB_READ_SCRATCH_BUF_SIZE as usize]>,
+    buf: core::cell::UnsafeCell<[u8; READ_SCRATCH_BUF_SIZE as usize]>,
 }
 
 impl SbReadScratch {
@@ -2519,7 +2519,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
     prt!(msg, "Error writing superblock, wrote to {nr_wrote}/{nr_members} devices:\n");
 
     let mut sb_unwritten = DevsMask::default();
-    for dev in 0..BCH_SB_MEMBERS_MAX as usize {
+    for dev in 0..MEMBERS_MAX as usize {
         sb_unwritten.set(dev);
     }
 
@@ -2792,7 +2792,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
 }
 
 /// @src's header and sections into @dst - all but those each device has its
-/// own of, BCH_SINGLE_DEVICE_SB_FIELDS: __copy_super().
+/// own of, SINGLE_DEVICE_SB_FIELDS: __copy_super().
 fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &Sb) -> Result<(), BchError> {
     let d = dst.sb_mut();
     d.version        = src.version;
@@ -2823,7 +2823,7 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &Sb) -> Result<(), BchErro
     d.compat_hi      = src.compat_hi;
 
     for ty in (0..FIELD_NR as u32).map(SbFieldType) {
-        if BCH_SINGLE_DEVICE_SB_FIELDS & (1 << ty.0) != 0 {
+        if SINGLE_DEVICE_SB_FIELDS & (1 << ty.0) != 0 {
             continue;
         }
 

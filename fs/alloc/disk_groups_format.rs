@@ -5,12 +5,12 @@
 use crate::types::Le64;
 use cstruct_macros::{bitfield, whole, MaybeZeroable, Plain, TypeInfo};
 
-pub const BCH_SB_LABEL_SIZE: u32 = 32;
+pub const LABEL_SIZE: u32 = 32;
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
 pub struct bch_disk_group {
-    pub label: [u8; BCH_SB_LABEL_SIZE as usize],
+    pub label: [u8; LABEL_SIZE as usize],
     pub flags0: DiskGroupFlags,
     pub flags1: Le64,
 }

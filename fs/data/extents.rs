@@ -23,7 +23,7 @@ use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::Le8;
 use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits,
-    Csum, BCH_REPLICAS_MAX, Bkey, CompressionType, CsumType};
+    Csum, REPLICAS_MAX, Bkey, CompressionType, CsumType};
 
 /*
  * Everything one walk of a key's pointer list can say about its replication.
@@ -35,12 +35,12 @@ use crate::format::{Bpos, Btree, BkeyType, BkeyTypeFlags, BkeyTypeFlags_bits,
  * calls inside a loop.
  *
  * The durability counts are weighted by each device's mi.durability and skip
- * BCH_SB_MEMBER_INVALID placeholders - those are added by
+ * MEMBER_INVALID placeholders - those are added by
  * bch2_bkey_set_needs_reconcile() on a degraded write, to stand for a replica
  * that isn't there. The raw counts below are unweighted.
  *
  * u8 except the sector count: BCH_MEMBER_DURABILITY is a two bit field and
- * BCH_REPLICAS_MAX is 4, so none of these can come near 255.
+ * REPLICAS_MAX is 4, so none of these can come near 255.
  *
  * Not handled here: KEY_TYPE_reservation, which several of the older
  * single-value helpers report as v->nr_replicas. Callers that need that still
@@ -552,7 +552,7 @@ impl BkeyOps for Reservation {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let r = v.k.arm::<Reservation>().expect("a reservation").v();
 
-        bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > BCH_REPLICAS_MAX,
+        bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > REPLICAS_MAX,
                           id::reservation_key_nr_replicas_invalid,
                           "invalid nr_replicas ({})", r.nr_replicas)
     }

@@ -52,11 +52,11 @@ use crate::{bch_err_fn, log_msg_ratelimited};
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::sync::atomic::{fence, Ordering};
-use crate::format::{Bpos, BkeyType, BCH_REPLICAS_MAX};
+use crate::format::{Bpos, BkeyType, REPLICAS_MAX};
 
 /// Room past a key for set_needs_reconcile(): an entry, and a padding pointer
 /// per replica.
-const RECONCILE_ROOM: usize = (1 + BCH_REPLICAS_MAX as usize) * size_of::<u64>();
+const RECONCILE_ROOM: usize = (1 + REPLICAS_MAX as usize) * size_of::<u64>();
 
 // The update's keys, narrowed to what they're known to be: of an extents
 // btree, and once one matched @old, of its type - with pointers. One that

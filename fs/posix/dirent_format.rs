@@ -105,9 +105,9 @@ nest! {
 }
 
 pub const DT_SUBVOL: u32 = 16;
-pub const BCH_DT_MAX: u32 = 17;
+pub const DT_MAX: u32 = 17;
 
-pub const BCH_NAME_MAX: u32 = 512;
+pub const DIRENT_NAME_MAX: u32 = 512;
 
 // ── The target ───────────────────────────────────────────────────────────
 
@@ -300,7 +300,7 @@ impl crate::btree::bkey::BkeyOps for Dirent {
 
 /// Check @v.k, a dirent: the error the key fails with, if it does.
 ///
-/// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
+/// Only new keys are held to DIRENT_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
 pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let d = v.k.arm::<Dirent>().expect("a dirent").v();
@@ -318,9 +318,9 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let name = names.name().as_bytes();
 
     bkey_fsck_err_on!(v, v.from.flags().contains(ValidateFlags::commit) &&
-                      name.len() > BCH_NAME_MAX as usize,
+                      name.len() > DIRENT_NAME_MAX as usize,
                       id::dirent_name_too_long,
-                      "dirent name too big ({} > {})", name.len(), BCH_NAME_MAX)?;
+                      "dirent name too big ({} > {})", name.len(), DIRENT_NAME_MAX)?;
 
     bkey_fsck_err_on!(v, name.contains(&0), id::dirent_name_embedded_nul,
                       "dirent has stray data after name's NUL")?;
@@ -338,9 +338,9 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     if let DirentName::Casefolded { cf, .. } = names {
         let cf = cf.as_bytes();
         bkey_fsck_err_on!(v, v.from.from() == BkeyValidateFrom::commit &&
-                          cf.len() > BCH_NAME_MAX as usize,
+                          cf.len() > DIRENT_NAME_MAX as usize,
                           id::dirent_cf_name_too_big,
-                          "dirent w/ cf name too big ({} > {})", cf.len(), BCH_NAME_MAX)?;
+                          "dirent w/ cf name too big ({} > {})", cf.len(), DIRENT_NAME_MAX)?;
 
         bkey_fsck_err_on!(v, cf.contains(&0), id::dirent_stray_data_after_cf_name,
                           "dirent has stray data after cf name's NUL")?;
@@ -403,7 +403,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
 }
 
 fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), SetError<'p>> {
-    if val.is_empty() || val.len() > BCH_NAME_MAX as usize {
+    if val.is_empty() || val.len() > DIRENT_NAME_MAX as usize {
         return Err(SetError::BadName { val });
     }
 

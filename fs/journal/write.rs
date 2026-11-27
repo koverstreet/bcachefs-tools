@@ -24,7 +24,7 @@ use crate::alloc::foreground::{DevAllocList, Watermark};
 use crate::data::ptrs::IoFailures;
 use crate::data::extents_format::ExtentPtr;
 use crate::init::dev::{DevsList, DevsMask, DevFlag};
-use crate::sb::{members_format::BCH_SB_MEMBERS_MAX, members::{DevIoRef, DevWriteRefKind}};
+use crate::sb::{members_format::MEMBERS_MAX, members::{DevIoRef, DevWriteRefKind}};
 use crate::util::time_stats::TimeStat;
 use crate::journal::buckets::JournalBucketStage::JOURNAL_BUCKET_cur;
 use crate::journal::journal::{JournalFlag, JournalGuard, Journal, JournalBuf,
@@ -36,7 +36,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead, dst_room::DstRoom};
 use crate::debug::trace::events;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, BCH_REPLICAS_MAX, Bkey, Jset, JsetEntryDatetime,
+use crate::format::{DataType, REPLICAS_MAX, Bkey, Jset, JsetEntryDatetime,
     JsetEntryRewindLimit, MetadataVersion, JsetEntryType, BkeyType};
 use crate::fs::{Dev, Fs};
 use crate::journal::entries::{entry_u64s, EntryWriter};
@@ -203,7 +203,7 @@ pub type BufLocked<T> = LockedBy<T, (), JournalLockAt>;
 pub type BufLockGuard<'a> = ExclusiveGuard<'a, Noio<Mutex>>;
 
 /* A journal entry's extent key: a pointer for each device it's written to */
-pub type JournalKey = DstRoom<BkeyI, [u64; BKEY_U64S + BCH_REPLICAS_MAX as usize]>;
+pub type JournalKey = DstRoom<BkeyI, [u64; BKEY_U64S + REPLICAS_MAX as usize]>;
 
 impl JournalKey {
     pub fn empty() -> Self {
@@ -219,7 +219,7 @@ pub struct WriteAlloc {
     /* The round robin over devices journal writes take: */
     pub stripe: DevStripeState,
     /* Failure domain keys scratch for journal_write_alloc(): */
-    pub wp_domain_keys: [u64; BCH_SB_MEMBERS_MAX as usize],
+    pub wp_domain_keys: [u64; MEMBERS_MAX as usize],
     /* The devices the last journal write went to, which the next one prefers: */
     pub wp_prev_devs: DevsMask,
 }
@@ -237,7 +237,7 @@ const IOPRIO_RT: u16 = 1 << 13;
  * re-derive ca via c->devs[idx], which dev_remove may have cleared while our
  * io_ref still pins the dev object.
  */
-type Cas = [Option<DevWriteRef>; BCH_REPLICAS_MAX as usize];
+type Cas = [Option<DevWriteRef>; REPLICAS_MAX as usize];
 
 /// What close settled of an entry, read once as its write starts.
 struct Closed {
@@ -529,7 +529,7 @@ fn write_alloc(j: &Journal, a: &mut WriteAlloc, key: &mut JournalKey, data: &Jse
 
     /* The devices it's allocated, a pointer each: bkey_val_u64s(&w->key.k) */
     let nr_ptrs = key.k.val_u64s();
-    assert!(nr_ptrs <= BCH_REPLICAS_MAX as usize, "journal write to {nr_ptrs} devices");
+    assert!(nr_ptrs <= REPLICAS_MAX as usize, "journal write to {nr_ptrs} devices");
 
     if *replicas != 0 {
         a.wp_prev_devs = DevsMask::default();
@@ -944,7 +944,7 @@ fn wake_flush_waiters(w: &JournalBuf, written: &Written) {
     }
 }
 
-type PreflushErrs = DevErrs<{ BCH_SB_MEMBERS_MAX as usize }>;
+type PreflushErrs = DevErrs<{ MEMBERS_MAX as usize }>;
 
 /// The entry's write: its op, FUA for a flush and PREFLUSH if there's no
 /// separate one, traced, and its bytes.

@@ -47,7 +47,7 @@ use crate::errcode::{status::BLK_STS_REMOVED, blk_status_to_bch_err, BchError, E
 use crate::sb::members::DevReadRefKind;
 use crate::sb::members_format::MemberErrorType;
 use crate::util::time_stats::TimeStat;
-use crate::data::checksum::{csum_err_msg, csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
+use crate::data::checksum::{csum_err_msg, csum_vstruct, NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::data::ptrs::BkeyVRead;
 use crate::debug::trace::events;
 use crate::format::{BkeyType, Btree, BtreeFlags, DataType, Nonce, Csum, Bkey, Bset, btree_node,
@@ -343,7 +343,7 @@ impl BsetHead {
                 Le32::new(offset),
                 Le32::new(seq as u32),
                 Le32::new((seq >> 32) as u32),
-                Le32::new(self.journal_seq.get() as u32 ^ BCH_NONCE_BTREE),
+                Le32::new(self.journal_seq.get() as u32 ^ NONCE_BTREE),
             ],
         }
     }

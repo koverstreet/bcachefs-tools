@@ -35,7 +35,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::{dirent_format, inode};
-use crate::posix::dirent_format::{BCH_NAME_MAX, DT_SUBVOL, DirentCfNameBlock,
+use crate::posix::dirent_format::{DIRENT_NAME_MAX, DT_SUBVOL, DirentCfNameBlock,
     DirentSubvol, bch_dirent_target};
 use crate::posix::inode::InodeUnpacked;
 use crate::snapshots::{subvolume::SubvolInum, subvolume};
@@ -165,7 +165,7 @@ pub fn init_name(
     let name = name.as_bytes();
     let cf_name = cf_name.map(OsStrExt::as_bytes);
 
-    if name.len() > BCH_NAME_MAX as usize {
+    if name.len() > DIRENT_NAME_MAX as usize {
         return Err(Errcode::ENAMETOOLONG_dirent_name.into());
     }
 
@@ -326,7 +326,7 @@ pub fn casefold<'a>(
 ) -> Result<&'a OsStr, BchError> {
     t.fs().casefold_enabled()?;
 
-    let buf = t.kmalloc(BCH_NAME_MAX as usize + 1)?;
+    let buf = t.kmalloc(DIRENT_NAME_MAX as usize + 1)?;
     let len = map.casefold(name, buf)?;
     Ok(OsStr::from_bytes(&buf[..len]))
 }

@@ -12,12 +12,12 @@ use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, 
  * We refer to members with bitmasks in various places - but we need to get rid
  * of this limit:
  */
-pub const BCH_SB_MEMBERS_MAX: u32 = 256;
+pub const MEMBERS_MAX: u32 = 256;
 
 /*
  * Sentinal value - indicates a device that does not exist
  */
-pub const BCH_SB_MEMBER_INVALID: u32 = 255;
+pub const MEMBER_INVALID: u32 = 255;
 
 #[bch_enum(open)]
 #[repr(u32)]

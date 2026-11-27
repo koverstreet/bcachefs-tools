@@ -71,7 +71,7 @@
 #![allow(non_camel_case_types)]
 
 
-use crate::alloc::{disk_groups_format::BCH_SB_LABEL_SIZE, replicas_format::ReplicasEntryV1};
+use crate::alloc::{disk_groups_format::LABEL_SIZE, replicas_format::ReplicasEntryV1};
 use crate::data::{extents_format::ExtentPtr, reconcile::format::ReconcileWorkId};
 use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut,
@@ -809,7 +809,7 @@ tagged_union! {
  * Most superblock fields are replicated in all device's superblocks - a few are
  * not:
  */
-pub const BCH_SINGLE_DEVICE_SB_FIELDS: u32 =
+pub const SINGLE_DEVICE_SB_FIELDS: u32 =
     (1 << SbFieldType::journal.0) |
     (1 << SbFieldType::journal_v2.0);
 
@@ -1257,7 +1257,7 @@ pub struct Sb {
     pub magic: __uuid_t,
     pub uuid: __uuid_t,
     pub user_uuid: __uuid_t,
-    pub label: [u8; BCH_SB_LABEL_SIZE as usize],
+    pub label: [u8; LABEL_SIZE as usize],
     pub offset: Le64,
     pub seq: Le64,
 
@@ -1521,9 +1521,9 @@ pub enum VersionUpgradeOpt {
     none = 2,
 }
 
-pub const BCH_REPLICAS_MAX: u32 = 4;
+pub const REPLICAS_MAX: u32 = 4;
 
-pub const BCH_BKEY_PTRS_MAX: u32 = 16;
+pub const BKEY_PTRS_MAX: u32 = 16;
 
 #[bch_enum(open)]
 #[nr]
@@ -1916,7 +1916,7 @@ pub struct JsetFlags {
     __:                     u25,
 }
 
-pub const BCH_JOURNAL_BUCKETS_MIN: u32 = 8;
+pub const JOURNAL_BUCKETS_MIN: u32 = 8;
 
 /* Btree: */
 

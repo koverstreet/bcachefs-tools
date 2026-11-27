@@ -56,7 +56,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::alloc::replicas_format::ReplicasEntryV1;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{self, Bpos};
 use crate::init::error::{id, BkeyValidate};
@@ -284,7 +284,7 @@ impl BkeyOps for Accounting {
             bkey_fsck_err_on!(v, r.nr_required > r.nr_devs || (r.nr_required > 1 && r.nr_required == r.nr_devs),
                               id::accounting_key_replicas_nr_required_bad,
                               "accounting key replicas entry with bad nr_required")?;
-            bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != BCH_SB_MEMBER_INVALID && d[0] >= d[1]),
+            bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != MEMBER_INVALID && d[0] >= d[1]),
                               id::accounting_key_replicas_devs_unsorted,
                               "accounting key replicas entry with unsorted devs")?;
         }

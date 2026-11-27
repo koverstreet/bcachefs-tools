@@ -7,7 +7,7 @@
 //! buffer, or a bio's chunks: a crc's seed, xxhash's state, or a Poly1305
 //! MAC's, an encryption type's checksum. Encryption is ChaCha20 under the
 //! filesystem's key: its own inverse. The MAC is keyed by ChaCha20 under the
-//! same key, from the nonce with BCH_NONCE_POLY set. The primitives are the
+//! same key, from the nonce with NONCE_POLY set. The primitives are the
 //! kernel's lib/crypto, xxhash and crcs - in userspace include/'s, the crypto
 //! RustCrypto's, which the kernel's is called as.
 //!
@@ -47,10 +47,10 @@ use crate::os::{crypto::*, keyring};
 pub const CHACHA_BLOCK_SIZE: u32 = 64;
 
 /// The domains, in a nonce's last word.
-pub const BCH_NONCE_EXTENT:	u32 = 1 << 28;
-pub const BCH_NONCE_BTREE:	u32 = 2 << 28;
-pub const BCH_NONCE_JOURNAL:	u32 = 3 << 28;
-pub const BCH_NONCE_POLY:	u32 = 1 << 31;
+pub const NONCE_EXTENT:	u32 = 1 << 28;
+pub const NONCE_BTREE:	u32 = 2 << 28;
+pub const NONCE_JOURNAL:	u32 = 3 << 28;
+pub const NONCE_POLY:	u32 = 1 << 31;
 
 /// The nonce @offset bytes further into its stream - a whole number of
 /// ChaCha20 blocks: C's nonce_add().
@@ -99,7 +99,7 @@ impl CsumState {
             t::chacha20_poly1305_80 | t::chacha20_poly1305_128 => {
                 let fs = fs.expect("an encryption type's checksum, with no filesystem for its key");
                 let mut key = [0u8; POLY1305_KEY_SIZE];
-                nonce.d[3] = Le32::new(nonce.d[3].get() ^ BCH_NONCE_POLY);
+                nonce.d[3] = Le32::new(nonce.d[3].get() ^ NONCE_POLY);
                 // as C's, with a key it hasn't - all zeroes - though callers
                 // check valid() first
                 let unset = Key::default();

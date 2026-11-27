@@ -25,7 +25,7 @@ use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, 
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, MemberState, MetadataVersion, BCH_BKEY_PTRS_MAX};
+use crate::format::{DataType, MemberState, MetadataVersion, BKEY_PTRS_MAX};
 use crate::locking::{ByteLock, ExclusiveGuard, Locked, Lockdep};
 use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::BitArray;
@@ -83,7 +83,7 @@ pub enum EcStripeNewState {
 }
 
 /// A set of a stripe's blocks, by index.
-pub type StripeBlockMask = BitArray<{ bits_to_longs(BCH_BKEY_PTRS_MAX as usize) }>;
+pub type StripeBlockMask = BitArray<{ bits_to_longs(BKEY_PTRS_MAX as usize) }>;
 
 /// The sector allocator's source of erasure coded buckets, one per disk label,
 /// algorithm, redundancy and watermark - its key, fixed when it's made - and
@@ -493,7 +493,7 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
 fn alloc_for_head(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, max_data_blocks: u32)
     -> Result<StripeNewBox, BchError>
 {
-    let active = g.devs.nr_active.min(BCH_BKEY_PTRS_MAX);
+    let active = g.devs.nr_active.min(BKEY_PTRS_MAX);
     let nr_data = (active - h.redundancy).min(if max_data_blocks != 0 { max_data_blocks } else { !0 });
 
     // insufficiency was checked - at least redundancy + 2 domains:

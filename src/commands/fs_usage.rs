@@ -1,6 +1,6 @@
 
 use anyhow::{anyhow, Result};
-use bcachefs_kernel::sb::members_format::BCH_SB_MEMBER_INVALID;
+use bcachefs_kernel::sb::members_format::MEMBER_INVALID;
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
@@ -502,7 +502,7 @@ fn replicas_summary_to_text(
 fn prt_dev_list(out: &mut Printbuf, dev_list: &[u8], devs: &[DevInfo]) {
     for (i, &dev_idx) in dev_list.iter().enumerate() {
         if i > 0 { write!(out, " "); }
-        if dev_idx == BCH_SB_MEMBER_INVALID as u8 {
+        if dev_idx == MEMBER_INVALID as u8 {
             write!(out, "none");
         } else if let Some(d) = devs.iter().find(|d| d.idx == dev_idx as u32) {
             write!(out, "{}", d.dev);

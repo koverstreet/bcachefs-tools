@@ -9,14 +9,14 @@
 //! device failed, or is offline, is read by reconstructing it from its
 //! stripe.
 
-use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, CsumType};
+use crate::format::{BkeyType, BKEY_PTRS_MAX, CsumType};
 use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
 use crate::bcachefs_ioctl::ReadErr;
 use crate::errcode::Errcode;
 use crate::util::Printbuf;
-use crate::sb::{errors::blk_sts_sb_err, members_format::BCH_SB_MEMBER_INVALID};
+use crate::sb::{errors::blk_sts_sb_err, members_format::MEMBER_INVALID};
 use crate::os::kernel::{cold_path, random_u64_below, unlikely, READ};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
@@ -45,7 +45,7 @@ pub struct DevIoFailures {
 /// coded reconstruct's message. All zeroes is empty.
 #[repr(C)]
 #[derive(Default)]
-pub struct IoFailures<const N: usize = { BCH_BKEY_PTRS_MAX as usize }> {
+pub struct IoFailures<const N: usize = { BKEY_PTRS_MAX as usize }> {
     devs: ArrayVec<DevIoFailures, N>,
     pub ec_msg: Printbuf,
 }
@@ -301,7 +301,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
 
                 // reported outside the read-side section; still not there
-                let missing = unlikely(fs.dev_rcu(dev, &rcu).is_none() && dev != BCH_SB_MEMBER_INVALID);
+                let missing = unlikely(fs.dev_rcu(dev, &rcu).is_none() && dev != MEMBER_INVALID);
                 if missing {
                     drop(rcu);
                     fs.dev_missing_bkey(key.untyped(), dev)?;

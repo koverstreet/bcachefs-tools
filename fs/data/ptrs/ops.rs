@@ -10,8 +10,8 @@ use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconc
 use crate::data::durability::BkeyVDurability;
 use crate::btree::{bkey::{AnyKeySC, BkeyOps, ValidateFlags, BkeyValidateFrom}, trigger::Trigger};
 use crate::util::{vstructs::Unvalidated, rcu::ReadGuard, Printbuf, ToText};
-use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion, BCH_BKEY_PTRS_MAX,
-    BCH_REPLICAS_MAX};
+use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion, BKEY_PTRS_MAX,
+    REPLICAS_MAX};
 
 // ── validate ─────────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ use crate::format::{Btree, CompressionType, BkeyType, MetadataVersion, BCH_BKEY_
 fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTypes, Unvalidated>>,
                        ptr: &ExtentPtr,
                        size_ondisk: u32) -> Result<(), BchError> {
-    if u32::from(ptr.dev()) == BCH_SB_MEMBER_INVALID {
+    if u32::from(ptr.dev()) == MEMBER_INVALID {
         return Ok(());
     }
 
@@ -98,7 +98,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 bkey_fsck_err_on!(v, ptr.cached() != 0 && have_ec, id::ptr_cached_and_erasure_coded,
                                   "cached, erasure coded ptr")?;
 
-                let real_dev = u32::from(ptr.dev()) != BCH_SB_MEMBER_INVALID;
+                let real_dev = u32::from(ptr.dev()) != MEMBER_INVALID;
                 if real_dev {
                     if ptr.unwritten() == 0 {
                         have_written = true;
@@ -168,8 +168,8 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     }
 
     bkey_fsck_err_on!(v, nr_ptrs == 0, id::extent_ptrs_no_ptrs, "no ptrs")?;
-    bkey_fsck_err_on!(v, nr_ptrs > BCH_BKEY_PTRS_MAX, id::extent_ptrs_too_many_ptrs,
-                      "too many ptrs: {} > {}", nr_ptrs, BCH_BKEY_PTRS_MAX)?;
+    bkey_fsck_err_on!(v, nr_ptrs > BKEY_PTRS_MAX, id::extent_ptrs_too_many_ptrs,
+                      "too many ptrs: {} > {}", nr_ptrs, BKEY_PTRS_MAX)?;
     bkey_fsck_err_on!(v, have_written && have_unwritten, id::extent_ptrs_written_and_unwritten,
                       "extent with unwritten and written ptrs")?;
     bkey_fsck_err_on!(v, k.k.key_type() != BkeyType::extent && have_unwritten,
@@ -316,14 +316,14 @@ use crate::data::extents::ExtentCrcUnpacked;
 use crate::data::extents_format::{ExtentPtr, BKEY_BTREE_PTR_VAL_U64s_MAX, BtreePtr, BtreePtrV2,
     Extent, ExtentEntryType};
 use crate::fs::FsFlag;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 
 impl BkeyOps for BtreePtr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let val_u64s = v.k.val_bytes().len() / 8;
 
-        bkey_fsck_err_on!(v, val_u64s > BCH_REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
-                          "value too big ({} > {})", val_u64s, BCH_REPLICAS_MAX)?;
+        bkey_fsck_err_on!(v, val_u64s > REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
+                          "value too big ({} > {})", val_u64s, REPLICAS_MAX)?;
 
         bkey_ptrs_validate(v)
     }

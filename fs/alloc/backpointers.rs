@@ -47,7 +47,7 @@ use crate::data::ec::format::Stripe;
 use crate::btree::bbpos::Bbpos;
 use crate::data::extents::ExtentPtrDecoded;
 use crate::data::reconcile::format::ReconcileWorkId;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
@@ -125,8 +125,8 @@ impl BkeyOps for Backpointer {
 
         bkey_fsck_err_on!(v, u32::from(level) > BTREE_MAX_DEPTH, id::backpointer_level_bad,
                           "backpointer level bad: {level} >= {}", BTREE_MAX_DEPTH)?;
-        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(BCH_SB_MEMBER_INVALID), id::backpointer_dev_bad,
-                          "backpointer for BCH_SB_MEMBER_INVALID")
+        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(MEMBER_INVALID), id::backpointer_dev_bad,
+                          "backpointer for MEMBER_INVALID")
     }
 
     #[cold]
@@ -233,7 +233,7 @@ fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &ExtentPtrDecoded) -> Bpos {
     }
 
     let mut ret = pos(dev, (p.ptr.offset() << shift) + u64::from(p.crc.offset));
-    if u32::from(p.ptr.dev()) == BCH_SB_MEMBER_INVALID && p.has_ec {
+    if u32::from(p.ptr.dev()) == MEMBER_INVALID && p.has_ec {
         ret.inode = BackpointerPos::ec_removed_dev(p.ec.idx(), p.ec.block().into());
     }
     ret
@@ -257,7 +257,7 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, d: &De
     };
     bp.v.set_reconcile_phys(bp_reconcile_phys(fs, level, dev, k));
     bp.v.set_erasure_coded(d.p.has_ec);
-    bp.v.set_stripe_ptr(d.p.has_ec && dev == BCH_SB_MEMBER_INVALID);
+    bp.v.set_stripe_ptr(d.p.has_ec && dev == MEMBER_INVALID);
     bp
 }
 

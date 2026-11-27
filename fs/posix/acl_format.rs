@@ -10,7 +10,7 @@
 use crate::types::{Le16, Le32};
 use cstruct_macros::{tagged_union, MaybeZeroable, Plain, TypeInfo};
 
-pub const BCH_ACL_VERSION: u32 = 0x0001;
+pub const ACL_VERSION: u32 = 0x0001;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]

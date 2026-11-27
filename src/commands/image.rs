@@ -39,9 +39,9 @@ use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::commands::format_util::SUPERBLOCK_SIZE_DEFAULT;
 use bcachefs_kernel::sb::io::SbResize;
-use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, MetadataVersion, SbFeatures};
+use bcachefs_kernel::format::{Btree, CompressionType, DataType, DataTypes, BkeyType, MetadataVersion, REPLICAS_MAX,
+    SbFeatures};
 
-const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
 
 // --- Core logic, converted from C ---
@@ -775,7 +775,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                 "replicas" => {
                     let val = take_opt_value(inline_val, &argv, &mut i, raw_name)?;
                     let v: u32 = val.parse().map_err(|_| anyhow!("invalid replicas"))?;
-                    if v == 0 || v > BCH_REPLICAS_MAX {
+                    if v == 0 || v > REPLICAS_MAX {
                         bail!("invalid replicas");
                     }
                     fs_opts.set_metadata_replicas(v as u8);

@@ -27,10 +27,10 @@ use crate::data::ec::format::Stripe;
 use crate::data::ec::trigger::GcStripeData;
 use crate::data::extents::ExtentPtrDecoded;
 use crate::data::extents_format::ExtentPtr;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, Csum, Bkey, BKEY_U64s_MAX, CsumType};
+use crate::format::{BkeyType, BKEY_PTRS_MAX, Csum, Bkey, BKEY_U64s_MAX, CsumType};
 use crate::fs::Fs;
 use crate::btree::trigger::Trigger;
 use crate::init::error::{id, BkeyValidate};
@@ -43,7 +43,7 @@ use core::mem::{offset_of, size_of};
 use core::ops::{Range, RangeInclusive};
 
 /// The most blocks a stripe has: a pointer each, of the most a key holds.
-pub(crate) const MAX_BLOCKS: usize = BCH_BKEY_PTRS_MAX as usize;
+pub(crate) const MAX_BLOCKS: usize = BKEY_PTRS_MAX as usize;
 
 /// Where a stripe's pointers start: sizeof(struct bch_stripe).
 const STRIPE_PTRS: usize = offset_of!(Stripe, repr.ptrs);
@@ -187,7 +187,7 @@ impl Stripe<Validated> {
         let Some(empty) = self.data_blocks_empty() else { return 0 };
         let live = self.nr_data() - empty;
 
-        if live == 0 || live >= BCH_BKEY_PTRS_MAX.saturating_sub(self.nr_redundant.into()) {
+        if live == 0 || live >= BKEY_PTRS_MAX.saturating_sub(self.nr_redundant.into()) {
             return 0;
         }
         self.reuse_group() << STRIPE_REUSE_LIVE_BITS | u64::from(live)
@@ -237,7 +237,7 @@ impl<B: AsMut<[u8]>> StripeCsums<B> {
 pub const STRIPE_LRU_POS_EMPTY: u64 = 1;
 
 /// A stripe's time in the reuse lru is its group, then its live data blocks -
-/// fewer than BCH_BKEY_PTRS_MAX: the stripes a new stripe fits are one range
+/// fewer than BKEY_PTRS_MAX: the stripes a new stripe fits are one range
 /// of the lru, and stripe_reuse() walks only that.
 const STRIPE_REUSE_LIVE_BITS: u32 = 8;
 
@@ -277,7 +277,7 @@ pub fn ptr_matches_stripe_m(m: &GcStripeData, p: &ExtentPtrDecoded) -> bool {
 
 /// Whether @data_ptr is in the block of @sectors at @stripe_ptr.
 pub(crate) fn ptr_in_block(stripe_ptr: &ExtentPtr, data_ptr: &ExtentPtr, sectors: u64) -> bool {
-    let invalid = BCH_SB_MEMBER_INVALID as u8;
+    let invalid = MEMBER_INVALID as u8;
     (data_ptr.dev() == stripe_ptr.dev() || data_ptr.dev() == invalid || stripe_ptr.dev() == invalid) &&
         data_ptr.generation() == stripe_ptr.generation() &&
         data_ptr.offset() >= stripe_ptr.offset() &&
@@ -287,14 +287,14 @@ pub(crate) fn ptr_in_block(stripe_ptr: &ExtentPtr, data_ptr: &ExtentPtr, sectors
 
 /// How many data blocks @nr_devs devices could give a stripe with
 /// @nr_redundant parity blocks - the pool's widening target - capped at
-/// BCH_BKEY_PTRS_MAX, and at @max_data_blocks if that's set (the
+/// BKEY_PTRS_MAX, and at @max_data_blocks if that's set (the
 /// ec_max_data_blocks option): stripe_widen_target_nr_data().
 fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blocks: u32) -> u32 {
     if nr_devs <= nr_redundant {
         return 0;
     }
     // unsigned, as C's
-    let t = nr_devs.min(BCH_BKEY_PTRS_MAX).wrapping_sub(nr_redundant);
+    let t = nr_devs.min(BKEY_PTRS_MAX).wrapping_sub(nr_redundant);
     if max_data_blocks != 0 { t.min(max_data_blocks) } else { t }
 }
 

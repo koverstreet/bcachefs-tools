@@ -22,7 +22,7 @@ use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::write::WriteFlags;
 use crate::init::{dev::DevsMask, damage};
-use crate::sb::{members_format::BCH_SB_MEMBER_INVALID, errors::SbErrorId};
+use crate::sb::{members_format::MEMBER_INVALID, errors::SbErrorId};
 use crate::data::copygc;
 use crate::data::ec::buf::{blocks_good, blocks_in, validate_msg, MemWait, StripeBuf, PRE};
 use crate::data::ec::delete::stripe_delete;
@@ -85,7 +85,7 @@ fn extent_good_in_buf(fs: &Fs, k: BkeySC<'_>, s: BkeySC<'_, Stripe<Validated>>, 
 
 /// Damage recorded against every extent in @blocks of stripe @s - found by
 /// @s's pointers, so a block on a device being removed already points at
-/// BCH_SB_MEMBER_INVALID. Commits per extent: callers record before
+/// MEMBER_INVALID. Commits per extent: callers record before
 /// destroying the blocks, not atomically with it.
 ///
 /// @count: counting the sb error too, as well as recording it. The reuse path
@@ -155,7 +155,7 @@ fn drop_block_extent(t: &TransAttempt<'_, '_>, idx: u64, block: u32, bp: BkeySC<
     let mut n = t.bkey_reassemble_room(k, BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
     {
         let mut kp = n.reborrow().arm::<PtrsMut>().expect("a key with pointers, as it had ours");
-        if dev == BCH_SB_MEMBER_INVALID {
+        if dev == MEMBER_INVALID {
             kp.drop_ptrs_noerror(fs, |d| ours(&d.p));
         } else {
             kp.drop_ec(fs, dev);
@@ -342,7 +342,7 @@ fn stripe_repair_narrow(ctxt: &Moving<'_>, s: BkeySC<'_, Stripe<Validated>>, b: 
         let ptr = &s.v().block_ptrs()[i];
         let (start, end) = (ptr.offset(), ptr.offset() + sectors);
 
-        if u32::from(ptr.dev()) != BCH_SB_MEMBER_INVALID {
+        if u32::from(ptr.dev()) != MEMBER_INVALID {
             ctxt.evacuate_data(ptr.dev().into(), start, end)?;
         } else {
             ctxt.evacuate_ec_orphan(s.k.p.offset, i as u32, start, end)?;

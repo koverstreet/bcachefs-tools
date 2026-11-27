@@ -172,7 +172,7 @@ fn scrub_node<'s, 'f: 's>(fs: &'f Fs, nodes: &Scope<'s, Bad, waiter::Sync>, btre
         return Ok(());
     }
 
-    // made in the task's box, its home: room for BCH_BKEY_PTRS_MAX replicas
+    // made in the task's box, its home: room for BKEY_PTRS_MAX replicas
     // is a kilobyte, and this can be under scrub(), under the moves
     // flush_all() runs on its stack
     let mut slot = TaskSlot::exclusive_in(Global, ::pin_init::init_zeroed::<Replicas<ReplicaRead<'s>>>())?;

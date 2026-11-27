@@ -19,9 +19,9 @@
 
 use crate::fs::{Dev, Fs};
 use crate::alloc::{buckets::DevUsage, foreground::{alloc_request, DevAllocList, Watermark}};
-use crate::format::BCH_REPLICAS_MAX;
+use crate::format::REPLICAS_MAX;
 use crate::init::dev::DevsMask;
-use crate::sb::members_format::BCH_SB_MEMBERS_MAX;
+use crate::sb::members_format::MEMBERS_MAX;
 use crate::debug::trace::events;
 use crate::os::kernel::likely;
 use crate::util::{projections::Volatile, rcu::read_lock};
@@ -44,7 +44,7 @@ use cstruct_macros::MaybeZeroable;
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct DevStripeState {
-    pub next_alloc: [u64; BCH_SB_MEMBERS_MAX as usize],
+    pub next_alloc: [u64; MEMBERS_MAX as usize],
     pub cached_devs: DevsMask,
 }
 
@@ -58,12 +58,12 @@ published! {
         /* bit n - 1: placement decides how much fits at n replicas */
         pub placement_constrained: Volatile<usize>,
         /* at n replicas, the devices every such allocation has to use */
-        pub placement_required: [Volatile<DevsMask>; BCH_REPLICAS_MAX as usize],
+        pub placement_required: [Volatile<DevsMask>; REPLICAS_MAX as usize],
     }
 }
 
 
-const NR_DEVS: usize = BCH_SB_MEMBERS_MAX as usize;
+const NR_DEVS: usize = MEMBERS_MAX as usize;
 
 const HAND_RESCALE: u64 = 1 << 62;    /* rescale past this */
 const HAND_MAX: u64     = 1 << 56;    /* the most, after a rescale */
@@ -195,7 +195,7 @@ impl Fs {
         let n = u32::from(req.nr_replicas);
         let p = &self.capacity.sectors_available_lock;
 
-        if req.bits.ec() || !(2..=BCH_REPLICAS_MAX).contains(&n) ||
+        if req.bits.ec() || !(2..=REPLICAS_MAX).contains(&n) ||
            p.placement_constrained.get() & 1 << (n - 1) == 0 {
             return None;
         }

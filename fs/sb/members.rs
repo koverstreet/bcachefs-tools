@@ -7,8 +7,8 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIte
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::init::dev::{DevsList, DevsMask, bch_sb_buf, DevFlag};
-use crate::sb::members_format::{Member, SbFieldMembersV1, SbFieldMembersV2, BCH_SB_MEMBER_INVALID,
-    BCH_SB_MEMBERS_MAX, IopsMeasurement, MemberErrorType};
+use crate::sb::members_format::{Member, SbFieldMembersV1, SbFieldMembersV2, MEMBER_INVALID,
+    MEMBERS_MAX, IopsMeasurement, MemberErrorType};
 use crate::errcode::{Errcode, BchError};
 use crate::locking::MemallocFlags;
 use crate::{prt, sb_err_on};
@@ -142,18 +142,18 @@ impl<S: SbState> Sb<S> {
 }
 
 /// A free member slot: past the last one in use if there's room, else the
-/// empty one least recently mounted - never BCH_SB_MEMBER_INVALID, the
+/// empty one least recently mounted - never MEMBER_INVALID, the
 /// sentinel. Deleted ones aren't free until fsck clears them.
 fn sb_member_find_slot(fs: &Fs, sb: &Sb) -> Result<u32, BchError> {
     let nr = fs.nr_devices();
-    if nr < BCH_SB_MEMBERS_MAX && nr != BCH_SB_MEMBER_INVALID {
+    if nr < MEMBERS_MAX && nr != MEMBER_INVALID {
         return Ok(nr);
     }
 
     let mut best: Option<(u64, u32)> = None;
     let mut nr_deleted = 0;
 
-    for dev in (0..BCH_SB_MEMBERS_MAX).filter(|&i| i != BCH_SB_MEMBER_INVALID) {
+    for dev in (0..MEMBERS_MAX).filter(|&i| i != MEMBER_INVALID) {
         let m = sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed);
         nr_deleted += m.deleted() as u32;
 
@@ -963,7 +963,7 @@ pub(crate) fn btree_bitmap_gc_schedule(fs: &Fs) {
 // ---------------------------------------------------------------------------
 
 /// A short list of devices - an extent's, a write point's: at most
-/// BCH_BKEY_PTRS_MAX, no repeats.
+/// BKEY_PTRS_MAX, no repeats.
 impl DevsList {
     /// Just @dev.
     pub fn single(dev: u8) -> Self {
@@ -1006,10 +1006,10 @@ impl Fs {
         self.devs.get(..self.nr_devices() as usize)?.get(dev as usize)?.read(rcu)
     }
 
-    /// Device @dev's name - "(none)" for BCH_SB_MEMBER_INVALID, and for one
+    /// Device @dev's name - "(none)" for MEMBER_INVALID, and for one
     /// there isn't, its number.
     pub fn member_name_to_text(&self, out: &mut Printbuf, dev: u32) {
-        if dev == BCH_SB_MEMBER_INVALID {
+        if dev == MEMBER_INVALID {
             write!(out, "(none)");
             return;
         }
@@ -1089,11 +1089,11 @@ impl Fs {
 
     /// dev_get() for a pointer of @k's. A missing device isn't an error: it's
     /// reported against @k and check_allocations scheduled to repair it
-    /// (unless it's BCH_SB_MEMBER_INVALID, which names none), and we carry on
+    /// (unless it's MEMBER_INVALID, which names none), and we carry on
     /// without it. The error is scheduling's, e.g. restart_recovery.
     pub fn dev_bkey_tryget(&self, k: BkeySC<'_>, dev: u32) -> Result<Option<DevRef>, BchError> {
         let ca = self.dev_get(dev);
-        if ca.is_none() && dev != BCH_SB_MEMBER_INVALID {
+        if ca.is_none() && dev != MEMBER_INVALID {
             self.dev_missing_bkey(k, dev)?;
         }
         Ok(ca)
@@ -1181,9 +1181,9 @@ impl Fs {
     /// A pointer in @k to device @dev, which there isn't: said to @out,
     /// counted as the fsck error it is, and check_allocations scheduled to
     /// repair it - the error is scheduling's. Nothing for
-    /// BCH_SB_MEMBER_INVALID, which names no device.
+    /// MEMBER_INVALID, which names no device.
     pub fn dev_missing_bkey_msg(&self, k: BkeySC<'_>, dev: u32, out: &mut Printbuf) -> Result<(), BchError> {
-        if dev == BCH_SB_MEMBER_INVALID {
+        if dev == MEMBER_INVALID {
             return Ok(());
         }
 
@@ -1205,7 +1205,7 @@ impl Fs {
     /// to show: logged, with a backtrace, as an inconsistency. Safe from
     /// atomic context - in a NORECLAIM scope, nothing it allocates can sleep.
     fn dev_missing_atomic(&self, dev: u32) {
-        if dev == BCH_SB_MEMBER_INVALID {
+        if dev == MEMBER_INVALID {
             return;
         }
 
@@ -1468,7 +1468,7 @@ impl Fs {
     }
 
     pub fn dev_rotational(&self, dev: u32) -> bool {
-        dev != BCH_SB_MEMBER_INVALID && self.devs_rotational.test(dev as usize)
+        dev != MEMBER_INVALID && self.devs_rotational.test(dev as usize)
     }
 
     /// Whether @dev is missing, or being evacuated.

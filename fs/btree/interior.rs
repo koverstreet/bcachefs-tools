@@ -32,7 +32,7 @@ use crate::data_structures::array_vec::ArrayVec;
 use crate::data_structures::list::ListLinks;
 use crate::data_structures::ref_cell::RefCell;
 use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BCH_REPLICAS_MAX, BTREE_MAX_DEPTH, Deleted, JSET_KEYS_U64s,
+use crate::format::{Bpos, Btree, REPLICAS_MAX, BTREE_MAX_DEPTH, Deleted, JSET_KEYS_U64s,
     JsetEntryType};
 use crate::fs::{Fs, FsFlag};
 use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Mutex, RwSem, SharedGuard};
@@ -327,7 +327,7 @@ struct Owned {
     /* take_path()'s, put before the update lets go of its nodes */
     paths:        ArrayVec<PathIdx, UPDATE_NODES_MAX>,
     old_nodes:    ArrayVec<OldNode, UPDATE_NODES_MAX>,
-    open_buckets: ArrayVec<OpenBucket, { UPDATE_NODES_MAX * BCH_REPLICAS_MAX as usize }>,
+    open_buckets: ArrayVec<OpenBucket, { UPDATE_NODES_MAX * REPLICAS_MAX as usize }>,
     gc_lock:      Option<GcReadLock>,
 
     /* Only here to reduce stack usage on recursive splits: */

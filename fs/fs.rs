@@ -20,7 +20,7 @@ use crate::journal::journal::{Journal, JournalEntryRes};
 use crate::opts::{AtomicOptsMask, Opts, OPT_SHOW_MOUNT_STYLE, OptFlags, PublishedOpts,
     PublishedOptsWriter};
 use crate::posix::{logged_ops::FsLoggedOps, quota::Quotas};
-use crate::sb::members_format::{Member, BCH_SB_MEMBERS_MAX};
+use crate::sb::members_format::{Member, MEMBERS_MAX};
 use crate::snapshots::{FsSnapshots, subvolume::SubvolInum};
 use crate::util::clock::IoClock;
 #[cfg(kernel)]
@@ -132,7 +132,7 @@ impl<'a> StateLockWrite<'a> {
     }
 
     /// c->devs[], as their writer has them.
-    pub(crate) fn devs(&self) -> &[RcuPtrWriter<DevKobjRef>; BCH_SB_MEMBERS_MAX as usize] {
+    pub(crate) fn devs(&self) -> &[RcuPtrWriter<DevKobjRef>; MEMBERS_MAX as usize] {
         self.writer::<crate::field!(devs)>()
     }
 }
@@ -273,7 +273,7 @@ pub struct Fs {
     pub(crate) read_only_work: ReffedWork<read_only_work, crate::field!(ro_ref)>,
 
     /// Written under state_lock: StateLockWrite::devs().
-    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::sb::members::DevKobjRef>; BCH_SB_MEMBERS_MAX as usize],
+    pub devs: LockedBy<(), [crate::util::rcu::RcuPtr<crate::sb::members::DevKobjRef>; MEMBERS_MAX as usize],
                        crate::at!(Fs.state_lock)>,
     pub devs_online: AtomicDevsMask,
     pub devs_removed: AtomicDevsMask,
@@ -801,7 +801,7 @@ fn alloc(sbs: &mut Vec<SbHandle>, opts: &Opts, holder: Arc<Holder>,
 /// The default encoding, utf8 12.1.0: UNICODE_AGE()'s major, minor and rev
 /// bytes
 #[cfg(CONFIG_UNICODE)]
-const BCH_FS_DEFAULT_UTF8_ENCODING: u32 = (12 << 16) | (1 << 8);
+const DEFAULT_UTF8_ENCODING: u32 = (12 << 16) | (1 << 8);
 
 impl Fs {
     /// What's set while nothing else can reach it: its @holder, its superblock,
@@ -855,11 +855,11 @@ impl Fs {
         #[cfg(CONFIG_UNICODE)]
         if self.casefold_enabled().is_ok() {
             /* Default encoding until we can potentially have more as an option. */
-            let Some(enc) = crate::os::unicode::UnicodeMap::load(BCH_FS_DEFAULT_UTF8_ENCODING) else {
+            let Some(enc) = crate::os::unicode::UnicodeMap::load(DEFAULT_UTF8_ENCODING) else {
                 prt!(out, "Cannot load UTF-8 encoding for filesystem. Version: {}.{}.{}\n",
-                     BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
-                     (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
-                     BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
+                     DEFAULT_UTF8_ENCODING >> 16,
+                     (DEFAULT_UTF8_ENCODING >> 8) & 0xff,
+                     DEFAULT_UTF8_ENCODING & 0xff);
                 return self.throw(Errcode::EINVAL_utf8_load_failed);
             };
             self.cf_encoding.populate(enc);
@@ -997,9 +997,9 @@ impl Fs {
         #[cfg(CONFIG_UNICODE)]
         if self.cf_encoding.as_ref().is_some() {
             crate::bch_info!(self, "Using encoding defined by superblock: utf8-{}.{}.{}",
-                      BCH_FS_DEFAULT_UTF8_ENCODING >> 16,
-                      (BCH_FS_DEFAULT_UTF8_ENCODING >> 8) & 0xff,
-                      BCH_FS_DEFAULT_UTF8_ENCODING & 0xff);
+                      DEFAULT_UTF8_ENCODING >> 16,
+                      (DEFAULT_UTF8_ENCODING >> 8) & 0xff,
+                      DEFAULT_UTF8_ENCODING & 0xff);
         }
 
         if self.sb_lock().sb().initialized() {

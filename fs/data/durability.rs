@@ -21,14 +21,14 @@ use crate::data::extents::{BkeyDurability, ExtentPtrDecoded};
 use crate::data::extents_format::Reservation;
 use crate::init::dev::DevsMask;
 use crate::opts::InodeOpts;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::ec::stripe::ptr_matches_stripe;
 use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::data_structures::{inline_vec::InlineVec, array_vec::ArrayVec};
 use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated}};
-use crate::format::{Btree, MemberState, BCH_BKEY_PTRS_MAX};
+use crate::format::{Btree, MemberState, BKEY_PTRS_MAX};
 
 impl Fs {
     /// What a copy already on @dev is worth: nothing if the device is gone or
@@ -93,7 +93,7 @@ fn stripe_durability(t: &TransAttempt<'_, '_>, p: &ExtentPtrDecoded, ret: &mut B
     let v = s.v();
 
     // nothing allocates in the read-side section
-    let mut devs = InlineVec::<StripeDev, { BCH_BKEY_PTRS_MAX as usize }>::new();
+    let mut devs = InlineVec::<StripeDev, { BKEY_PTRS_MAX as usize }>::new();
     devs.reserve(v.nr_blocks.into())?;
     {
         let rcu = read_lock();
@@ -202,7 +202,7 @@ fn reservation_durability(k: AnyKeySC<'_, Unvalidated>) -> Option<BkeyDurability
 /// The counts of @p's that need no device: its pointer, replicas, and how
 /// much is compressed.
 fn count_ptr(ret: &mut BkeyDurability, p: &ExtentPtrDecoded) {
-    let real = u8::from(u32::from(p.ptr.dev()) != BCH_SB_MEMBER_INVALID);
+    let real = u8::from(u32::from(p.ptr.dev()) != MEMBER_INVALID);
     let compressed = crc_is_compressed(&p.crc);
 
     ret.nr_ptrs = ret.nr_ptrs.wrapping_add(real);
@@ -245,9 +245,9 @@ pub trait BkeyVDurability: BkeyV {
             let mut desired = 0;
 
             if p.has_ec {
-                // its stripe's, even as a BCH_SB_MEMBER_INVALID placeholder
+                // its stripe's, even as a MEMBER_INVALID placeholder
                 stripe_durability(t, p, &mut ret, &mut seen, Some(&mut desired))?;
-            } else if dev != BCH_SB_MEMBER_INVALID {
+            } else if dev != MEMBER_INVALID {
                 let rcu = read_lock();
                 let cur = fs.dev_durability(dev, &rcu) as u8;
                 desired = fs.dev_durability_desired(dev, &rcu);
@@ -291,7 +291,7 @@ pub trait BkeyVDurability: BkeyV {
             let dev = u32::from(p.ptr.dev());
             if p.has_ec {
                 ret.total = ret.total.wrapping_add(p.ec.redundancy()).wrapping_add(1);
-            } else if dev != BCH_SB_MEMBER_INVALID {
+            } else if dev != MEMBER_INVALID {
                 let d = fs.dev_rcu(dev, &rcu).map_or(1, |ca| ca.mi.get().durability);
                 ret.total = ret.total.wrapping_add(d);
             }
@@ -309,7 +309,7 @@ pub trait BkeyVDurability: BkeyV {
 
         for ptr in self.ptrs(fs) {
             let dev = u32::from(ptr.dev());
-            if ptr.cached() == 0 && dev != BCH_SB_MEMBER_INVALID {
+            if ptr.cached() == 0 && dev != MEMBER_INVALID {
                 let d = fs.dev_durability(dev, &rcu) as u8;
                 if fs.dev_online(dev) {
                     ret.online = ret.online.wrapping_add(d);
@@ -328,7 +328,7 @@ pub trait BkeyVDurability: BkeyV {
         self.as_sc().arm::<Ptrs>().is_some_and(|k| {
             k.ptrs_decoded(fs).any(|d| {
                 d.p.ptr.cached() == 0 &&
-                    (u32::from(d.p.ptr.dev()) != BCH_SB_MEMBER_INVALID || d.p.has_ec)
+                    (u32::from(d.p.ptr.dev()) != MEMBER_INVALID || d.p.has_ec)
             })
         })
     }
@@ -386,7 +386,7 @@ pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<
         return Ok(());
     }
     let fs = t.fs();
-    let devs: ArrayVec<u32, { BCH_BKEY_PTRS_MAX as usize }> =
+    let devs: ArrayVec<u32, { BKEY_PTRS_MAX as usize }> =
         k.ptrs_in(fs, mask).map(|p| u32::from(p.dev())).collect();
 
     for dev in devs {

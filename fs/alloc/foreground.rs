@@ -66,11 +66,11 @@ use crate::data::ptrs::IoFailures;
 use crate::data::extents_format::ExtentPtr;
 use crate::data::write::WriteFlags;
 use crate::init::dev::{AtomicDevsMask, DevsList, DevsMask};
-use crate::sb::members_format::{BCH_SB_MEMBER_INVALID, BCH_SB_MEMBERS_MAX};
+use crate::sb::members_format::{MEMBER_INVALID, MEMBERS_MAX};
 use crate::util::time_stats::TimeStat;
 use crate::errcode::{Errcode, ret_to_c, BchError};
 use crate::data::copygc::can_make_progress;
-use crate::format::{DataType, BCH_BKEY_PTRS_MAX};
+use crate::format::{DataType, BKEY_PTRS_MAX};
 use crate::locking::{ExclusiveGuard, SpinLockIrq, ByteLock, Locked, Lockdep};
 use crate::opts::data_type_str;
 use crate::{percpu_field, new_lock, published};
@@ -268,7 +268,7 @@ published! {
 #[derive(Clone, Copy, Default, MaybeZeroable)]
 pub struct OpenBuckets {
     pub nr: u16,
-    pub v: [Option<OpenBucketIdx>; BCH_BKEY_PTRS_MAX as usize],
+    pub v: [Option<OpenBucketIdx>; BKEY_PTRS_MAX as usize],
 }
 
 #[placed(Fs.allocator)]
@@ -337,7 +337,7 @@ published! {
 #[derive(Clone, Copy, MaybeZeroable)]
 pub struct DevAllocList {
     pub nr: u32,
-    pub data: [u8; BCH_SB_MEMBERS_MAX as usize],
+    pub data: [u8; MEMBERS_MAX as usize],
 }
 
 nest! {
@@ -472,7 +472,7 @@ nest! {
 
         /* bch2_bucket_alloc_set_trans(): */
         pub devs_sorted: DevAllocList,
-        pub domain_keys: [u64; BCH_SB_MEMBERS_MAX as usize],
+        pub domain_keys: [u64; MEMBERS_MAX as usize],
         pub usage: DevUsage,
 
         /*
@@ -1131,7 +1131,7 @@ impl<'r, 'f> alloc_request<'r, 'f> {
         drop(core::mem::take(&mut self.trace));
     }
 
-    /// An attempt recorded in its trace - on @dev, BCH_SB_MEMBER_INVALID for
+    /// An attempt recorded in its trace - on @dev, MEMBER_INVALID for
     /// none, or U8_MAX for the open bucket pool - for the allocator stuck
     /// dump, @err its error if it failed. @wake_counter_snapshot is the
     /// device's wake counter as it was before the attempt waited, or a wake
@@ -1244,7 +1244,7 @@ impl Fs {
         let rcu = read_lock();
         let mut found = false;
 
-        for e in req.trace.iter().filter(|e| e.err != 0 && u32::from(e.dev) != BCH_SB_MEMBER_INVALID) {
+        for e in req.trace.iter().filter(|e| e.err != 0 && u32::from(e.dev) != MEMBER_INVALID) {
             found = true;
 
             let Some(ca) = self.dev_rcu(e.dev.into(), &rcu) else { return true };

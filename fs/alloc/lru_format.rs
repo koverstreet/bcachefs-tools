@@ -26,24 +26,24 @@ pub enum LruType {
  * LRU id space: read LRUs and bucket fragmentation LRUs are per-device,
  * id = range base + device index:
  */
-pub const BCH_LRU_READ_MAX: u32 = 1 << 13;
-pub const BCH_LRU_BUCKET_FRAGMENTATION_START: u32 = 1 << 13;
-pub const BCH_LRU_BUCKET_FRAGMENTATION_END: u32 = 2 << 13;
+pub const LRU_READ_MAX: u32 = 1 << 13;
+pub const LRU_BUCKET_FRAGMENTATION_START: u32 = 1 << 13;
+pub const LRU_BUCKET_FRAGMENTATION_END: u32 = 2 << 13;
 
-pub const BCH_LRU_STRIPE_FRAGMENTATION: u32 = (1 << 16) - 2;
+pub const LRU_STRIPE_FRAGMENTATION: u32 = (1 << 16) - 2;
 
 /*
  * Stripe reuse: stripes by what a new stripe packed into them must match, then
  * by how many live data blocks they have - stripe.rs's reuse_lru_pos():
  */
-pub const BCH_LRU_STRIPE_REUSE: u32 = (1 << 16) - 3;
+pub const LRU_STRIPE_REUSE: u32 = (1 << 16) - 3;
 
 /*
  * Obsolete: the single fs-wide bucket fragmentation lru, replaced by the
  * per-device fragmentation lrus in per_dev_fragmentation_lru; stale entries
  * are deleted by check_lrus:
  */
-pub const BCH_LRU_BUCKET_FRAGMENTATION_OLD: u32 = (1 << 16) - 1;
+pub const LRU_BUCKET_FRAGMENTATION_OLD: u32 = (1 << 16) - 1;
 
 pub const LRU_TIME_BITS: u32 = 48;
 pub const LRU_TIME_MAX: u64 = (1 << LRU_TIME_BITS) - 1;

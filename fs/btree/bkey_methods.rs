@@ -46,7 +46,7 @@ pub enum SetError<'p> {
     Access { field: &'p str, err: AccessError },
     BadValue { field: &'p str, val: &'p str, valid: Option<EnumValues> },
     NoRoom(NoRoom),
-    /// A dirent name that isn't one: empty, or past BCH_NAME_MAX.
+    /// A dirent name that isn't one: empty, or past DIRENT_NAME_MAX.
     BadName { val: &'p str },
     Unsupported { type_: u8 },
 }

@@ -39,7 +39,7 @@ use crate::util::{Printbuf, ToText};
 use crate::data_structures::array_vec::ArrayVec;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering::{AcqRel, Relaxed}};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
-use crate::format::{Bpos, BCH_BKEY_PTRS_MAX};
+use crate::format::{Bpos, BKEY_PTRS_MAX};
 
 pub const BUCKET_NOCOW_LOCKS_BITS: u32 = 10;
 pub const BUCKET_NOCOW_LOCKS: u32 = 1 << BUCKET_NOCOW_LOCKS_BITS;
@@ -50,7 +50,7 @@ const NR_SLOTS: usize = NOCOW_LOCK_BUCKET_SIZE as usize;
 const NR_BUCKETS: usize = BUCKET_NOCOW_LOCKS as usize;
 
 /// A key's buckets: one per pointer, at most.
-type Buckets = ArrayVec<u64, { BCH_BKEY_PTRS_MAX as usize }>;
+type Buckets = ArrayVec<u64, { BKEY_PTRS_MAX as usize }>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NocowKind {
@@ -215,7 +215,7 @@ impl NocowLocks {
         }
 
         // in hash bucket order: we never wait holding what another waits for
-        let mut order: ArrayVec<(u64, &NocowLockBucket), { BCH_BKEY_PTRS_MAX as usize }> =
+        let mut order: ArrayVec<(u64, &NocowLockBucket), { BKEY_PTRS_MAX as usize }> =
             buckets.iter().map(|&b| (b, self.bucket(b))).collect();
         order.sort_unstable_by_key(|&(_, l)| core::ptr::from_ref(l) as usize);
         warn_on_once!(order.len() > NR_SLOTS);

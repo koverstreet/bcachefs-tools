@@ -9,7 +9,7 @@ use crate::btree::bkey::BkeyI;
 use bitflags::bitflags;
 use cstruct_macros::{bch_enum, ioctl, counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
-use crate::format::{Bpos, __uuid_t, BCH_REPLICAS_MAX};
+use crate::format::{Bpos, __uuid_t, REPLICAS_MAX};
 
 bitflags! {
     /// What an operation on a device may leave degraded, or lose.
@@ -504,7 +504,7 @@ pub struct IoctlFsUsage {
     pub capacity: u64,
     pub used: u64,
     pub online_reserved: u64,
-    pub persistent_reserved: [u64; BCH_REPLICAS_MAX as usize],
+    pub persistent_reserved: [u64; REPLICAS_MAX as usize],
 
     pub replica_entries_bytes: u32,
     pub pad: u32,
@@ -735,7 +735,7 @@ pub struct IoctlQueryAccounting {
     pub accounting: [BkeyI<Accounting>; 0],
 }
 
-pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
+pub const QUERY_ACCOUNTING_FREE_NR: u32 = 8;
 
 /*
  * BCH_IOCTL_QUERY_ACCOUNTING_v2: as v1, plus free space by replica count
@@ -752,10 +752,10 @@ pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
  * is the allocator's backlog, and it's what distinguishes a filesystem that is
  * slow right now from one that is full.
  *
- * Both are sized 8 rather than BCH_REPLICAS_MAX deliberately: sizeof(this
+ * Both are sized 8 rather than REPLICAS_MAX deliberately: sizeof(this
  * struct) is encoded in the ioctl number, so sizing it by a constant that could
  * grow would silently change the command and -ENOTTY every existing binary.
- * Entries from BCH_REPLICAS_MAX up are zero.
+ * Entries from REPLICAS_MAX up are zero.
  */
 #[repr(C)]
 #[derive(Default, MaybeZeroable, TypeInfo)]
@@ -763,8 +763,8 @@ pub struct IoctlQueryAccountingV2 {
     pub capacity: u64,
     pub used: u64,
     pub online_reserved: u64,
-    pub free: [u64; BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize],
-    pub free_now: [u64; BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize],
+    pub free: [u64; QUERY_ACCOUNTING_FREE_NR as usize],
+    pub free_now: [u64; QUERY_ACCOUNTING_FREE_NR as usize],
 
     pub accounting_u64s: u32, /* input parameter */
     pub accounting_types_mask: u32, /* input parameter */

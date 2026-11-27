@@ -34,7 +34,7 @@ use crate::data::extents_format::{ExtentPtr, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::write::WriteFlags;
 use crate::fs::FsFlag;
-use crate::sb::{members::DevReadRefKind, members_format::BCH_SB_MEMBER_INVALID};
+use crate::sb::{members::DevReadRefKind, members_format::MEMBER_INVALID};
 use crate::errcode::{Errcode, BchError};
 use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
@@ -48,7 +48,7 @@ use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use bitflags::bitflags;
 use core::mem::size_of;
-use crate::format::{Btree, DataType, ErrorKeyReason, BCH_BKEY_PTRS_MAX, CsumType};
+use crate::format::{Btree, DataType, ErrorKeyReason, BKEY_PTRS_MAX, CsumType};
 
 /// What a key with pointers is copied with room for: as large as one can get,
 /// for the reconcile entry and padding pointers set_needs_reconcile() may add.
@@ -207,7 +207,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     let fs = t.fs();
     let p = &d.p;
     let dev = u32::from(p.ptr.dev());
-    if dev == BCH_SB_MEMBER_INVALID {
+    if dev == MEMBER_INVALID {
         return Ok(PtrFix::empty());
     }
 
@@ -437,7 +437,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
 
     let fixes = kp.ptrs_decoded(fs)
         .map(|d| check_fix_ptr(t, k, &d))
-        .collect::<Result<ArrayVec<PtrFix, { BCH_BKEY_PTRS_MAX as usize }>, _>>()?;
+        .collect::<Result<ArrayVec<PtrFix, { BKEY_PTRS_MAX as usize }>, _>>()?;
     if fixes.iter().all(|f| f.is_empty()) {
         return Ok(());
     }
@@ -494,11 +494,11 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
     new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
     // A btree node pointer kept for its cached node, with no pointer left,
-    // gets one to BCH_SB_MEMBER_INVALID - which nothing reads or marks -
+    // gets one to MEMBER_INVALID - which nothing reads or marks -
     // until the node's rewrite replaces it. set_needs_reconcile() pads a key
     // short of its replicas with those, but not a key at one replica
     if new.as_sc().arm::<Ptrs>().is_some_and(|p| p.ptrs(fs).next().is_none()) {
-        let ptr = ExtentPtr::new().with_dev(BCH_SB_MEMBER_INVALID as u8);
+        let ptr = ExtentPtr::new().with_dev(MEMBER_INVALID as u8);
         let mut kp = new.reborrow().arm::<PtrsMut>().expect("a btree node pointer: entries to its end");
         let end = kp.entries_end();
         kp.insert_entry(end, &[ptr.into_bits().0]).expect("room for a pointer: the copy's made with it");

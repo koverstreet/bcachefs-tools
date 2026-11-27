@@ -14,7 +14,7 @@
 use core::mem::size_of;
 
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::acl_format::{AclEntry, BCH_ACL_VERSION, bch_acl_entry, AclHeader};
+use crate::posix::acl_format::{AclEntry, ACL_VERSION, bch_acl_entry, AclHeader};
 use crate::init::error::id;
 use crate::os::posix_acl::AclType;
 use crate::sb::errors::SbErrorId;
@@ -53,7 +53,7 @@ impl core::fmt::Display for AclError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Short(len)  => write!(f, "{len} bytes, too few for its header"),
-            Self::Version(v)  => write!(f, "version {v}, not {BCH_ACL_VERSION}"),
+            Self::Version(v)  => write!(f, "version {v}, not {ACL_VERSION}"),
             Self::Entry(err)  => write!(f, "{err}"),
         }
     }
@@ -64,7 +64,7 @@ const HEADER_BYTES: usize = size_of::<AclHeader>();
 /// Past the header: an error if the header isn't one.
 fn entry_bytes(value: &[u8]) -> Result<&[u8], AclError> {
     let h = cast_plain::<AclHeader>(value).ok_or(AclError::Short(value.len()))?;
-    if h.a_version.get() != BCH_ACL_VERSION {
+    if h.a_version.get() != ACL_VERSION {
         return Err(AclError::Version(h.a_version.get()));
     }
     Ok(&value[HEADER_BYTES..])
@@ -92,7 +92,7 @@ pub fn encoded_len(entries: impl Iterator<Item = AclEntry>) -> usize {
 
 /// @out must be encoded_len() long.
 pub fn encode(entries: impl Iterator<Item = AclEntry>, out: &mut [u8]) {
-    let h = AclHeader { a_version: BCH_ACL_VERSION.into() };
+    let h = AclHeader { a_version: ACL_VERSION.into() };
     out[..HEADER_BYTES].copy_from_slice(plain_bytes(&h));
 
     let mut rest = &mut out[HEADER_BYTES..];

@@ -22,7 +22,7 @@ use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, types_with, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
 use crate::btree::bkey_methods::SetError;
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
-use crate::data::checksum::BCH_NONCE_EXTENT;
+use crate::data::checksum::NONCE_EXTENT;
 use crate::data::extents::{BkeyVExtents, ExtentCrcUnpacked, ExtentPtrDecoded};
 use crate::errcode::BchError;
 use crate::data::ec::format::Stripe;
@@ -32,7 +32,7 @@ use crate::data::extents_format::{ExtentCrc32, ExtentPtr, CRC32_NONCE_MAX,
 use crate::data::reflink_format::ReflinkV;
 use crate::init::dev::DevsList;
 use crate::opts::InodeOpts;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::fs::Fs;
 use crate::debug::trace::events;
 use crate::typeinfo::{AccessError, ResolveError};
@@ -322,10 +322,10 @@ impl<S: KeyState + InPlace> PtrsEntries for Stripe<S> {
 impl PtrsBkey for Stripe<Validated> {
 
     /// A stripe's pointers are its blocks, which can't be dropped: one is made
-    /// to point nowhere, its dev BCH_SB_MEMBER_INVALID - for fsck's repairs.
+    /// to point nowhere, its dev MEMBER_INVALID - for fsck's repairs.
     fn drop_ptr_noerror(mut k: BkeyS<'_, Self>, fs: &Fs, at: EntryPos) {
         k.ptr_mut_at(fs, at).expect("a pointer at the position to drop")
-            .set_dev(BCH_SB_MEMBER_INVALID as u8);
+            .set_dev(MEMBER_INVALID as u8);
     }
 }
 
@@ -511,10 +511,10 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         self.ptrs(fs).all(|p| fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.is_rw()))
     }
 
-    /// The devices it points to, BCH_SB_MEMBER_INVALID placeholders skipped:
+    /// The devices it points to, MEMBER_INVALID placeholders skipped:
     fn devs(&self, fs: &Fs) -> DevsList {
         let mut d = DevsList::default();
-        for p in self.ptrs(fs).filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID) {
+        for p in self.ptrs(fs).filter(|p| u32::from(p.dev()) != MEMBER_INVALID) {
             d.data[usize::from(d.nr)] = p.dev();
             d.nr += 1;
         }
@@ -595,7 +595,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
     /// drop_ptr_noerror() - unless a pointer to its device has a stripe,
     /// whose redundancy it keeps: then it's made to point nowhere, its dev
-    /// BCH_SB_MEMBER_INVALID.
+    /// MEMBER_INVALID.
     fn drop_ptr(&mut self, fs: &Fs, at: EntryPos)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -603,7 +603,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
             .expect("a pointer at the position to drop").p.ptr.dev();
         if self.ptrs_decoded(fs).any(|p| p.p.ptr.dev() == dev && p.p.has_ec) {
             self.ptr_mut_at(fs, at).expect("a pointer at the position to drop")
-                .set_dev(BCH_SB_MEMBER_INVALID as u8);
+                .set_dev(MEMBER_INVALID as u8);
         } else {
             self.drop_ptr_noerror(fs, at);
         }
@@ -1035,7 +1035,7 @@ pub fn extent_nonce(version: Bversion, crc: &ExtentCrcUnpacked) -> Nonce {
             Le32::new(lo as u32),
             Le32::new((lo >> 32) as u32),
             // C xors the domain into the word once it's little-endian
-            Le32::new((hi | compression_type << 24) ^ u32::from_le(BCH_NONCE_EXTENT)),
+            Le32::new((hi | compression_type << 24) ^ u32::from_le(NONCE_EXTENT)),
         ],
     };
     nonce + (u32::from(crc.nonce) << 9)

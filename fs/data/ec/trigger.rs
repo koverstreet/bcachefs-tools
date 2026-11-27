@@ -30,7 +30,7 @@ use crate::alloc::format::AllocV4;
 use crate::btree::check_allocations::GcPhase;
 use crate::data::ec::FsEc;
 use crate::data::extents_format::ExtentPtr;
-use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
 use crate::data::ptrs::BkeyVPtrs;
 use crate::data::reconcile::trigger::data_to_rb_work_pos;
@@ -41,7 +41,7 @@ use crate::{bch_err, fs_inconsistent, fsck_err_on, prt};
 use crate::alloc::accounting;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
-use crate::format::{Bpos, Btree, DataType, BCH_BKEY_PTRS_MAX};
+use crate::format::{Bpos, Btree, DataType, BKEY_PTRS_MAX};
 use crate::locking::{ByteLock, Locked};
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
@@ -72,8 +72,8 @@ nest! {
         pub sectors: u16,
         pub nr_blocks: u8,
         pub nr_redundant: u8,
-        pub block_sectors: [u16; BCH_BKEY_PTRS_MAX as usize],
-        pub ptrs: [ExtentPtr; BCH_BKEY_PTRS_MAX as usize],
+        pub block_sectors: [u16; BKEY_PTRS_MAX as usize],
+        pub ptrs: [ExtentPtr; BKEY_PTRS_MAX as usize],
 
         pub r: ReplicasPadded,
     }
@@ -176,7 +176,7 @@ fn stripe_frag_acct(t: &TransAttempt<'_, '_>, s: Option<StripeK<'_>>, gc: bool, 
 fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: Option<StripeK<'_>>, gc: bool)
     -> Result<(), BchError>
 {
-    type Deltas = ArrayVec<(u8, accounting::DevStripeFragCounters<i64>), { 2 * BCH_BKEY_PTRS_MAX as usize }>;
+    type Deltas = ArrayVec<(u8, accounting::DevStripeFragCounters<i64>), { 2 * BKEY_PTRS_MAX as usize }>;
 
     fn add(d: &mut Deltas, s: Option<StripeK<'_>>, sign: i64) {
         let Some(s) = s else { return };
@@ -322,7 +322,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     // reports is dropped, as C dropped it
     let Some(ca) = fs.dev_bkey_tryget(s.untyped(), dev).unwrap_or(None) else {
         cold_path();
-        if dev != BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
+        if dev != MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
             return fs.throw(Errcode::mark_stripe);
         }
         return Ok(());
@@ -349,7 +349,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
 fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool) -> Result<(), BchError> {
     let fs = t.fs();
     let d = s.ptrs_decoded(fs).nth(i as usize).expect("a block of the stripe's");
-    if u32::from(d.p.ptr.dev()) == BCH_SB_MEMBER_INVALID {
+    if u32::from(d.p.ptr.dev()) == MEMBER_INVALID {
         return Ok(());
     }
 

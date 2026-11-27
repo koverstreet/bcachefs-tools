@@ -20,7 +20,7 @@ use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
 use crate::os::{bio::{Bio, BioRange}, kernel::unlikely};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Dev, Fs};
-use crate::format::{Btree, DataType, BkeyType, BCH_BKEY_PTRS_MAX, BCH_REPLICAS_MAX};
+use crate::format::{Btree, DataType, BkeyType, BKEY_PTRS_MAX, REPLICAS_MAX};
 use crate::snapshots::subvolume;
 use crate::util::{rcu::read_lock, task::Resume};
 use crate::{btree_trans, fs_inconsistent};
@@ -64,10 +64,10 @@ fn nocow_write_convert_one_unwritten<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeI
 
     /*
      * If we did a degraded write, bch2_bkey_set_needs_reconcile() will add
-     * pointers to BCH_SB_MEMBER_INVALID so the extent is accounted as
+     * pointers to MEMBER_INVALID so the extent is accounted as
      * degraded
      */
-    let new_buf_u64s = usize::from(k.k.u64s) + 1 + BCH_REPLICAS_MAX as usize;
+    let new_buf_u64s = usize::from(k.k.u64s) + 1 + REPLICAS_MAX as usize;
     let mut new = t.bkey_reassemble_room(k, new_buf_u64s * size_of::<u64>())?;
 
     if let Some(mut ptrs) = new.reborrow().arm::<PtrsMut>() {
@@ -166,11 +166,11 @@ fn inode_get_i_size(t: &TransAttempt<'_, '_>, inode_pos: crate::format::Bpos) ->
 struct NocowExtent<'a> {
     data: BioRange<'a>,
     k:    DstRoom<BkeyI, [u64; BKEY_EXTENT_U64s_MAX]>,
-    cas:  [Option<DevWriteRef>; BCH_BKEY_PTRS_MAX as usize],
+    cas:  [Option<DevWriteRef>; BKEY_PTRS_MAX as usize],
     nr:   usize,
 }
 
-type NocowExtents<'a> = ArrayVec<NocowExtent<'a>, { BCH_BKEY_PTRS_MAX as usize }>;
+type NocowExtents<'a> = ArrayVec<NocowExtent<'a>, { BKEY_PTRS_MAX as usize }>;
 
 /// The write's data - @data, a position in its bio, advanced past what's
 /// done - written in place, as much as its extents allow, in @t: each extent
@@ -222,12 +222,12 @@ fn nocow_write_submit<'a>(t: &TransAttempt<'_, '_>, op: &mut Op, data: &mut BioR
         }
 
         /* Get iorefs before dropping btree locks: */
-        let mut refs = [const { None }; BCH_BKEY_PTRS_MAX as usize];
+        let mut refs = [const { None }; BKEY_PTRS_MAX as usize];
         let Some(nr_cas) = bkey_get_dev_iorefs(fs, k.arm::<Ptrs>().expect("a writeable extent"), &mut refs) else {
             return Ok(false);
         };
         let cas = &refs[..nr_cas];
-        let devs: [Option<&Dev>; BCH_BKEY_PTRS_MAX as usize] =
+        let devs: [Option<&Dev>; BKEY_PTRS_MAX as usize] =
             core::array::from_fn(|i| cas.get(i).and_then(Option::as_deref));
         let devs = &devs[..nr_cas];
 

@@ -485,7 +485,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, Loop
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BucketGens,
     BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
-use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
+use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
 use crate::errcode::{Errcode, BchError};
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
@@ -1573,7 +1573,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         // bucket_fragmentation_lru()'s
         lru_change(t, LruId::from(p.inode as u16), bucket_to_u64(p),
                    old_a.lru_idx_read(), new_a.lru_idx_read())?;
-        lru_change(t, LruId::from((BCH_LRU_BUCKET_FRAGMENTATION_START + dev) as u16), bucket_to_u64(p),
+        lru_change(t, LruId::from((LRU_BUCKET_FRAGMENTATION_START + dev) as u16), bucket_to_u64(p),
                    old_a.lru_idx_fragmentation(&ca), new_a.lru_idx_fragmentation(&ca))?;
 
         if old_a.generation != new_a.generation {
