@@ -22,8 +22,8 @@
 //! Who changes what:
 //!  - The keys themselves, and pre_sort, change only where nothing else reads
 //!    them: before the filesystem can go rw - sorting, inserts, accounting
-//!    read's merging - which a NotRw shows, their LockedBy's; the last ref's
-//!    put, and what keys_mut() is for.
+//!    read's merging - which a NotRw shows, their LockedBy's - and the last
+//!    ref's put, which has them alone.
 //!  - Overwriting happens later too, from any thread, under overwrite_lock -
 //!    which journal replay's commits take, in C - while the keys are read
 //!    without it. So a key's overwritten flag and range are words the lock
@@ -344,13 +344,6 @@ impl JournalKeys {
         unsafe { &*self.keys.data_ptr() }
     }
 
-    /// # Safety
-    /// Nothing else reads or writes the keys while it's held: the last ref,
-    /// or a writer that can't have a NotRw.
-    pub(crate) unsafe fn keys_mut(&self) -> &mut GapBuffer<journal_key> {
-        unsafe { self.keys.protected_mut() }
-    }
-
     fn seq(&self) -> u64 {
         self.seq.load(Relaxed)
     }
@@ -447,10 +440,10 @@ impl JournalKeys {
 
     /// The keys freed, what they own and the buffer, and the overwrite
     /// ranges.
-    fn reset(&self, keys: &mut GapBuffer<journal_key>) {
+    fn reset(keys: &mut GapBuffer<journal_key>, overwrites: &Locked<Mutex, OverwriteRanges, OverwriteRangesLive>) {
         keys.clear();
 
-        let mut g = self.overwrites.lock();
+        let mut g = overwrites.lock();
         g.overwrites_nr = 0;
         g.published().ranges.clear();
     }
@@ -952,7 +945,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
     let (mut nr_read, mut nr_extra_sorts) = (0usize, 0usize);
     let start_seq = match fs.journal_scrub_seq.get() { 0 => fs.journal_replay_seq_start.get(), s => s };
 
-    jk.reset(keys);
+    JournalKeys::reset(keys, &jk.overwrites);
 
     for (i, j) in jk.replays() {
         cond_resched();
@@ -1042,8 +1035,8 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
 #[pinned_drop]
 impl PinnedDrop for JournalKeys {
     fn drop(self: Pin<&mut Self>) {
-        // SAFETY: the last ref's
-        unsafe { self.reset(self.keys_mut()) };
+        let this = self.project();
+        JournalKeys::reset(this.keys.get_mut(), &this.overwrites);
     }
 }
 
@@ -1058,8 +1051,8 @@ pub fn shoot_down_journal_keys(fs: &Fs, btree: Btree, level_min: u32, level_max:
                                start: Bpos, end: Bpos) {
     let Some(jk) = fs.journal_keys_get() else { return };
     let jk = jk.value();
-    // SAFETY: recovery's, before anything runs alongside it
-    let keys = unsafe { jk.keys_mut() };
+    let mut not_rw = fs.not_rw();
+    let keys = not_rw.get_mut_of(&jk.keys);
     let s = keys.make_contiguous();
     let mut dst = 0;
 

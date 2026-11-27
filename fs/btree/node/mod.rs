@@ -368,7 +368,7 @@ impl BtreeNode {
     pub fn update_key<R>(&self, contents: &mut NodeContents, f: impl FnOnce(&mut NodeKey) -> R) -> R {
         let mut k = *self.key_room(contents);
         let ret = f(&mut k);
-        unsafe { self.contents.published_writer() }.store(&k);
+        self.contents.writer_by(contents).store(&k);
         ret
     }
 

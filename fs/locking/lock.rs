@@ -914,6 +914,13 @@ impl<G, P: crate::util::projections::Publish, L> LockedBy<G, P, L> {
     pub fn published_writer_mut(&mut self) -> &P::Writer {
         unsafe { self.published_writer() }
     }
+
+    /// @P as its writer has it, by @g: a &mut of the G it protects, which only
+    /// whoever holds the lock alone has.
+    pub fn writer_by(&self, g: &mut G) -> &P::Writer {
+        assert!(core::ptr::eq(g, self.data_ptr()), "a LockedBy's writer by another's data");
+        unsafe { self.published_writer() }
+    }
 }
 
 impl<G, P, L, S: Sharing> Deref for LockedBy<G, P, L, S> {
