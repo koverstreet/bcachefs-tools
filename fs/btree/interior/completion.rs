@@ -92,7 +92,7 @@ impl InteriorUpdate<'_> {
         let fs = self.fs();
         let mut n = paths[at.path].locked_btree_node_mut(at.level).expect("a new node, held by its path");
 
-        unsafe { self.new_nodes() }.push(NewPointer::node(fs, n.held()));
+        self.push_new_node(NewPointer::node(fs, n.held()));
 
         self.pending.fetch_add(1, Relaxed);
 

@@ -460,13 +460,6 @@ impl BtreeUpdate {
         *updates.get_mut_of(&self.mode) = Some(mode)
     }
 
-    /// # Safety
-    /// The update holds its new nodes locked: before done().
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn new_nodes(&self) -> &mut NewPointers {
-        unsafe { self.new_nodes.protected_mut() }
-    }
-
     fn new_nodes_locked<'a>(&'a self, commit_lock: &'a mut CommitGuard<'_>) -> &'a mut NewPointers {
         commit_lock.get_mut_of(&self.new_nodes)
     }
@@ -858,6 +851,12 @@ impl<'t> InteriorUpdate<'t> {
         self.owned.borrow_mut().parent_keys.push_key(k)
     }
 
+    /// @p onto the new nodes: the foreground's alone till done(), as the field
+    /// says. Not Sync, and nothing in it borrows them across this.
+    fn push_new_node(&self, p: NewPointer) {
+        unsafe { self.new_nodes.protected_mut() }.push(p)
+    }
+
     /// @n's pointer, its sectors_written stamped, added to what the parent
     /// gets.
     pub(crate) fn link(&self, n: &mut NewNode<'_>) {
@@ -875,7 +874,7 @@ impl<'t> InteriorUpdate<'t> {
 
         let mut key = NodeKey::default();
         key.set_key(delete);
-        unsafe { self.new_nodes() }.push(NewPointer { level: level as u8, key, to: Pointee::Deleted });
+        self.push_new_node(NewPointer { level: level as u8, key, to: Pointee::Deleted });
     }
 
     /// The parent keys that go in @n inserted into it, @path's at its level.
