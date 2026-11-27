@@ -6,37 +6,63 @@ use crate::sb::errors_format::SbFieldErrorEntryV2;
 use crate::alloc::{accounting_format::Accounting, replicas_format::ReplicasEntryV1};
 use crate::util::{ffi::c_char, vstructs::Head};
 use crate::btree::bkey::BkeyI;
+use bitflags::bitflags;
 use cstruct_macros::{bch_enum, ioctl, counted, unsized_vstruct, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
 use crate::format::{Bpos, __uuid_t, BCH_REPLICAS_MAX};
 
-/*
- * Flags common to multiple ioctls:
- */
-pub const BCH_FORCE_IF_DATA_LOST: u32 = 1 << 0;
-pub const BCH_FORCE_IF_METADATA_LOST: u32 = 1 << 1;
-pub const BCH_FORCE_IF_DATA_DEGRADED: u32 = 1 << 2;
-pub const BCH_FORCE_IF_METADATA_DEGRADED: u32 = 1 << 3;
+bitflags! {
+    /// What an operation on a device may leave degraded, or lose.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct ForceIf: u32 {
+        const DATA_LOST         = 1 << 0;
+        const METADATA_LOST     = 1 << 1;
+        const DATA_DEGRADED     = 1 << 2;
+        const METADATA_DEGRADED = 1 << 3;
 
-pub const BCH_FORCE_IF_LOST: u32 =
-    BCH_FORCE_IF_DATA_LOST |
-    BCH_FORCE_IF_METADATA_LOST;
-pub const BCH_FORCE_IF_DEGRADED: u32 =
-    BCH_FORCE_IF_DATA_DEGRADED |
-    BCH_FORCE_IF_METADATA_DEGRADED;
+        const LOST     = Self::DATA_LOST.bits() | Self::METADATA_LOST.bits();
+        const DEGRADED = Self::DATA_DEGRADED.bits() | Self::METADATA_DEGRADED.bits();
+    }
+}
 
-/*
- * If cleared, ioctl that refer to a device pass it as a pointer to a pathname
- * (e.g. /dev/sda1); if set, the dev field is the device's index within the
- * filesystem:
- */
-pub const BCH_BY_INDEX: u32 = 1 << 4;
+bitflags! {
+    /// Flags common to multiple ioctls: ForceIf's, and how the device is named.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct IoctlFlags: u32 {
+        const FORCE = ForceIf::all().bits();
 
-/*
- * For BCH_IOCTL_READ_SUPER: get superblock of a specific device, not filesystem
- * wide superblock:
- */
-pub const BCH_READ_DEV: u32 = 1 << 5;
+        /*
+         * If cleared, ioctl that refer to a device pass it as a pointer to a pathname
+         * (e.g. /dev/sda1); if set, the dev field is the device's index within the
+         * filesystem:
+         */
+        const BY_INDEX = 1 << 4;
+
+        /*
+         * For BCH_IOCTL_READ_SUPER: get superblock of a specific device, not filesystem
+         * wide superblock:
+         */
+        const READ_DEV = 1 << 5;
+    }
+}
+
+impl IoctlFlags {
+    /// @raw, if it sets no flag but @allowed's: the check every ioctl's flags
+    /// get.
+    pub fn within(raw: u32, allowed: IoctlFlags) -> Option<IoctlFlags> {
+        IoctlFlags::from_bits(raw).filter(|f| allowed.contains(*f))
+    }
+
+    pub fn force(self) -> ForceIf {
+        ForceIf::from_bits_truncate(self.bits())
+    }
+}
+
+impl From<ForceIf> for IoctlFlags {
+    fn from(f: ForceIf) -> IoctlFlags {
+        IoctlFlags::from_bits_retain(f.bits())
+    }
+}
 
 ioctl! {
     /* filesystem ioctls: */
@@ -140,12 +166,15 @@ pub struct IoctlGetDamage {
     pub entries: [SbFieldErrorEntryV2; 0],
 }
 
-#[allow(non_upper_case_globals)]
-pub const BCH_READDIR_recursive: u32 = 1 << 0;
-#[allow(non_upper_case_globals)]
-pub const BCH_READDIR_damaged: u32 = 1 << 2;
-#[allow(non_upper_case_globals)]
-pub const BCH_READDIR_subvolumes_only: u32 = 1 << 1;
+bitflags! {
+    /// BCHFS_IOC_READDIR_FLAGS's @flags.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct ReaddirFlags: u32 {
+        const RECURSIVE       = 1 << 0;
+        const SUBVOLUMES_ONLY = 1 << 1;
+        const DAMAGED         = 1 << 2;
+    }
+}
 
 /*
  * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
@@ -163,7 +192,7 @@ pub const BCH_READDIR_subvolumes_only: u32 = 1 << 1;
  * Permissions are those of readdir: the caller learns nothing beyond the
  * directory they opened.
  *
- * @flags	- BCH_READDIR_*
+ * @flags	- ReaddirFlags
  * @pos		- opaque resume cursor: zero to start; copied back out
  *		  past the last entry returned. Iterate until @used == 0.
  * @buf_size,
@@ -243,7 +272,7 @@ pub struct IoctlQueryUuid {
  * may be either offline or offline.
  *
  * Will fail removing @dev would leave us with insufficient read write devices
- * or degraded/unavailable data, unless the approprate BCH_FORCE_IF_* flags are
+ * or degraded/unavailable data, unless the approprate ForceIf flags are
  * set.
  */
 
@@ -266,7 +295,7 @@ pub struct IoctlQueryUuid {
  *
  * Will fail (similarly to BCH_IOCTL_DISK_SET_STATE) if offlining @dev would
  * leave us with insufficient read write devices or degraded/unavailable data,
- * unless the approprate BCH_FORCE_IF_* flags are set.
+ * unless the approprate ForceIf flags are set.
  */
 
 #[repr(C)]
@@ -294,7 +323,7 @@ pub struct IoctlDiskV2 {
  *
  * Will refuse to change member state if we would then have insufficient devices
  * to write to, or if it would result in degraded data (when @new_state is
- * failed or spare) unless the appropriate BCH_FORCE_IF_* flags are set.
+ * failed or spare) unless the appropriate ForceIf flags are set.
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo)]
@@ -540,7 +569,7 @@ pub struct IoctlDevUsageV2 {
  *
  * @sb		- buffer to read into
  * @size	- size of userspace allocated buffer
- * @dev		- device to read superblock for, if BCH_READ_DEV flag is
+ * @dev		- device to read superblock for, if the READ_DEV flag is
  *		  specified
  *
  * Returns -ERANGE if buffer provided is too small
@@ -640,8 +669,14 @@ pub struct IoctlSubvolumeV2 {
     pub err: IoctlErrMsg,
 }
 
-pub const BCH_SUBVOL_SNAPSHOT_CREATE: u32 = 1 << 0;
-pub const BCH_SUBVOL_SNAPSHOT_RO: u32 = 1 << 1;
+bitflags! {
+    /// BCH_IOCTL_SUBVOLUME_CREATE's @flags.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct SubvolFlags: u32 {
+        const SNAPSHOT_CREATE = 1 << 0;
+        const SNAPSHOT_RO     = 1 << 1;
+    }
+}
 
 /*
  * BCH_IOCTL_FSCK_OFFLINE: run fsck from the 'bcachefs fsck' userspace command,
@@ -738,7 +773,13 @@ pub struct IoctlQueryAccountingV2 {
     pub accounting: [BkeyI<Accounting>; 0],
 }
 
-pub const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u32 = 1 << 0;
+bitflags! {
+    /// BCH_IOCTL_QUERY_COUNTERS's @flags.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct QueryCountersFlags: u16 {
+        const MOUNT = 1 << 0;
+    }
+}
 
 #[counted(nr)]
 #[repr(C)]
@@ -959,17 +1000,25 @@ pub struct IoctlRecoveryStatus {
     pub total: u64,
 }
 
-#[allow(non_upper_case_globals)]
-pub const BCH_PREAD_RAW_no_poison_check: u32 = 1 << 0;
+bitflags! {
+    /// BCHFS_IOC_PREAD_RAW's @flags.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct PreadRawFlags: u32 {
+        const NO_POISON_CHECK = 1 << 0;
+    }
+}
 
-#[allow(non_upper_case_globals)]
-pub const BCH_PREAD_RAW_ERR_checksum: u32 = 1 << 0;
-#[allow(non_upper_case_globals)]
-pub const BCH_PREAD_RAW_ERR_io: u32 = 1 << 1;
-#[allow(non_upper_case_globals)]
-pub const BCH_PREAD_RAW_ERR_decompression: u32 = 1 << 2;
-#[allow(non_upper_case_globals)]
-pub const BCH_PREAD_RAW_ERR_ec_reconstruct: u32 = 1 << 3;
+bitflags! {
+    /// The kinds of error a read had: BCHFS_IOC_PREAD_RAW's @errors, and what a
+    /// read's error report says.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct ReadErr: u32 {
+        const CHECKSUM       = 1 << 0;
+        const IO             = 1 << 1;
+        const DECOMPRESSION  = 1 << 2;
+        const EC_RECONSTRUCT = 1 << 3;
+    }
+}
 
 /*
  * BCHFS_IOC_PREAD_RAW: O_DIRECT read with extended error reporting.
@@ -978,7 +1027,7 @@ pub const BCH_PREAD_RAW_ERR_ec_reconstruct: u32 = 1 << 3;
  * error reporting via the errors bitmask and embedded err_msg.
  *
  * With no flags set, behaves like a normal O_DIRECT read but with
- * better error information.  BCH_PREAD_RAW_no_poison_check bypasses
+ * better error information.  PreadRawFlags::NO_POISON_CHECK bypasses
  * extent poisoning so corrupted data can be recovered.
  */
 #[repr(C)]
@@ -987,8 +1036,8 @@ pub struct IoctlPreadRaw {
     pub offset: u64,
     pub len: u64,
     pub buf: u64, /* userspace data buffer */
-    pub flags: u32, /* BCH_PREAD_RAW_* input flags */
-    pub errors: u32, /* output: BCH_PREAD_RAW_ERR_* */
+    pub flags: u32, /* PreadRawFlags, input */
+    pub errors: u32, /* output: ReadErr */
     pub err: IoctlErrMsg,
 }
 
@@ -1008,14 +1057,16 @@ pub struct IoctlUnpoison {
     pub pad: u32,
 }
 
-#[allow(non_upper_case_globals)]
-pub const BCH_IOCTL_QUERY_BTREE_KEYS_slots: u32 = 1 << 0;
-#[allow(non_upper_case_globals)]
-pub const BCH_IOCTL_QUERY_BTREE_KEYS_prev: u32 = 1 << 1;
-#[allow(non_upper_case_globals)]
-pub const BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots: u32 = 1 << 2;
-#[allow(non_upper_case_globals)]
-pub const BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts: u32 = 1 << 3;
+bitflags! {
+    /// BCH_IOCTL_QUERY_BTREE_KEYS's @flags.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct QueryBtreeKeysFlags: u32 {
+        const SLOTS              = 1 << 0;
+        const PREV               = 1 << 1;
+        const ALL_SNAPSHOTS      = 1 << 2;
+        const NOFILTER_WHITEOUTS = 1 << 3;
+    }
+}
 
 /*
  * BCH_IOCTL_QUERY_BTREE_KEYS: read keys from a btree, range query
@@ -1048,7 +1099,7 @@ pub const BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts: u32 = 1 << 3;
  *
  * @btree	- btree id
  * @level	- btree level to read keys from (0 = leaves)
- * @flags	- BCH_IOCTL_QUERY_BTREE_KEYS_*
+ * @flags	- QueryBtreeKeysFlags
  * @done	- out: nonzero once iteration has reached the end of the range
  * @start	- in/out: cursor; on return, where the next call should
  *		  resume (only meaningful while @done is unset)

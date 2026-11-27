@@ -10,7 +10,7 @@ use crate::format::{MemberState, SbFeature, VersionUpgradeOpt};
 use crate::fs::{Dev, FsFlag, Fs};
 use super::{opt_to_text, Opt, OptId, OPTS};
 use crate::alloc::disk_groups_format::SbFieldDiskGroups;
-use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
+use crate::bcachefs_ioctl::ForceIf;
 use crate::data::compress;
 use crate::errcode::{Errcode, BchError};
 use crate::locking::{ExclusiveGuard, Mutex};
@@ -94,7 +94,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
     match id {
         OptId::state => {
             if let Some(ca) = ca {
-                return fs.dev_set_state(ca, MemberState(v as u8), BCH_FORCE_IF_DEGRADED, None);
+                return fs.dev_set_state(ca, MemberState(v as u8), ForceIf::DEGRADED, None);
             }
         }
         OptId::compression | OptId::background_compression => {

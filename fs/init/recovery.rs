@@ -34,6 +34,7 @@ use crate::locking::Guard as _;
 use crate::util::{alloc::Vec, log::LogMsg, os_str::{OsStr, OsStrExt}, Printbuf};
 use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::posix::{inode, logged_ops, namei, quota};
+use crate::posix::namei::CreateFlags;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
             message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
 use crate::bcachefs_ioctl::ProgressUnit as Units;
@@ -1133,7 +1134,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     bch_err_msg!(fs, trans_commit_do(fs, None, CommitFlags::empty(), |t| {
         namei::create_trans(t, SubvolInum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
                             Some(OsStr::from_bytes(b"lost+found")), 0, 0, S_IFDIR | umode_t(0o700), dev_t::NONE,
-                            None, None, SubvolInum::default(), 0)
+                            None, None, SubvolInum::default(), CreateFlags::empty())
     }), "creating lost+found")?;
 
     passes::set_pass_done(fs, passes::LAST);

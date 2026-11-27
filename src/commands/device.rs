@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::opts::{Opts, OptFlags};
 use bcachefs_kernel::format::{DegradedAction, MetadataVersion};
-use bcachefs_kernel::bcachefs_ioctl::{BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
+use bcachefs_kernel::bcachefs_ioctl::ForceIf;
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::sb::members_format;
@@ -235,7 +235,7 @@ pub struct OfflineCli {
 fn cmd_device_offline(cli: OfflineCli) -> Result<()> {
     let (handle, dev_idx) = open_dev(&cli.device)?;
 
-    let flags = if cli.force { BCH_FORCE_IF_DEGRADED } else { 0 };
+    let flags = if cli.force { ForceIf::DEGRADED } else { ForceIf::empty() };
     handle.disk_offline(dev_idx, flags)
         .with_context(|| format!("offlining device '{}'", cli.device))
 }
@@ -260,12 +260,12 @@ pub struct RemoveCli {
 
 fn cmd_device_remove(cli: RemoveCli) -> Result<()> {
 
-    let mut flags = BCH_FORCE_IF_DEGRADED;
+    let mut flags = ForceIf::DEGRADED;
     if cli.force {
-        flags |= BCH_FORCE_IF_DATA_LOST;
+        flags |= ForceIf::DATA_LOST;
     }
     if cli.force_metadata {
-        flags |= BCH_FORCE_IF_METADATA_LOST;
+        flags |= ForceIf::METADATA_LOST;
     }
 
     let (handle, dev_idx) = open_dev_by_path_or_index(
@@ -338,9 +338,9 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
         return set_state_offline(&cli.device, new_state);
     }
 
-    let mut flags = if cli.force { BCH_FORCE_IF_DEGRADED } else { 0 };
+    let mut flags = if cli.force { ForceIf::DEGRADED } else { ForceIf::empty() };
     if cli.force_if_data_lost {
-        flags |= BCH_FORCE_IF_DEGRADED | BCH_FORCE_IF_DATA_LOST | BCH_FORCE_IF_METADATA_LOST;
+        flags |= ForceIf::DEGRADED | ForceIf::LOST;
     }
 
     let (handle, dev_idx) = open_dev_by_path_or_index(
@@ -546,12 +546,12 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
     if members_format::MemberState(usage.state) == members_format::MemberState::rw {
         println!("Setting {} readonly", cli.device);
-        handle.disk_set_state(dev_idx, members_format::MemberState::ro, BCH_FORCE_IF_DEGRADED)
+        handle.disk_set_state(dev_idx, members_format::MemberState::ro, ForceIf::DEGRADED)
             .context("setting device readonly")?;
     }
 
     println!("Setting {} evacuating", cli.device);
-    handle.disk_set_state(dev_idx, members_format::MemberState::evacuating, BCH_FORCE_IF_DEGRADED)
+    handle.disk_set_state(dev_idx, members_format::MemberState::evacuating, ForceIf::DEGRADED)
         .context("setting device evacuating")?;
 
     // Trigger reconcile wakeup so it starts processing the evacuation

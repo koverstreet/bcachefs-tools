@@ -211,8 +211,7 @@
 
 use crate::c;
 use crate::posix::dev::dev_t;
-#[cfg(kernel)]
-use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
+use crate::bcachefs_ioctl::ForceIf;
 use crate::alloc::buckets::{DevUsageFull, Bucket, BucketGensArray};
 use crate::alloc::check_backpointers::{BucketBitmap, BucketBitmapWords};
 use crate::btree::interior::BTREE_NODE_RESERVE;
@@ -1101,7 +1100,7 @@ impl StateLockWrite<'_> {
      * XXX: maybe we should be more explicit about whether we're changing state
      * because we got an error or what have you?
      */
-    pub fn dev_state_allowed(&self, ca: &Dev, new_state: MemberState, flags: u32,
+    pub fn dev_state_allowed(&self, ca: &Dev, new_state: MemberState, flags: ForceIf,
                              err: &mut Printbuf) -> bool {
         let fs = self.fs();
         let rw = MemberState::rw;
@@ -1117,7 +1116,7 @@ impl StateLockWrite<'_> {
         true
     }
 
-    pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: u32, err: &mut Printbuf)
+    pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: ForceIf, err: &mut Printbuf)
         -> Result<(), BchError>
     {
         let fs = self.fs();
@@ -1190,7 +1189,7 @@ impl StateLockWrite<'_> {
         Ok(())
     }
 
-    pub fn dev_may_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+    pub fn dev_may_offline(&self, ca: &Dev, flags: ForceIf, err: &mut Printbuf) -> Result<(), BchError> {
         let fs = self.fs();
 
         let mut new_devs = fs.devs_online.load();
@@ -1210,7 +1209,7 @@ impl StateLockWrite<'_> {
         Ok(())
     }
 
-    fn dev_remove_locked(&self, ca: &Dev, fast_device_removal: bool, flags: u32,
+    fn dev_remove_locked(&self, ca: &Dev, fast_device_removal: bool, flags: ForceIf,
                          err: &mut Printbuf) -> Result<DevKobjRef, BchError> {
         let fs = self.fs();
 
@@ -1329,7 +1328,7 @@ impl StateLockWrite<'_> {
 }
 
 impl Fs {
-    pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: u32,
+    pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: ForceIf,
                          err: Option<&mut Printbuf>) -> Result<(), BchError>
     {
         let mut no_err = Printbuf::new();
@@ -1363,7 +1362,7 @@ impl Fs {
 
     /* Device add/removal: */
 
-    pub fn dev_remove(&self, ca: DevOuterRef, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+    pub fn dev_remove(&self, ca: DevOuterRef, flags: ForceIf, err: &mut Printbuf) -> Result<(), BchError> {
         let dev_idx = ca.dev_idx;
         let fast_device_removal = self.compat(SbCompat::no_stale_ptrs) &&
             self.request_incompat_feature(MetadataVersion::fast_device_removal).is_ok();
@@ -1670,7 +1669,7 @@ impl Fs {
         Ok(())
     }
 
-    pub fn dev_offline(&self, ca: &Dev, flags: u32, err: &mut Printbuf) -> Result<(), BchError> {
+    pub fn dev_offline(&self, ca: &Dev, flags: ForceIf, err: &mut Printbuf) -> Result<(), BchError> {
         let state = self.state_lock_write();
 
         if ca.removing() {
@@ -1952,7 +1951,7 @@ impl crate::os::blkdev::HolderOps for Holder {
         log_msg_start(&mut msg, ca.name().as_cstr());
         prt!(&mut msg, "offline from block layer\n");
 
-        let dev = state.dev_may_offline(&ca, BCH_FORCE_IF_DEGRADED, &mut msg).is_ok();
+        let dev = state.dev_may_offline(&ca, ForceIf::DEGRADED, &mut msg).is_ok();
         if !dev {
             if let Some((sb, umount)) = &umount {
                 if !surprise {

@@ -272,7 +272,7 @@ fn create_or_update_file(
                     None,
                     None,
                     zeroed_subvol_inum(),
-                    0,
+                    namei::CreateFlags::empty(),
                 )
             },
         )?;

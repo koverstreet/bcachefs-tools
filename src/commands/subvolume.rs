@@ -3,7 +3,7 @@ use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
 use chrono::{Local, TimeZone};
 
 use anyhow::{anyhow, ensure, Context, Result};
-use bcachefs_kernel::bcachefs_ioctl::{BCH_SUBVOL_SNAPSHOT_RO, IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2, IoctlSubvolDirent, IoctlSubvolReaddir, IoctlSubvolToPath};
+use bcachefs_kernel::bcachefs_ioctl::{SubvolFlags, IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2, IoctlSubvolDirent, IoctlSubvolReaddir, IoctlSubvolToPath};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
@@ -881,7 +881,7 @@ fn cmd_delete(targets: Vec<PathBuf>) -> Result<()> {
 fn cmd_snapshot(read_only: bool, source: Option<PathBuf>, dest: PathBuf) -> Result<()> {
     fs_for_path(&dest)?
         .snapshot_subvolume(
-            if read_only { BCH_SUBVOL_SNAPSHOT_RO } else { 0x0 },
+            if read_only { SubvolFlags::SNAPSHOT_RO } else { SubvolFlags::empty() },
             source,
             dest,
         )

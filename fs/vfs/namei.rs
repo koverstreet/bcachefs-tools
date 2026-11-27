@@ -21,7 +21,7 @@ use crate::posix::inode::InodeUnpacked;
 use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFCHR, S_IFDIR, S_IFLNK, S_IFREG, S_IRWXUGO, WHITEOUT_MODE};
 use crate::posix::inode_opts::InodeOptChange;
-use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_TMPFILE, BCH_CREATE_SUBVOL};
+use crate::posix::namei::CreateFlags;
 use crate::posix::quota_format::{QuotaCounter, QuotaType};
 use crate::posix::str_hash::HashInfo;
 use crate::snapshots::{format::Subvolume, subvolume::SubvolInum, subvolume};
@@ -50,16 +50,15 @@ const DIR_ENTRIES_CHANGED: u32 = ATTR_MTIME | ATTR_CTIME | ATTR_SIZE;
 
 impl InodeInfo {
     /// A new inode in this directory for @dentry, in the btree and the inode
-    /// cache - linked, unless @flags has BCH_CREATE_TMPFILE; a subvolume's
-    /// root, a snapshot of @snapshot_src's subvolume, with BCH_CREATE_SUBVOL
-    /// and BCH_CREATE_SNAPSHOT. The reference is ours, not yet the dentry's.
+    /// cache - linked, unless @flags has TMPFILE; a subvolume's root, a
+    /// snapshot of @snapshot_src's subvolume, with SUBVOL and SNAPSHOT. The reference is ours, not yet the dentry's.
     pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mut mode: umode_t,
-                         rdev: dev_t, snapshot_src: SubvolInum, flags: u32)
+                         rdev: dev_t, snapshot_src: SubvolInum, flags: CreateFlags)
         -> Result<InodeRef, BchError>
     {
         let fs = self.fs();
         let dir = self.vfs();
-        let tmpfile = flags & BCH_CREATE_TMPFILE != 0;
+        let tmpfile = flags.contains(CreateFlags::TMPFILE);
         let name = (!tmpfile).then_some(dentry);
         let uid = dir.uid_of(idmap.fsuid(dir));
         let gid = dir.gid_of(idmap.fsgid(dir));
@@ -90,8 +89,8 @@ impl InodeInfo {
 
         // Quotas count only master subvolume inodes; a new subvolume's root is
         // in a new snapshot tree, and is its master unless it's a snapshot:
-        let quota = if flags & BCH_CREATE_SUBVOL != 0 {
-            flags & BCH_CREATE_SNAPSHOT == 0
+        let quota = if flags.contains(CreateFlags::SUBVOL) {
+            !flags.contains(CreateFlags::SNAPSHOT)
         } else {
             !self.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT)
         };
@@ -251,7 +250,7 @@ impl InodeInfo {
 
 /// The LSMs' xattrs for a new @inode in @dir.
 fn init_security(t: &TransAttempt<'_, '_>, dir: &InodeInfo, inode: &mut NewInode, name: Option<&c::qstr>,
-                 inum: SubvolInum, inode_u: &InodeUnpacked, flags: u32) -> Result<(), BchError> {
+                 inum: SubvolInum, inode_u: &InodeUnpacked, flags: CreateFlags) -> Result<(), BchError> {
     // A snapshot create doesn't create an inode: create_trans() looks up the
     // source subvolume's root and reuses it at the new snapshot ID, so the
     // source's security xattr is already visible there through snapshot
@@ -267,7 +266,7 @@ fn init_security(t: &TransAttempt<'_, '_>, dir: &InodeInfo, inode: &mut NewInode
     // The in-core label still gets set: the new subvolume root is
     // instantiated after commit, and the LSM's d_instantiate hook reads it
     // back off the inherited xattr.
-    if flags & BCH_CREATE_SNAPSHOT != 0 {
+    if flags.contains(CreateFlags::SNAPSHOT) {
         return Ok(());
     }
 
@@ -339,7 +338,7 @@ impl InodeOps for DirOps {
         -> Result<(), BchError>
     {
         let inode = dir.create(idmap, dentry, S_IFLNK | S_IRWXUGO, dev_t::NONE,
-                               Default::default(), BCH_CREATE_TMPFILE)?;
+                               Default::default(), CreateFlags::TMPFILE)?;
         inode.vfs().page_symlink(target)?;
         inode.vfs().write_and_wait()?;
         inode.link(dir, dentry.name())?;
@@ -360,7 +359,7 @@ impl InodeOps for DirOps {
     fn mknod(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: umode_t,
              rdev: dev_t) -> Result<(), BchError>
     {
-        let inode = dir.create(idmap, dentry, mode, rdev, Default::default(), 0)?;
+        let inode = dir.create(idmap, dentry, mode, rdev, Default::default(), CreateFlags::empty())?;
         dentry.set_casefold_ops(inode.vfs());
         dentry.instantiate(inode);
         Ok(())
@@ -438,7 +437,7 @@ impl InodeOps for DirOps {
                     namei::create_trans(t, src_dir.inum(), &mut src_dir_u, w, &mut new_subvol,
                                         Some(src_dentry.name()), uid, gid,
                                         S_IFCHR | WHITEOUT_MODE, dev_t::NONE,
-                                        None, None, SubvolInum::default(), 0)?;
+                                        None, None, SubvolInum::default(), CreateFlags::empty())?;
                     if !src_dir.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
                         quota::acct(fs, quota::qid(w), QuotaCounter::Q_INO.0 as usize, 1,
                                     QuotaAcctMode::PREALLOC, &mut QuotaWarnings::new(fs))?;
@@ -479,7 +478,7 @@ impl InodeOps for DirOps {
     fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: OpeningTmpfile<'_, InodeInfo>, mode: umode_t)
         -> Result<(), BchError>
     {
-        let inode = dir.create(idmap, file.dentry(), mode, dev_t::NONE, Default::default(), BCH_CREATE_TMPFILE)?;
+        let inode = dir.create(idmap, file.dentry(), mode, dev_t::NONE, Default::default(), CreateFlags::TMPFILE)?;
         file.finish(inode)
     }
 }

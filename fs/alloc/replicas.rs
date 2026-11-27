@@ -22,8 +22,7 @@ use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::data::{ec::format::Stripe, ptrs::{BkeyVPtrs, Ptrs}};
 use crate::alloc::replicas_format::{ReplicasEntryV0, ReplicasEntryV1,
     SbFieldReplicas, SbFieldReplicasV0};
-use crate::bcachefs_ioctl::{BCH_FORCE_IF_DATA_DEGRADED, BCH_FORCE_IF_DATA_LOST,
-    BCH_FORCE_IF_METADATA_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
+use crate::bcachefs_ioctl::ForceIf;
 use crate::init::{dev::{DevsList, DevsMask}, passes::RecoveryPass};
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
@@ -358,9 +357,9 @@ impl<S: SbState> Sb<S> {
 // ── Can we read, can we write ────────────────────────────────────────────
 
 /// Whether data that @e lists can be read with @devs: none of its devices
-/// missing past what @flags, BCH_FORCE_IF_*, allows - degraded, or lost. If
+/// missing past what @flags allows - degraded, or lost. If
 /// not, why in @err.
-pub(crate) fn can_read_with_devs(e: &Entry, devs: &DevsMask, flags: u32, err: Option<&mut Printbuf>)
+pub(crate) fn can_read_with_devs(e: &Entry, devs: &DevsMask, flags: ForceIf, err: Option<&mut Printbuf>)
     -> bool
 {
     type D = DataType;
@@ -379,15 +378,15 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &DevsMask, flags: u32, err: Op
     }
 
     let metadata = e.data_type.get() < D::user;
-    let mut dflags = 0;
+    let mut dflags = ForceIf::empty();
     if online < usize::from(e.nr_required) {
-        dflags |= if metadata { BCH_FORCE_IF_METADATA_LOST } else { BCH_FORCE_IF_DATA_LOST };
+        dflags |= if metadata { ForceIf::METADATA_LOST } else { ForceIf::DATA_LOST };
     }
     if online + invalid < e.devs.len() {
-        dflags |= if metadata { BCH_FORCE_IF_METADATA_DEGRADED } else { BCH_FORCE_IF_DATA_DEGRADED };
+        dflags |= if metadata { ForceIf::METADATA_DEGRADED } else { ForceIf::DATA_DEGRADED };
     }
 
-    if dflags & !flags != 0 {
+    if !flags.contains(dflags) {
         if let Some(err) = err {
             write!(err, "insufficient devices online ({online}) for replicas entry ");
             e.to_text(err);
@@ -404,7 +403,7 @@ pub(crate) fn can_read_with_devs(e: &Entry, devs: &DevsMask, flags: u32, err: Op
 /// each - than there are now, if that's fewer - unless @flags allows going
 /// degraded. If not, why in @err.
 pub(crate) fn can_write_with_devs(fs: &Fs, devs: &DevsMask, check: WriteCheck,
-                       flags: u32, err: &mut Printbuf) -> bool {
+                       flags: ForceIf, err: &mut Printbuf) -> bool {
     type D = DataType;
 
     // have: what the rw set has now; online: what @devs would have
@@ -446,17 +445,17 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &DevsMask, check: WriteCheck,
         0 => opts.metadata_replicas.get(),
         r => r,
     };
-    let want = |t: usize, force: u32, name: &str, replicas: u8, err: &mut Printbuf| {
-        if flags & force == 0 && online[t] < have[t] && online[t] < u32::from(replicas) {
+    let want = |t: usize, force: ForceIf, name: &str, replicas: u8, err: &mut Printbuf| {
+        if !flags.intersects(force) && online[t] < have[t] && online[t] < u32::from(replicas) {
             write!(err, "Insufficient rw {name} devices ({} < {replicas}) online\n", online[t]);
             return false;
         }
         true
     };
 
-    want(j, BCH_FORCE_IF_METADATA_DEGRADED, "journal", journal_replicas, err) &&
-    want(b, BCH_FORCE_IF_METADATA_DEGRADED, "btree", opts.metadata_replicas.get(), err) &&
-    want(u, BCH_FORCE_IF_DATA_DEGRADED, "user data", opts.data_replicas.get(), err)
+    want(j, ForceIf::METADATA_DEGRADED, "journal", journal_replicas, err) &&
+    want(b, ForceIf::METADATA_DEGRADED, "btree", opts.metadata_replicas.get(), err) &&
+    want(u, ForceIf::DATA_DEGRADED, "user data", opts.data_replicas.get(), err)
 }
 
 // ── In memory: c->replicas ───────────────────────────────────────────────
@@ -917,7 +916,7 @@ impl Fs {
     /// can_read_with_devs(). One that can't be is in @err with the sectors
     /// accounted to it, once accounting's been read - before, at mount, there
     /// are none to say: none, and it's a stale entry refusing.
-    pub fn can_read_fs_with_devs(&self, devs: &DevsMask, flags: u32, mut err: Option<&mut Printbuf>) -> bool {
+    pub fn can_read_fs_with_devs(&self, devs: &DevsMask, flags: ForceIf, mut err: Option<&mut Printbuf>) -> bool {
         let accounted = self.recovery.runner.pass_done.get() >= RecoveryPass::accounting_read;
         // mark_lock, for the sectors: before the table's lock, the order above
         let mark = (err.is_some() && accounted).then(|| self.mark_lock().read());

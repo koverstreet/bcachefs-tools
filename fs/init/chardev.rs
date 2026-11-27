@@ -30,22 +30,20 @@
 //! The device ioctls come in pairs, a v1 and a v2 whose argument is v1's and
 //! a buffer for the error message: one handler each, given an ErrMsg, which
 //! is v1's logging - each as C had it - or v2's buffer. A device is named by
-//! index or by path (BCH_BY_INDEX); a handler that takes state_lock holds
+//! index or by path (IoctlFlags::BY_INDEX); a handler that takes state_lock holds
 //! only an outer ref on it, as device removal drains ca->ref under that lock.
 
 use crate::init::passes::RecoveryPass;
 use crate::c;
 use crate::posix::dev::dev_t;
-use crate::bcachefs_ioctl::{BCH_BY_INDEX, BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED,
-    BCH_FORCE_IF_METADATA_LOST, IoctlDataProgress, IoctlDevUsage,
+use crate::bcachefs_ioctl::{IoctlFlags, IoctlDataProgress, IoctlDevUsage,
     IoctlDevUsageType, IoctlDevUsageV2, IoctlDisk, IoctlDiskGetIdx,
     IoctlDiskResize, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2,
     IoctlDiskResizeV2, IoctlDiskSetState, IoctlDiskSetStateV2,
     IoctlDiskV2, IoctlErrMsg, IoctlFsUsage, IoctlQueryAccounting,
     BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR, IoctlQueryAccountingV2, IoctlQueryBtreeKeys,
-    BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots, BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts,
-    BCH_IOCTL_QUERY_BTREE_KEYS_prev, BCH_IOCTL_QUERY_BTREE_KEYS_slots, IoctlQueryUuid,
-    IoctlReadSuper, BCH_READ_DEV, DataEvent, DataOp, DataProgressDataTypeSpecial,
+    QueryBtreeKeysFlags, IoctlQueryUuid,
+    IoctlReadSuper, DataEvent, DataOp, DataProgressDataTypeSpecial,
     IoctlDataEventRet, IoctlData, BCH_IOCTL_DATA, IoctlDataEvent, BCH_IOCTL_DEV_USAGE,
     BCH_IOCTL_DEV_USAGE_V2, BCH_IOCTL_DISK_ADD, BCH_IOCTL_DISK_ADD_v2, BCH_IOCTL_DISK_GET_IDX,
     BCH_IOCTL_DISK_OFFLINE, BCH_IOCTL_DISK_OFFLINE_v2, BCH_IOCTL_DISK_ONLINE,
@@ -305,10 +303,11 @@ fn query_accounting_v2(fs: &Fs, user: UserArg<IoctlQueryAccountingV2>) -> Result
 
 /* obsolete, didn't allow for new data types: */
 fn dev_usage(fs: &Fs, arg: &mut IoctlDevUsage) -> Result<(), BchError> {
-    if arg.flags & !BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
+    let Some(flags) = IoctlFlags::within(arg.flags, IoctlFlags::BY_INDEX)
+        .filter(|_| arg.pad[..3] == [0; 3]) else {
         return fs.throw(Errcode::EINVAL_ioctl_dev_usage_bad_flags);
-    }
-    let ca = dev_lookup(fs, arg.dev, arg.flags)?;
+    };
+    let ca = dev_lookup(fs, arg.dev, flags)?;
     let src = ca.usage_full_read_fast();
 
     arg.state       = ca.mi.get().state.0;
@@ -327,10 +326,11 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<IoctlDevUsageV2>) -> Result<(), BchEr
         return fs.throw(Errcode::EINVAL_ioctl_dev_usage_v2_accounting_not_read);
     }
     let mut arg = user.head()?;
-    if arg.flags & !BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
+    let Some(flags) = IoctlFlags::within(arg.flags, IoctlFlags::BY_INDEX)
+        .filter(|_| arg.pad[..3] == [0; 3]) else {
         return fs.throw(Errcode::EINVAL_ioctl_dev_usage_v2_bad_flags);
-    }
-    let ca = dev_lookup(fs, arg.dev, arg.flags)?;
+    };
+    let ca = dev_lookup(fs, arg.dev, flags)?;
     let src = ca.usage_full_read_fast();
 
     arg.state         = ca.mi.get().state.0;
@@ -352,14 +352,15 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<IoctlDevUsageV2>) -> Result<(), BchEr
 
 fn read_super(fs: &Fs, arg: IoctlReadSuper) -> Result<(), BchError> {
     admin(fs)?;
-    if arg.flags & !(BCH_BY_INDEX | BCH_READ_DEV) != 0 || arg.pad != 0 {
+    let Some(flags) = IoctlFlags::within(arg.flags, IoctlFlags::BY_INDEX | IoctlFlags::READ_DEV)
+        .filter(|_| arg.pad == 0) else {
         return fs.throw(Errcode::EINVAL_ioctl_read_super_bad_flags);
-    }
+    };
 
     let sb_lock = fs.sb_lock();
     let ca;
-    let sb = if arg.flags & BCH_READ_DEV != 0 {
-        ca = dev_lookup(fs, arg.dev, arg.flags)?;
+    let sb = if flags.contains(IoctlFlags::READ_DEV) {
+        ca = dev_lookup(fs, arg.dev, flags)?;
         match fs.dev_sb(&sb_lock, &ca) {
             Some(sb) => sb,
             None     => return fs.throw(Errcode::device_offline),
@@ -392,11 +393,11 @@ fn disk_get_idx(fs: &Fs, arg: IoctlDiskGetIdx) -> Result<i32, BchError> {
 }
 
 fn query_btree_keys(fs: &Fs, arg: &mut IoctlQueryBtreeKeys) -> Result<(), BchError> {
-    const FLAGS: [(u32, BtreeIterFlags); 4] = [
-        (BCH_IOCTL_QUERY_BTREE_KEYS_slots,              BtreeIterFlags::SLOTS),
-        (BCH_IOCTL_QUERY_BTREE_KEYS_prev,               BtreeIterFlags::PREV),
-        (BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots,      BtreeIterFlags::ALL_SNAPSHOTS),
-        (BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts, BtreeIterFlags::NOFILTER_WHITEOUTS),
+    const FLAGS: [(QueryBtreeKeysFlags, BtreeIterFlags); 4] = [
+        (QueryBtreeKeysFlags::SLOTS,              BtreeIterFlags::SLOTS),
+        (QueryBtreeKeysFlags::PREV,               BtreeIterFlags::PREV),
+        (QueryBtreeKeysFlags::ALL_SNAPSHOTS,      BtreeIterFlags::ALL_SNAPSHOTS),
+        (QueryBtreeKeysFlags::NOFILTER_WHITEOUTS, BtreeIterFlags::NOFILTER_WHITEOUTS),
     ];
 
     /*
@@ -405,11 +406,11 @@ fn query_btree_keys(fs: &Fs, arg: &mut IoctlQueryBtreeKeys) -> Result<(), BchErr
      */
     admin(fs)?;
 
-    if arg.flags & !FLAGS.iter().fold(0, |m, (f, _)| m | f) != 0 {
+    let Some(qflags) = QueryBtreeKeysFlags::from_bits(arg.flags) else {
         return fs.throw(Errcode::EINVAL_ioctl_query_btree_keys_bad_flags);
-    }
+    };
     let mut flags = FLAGS.iter()
-        .filter(|(f, _)| arg.flags & f != 0)
+        .filter(|(f, _)| qflags.contains(*f))
         .fold(BtreeIterFlags::empty(), |m, (_, i)| m | *i);
 
     /* Interior nodes aren't extents - only meaningful at level 0: */
@@ -527,11 +528,10 @@ impl V2 for IoctlDiskResizeJournalV2 {
 }
 
 /// What remove, offline and set_state take: the data they may lose.
-const FORCE_FLAGS: u32 = BCH_FORCE_IF_DATA_LOST | BCH_FORCE_IF_METADATA_LOST |
-    BCH_FORCE_IF_DEGRADED | BCH_BY_INDEX;
+const FORCE_FLAGS: IoctlFlags = IoctlFlags::FORCE.union(IoctlFlags::BY_INDEX);
 
-fn dev_lookup(fs: &Fs, dev: u64, flags: u32) -> Result<DevRef, BchError> {
-    if flags & BCH_BY_INDEX != 0 {
+fn dev_lookup(fs: &Fs, dev: u64, flags: IoctlFlags) -> Result<DevRef, BchError> {
+    if flags.contains(IoctlFlags::BY_INDEX) {
         if dev >= u64::from(fs.nr_devices()) {
             return fs.throw(Errcode::EINVAL_dev_lookup_idx);
         }
@@ -542,7 +542,7 @@ fn dev_lookup(fs: &Fs, dev: u64, flags: u32) -> Result<DevRef, BchError> {
     }
 }
 
-fn dev_lookup_outer(fs: &Fs, dev: u64, flags: u32) -> Result<DevOuterRef, BchError> {
+fn dev_lookup_outer(fs: &Fs, dev: u64, flags: IoctlFlags) -> Result<DevOuterRef, BchError> {
     Ok(dev_lookup(fs, dev, flags)?.outer_ref())
 }
 
@@ -564,13 +564,13 @@ fn disk_add(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<()
 
 fn disk_remove(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
-    if a.flags & !FORCE_FLAGS != 0 || a.pad != 0 {
+    let Some(flags) = IoctlFlags::within(a.flags, FORCE_FLAGS).filter(|_| a.pad == 0) else {
         return fs.throw(bad_flags);
-    }
-    let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
+    };
+    let ca = dev_lookup_outer(fs, a.dev, flags)?;
 
     let mut err = Printbuf::new();
-    let ret = fs.dev_remove(ca, a.flags, &mut err);
+    let ret = fs.dev_remove(ca, flags.force(), &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
             bch_err!(fs, "{}", err);
@@ -598,13 +598,13 @@ fn disk_online(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result
 
 fn disk_offline(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
     admin(fs)?;
-    if a.flags & !FORCE_FLAGS != 0 || a.pad != 0 {
+    let Some(flags) = IoctlFlags::within(a.flags, FORCE_FLAGS).filter(|_| a.pad == 0) else {
         return fs.throw(bad_flags);
-    }
-    let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
+    };
+    let ca = dev_lookup_outer(fs, a.dev, flags)?;
 
     let mut err = Printbuf::new();
-    let ret = fs.dev_offline(&ca, a.flags, &mut err);
+    let ret = fs.dev_offline(&ca, flags.force(), &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
             bch_err_dev!(&ca, "{}", err);
@@ -618,13 +618,14 @@ fn disk_set_state(fs: &Fs, a: IoctlDiskSetState, msg: ErrMsg, bad_args: Errcode)
 {
     admin(fs)?;
     let new_state = MemberState(a.new_state);
-    if a.flags & !FORCE_FLAGS != 0 || a.pad != [0; 3] || a.new_state >= MemberState::NR {
+    let Some(flags) = IoctlFlags::within(a.flags, FORCE_FLAGS)
+        .filter(|_| a.pad == [0; 3] && a.new_state < MemberState::NR) else {
         return fs.throw(bad_args);
-    }
-    let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
+    };
+    let ca = dev_lookup_outer(fs, a.dev, flags)?;
 
     let mut err = Printbuf::new();
-    let ret = fs.dev_set_state(&ca, new_state, a.flags, Some(&mut err));
+    let ret = fs.dev_set_state(&ca, new_state, flags.force(), Some(&mut err));
     msg.report(&mut err, ret, |ret, _| bch_err_msg_dev!(&ca, ret, "setting device state"))
 }
 
@@ -632,10 +633,10 @@ fn disk_resize(fs: &Fs, a: IoctlDiskResize, msg: ErrMsg, bad_flags: Errcode)
     -> Result<(), BchError>
 {
     admin(fs)?;
-    if a.flags & !BCH_BY_INDEX != 0 || a.pad != 0 {
+    let Some(flags) = IoctlFlags::within(a.flags, IoctlFlags::BY_INDEX).filter(|_| a.pad == 0) else {
         return fs.throw(bad_flags);
-    }
-    let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
+    };
+    let ca = dev_lookup_outer(fs, a.dev, flags)?;
 
     let mut err = Printbuf::new();
     let ret = fs.dev_resize(&ca, a.nbuckets, &mut err);
@@ -650,13 +651,13 @@ fn disk_resize(fs: &Fs, a: IoctlDiskResize, msg: ErrMsg, bad_flags: Errcode)
 fn disk_resize_journal(fs: &Fs, a: IoctlDiskResizeJournal, msg: ErrMsg,
                        bad_flags: Errcode, too_big: Errcode) -> Result<(), BchError> {
     admin(fs)?;
-    if a.flags & !BCH_BY_INDEX != 0 || a.pad != 0 {
+    let Some(flags) = IoctlFlags::within(a.flags, IoctlFlags::BY_INDEX).filter(|_| a.pad == 0) else {
         return fs.throw(bad_flags);
-    }
+    };
     if a.nbuckets > u64::from(u32::MAX) {
         return fs.throw(too_big);
     }
-    let ca = dev_lookup_outer(fs, a.dev, a.flags)?;
+    let ca = dev_lookup_outer(fs, a.dev, flags)?;
 
     let ret = crate::journal::buckets::set_nr_journal_buckets(fs, &ca, a.nbuckets as u32);
     msg.report(&mut Printbuf::new(), ret, |ret, _| ret)

@@ -15,8 +15,7 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
 use crate::c;
 use crate::bcachefs_ioctl::{IoctlGetDamage, IoctlReaddirFlags, IoctlSnapshotNode,
     IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2,
-    IoctlSubvolReaddir, IoctlSubvolToPath, IoctlUnpoison, BCH_READDIR_damaged,
-    BCH_READDIR_recursive, BCH_READDIR_subvolumes_only, IoctlReaddirEntryHead,
+    IoctlSubvolReaddir, IoctlSubvolToPath, IoctlUnpoison, ReaddirFlags, IoctlReaddirEntryHead,
     IoctlSubvolDirentHead};
 use crate::data::extents_format::{bch_extent_flags, ExtentFlags};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
@@ -157,30 +156,29 @@ pub fn get_damage(fs: &Fs, inum: SubvolInum, user: UserVstruct<IoctlGetDamage>)
  * candidate's position in its btree.
  */
 
-const READDIR_FLAGS_ALL: u32 =
-    BCH_READDIR_recursive | BCH_READDIR_damaged | BCH_READDIR_subvolumes_only;
-
 /// Whether @flags' filter keeps dirent @d, in @dir - whose snapshot is @view
 /// - pointing at @target.
-fn readdir_filter(t: &TransAttempt<'_, '_>, flags: u32, dir: SubvolInum, view: u32,
+fn readdir_filter(t: &TransAttempt<'_, '_>, flags: ReaddirFlags, dir: SubvolInum, view: u32,
                   d: Dirent<'_>, target: SubvolInum) -> Result<bool, BchError> {
-    match flags & !BCH_READDIR_recursive {
-        0 => Ok(true),
-        BCH_READDIR_damaged => {
-            // a subvolume's root is in its own snapshot
-            let snapshot = if target.subvol != dir.subvol {
-                subvolume::get_snapshot(t, target.subvol as u32)?
-            } else {
-                view
-            };
-            damage::inode_has_damage(t, target.inum, snapshot)
-        }
-        BCH_READDIR_subvolumes_only => Ok(u32::from(d.d_type()) == DT_SUBVOL),
-        _ => t.fs().throw(Errcode::EINVAL_readdir_filter_flags),
+    let filter = flags.difference(ReaddirFlags::RECURSIVE);
+    if filter.is_empty() {
+        Ok(true)
+    } else if filter == ReaddirFlags::DAMAGED {
+        // a subvolume's root is in its own snapshot
+        let snapshot = if target.subvol != dir.subvol {
+            subvolume::get_snapshot(t, target.subvol as u32)?
+        } else {
+            view
+        };
+        damage::inode_has_damage(t, target.inum, snapshot)
+    } else if filter == ReaddirFlags::SUBVOLUMES_ONLY {
+        Ok(u32::from(d.d_type()) == DT_SUBVOL)
+    } else {
+        t.fs().throw(Errcode::EINVAL_readdir_filter_flags)
     }
 }
 
-fn readdir_plain(fs: &Fs, dir: SubvolInum, flags: u32, out: &mut Entries, pos: u64)
+fn readdir_plain(fs: &Fs, dir: SubvolInum, flags: ReaddirFlags, out: &mut Entries, pos: u64)
     -> Result<u64, BchError>
 {
     let trans = btree_trans!(fs);
@@ -340,9 +338,9 @@ where
     A: FnMut(&TransAttempt<'_, '_>, SubvolInum) -> Result<bool, BchError>,
 {
     let arg = user.read()?;
-    if arg.pad != 0 || arg.used != 0 || arg.flags & !READDIR_FLAGS_ALL != 0 {
+    let Some(flags) = ReaddirFlags::from_bits(arg.flags).filter(|_| arg.pad == 0 && arg.used == 0) else {
         return fs.throw(Errcode::EINVAL_readdir_flags_args);
-    }
+    };
     if !is_dir {
         return fs.throw(Errcode::ENOTDIR_readdir_flags);
     }
@@ -351,19 +349,22 @@ where
     let mut out = Entries::new(arg.buf, arg.buf_size);
 
     // only what the call moved: an unrecursive cursor is one word
-    if arg.flags & BCH_READDIR_recursive == 0 {
-        let pos = readdir_plain(fs, dir, arg.flags, &mut out, arg.pos[0])?;
+    if !flags.contains(ReaddirFlags::RECURSIVE) {
+        let pos = readdir_plain(fs, dir, flags, &mut out, arg.pos[0])?;
         out.check_room()?;
         user.write_at(offset_of!(Q, pos), &pos)?;
         return user.write_at(offset_of!(Q, used), &out.used);
     }
 
     let mut r = Recursive { dir, dir_path: Printbuf::new(), path: Printbuf::new(), accessible, out };
-    let pos = match arg.flags & !BCH_READDIR_recursive {
-        BCH_READDIR_damaged         => r.damaged(fs, arg.pos)?,
-        BCH_READDIR_subvolumes_only => [r.subvols(fs, arg.pos[0])?, 0],
+    let filter = flags.difference(ReaddirFlags::RECURSIVE);
+    let pos = if filter == ReaddirFlags::DAMAGED {
+        r.damaged(fs, arg.pos)?
+    } else if filter == ReaddirFlags::SUBVOLUMES_ONLY {
+        [r.subvols(fs, arg.pos[0])?, 0]
+    } else {
         // unfiltered: an honest tree walk, not yet
-        _ => return fs.throw(Errcode::EOPNOTSUPP_readdir_flags_unfiltered),
+        return fs.throw(Errcode::EOPNOTSUPP_readdir_flags_unfiltered);
     };
     r.out.check_room()?;
     user.write_at(offset_of!(Q, pos), &pos)?;

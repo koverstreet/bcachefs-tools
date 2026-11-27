@@ -60,7 +60,8 @@ use clap::Parser;
 
 use crate::device_scan::OpenedFs;
 use crate::logging;
-use crate::wrappers::{handle::BcachefsHandle, online_iter::{OnlineBtreeIter, OnlineIterFlags}};
+use crate::wrappers::{handle::BcachefsHandle, online_iter::OnlineBtreeIter};
+use bcachefs_kernel::bcachefs_ioctl::QueryBtreeKeysFlags;
 use bcachefs_kernel::format::{Bpos, Btree, BkeyType, Sb, Bkey, Deleted, ErrorAction};
 
 const BKEY_U64S: usize = size_of::<Bkey>() / size_of::<u64>();
@@ -607,11 +608,11 @@ fn cmd_list(fs: &Fs, btree: Btree, start: Bpos, end: Bpos, level: u32,
 /// exact pos; peek/peek_prev: first key at/after (at/before) pos.
 fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
 		  btree: Btree, pos: Bpos, level: u32,
-		  flags: OnlineIterFlags, how: Render<'_>) -> Result<String> {
+		  flags: QueryBtreeKeysFlags, how: Render<'_>) -> Result<String> {
     // Small buffer: the kernel fills the whole thing per call, and we only
     // want one key (it grows automatically if the key doesn't fit):
     let mut iter = OnlineBtreeIter::with_buf_size(handle, btree, level, pos,
-					if flags.0 & OnlineIterFlags::PREV.0 != 0 { POS_MIN } else { SPOS_MAX },
+					if flags.contains(QueryBtreeKeysFlags::PREV) { POS_MIN } else { SPOS_MAX },
 					flags, 4096);
     match iter.next().map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))? {
         Some(k) => render_read(fs, &k, how),
@@ -623,11 +624,11 @@ fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
 /// btree iter flags, so omitting all_snapshots gets filtered iteration
 /// kernel-side. (nofilter_whiteouts is rejected by kernels predating the
 /// bit - run a matching kernel for online filtered reads.)
-fn online_snapshots_flag(filtered: bool) -> OnlineIterFlags {
+fn online_snapshots_flag(filtered: bool) -> QueryBtreeKeysFlags {
     if filtered {
-        OnlineIterFlags::NOFILTER_WHITEOUTS
+        QueryBtreeKeysFlags::NOFILTER_WHITEOUTS
     } else {
-        OnlineIterFlags::ALL_SNAPSHOTS
+        QueryBtreeKeysFlags::ALL_SNAPSHOTS
     }
 }
 
@@ -635,9 +636,9 @@ fn cmd_read_online(handle: &BcachefsHandle, fs: &Fs, op: ReadOp,
 		   btree: Btree, pos: Bpos, level: u32, filtered: bool,
 		   how: Render<'_>) -> Result<String> {
     let flags = online_snapshots_flag(filtered) | match op {
-        ReadOp::Get => OnlineIterFlags::SLOTS,
-        ReadOp::Peek => OnlineIterFlags(0),
-        ReadOp::PeekPrev => OnlineIterFlags::PREV,
+        ReadOp::Get => QueryBtreeKeysFlags::SLOTS,
+        ReadOp::Peek => QueryBtreeKeysFlags::empty(),
+        ReadOp::PeekPrev => QueryBtreeKeysFlags::PREV,
     };
     online_one_key(handle, fs, btree, pos, level, flags, how)
 }

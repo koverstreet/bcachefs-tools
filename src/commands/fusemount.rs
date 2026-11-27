@@ -345,7 +345,7 @@ fn fuse_create_inode(
                 None,
                 None,
                 SubvolInum::default(),
-                0,
+                namei::CreateFlags::empty(),
             )
         },
     )?;

@@ -51,7 +51,7 @@ use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use pin_init::pin_data;
 use crate::format::{Bpos, Btree, MemberState, ErrorAction};
-use crate::bcachefs_ioctl::BCH_FORCE_IF_DEGRADED;
+use crate::bcachefs_ioctl::ForceIf;
 use crate::opts::FsckErrOpt;
 use crate::sb::members_format::MemberErrorType;
 use crate::snapshots::subvolume::SubvolInum;
@@ -1047,7 +1047,7 @@ pub(crate) fn io_error_work(ca: &Dev) {
     write!(buf, "writes erroring for {timeout} seconds\n");
 
     let dev = state.dev_set_state(ca, MemberState::ro,
-                                  BCH_FORCE_IF_DEGRADED, &mut buf).is_ok();
+                                  ForceIf::DEGRADED, &mut buf).is_ok();
     write!(buf, "setting {} ro", if dev { "device" } else { "filesystem" });
     if dev || fs.emergency_read_only(&mut buf) {
         print_str(fs, LogLevel::ERR, &mut buf);

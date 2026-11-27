@@ -26,6 +26,7 @@
 //! (inode::nlink_add()), depths wrap, as C's did.
 
 use crate::os::{posix_acl::PosixAcl, kernel::{capable, Capability}};
+use bitflags::bitflags;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
@@ -53,11 +54,16 @@ use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ops::ControlFlow;
 use crate::format::{Btree, MetadataVersion};
 
-// create_trans()'s flags:
-pub const BCH_CREATE_TMPFILE: u32 = 1 << 0;
-pub const BCH_CREATE_SUBVOL: u32 = 1 << 1;
-pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2;
-pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3;
+bitflags! {
+    /// create_trans()'s flags.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct CreateFlags: u32 {
+        const TMPFILE     = 1 << 0;
+        const SUBVOL      = 1 << 1;
+        const SNAPSHOT    = 1 << 2;
+        const SNAPSHOT_RO = 1 << 3;
+    }
+}
 
 pub(crate) fn subvol_inum_eq(l: SubvolInum, r: SubvolInum) -> bool {
     l.subvol == r.subvol && l.inum == r.inum
@@ -88,11 +94,10 @@ fn inodes_32bit(fs: &Fs, dir: &InodeUnpacked) -> bool {
 // ── Create, link, unlink, rename ─────────────────────────────────────────
 
 /// Create @name in directory @dir, an inode of @mode - filled in from @uid,
-/// @gid, @rdev, and its parent - or, with BCH_CREATE_SNAPSHOT, a snapshot of
-/// subvolume @snapshot_src, its root found if @snapshot_src.inum is 0.
-/// BCH_CREATE_SUBVOL makes the new directory a subvolume's root,
-/// BCH_CREATE_SNAPSHOT_RO the snapshot read-only, and BCH_CREATE_TMPFILE
-/// gives the inode no name - @name is None then, and only then.
+/// @gid, @rdev, and its parent - or, with SNAPSHOT, a snapshot of subvolume
+/// @snapshot_src, its root found if @snapshot_src.inum is 0. SUBVOL makes the
+/// new directory a subvolume's root, SNAPSHOT_RO the snapshot read-only, and
+/// TMPFILE gives the inode no name - @name is None then, and only then.
 ///
 /// @dir_u and @new_inode are read and returned; @new_subvol is @dir's
 /// subvolume, or the new one if one's created. The new inode gets @acl and
@@ -112,7 +117,7 @@ pub fn create_trans(
     default_acl:      Option<&PosixAcl>,
     acl:              Option<&PosixAcl>,
     mut snapshot_src: SubvolInum,
-    mut flags:        u32,
+    mut flags:        CreateFlags,
 ) -> Result<(), BchError> {
     let fs = t.fs();
     let mut dir_iter = BtreeIter::uninit(t.trans());
@@ -131,11 +136,11 @@ pub fn create_trans(
 
     *dir_u = inode::peek_snapshot(t, &mut dir_iter, dir, dir_snapshot, BtreeIterFlags::INTENT)?;
 
-    if flags & BCH_CREATE_SNAPSHOT == 0 {
+    if !flags.contains(CreateFlags::SNAPSHOT) {
         // Normal create path - allocate a new inode:
         inode::init_late(fs, new_inode, now, uid, gid, mode, rdev, Some(dir_u));
 
-        if flags & BCH_CREATE_TMPFILE != 0 {
+        if flags.contains(CreateFlags::TMPFILE) {
             new_inode.set_flag(InodeFlags::unlinked, true);
         }
 
@@ -172,15 +177,15 @@ pub fn create_trans(
             return Err(fs.err(Errcode::EPERM_non_admin_or_owner));
         }
 
-        flags |= BCH_CREATE_SUBVOL;
+        flags |= CreateFlags::SUBVOL;
     }
 
     let mut dir_target = DirentTarget::Inode(new_inode.bi_inum);
 
-    if flags & BCH_CREATE_SUBVOL != 0 {
+    if flags.contains(CreateFlags::SUBVOL) {
         let created = subvolume::create(t, new_inode.bi_inum, dir.subvol as u32,
                                         snapshot_src.subvol as u32,
-                                        flags & BCH_CREATE_SNAPSHOT_RO != 0)?;
+                                        flags.contains(CreateFlags::SNAPSHOT_RO))?;
         child_snapshot = created.snapshot;
         *new_subvol    = created.v;
 
@@ -196,7 +201,7 @@ pub fn create_trans(
         dir_iter.traverse(t)?;
     }
 
-    if flags & BCH_CREATE_SNAPSHOT == 0 {
+    if !flags.contains(CreateFlags::SNAPSHOT) {
         #[cfg(kernel)]
         {
             use crate::posix::acl::set_acl_trans;
@@ -204,7 +209,7 @@ pub fn create_trans(
 
             // In the new subvolume, if one was made:
             let new_inum = SubvolInum {
-                subvol: if flags & BCH_CREATE_SUBVOL != 0 {
+                subvol: if flags.contains(CreateFlags::SUBVOL) {
                     new_inode.bi_subvol as u64
                 } else {
                     dir.subvol
@@ -221,8 +226,8 @@ pub fn create_trans(
         }
     }
 
-    if flags & BCH_CREATE_TMPFILE == 0 {
-        let name = name.expect("create_trans: no name, and not BCH_CREATE_TMPFILE");
+    if !flags.contains(CreateFlags::TMPFILE) {
+        let name = name.expect("create_trans: no name, and not CreateFlags::TMPFILE");
 
         inode::nlink_add(t, dir_u, new_inode.is_subdir_for_nlink() as i32)?;
         dir_u.bi_mtime = now;

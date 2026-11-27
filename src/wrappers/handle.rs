@@ -3,7 +3,7 @@ use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
-use bcachefs_kernel::bcachefs_ioctl::{IoctlDevUsage, IoctlDevUsageV2, IoctlDisk, IoctlDiskV2, IoctlDiskSetState, IoctlDiskSetStateV2, IoctlDiskResize, IoctlDiskResizeV2, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2, IoctlSubvolume, IoctlSubvolumeV2, IoctlQueryBtreeKeys, IoctlQueryUuid, IoctlReadSuper, BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE};
+use bcachefs_kernel::bcachefs_ioctl::{IoctlDevUsage, IoctlDevUsageV2, IoctlDisk, IoctlDiskV2, IoctlDiskSetState, IoctlDiskSetStateV2, IoctlDiskResize, IoctlDiskResizeV2, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2, IoctlSubvolume, IoctlSubvolumeV2, IoctlQueryBtreeKeys, IoctlQueryUuid, IoctlReadSuper, ForceIf, IoctlFlags, SubvolFlags};
 use bcachefs_kernel::sb::members_format::MemberState;
 use crate::wrappers::{ioctl::*, sysfs};
 use bcachefs_kernel::c;
@@ -348,14 +348,14 @@ impl BcachefsHandle {
     /// at the given path
     pub fn snapshot_subvolume<P: AsRef<Path>>(
         &self,
-        extra_flags: u32,
+        extra_flags: SubvolFlags,
         src: Option<P>,
         dst: P,
     ) -> Result<(), Errno> {
         let src = src.map(|src| path_to_cstr(src));
         let dst = path_to_cstr(dst);
         self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_CREATE>(
-            BCH_SUBVOL_SNAPSHOT_CREATE | extra_flags,
+            (SubvolFlags::SNAPSHOT_CREATE | extra_flags).bits(),
             rustix::fs::CWD.as_raw_fd() as u32,
             0o777,
             dst.as_ptr() as u64,
@@ -383,9 +383,9 @@ impl BcachefsHandle {
     }
 
     /// Remove a device (by index) from this filesystem.
-    pub(crate) fn disk_remove(&self, dev_idx: u32, flags: u32) -> Result<(), Errno> {
+    pub(crate) fn disk_remove(&self, dev_idx: u32, flags: ForceIf) -> Result<(), Errno> {
         self.disk_ioctl::<BCH_IOCTL_DISK_REMOVE_v2, BCH_IOCTL_DISK_REMOVE>(
-            flags | BCH_BY_INDEX, dev_idx as u64,
+            (IoctlFlags::from(flags) | IoctlFlags::BY_INDEX).bits(), dev_idx as u64,
         )
     }
 
@@ -397,18 +397,19 @@ impl BcachefsHandle {
     }
 
     /// Take a device offline without removing it.
-    pub(crate) fn disk_offline(&self, dev_idx: u32, flags: u32) -> Result<(), Errno> {
+    pub(crate) fn disk_offline(&self, dev_idx: u32, flags: ForceIf) -> Result<(), Errno> {
         self.disk_ioctl::<BCH_IOCTL_DISK_OFFLINE_v2, BCH_IOCTL_DISK_OFFLINE>(
-            flags | BCH_BY_INDEX, dev_idx as u64,
+            (IoctlFlags::from(flags) | IoctlFlags::BY_INDEX).bits(), dev_idx as u64,
         )
     }
 
     /// Change device state (rw, ro, evacuating, spare).
-    pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: MemberState, flags: u32) -> Result<(), Errno> {
+    pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: MemberState, flags: ForceIf) -> Result<(), Errno> {
+        let flags = (IoctlFlags::from(flags) | IoctlFlags::BY_INDEX).bits();
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_SET_STATE_v2, BCH_IOCTL_DISK_SET_STATE,
-            IoctlDiskSetStateV2 { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() },
-            IoctlDiskSetState    { flags: flags | BCH_BY_INDEX, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() }
+            IoctlDiskSetStateV2 { flags, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() },
+            IoctlDiskSetState    { flags, new_state: new_state.0, dev: dev_idx as u64, ..Default::default() }
         )
     }
 
@@ -416,8 +417,8 @@ impl BcachefsHandle {
     pub(crate) fn disk_resize(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_RESIZE_v2, BCH_IOCTL_DISK_RESIZE,
-            IoctlDiskResizeV2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
-            IoctlDiskResize    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
+            IoctlDiskResizeV2 { flags: IoctlFlags::BY_INDEX.bits(), dev: dev_idx as u64, nbuckets, ..Default::default() },
+            IoctlDiskResize    { flags: IoctlFlags::BY_INDEX.bits(), dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
     }
 
@@ -425,8 +426,8 @@ impl BcachefsHandle {
     pub(crate) fn disk_resize_journal(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
             self.ioctl_fd(), BCH_IOCTL_DISK_RESIZE_JOURNAL_v2, BCH_IOCTL_DISK_RESIZE_JOURNAL,
-            IoctlDiskResizeJournalV2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
-            IoctlDiskResizeJournal    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
+            IoctlDiskResizeJournalV2 { flags: IoctlFlags::BY_INDEX.bits(), dev: dev_idx as u64, nbuckets, ..Default::default() },
+            IoctlDiskResizeJournal    { flags: IoctlFlags::BY_INDEX.bits(), dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
     }
 
@@ -471,7 +472,7 @@ impl BcachefsHandle {
         let mut buf = IoctlBuf::<Head<IoctlDevUsageV2>>::new(nr_data_types);
         let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
-        hdr.flags = BCH_BY_INDEX;
+        hdr.flags = IoctlFlags::BY_INDEX.bits();
         hdr.nr_data_types = nr_data_types as u8;
 
         let ret = unsafe {
@@ -499,7 +500,7 @@ impl BcachefsHandle {
         // v1 fallback
         let mut u_v1 = IoctlDevUsage {
             dev: dev_idx as u64,
-            flags: BCH_BY_INDEX,
+            flags: IoctlFlags::BY_INDEX.bits(),
             ..Default::default()
         };
         ioctl_rw::<BCH_IOCTL_DEV_USAGE>(self.ioctl_fd(), &mut u_v1).map_err(io_errno)?;

@@ -13,7 +13,7 @@ use crate::format::{BkeyType, BCH_BKEY_PTRS_MAX, CsumType};
 use crate::fs::Dev;
 use super::*;
 use crate::debug::params as debug_params;
-use crate::data::read::{BCH_READ_ERR_checksum, BCH_READ_ERR_decompression, BCH_READ_ERR_ec_reconstruct, BCH_READ_ERR_io};
+use crate::bcachefs_ioctl::ReadErr;
 use crate::errcode::Errcode;
 use crate::util::Printbuf;
 use crate::sb::{errors::blk_sts_sb_err, members_format::BCH_SB_MEMBER_INVALID};
@@ -115,21 +115,21 @@ impl<const N: usize> IoFailures<N> {
         }
     }
 
-    /// The BCH_READ_ERR_* kinds of error, for a read's error report.
-    pub fn err_mask(&self) -> u32 {
-        let mut errors = 0;
+    /// The kinds of error, for a read's error report.
+    pub fn err_mask(&self) -> ReadErr {
+        let mut errors = ReadErr::empty();
         for f in self.devs() {
             if f.csum_nr != 0 {
-                errors |= BCH_READ_ERR_checksum;
+                errors |= ReadErr::CHECKSUM;
             }
             if f.ec_errcode != 0 {
-                errors |= BCH_READ_ERR_ec_reconstruct;
+                errors |= ReadErr::EC_RECONSTRUCT;
             }
             if f.errcode != 0 {
                 errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::decompress) {
-                    BCH_READ_ERR_decompression
+                    ReadErr::DECOMPRESSION
                 } else {
-                    BCH_READ_ERR_io
+                    ReadErr::IO
                 };
             }
         }

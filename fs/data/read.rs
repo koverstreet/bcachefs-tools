@@ -75,6 +75,7 @@
 //! copy of it in the frame.
 
 use crate::alloc::{background::bucket_read_time_reset, capacity::DiskReservation};
+use crate::bcachefs_ioctl::ReadErr;
 use crate::btree::bkey::{pos, prelude::*, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
@@ -123,15 +124,6 @@ use crate::util::time_stats::TimeStat;
 
 type F = ReadFlags;
 
-#[allow(non_upper_case_globals)]
-pub const BCH_READ_ERR_checksum: u32 = 1 << 0;
-#[allow(non_upper_case_globals)]
-pub const BCH_READ_ERR_io: u32 = 1 << 1;
-#[allow(non_upper_case_globals)]
-pub const BCH_READ_ERR_decompression: u32 = 1 << 2;
-#[allow(non_upper_case_globals)]
-pub const BCH_READ_ERR_ec_reconstruct: u32 = 1 << 3;
-
 #[bch_enum(closed)]
 #[repr(u32)]
 pub enum ReadFor {
@@ -143,7 +135,7 @@ pub enum ReadFor {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct ReadErrs {
-    pub errors: u32,
+    pub errors: ReadErr,
     pub msg:    Printbuf,
 }
 
@@ -152,7 +144,7 @@ pub struct ReadErrs {
 #[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct ReadErrReport {
     #[pin]
-    #[init(crate::new_lock!(ReadErrs { errors: 0, msg: Printbuf::new() }, "bch_read_err_report"))]
+    #[init(crate::new_lock!(ReadErrs { errors: ReadErr::empty(), msg: Printbuf::new() }, "bch_read_err_report"))]
     pub errs: Locked<Mutex, ReadErrs>,
 }
 
@@ -203,7 +195,7 @@ impl RbioHdr {
         self.ret.store(ret_to_c(ret) as i16, Relaxed);
     }
 
-    fn report(&self, errors: u32, msg: impl Fn(&mut Printbuf)) -> bool {
+    fn report(&self, errors: ReadErr, msg: impl Fn(&mut Printbuf)) -> bool {
         let Some(r) = &self.err_report else { return false };
         let mut e = r.errs.lock();
         e.errors |= errors;
@@ -934,7 +926,7 @@ fn read_inline_csum_err(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, in
     };
 
     inline_data::poison(fs, e.btree, e.k, e.read_pos, !in_retry && !read.is_update());
-    read.report(BCH_READ_ERR_checksum, |_| {});
+    read.report(ReadErr::CHECKSUM, |_| {});
 
     if let Some(mut m) = msg {
         fs.sb_error_count(id::data_read_csum_err);
@@ -1163,7 +1155,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, mut
         if !flags.contains(F::no_poison_check) {
             return Err(fs.err(err::extent_poisoned));
         }
-        orig.report(BCH_READ_ERR_checksum, |_| {});
+        orig.report(ReadErr::CHECKSUM, |_| {});
     }
 
     let mut pick = match k.pick_read_device(fs, failed.as_deref().map(|f| &f.io), dev, flags) {

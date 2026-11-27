@@ -15,33 +15,12 @@
 use std::ops::ControlFlow;
 
 use anyhow::anyhow;
-use bcachefs_kernel::bcachefs_ioctl::{IoctlQueryBtreeKeys,
-    BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots, BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts,
-    BCH_IOCTL_QUERY_BTREE_KEYS_prev, BCH_IOCTL_QUERY_BTREE_KEYS_slots};
+use bcachefs_kernel::bcachefs_ioctl::{IoctlQueryBtreeKeys, QueryBtreeKeysFlags};
 use bcachefs_kernel::btree::bkey::{AnyKey, AnyKeySC, BkeySC};
 use bcachefs_kernel::util::vstructs::{from_bytes, plain_bytes, Unvalidated};
 
 use crate::wrappers::{handle::BcachefsHandle, ioctl::grow_on_erange};
 use bcachefs_kernel::format::{Bpos, Btree};
-
-/// Iteration flags, mirroring BCH_IOCTL_QUERY_BTREE_KEYS_*:
-#[derive(Clone, Copy, Default)]
-pub struct OnlineIterFlags(pub u32);
-
-impl OnlineIterFlags {
-    pub const SLOTS: Self         = Self(BCH_IOCTL_QUERY_BTREE_KEYS_slots);
-    pub const PREV: Self          = Self(BCH_IOCTL_QUERY_BTREE_KEYS_prev);
-    pub const ALL_SNAPSHOTS: Self = Self(BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots);
-    pub const NOFILTER_WHITEOUTS: Self =
-        Self(BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts);
-}
-
-impl std::ops::BitOr for OnlineIterFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
 
 pub struct OnlineBtreeIter<'h> {
     fs:   &'h BcachefsHandle,
@@ -60,7 +39,7 @@ impl<'h> OnlineBtreeIter<'h> {
 	       level: u32,
 	       start: Bpos,
 	       end: Bpos,
-	       flags: OnlineIterFlags) -> Self {
+	       flags: QueryBtreeKeysFlags) -> Self {
         Self::with_buf_size(fs, btree, level, start, end, flags, 1 << 20)
     }
 
@@ -73,14 +52,14 @@ impl<'h> OnlineBtreeIter<'h> {
 			 level: u32,
 			 start: Bpos,
 			 end: Bpos,
-			 flags: OnlineIterFlags,
+			 flags: QueryBtreeKeysFlags,
 			 buf_size: usize) -> Self {
         OnlineBtreeIter {
             fs,
             arg: IoctlQueryBtreeKeys {
                 btree: btree.into(),
                 level,
-                flags: flags.0,
+                flags: flags.bits(),
                 start,
                 end,
                 ..Default::default()

@@ -26,16 +26,15 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_COUNTERS};
 use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
 use bcachefs_kernel::sb::counters_format::PersistentCounterStable;
-
-const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
+use bcachefs_kernel::bcachefs_ioctl::QueryCountersFlags;
 
 // ioctl query
 
-fn read_counters(fd: std::os::fd::BorrowedFd, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
+fn read_counters(fd: std::os::fd::BorrowedFd, flags: QueryCountersFlags, nr_stable: u16) -> Result<Vec<u64>> {
     let mut buf = IoctlBuf::<Head<IoctlQueryCounters>>::new(nr_stable as usize);
     let hdr = buf.hdr_mut();
     hdr.nr = nr_stable;
-    hdr.flags = flags;
+    hdr.flags = flags.bits();
 
     unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd, buf.as_mut_ptr())? };
 
@@ -339,9 +338,9 @@ impl TopState {
         let ioctl_fd = handle.ioctl_fd();
         let nr_stable = PersistentCounterStable::NR as u16;
 
-        let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
-        let start_vals = read_counters(ioctl_fd, 0, nr_stable)?;
-        let prev_vals  = read_counters(ioctl_fd, 0, nr_stable)?;
+        let mount_vals = read_counters(ioctl_fd, QueryCountersFlags::MOUNT, nr_stable)?;
+        let start_vals = read_counters(ioctl_fd, QueryCountersFlags::empty(), nr_stable)?;
+        let prev_vals  = read_counters(ioctl_fd, QueryCountersFlags::empty(), nr_stable)?;
 
         let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
         let fs_name = sysfs_path.file_name()
@@ -574,10 +573,10 @@ fn run_non_interactive(
 ) -> Result<()> {
     let ioctl_fd   = handle.ioctl_fd();
     let nr_stable  = PersistentCounterStable::NR as u16;
-    let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
+    let mount_vals = read_counters(ioctl_fd, QueryCountersFlags::MOUNT, nr_stable)?;
     let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
 
-    let mut prev_vals   = read_counters(ioctl_fd, 0, nr_stable)?;
+    let mut prev_vals   = read_counters(ioctl_fd, QueryCountersFlags::empty(), nr_stable)?;
     let mut prev_dev_io: HashMap<String, (u64, u64)> = read_device_io(&sysfs_path, name_mode)
         .into_iter()
         .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
@@ -585,7 +584,7 @@ fn run_non_interactive(
 
     for i in 0..count {
         std::thread::sleep(Duration::from_secs(delay as u64));
-        let curr   = read_counters(ioctl_fd, 0, nr_stable)?;
+        let curr   = read_counters(ioctl_fd, QueryCountersFlags::empty(), nr_stable)?;
         let dev_io = read_device_io(&sysfs_path, name_mode);
 
         if i > 0 { println!(); }
@@ -613,7 +612,7 @@ fn run_interactive(
      * advance the rate baseline) on the interval timeout, never on a keypress -
      * otherwise scrolling would resample with ~no elapsed time and zero the
      * rate column. */
-    let mut curr = read_counters(state.handle.ioctl_fd(), 0, state.nr_stable)?;
+    let mut curr = read_counters(state.handle.ioctl_fd(), QueryCountersFlags::empty(), state.nr_stable)?;
     state.prev_vals = curr.clone();
     let mut dev_io = read_device_io(&state.sysfs_path, state.name_mode);
     state.prev_dev_io = dev_io.iter()
@@ -717,7 +716,7 @@ fn run_interactive(
             state.prev_dev_io = dev_io.into_iter()
                 .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
                 .collect();
-            curr = read_counters(state.handle.ioctl_fd(), 0, state.nr_stable)?;
+            curr = read_counters(state.handle.ioctl_fd(), QueryCountersFlags::empty(), state.nr_stable)?;
             dev_io = read_device_io(&state.sysfs_path, state.name_mode);
         }
     })

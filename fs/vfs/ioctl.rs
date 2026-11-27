@@ -26,7 +26,7 @@ use crate::c;
 use crate::alloc::disk_groups_format::BCH_SB_LABEL_SIZE;
 use crate::bcachefs_ioctl::{IoctlPreadRaw, IoctlSubvolume, IoctlSubvolumeV2,
     FSOP_GOING_FLAGS_DEFAULT, FSOP_GOING_FLAGS_LOGFLUSH, FSOP_GOING_FLAGS_NOLOGFLUSH,
-    BCH_PREAD_RAW_no_poison_check, BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
+    PreadRawFlags, BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
     BCH_IOCTL_SUBVOLUME_CREATE, BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_DESTROY,
     BCH_IOCTL_SUBVOLUME_DESTROY_v2, BCH_IOCTL_SUBVOLUME_LIST, BCH_IOCTL_SUBVOLUME_TO_PATH,
     BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_PREAD_RAW,
@@ -36,7 +36,7 @@ use crate::data::{extents::ReadFlags, read::ReadErrReport};
 use crate::posix::dirent_format::BCH_NAME_MAX;
 use crate::posix::dev::dev_t;
 use crate::posix::mode::{umode_t, S_IFDIR};
-use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL};
+use crate::posix::namei::CreateFlags;
 use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::{dirent, str_hash, namei};
 use crate::errcode::{Errcode, BchError};
@@ -235,29 +235,29 @@ fn subvolume_create(fs: &Fs, file: &File, a: IoctlSubvolume, err: ErrMsg)
 }
 
 /// BCH_IOCTL_SUBVOLUME_CREATE: a subvolume at @a.dst_ptr - with
-/// BCH_SUBVOL_SNAPSHOT_CREATE a snapshot, of the subvolume @a.src_ptr is in,
+/// SubvolFlags::SNAPSHOT_CREATE a snapshot, of the subvolume @a.src_ptr is in,
 /// or else the one the new directory's in.
 fn create_subvolume(fs: &Fs, file: &File, a: IoctlSubvolume, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     use Errcode as E;
-    use crate::bcachefs_ioctl::{BCH_SUBVOL_SNAPSHOT_CREATE as SNAPSHOT, BCH_SUBVOL_SNAPSHOT_RO as RO};
+    use crate::bcachefs_ioctl::SubvolFlags as F;
 
-    if a.flags & !(SNAPSHOT | RO) != 0 {
+    let Some(flags) = F::from_bits(a.flags) else {
         prt!(err, "invalid flags");
         return fs.throw(E::EINVAL_subvol_create_bad_flags);
-    }
-    if a.flags & SNAPSHOT == 0 && (a.src_ptr != 0 || a.flags & RO != 0) {
+    };
+    if !flags.contains(F::SNAPSHOT_CREATE) && (a.src_ptr != 0 || flags.contains(F::SNAPSHOT_RO)) {
         prt!(err, "invalid flags");
         return fs.throw(E::EINVAL_subvol_create_flags_mismatch);
     }
 
-    let mut create_flags = BCH_CREATE_SUBVOL;
-    if a.flags & SNAPSHOT != 0 {
-        create_flags |= BCH_CREATE_SNAPSHOT;
+    let mut create_flags = CreateFlags::SUBVOL;
+    if flags.contains(F::SNAPSHOT_CREATE) {
+        create_flags |= CreateFlags::SNAPSHOT;
     }
-    if a.flags & RO != 0 {
-        create_flags |= BCH_CREATE_SNAPSHOT_RO;
+    if flags.contains(F::SNAPSHOT_RO) {
+        create_flags |= CreateFlags::SNAPSHOT_RO;
     }
 
     // Held until the snapshot's made, as C held it
@@ -299,13 +299,13 @@ fn create_subvolume(fs: &Fs, file: &File, a: IoctlSubvolume, err: &mut Printbuf)
     }
     dst.may_mkdir(mode)?;
 
-    if a.flags & SNAPSHOT != 0 && a.src_ptr == 0 {
+    if flags.contains(F::SNAPSHOT_CREATE) && a.src_ptr == 0 {
         snapshot_src.subvol = dir.inum().subvol;
     }
 
     let inode = {
         let _create = fs.snapshots.create_lock.write();
-        if a.flags & SNAPSHOT != 0 {
+        if flags.contains(F::SNAPSHOT_CREATE) {
             let umount = sb.umount().read();
             sb.sync_inodes(&umount);
         }
@@ -345,15 +345,15 @@ fn subvolume_destroy(fs: &Fs, file: &File, a: IoctlSubvolume, err: ErrMsg)
 
 /// BCHFS_IOC_PREAD_RAW: an O_DIRECT read that reports the errors it hit -
 /// checksum, I/O, decompression - rather than failing on them, and with
-/// BCH_PREAD_RAW_no_poison_check, reads poisoned extents. The bytes read.
+/// PreadRawFlags::NO_POISON_CHECK, reads poisoned extents. The bytes read.
 fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<IoctlPreadRaw>)
     -> Result<isize, BchError>
 {
     let fs = inode.fs();
     let a = user.read()?;
-    if a.flags & !BCH_PREAD_RAW_no_poison_check != 0 || a.err.pad != 0 {
+    let Some(raw_flags) = PreadRawFlags::from_bits(a.flags).filter(|_| a.err.pad == 0) else {
         return fs.throw(Errcode::EINVAL_pread_raw_args);
-    }
+    };
     if a.len == 0 {
         return Ok(0);
     }
@@ -372,7 +372,7 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<IoctlPread
     let mut kiocb = MaybeUninit::uninit();
     let mut kiocb = Kiocb::sync(&mut kiocb, file, pos);
 
-    let flags = if a.flags & BCH_PREAD_RAW_no_poison_check != 0 {
+    let flags = if raw_flags.contains(PreadRawFlags::NO_POISON_CHECK) {
         ReadFlags::no_poison_check
     } else {
         ReadFlags::empty()
@@ -384,7 +384,7 @@ fn pread_raw(file: &File<InodeFile>, inode: &InodeInfo, user: UserArg<IoctlPread
     let mut ret = direct_io_read(&mut kiocb, &mut iter, flags, Some(&*report)).map(|n| n as isize);
 
     let mut errs = report.errs.lock();
-    if user.write_at(offset_of!(IoctlPreadRaw, errors), &errs.errors).is_err() {
+    if user.write_at(offset_of!(IoctlPreadRaw, errors), &errs.errors.bits()).is_err() {
         ret = Err(Errcode::EFAULT_pread_raw_errors.into());
     }
     let msg = &mut errs.msg;

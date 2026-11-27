@@ -11,7 +11,7 @@ use crate::c;
 use crate::alloc::capacity::{FsCapacity, MarkLockAt};
 use crate::alloc::discard::FsDiscards;
 use crate::alloc::gc_gens::FsGcGens;
-use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
+use crate::bcachefs_ioctl::ForceIf;
 use crate::data::{copygc::FsCopygc, ec::FsEc, reconcile::FsReconcile};
 use crate::debug::async_objs::{AsyncObjList, AsyncObjKind};
 #[cfg(CONFIG_DEBUG_FS)]
@@ -1420,9 +1420,9 @@ impl Fs {
 
         let degraded = self.opts().degraded();
         let flags = if degraded == Degraded::very {
-            BCH_FORCE_IF_DEGRADED | BCH_FORCE_IF_LOST
+            ForceIf::DEGRADED | ForceIf::LOST
         } else if degraded == Degraded::yes {
-            BCH_FORCE_IF_DEGRADED
+            ForceIf::DEGRADED
         } else {
             let mut missing = false;
             for ca in self.members() {
@@ -1445,7 +1445,7 @@ impl Fs {
             // error code, not prose. degraded=yes starts while every replica
             // set has a readable copy; past that, only degraded=very.
             let online = self.devs_online.load();
-            return self.throw(if self.can_read_fs_with_devs(&online, BCH_FORCE_IF_DEGRADED, Some(err)) {
+            return self.throw(if self.can_read_fs_with_devs(&online, ForceIf::DEGRADED, Some(err)) {
                 Errcode::insufficient_devices_data_intact
             } else {
                 Errcode::insufficient_devices_data_lost

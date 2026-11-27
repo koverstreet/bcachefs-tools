@@ -10,7 +10,8 @@ use std::io::{stdout, IsTerminal};
 
 use crate::logging;
 use crate::device_scan::OpenedFs;
-use crate::wrappers::{handle::BcachefsHandle, online_iter::{OnlineBtreeIter, OnlineIterFlags}};
+use crate::wrappers::{handle::BcachefsHandle, online_iter::OnlineBtreeIter};
+use bcachefs_kernel::bcachefs_ioctl::QueryBtreeKeysFlags;
 use bcachefs_kernel::format::{Bpos, Btree, BkeyType, BTREE_MAX_DEPTH, ErrorAction};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
@@ -130,9 +131,9 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 /// disk groups comes from the superblock; annotations needing live allocator
 /// state are omitted.
 fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
-    let mut flags = OnlineIterFlags::default();
+    let mut flags = QueryBtreeKeysFlags::empty();
     if opt.start.snapshot == 0 {
-        flags = flags | OnlineIterFlags::ALL_SNAPSHOTS;
+        flags |= QueryBtreeKeysFlags::ALL_SNAPSHOTS;
     }
 
     let mut iter = OnlineBtreeIter::new(handle, opt.btree, opt.level,

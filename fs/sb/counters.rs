@@ -287,24 +287,23 @@ pub fn counters_init(fs: &Fs) {
 #[cfg(kernel)]
 pub mod ioctl {
     use super::*;
-    use crate::bcachefs_ioctl::BCH_IOCTL_QUERY_COUNTERS_MOUNT;
+    use crate::bcachefs_ioctl::QueryCountersFlags;
     use crate::bcachefs_ioctl::IoctlQueryCounters;
     use crate::errcode::{Errcode, BchError};
     use crate::os::ioctl::UserVstruct;
 
     /// The counters, by stable id, up to the user's @nr of them: now, or at
-    /// mount (BCH_IOCTL_QUERY_COUNTERS_MOUNT). @nr comes back as the number
+    /// mount (QueryCountersFlags::MOUNT). @nr comes back as the number
     /// filled.
     pub fn query_counters(fs: &Fs, user: UserVstruct<IoctlQueryCounters>)
         -> Result<(), BchError>
     {
         let mut arg = user.head()?;
 
-        let flags = u32::from(arg.flags);
-        if flags & !BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0 || arg.pad != 0 {
+        let Some(flags) = QueryCountersFlags::from_bits(arg.flags).filter(|_| arg.pad == 0) else {
             return fs.throw(Errcode::EINVAL_ioctl_query_counters_bad_flags);
-        }
-        let mount = flags & BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0;
+        };
+        let mount = flags.contains(QueryCountersFlags::MOUNT);
 
         arg.nr = arg.nr.min(NR_STABLE as u16);
         user.set_head(&arg)?;

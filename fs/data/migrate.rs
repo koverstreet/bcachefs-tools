@@ -17,8 +17,8 @@
 //! after one that skipped open stripes, those are waited for.
 //!
 //! What a key has left without the device must be what @flags allows: with
-//! nothing, BCH_FORCE_IF_{DATA,METADATA}_LOST; with fewer replicas than the
-//! filesystem wants, BCH_FORCE_IF_*_DEGRADED - otherwise
+//! nothing, ForceIf::{DATA,METADATA}_LOST; with fewer replicas than the
+//! filesystem wants, ForceIf::*_DEGRADED - otherwise
 //! remove_would_lose_data, the key printed into @err. What's left readable is
 //! marked for reconcile, to replicate again; user data with nothing readable
 //! becomes an error key, its loss recorded. A btree node pointer is updated
@@ -46,8 +46,7 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeLevels, BtreeNodeIter, 
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::data::ec::format::Stripe;
-use crate::bcachefs_ioctl::{BCH_FORCE_IF_DATA_DEGRADED, BCH_FORCE_IF_DATA_LOST,
-    BCH_FORCE_IF_METADATA_DEGRADED, BCH_FORCE_IF_METADATA_LOST};
+use crate::bcachefs_ioctl::ForceIf;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BKEY_EXTENT_U64s_MAX};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
@@ -73,7 +72,7 @@ fn unless_overwritten<T>(r: Result<Option<T>, BchError>) -> Result<Option<T>, Bc
 
 pub(crate) struct DevDrop<'e> {
     pub(crate) dev:   u32,
-    pub(crate) flags: u32,
+    pub(crate) flags: ForceIf,
     pub(crate) err:   &'e mut Printbuf,
 }
 
@@ -84,10 +83,10 @@ impl DevDrop<'_> {
         let fs = t.fs();
         let metadata = k.k.is_btree_ptr();
         let (replicas, lost, degraded, room) = if metadata {
-            (fs.opts.metadata_replicas.get(), BCH_FORCE_IF_METADATA_LOST, BCH_FORCE_IF_METADATA_DEGRADED,
+            (fs.opts.metadata_replicas.get(), ForceIf::METADATA_LOST, ForceIf::METADATA_DEGRADED,
              BKEY_BTREE_PTR_U64s_MAX)
         } else {
-            (fs.opts.data_replicas.get(), BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DATA_DEGRADED,
+            (fs.opts.data_replicas.get(), ForceIf::DATA_LOST, ForceIf::DATA_DEGRADED,
              BKEY_EXTENT_U64s_MAX)
         };
 
@@ -100,7 +99,7 @@ impl DevDrop<'_> {
         let mut n: TransBkey<'a, 't> = n.into();
 
         let durability = n.as_sc().durability(t)?.total;
-        if (durability == 0 && self.flags & lost == 0) || (durability < replicas && self.flags & degraded == 0) {
+        if (durability == 0 && !self.flags.contains(lost)) || (durability < replicas && !self.flags.contains(degraded)) {
             prt!(self.err, "cannot drop device without degrading/losing data\n  {}\n", k.to_text(fs));
             return fs.throw(Errcode::remove_would_lose_data);
         }
@@ -190,11 +189,11 @@ impl DevDrop<'_> {
             }
         }
 
-        if nr_good < u32::from(v.nr_blocks) && self.flags & BCH_FORCE_IF_DATA_DEGRADED == 0 {
+        if nr_good < u32::from(v.nr_blocks) && !self.flags.contains(ForceIf::DATA_DEGRADED) {
             prt!(self.err, "cannot drop device without degrading\n  {}\n", k.to_text(fs));
             return fs.throw(Errcode::remove_would_lose_data);
         }
-        if nr_good < v.nr_data() && self.flags & BCH_FORCE_IF_DATA_LOST == 0 {
+        if nr_good < v.nr_data() && !self.flags.contains(ForceIf::DATA_LOST) {
             prt!(self.err, "cannot drop device without losing data\n  {}\n", k.to_text(fs));
             return fs.throw(Errcode::remove_would_lose_data);
         }
@@ -278,7 +277,7 @@ impl DevDrop<'_> {
     }
 
     fn metadata(&mut self, fs: &Fs, progress: &Progress<'_>) -> Result<(), BchError> {
-        if self.flags & BCH_FORCE_IF_METADATA_LOST != 0 {
+        if self.flags.contains(ForceIf::METADATA_LOST) {
             return fs.throw(Errcode::remove_with_metadata_missing_unimplemented);
         }
 

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::bcachefs_ioctl::{IoctlGetDamage, IoctlReaddirEntry,
-    IoctlReaddirFlags, BCH_READDIR_damaged, BCH_READDIR_recursive};
+    IoctlReaddirFlags, ReaddirFlags};
 use bcachefs_kernel::posix::dirent_format::DT_SUBVOL;
 use bcachefs_kernel::sb::errors::SbErrorId;
 use bcachefs_kernel::util::vstructs::{plain_bytes, Head, UnvalidatedEntries, Unvalidated};
@@ -125,7 +125,7 @@ struct Entry {
 /// in what the kernel says it wrote, or has no name, is an error. A
 /// recursive listing's paths have no limit: an entry bigger than the
 /// buffer is ERANGE, and the call is retried with twice the room.
-fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Entry>> {
+fn readdir_flags(fd: &OwnedFd, flags: ReaddirFlags, pos: &mut [u64; 2]) -> Result<Vec<Entry>> {
     // u64s: the kernel writes each entry at a multiple of 8 from the start,
     // aligned for one if the buffer is
     let mut buf = vec![0u64; (64 << 10) / 8];
@@ -135,7 +135,7 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
             buf: buf.as_mut_ptr() as u64,
             buf_size: u32::try_from(mem::size_of_val(&*buf))
                 .context("an entry bigger than any buffer the ioctl can be given")?,
-            flags,
+            flags: flags.bits(),
             used: 0,
             pad: 0,
         };
@@ -190,8 +190,8 @@ fn entry_errors(dir: &OwnedFd, e: &Entry) -> Option<Vec<DamageEntry>> {
 
 fn cmd_ls(path: &Path, recursive: bool) -> Result<()> {
     let dir = open_dir(path)?;
-    let flags = BCH_READDIR_damaged |
-        if recursive { BCH_READDIR_recursive } else { 0 };
+    let flags = ReaddirFlags::DAMAGED |
+        if recursive { ReaddirFlags::RECURSIVE } else { ReaddirFlags::empty() };
 
     let mut pos = [0u64; 2];
     loop {
@@ -253,7 +253,7 @@ fn cmd_clear(path: &Path, recursive: bool) -> Result<()> {
      * (ownership, racing renames) are reported and skipped.
      */
     let dir = open_dir(path)?;
-    let flags = BCH_READDIR_damaged | BCH_READDIR_recursive;
+    let flags = ReaddirFlags::DAMAGED | ReaddirFlags::RECURSIVE;
     let mut failed = 0u64;
 
     let mut pos = [0u64; 2];

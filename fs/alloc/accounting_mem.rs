@@ -12,7 +12,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, C
 use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::MarkLockAt;
 use crate::alloc::replicas_format::ReplicasEntryV1;
-use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
+use crate::bcachefs_ioctl::ForceIf;
 use crate::btree::journal_overlay::JournalKeys;
 use crate::journal::journal::JournalRes;
 use crate::sb::members_format::BCH_SB_MEMBER_INVALID;
@@ -358,9 +358,9 @@ fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchE
 
     if let Some(r) = replicas_entry(&pos).filter(|_| d.iter().any(|&v| v != 0)) {
         let flags = match fs.opts().degraded() {
-            DegradedAction::very => BCH_FORCE_IF_DEGRADED | BCH_FORCE_IF_LOST,
-            DegradedAction::yes  => BCH_FORCE_IF_DEGRADED,
-            _ => 0,
+            DegradedAction::very => ForceIf::DEGRADED | ForceIf::LOST,
+            DegradedAction::yes  => ForceIf::DEGRADED,
+            _ => ForceIf::empty(),
         };
 
         let mut buf = Printbuf::new();

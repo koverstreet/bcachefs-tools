@@ -142,7 +142,7 @@ use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::c;
 use crate::alloc::disk_groups_format::SbFieldDiskGroups;
 use crate::alloc::replicas_format::SbFieldReplicas;
-use crate::bcachefs_ioctl::{BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_LOST};
+use crate::bcachefs_ioctl::ForceIf;
 use crate::data::extents_sb_format::SbFieldExtentTypeU64s;
 use crate::opts::{Opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
 use crate::sb::counters_format::SbFieldCounters;
@@ -2482,9 +2482,9 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
                 copies: &Copies) -> Result<(), BchError> {
     use crate::util::log::LogMsg;
 
-    let mut degraded_flags = BCH_FORCE_IF_DEGRADED;
+    let mut degraded_flags = ForceIf::DEGRADED;
     if fs.opts().degraded() == DegradedAction::very {
-        degraded_flags |= BCH_FORCE_IF_LOST;
+        degraded_flags |= ForceIf::LOST;
     }
 
     let nr_wrote = copies.written.iter().count();
