@@ -33,7 +33,7 @@ use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
 };
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
@@ -121,7 +121,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
         // i_sectors fixed
         if let Err(e) = namei::inum_snapshot_to_path(t, i.inode.bi_inum, i.inode.bi_snapshot,
                                                      &mut buf) {
-            if is_restart(&e) {
+            if e.is_restart() {
                 return Err(e);
             }
         }

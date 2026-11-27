@@ -11,7 +11,7 @@ use crate::alloc::{accounting, capacity::DiskReservation, disk_groups_format};
 use crate::{bch_warn, btree_trans};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::bcachefs_ioctl::{IoctlGetDamage, IoctlReaddirFlags, IoctlSnapshotNode,
     IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2,
@@ -415,7 +415,7 @@ where
             let found = accessible(t, root, parent)? && {
                 path.reset();
                 match namei::inum_to_path_in_subvol(t, root, parent, &mut path) {
-                    Err(e) if !is_restart(&e) => false,
+                    Err(e) if !e.is_restart() => false,
                     r => { r?; true }
                 }
             };

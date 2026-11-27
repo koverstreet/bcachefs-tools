@@ -5,7 +5,7 @@
 //! slot.
 
 use crate::btree::bkey::{bkey_gt, pos};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::alloc::buckets::ReservationFlags;
@@ -192,7 +192,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut alloc_request, s: &mu
         req.target_frac = centroid;
         let ob = match t.bucket_alloc(req, &ca) {
             Ok(ob) => ob,
-            Err(e) if is_restart(&e) => {
+            Err(e) if e.is_restart() => {
                 ret = Err(e);
                 break;
             }
@@ -460,7 +460,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut alloc_request, dev
     (req.watermark, req.flags) = saved;
 
     match ret {
-        Err(e) if !is_restart(&e) && !e.matches(c::ENOMEM) => {}
+        Err(e) if !e.is_restart() && !e.matches(c::ENOMEM) => {}
         ret => return ret,
     }
 

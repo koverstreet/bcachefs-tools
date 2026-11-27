@@ -60,7 +60,7 @@ use core::mem::{offset_of, align_of, size_of};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::init::progress::Progress;
 use crate::btree::iter::{
-    is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
     TransAttempt, TransBkey, UpdateTriggerFlags,
 };
 use crate::btree::trans::TransGuard;
@@ -1463,7 +1463,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
         let r = match trans.delete_range(btree, spos(inum, 0, snapshot), spos(inum, u64::MAX, snapshot),
                                          UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE) {
             // handled restarts are an FYI - the range was fully deleted:
-            Err(e) if is_restart(&e) => Ok(()),
+            Err(e) if e.is_restart() => Ok(()),
             r => r,
         };
         if ret.is_ok() {
@@ -1573,7 +1573,7 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
         if delete {
             bch_verbose_ratelimited!(fs, "deleting unlinked inode {}:{}", { p.offset }, { p.snapshot });
             match rm_snapshot(&trans, p.offset, p.snapshot) {
-                Err(e) if is_restart(&e) => continue,
+                Err(e) if e.is_restart() => continue,
                 r => r?,
             }
         }

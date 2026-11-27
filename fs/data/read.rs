@@ -78,7 +78,7 @@ use crate::alloc::{background::bucket_read_time_reset, capacity::DiskReservation
 use crate::bcachefs_ioctl::ReadErr;
 use crate::btree::bkey::{pos, prelude::*, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          LoopFlow, TransAttempt, UpdateTriggerFlags};
 use crate::{bch_err, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
 use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch, InlineDataRef},
@@ -1240,7 +1240,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, mut
     if let Some(ca) = &ca {
         if pick.ptr.cached() != 0 && !orig.is_update() {
             match bucket_read_time_reset(t, pos(pick.ptr.dev().into(), ca.ptr_bucket(&pick.ptr))) {
-                Err(e) if is_restart(&e) => return Err(e),
+                Err(e) if e.is_restart() => return Err(e),
                 _ => {}
             }
         }

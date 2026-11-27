@@ -3,7 +3,7 @@
 use super::bkey::*;
 use super::iter::{BtreeIter, polonius_key, BtreeIterFlags, BtreeNodeIter};
 use super::trans::BtreeTrans;
-use super::trans_attempt::{is_restart, CommitOpts, TransAttempt};
+use super::trans_attempt::{CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::{node::BtreeNode, path::{LockedNode, Paths}};
 use crate::errcode::{BchError, Errcode};
@@ -170,7 +170,7 @@ impl<'t> BtreeTrans<'t> {
             // forgot to commit. A restart's are dropped by the restart. As C's
             // __commit_do().
             if let Err(e) = f(t) {
-                if !is_restart(&e) {
+                if !e.is_restart() {
                     let trans = t.trans();
                     trans.reset_updates(&mut trans.paths());
                 }

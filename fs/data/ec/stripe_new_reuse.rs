@@ -22,7 +22,7 @@
 //! data block it can keep carried or moved: repair.rs.
 
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::data::ec::buf::{blocks_in, StripeBuf};
@@ -220,7 +220,7 @@ fn stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchErr
 /// restart, going read-only - is returned.
 pub(crate) fn try_stripe_reuse(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
     match stripe_reuse(t, s) {
-        Err(e) if is_restart(&e) || e.matches(c::EROFS) => Err(e),
+        Err(e) if e.is_restart() || e.matches(c::EROFS) => Err(e),
         _ => Ok(()),
     }
 }

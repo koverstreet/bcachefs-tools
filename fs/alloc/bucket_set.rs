@@ -19,7 +19,7 @@
 //! a cached write, a stripe's block, or a cache device's: add_new_bucket().
 
 use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketRef, alloc_request};
-use crate::btree::iter::{is_restart, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::alloc::dev_select::DevStripeState;
 use crate::alloc::write_point::WritePointLocked;
 use crate::data::{write::WriteFlags, ec::head::{head_get, stripe_head_put}};
@@ -203,7 +203,7 @@ impl TransAttempt<'_, '_> {
                         progress = true;
                         break;
                     }
-                    Err(e) if is_restart(&e) ||
+                    Err(e) if e.is_restart() ||
                               e.matches(Errcode::operation_blocked) ||
                               e.matches(Errcode::open_buckets_empty) => return Err(e),
                     Err(e) => ret = Err(e),
@@ -298,7 +298,7 @@ impl TransAttempt<'_, '_> {
         req.nr_replicas = nr_replicas;
         req.wait = wait;
         match ret {
-            Err(e) if is_restart(&e) => Err(e),
+            Err(e) if e.is_restart() => Err(e),
             _ => Ok(()),
         }
     }

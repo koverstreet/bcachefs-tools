@@ -5,7 +5,7 @@ use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, Flushin
 use crate::alloc::{accounting, accounting_mem};
 use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::write_buffer::{FsBtreeWriteBuffer, BtreeWriteBufferedKey, WbKeyRef,
     WbFlushCaller};
@@ -313,7 +313,7 @@ fn flush_sorted_range(
                 t = trans.begin_flush(FlushKey(()));
             }
             match r {
-                Err(e) if is_restart(&e) => continue,
+                Err(e) if e.is_restart() => continue,
                 r => break r,
             }
         };

@@ -299,7 +299,7 @@ use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, B
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::{prt, bch_err, bkey_fsck_err_on};
 use crate::util::vstructs::{Unvalidated, Validated, Whole};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::locking::{ExclusiveGuard, Mutex};
@@ -1583,7 +1583,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
     let _ = write!(out, "{id} \t");
 
     match lookup(t, id) {
-        Err(e) if is_restart(&e) => return Err(e),
+        Err(e) if e.is_restart() => return Err(e),
         Err(e) => { let _ = write!(out, "{}", e.msg()); }
         Ok(s) => {
             let _ = write!(out, "{} ", SnapshotState(s.state.get()));
@@ -1595,7 +1595,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
 
             if subvol != 0 {
                 match subvolume::get(t, subvol, false) {
-                    Err(e) if is_restart(&e) => return Err(e),
+                    Err(e) if e.is_restart() => return Err(e),
                     Err(e) => { let _ = write!(out, "{}", e.msg()); }
                     Ok(sv) => crate::posix::namei::inum_to_path(
                         t, SubvolInum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
@@ -1614,7 +1614,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
     // Room for the next line now, while dropping locks to get it is cheap.
     // Without it the next line's cut short; a restart redoes this one
     match t.allocate_dropping_locks(|| out.make_room(1024).then_some(()).ok_or(Errcode::ENOMEM_snapshot_node_to_text.into())) {
-        Err(e) if is_restart(&e) => Err(e),
+        Err(e) if e.is_restart() => Err(e),
         _ => Ok(()),
     }
 }
@@ -1648,7 +1648,7 @@ pub fn tree_keys_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, start: u32)
 
         trans.lockrestart_do(|t| {
             let restore = out.state_save();
-            node_to_text(out, t, id).inspect_err(|e| if is_restart(e) {
+            node_to_text(out, t, id).inspect_err(|e| if e.is_restart() {
                 out.state_restore(restore);
             })
         })?;

@@ -18,7 +18,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::{vstructs::Unvalidated, ffi::c_str, Printbuf, ToText};
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::c;
@@ -339,7 +339,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>, 
             if matches!(mode, Mode::User) {
                 match inode::find_by_inum_snapshot(t, inum, k.k.p.snapshot, BtreeIterFlags::CACHED) {
                     Ok(inode) => opts = get_inode(fs, &inode),
-                    Err(e) if is_restart(&e) => return Err(e),
+                    Err(e) if e.is_restart() => return Err(e),
                     Err(_) => {}
                 }
             }

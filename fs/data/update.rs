@@ -25,7 +25,7 @@ use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::alloc::buckets::ReservationFlags;
@@ -582,7 +582,7 @@ impl DataUpdate {
         let ret = self.init_body(t, iter, io_opts, pos);
 
         if let Err(e) = &ret {
-            if !is_restart(e) {
+            if !e.is_restart() {
                 self.trace(Err(*e));
             }
             self.op.res.put();

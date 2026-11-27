@@ -15,7 +15,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, POS_MIN};
 use crate::btree::iter::{
-    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
@@ -93,7 +93,7 @@ fn create_lostfound_dirent(
                                     dir_offset,
                                     CREATE.0, CREATE.1);
     match &r {
-        Err(e) if !is_restart(e) => {
+        Err(e) if !e.is_restart() => {
             write!(msg, "\nerror creating dirent: {}", e.msg());
             msg.set_level(LogLevel::ERR);
         }

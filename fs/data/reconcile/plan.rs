@@ -54,7 +54,7 @@
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::compress::bch_compression_opt;
 use crate::data::extents::BkeyDurability;
@@ -328,7 +328,7 @@ pub fn park(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeyS
             write!(out, "{err}\n{}\n", k.to_text(fs));
             fs.data_update_opts_to_text(out, opts, data_opts);
             write!(out, "\n");
-            restart = t.can_do_data_update(opts, data_opts, k, Some(out)).err().filter(is_restart);
+            restart = t.can_do_data_update(opts, data_opts, k, Some(out)).err().filter(BchError::is_restart);
         }
         ParkReason::UpdateFailed { err, opts, data_opts } => {
             write!(out, "{err}\n{}\n", k.to_text(fs));

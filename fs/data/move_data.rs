@@ -40,7 +40,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::scrub::btree_node_scrub;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, CommitFlags, CommitOpts, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeLevels, CommitFlags, CommitOpts, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::format::Stripe;
@@ -157,7 +157,7 @@ impl<'a> Moving<'a> {
 
         if data_opts.type_ != DataUpdateType::copygc {
             if let Err(e) = t.can_do_data_update(opts, data_opts, k, None) {
-                if !is_restart(&e) {
+                if !e.is_restart() {
                     move_btree_node_trace(fs, opts, data_opts, k, Err(e));
                 }
                 return Err(e);
@@ -175,7 +175,7 @@ impl<'a> Moving<'a> {
                                            data_opts.write_flags);
 
         // ENOMEM becomes a restart, retried: not an outcome
-        if !matches!(&ret, Err(e) if is_restart(e) || e.matches(c::ENOMEM)) {
+        if !matches!(&ret, Err(e) if e.is_restart() || e.matches(c::ENOMEM)) {
             move_btree_node_trace(fs, opts, data_opts, BkeySC::from(&node_key), ret);
         }
         ret
@@ -252,7 +252,7 @@ impl Moving<'_> {
                 // failure for this key: go on
                 Err(e) if e.matches(err::data_update_fail) => {}
                 // a topology error, a btree node read error
-                Err(e) if is_restart(&e) || e.matches(c::EROFS) || e.matches(c::EIO) => return Err(e),
+                Err(e) if e.is_restart() || e.matches(c::EROFS) || e.matches(c::EIO) => return Err(e),
                 Err(e) => {
                     warn_once!(!e.matches(c::EAGAIN), fs, "unhandled error from move_extent: {e}");
                 }
@@ -357,7 +357,7 @@ impl PhysWalker<'_, '_> {
             return Err(t.close(CommitFlags::empty(), |trans| {
                 let s = BkeySC::from(&stripe).arm::<Stripe>().expect("a stripe");
                 let ret = scrub_stripe_block(moving, trans, ca, s, block);
-                if !ret.as_ref().is_err_and(is_restart) {
+                if !ret.as_ref().is_err_and(BchError::is_restart) {
                     *scrubbed = Some(bp.k.p);
                 }
                 ret
@@ -371,7 +371,7 @@ impl PhysWalker<'_, '_> {
 
         let bucket_len = { v.bucket_len };
         let ret = self.mover.move_key(t, None, iter, v.level.into(), k);
-        if matches!(&ret, Err(e) if is_restart(e)) {
+        if matches!(&ret, Err(e) if e.is_restart()) {
             return ret;
         }
         moving.stats().walked(iter, bucket_len.into());

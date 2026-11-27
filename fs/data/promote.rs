@@ -16,7 +16,7 @@
 //! online CPU.
 
 use crate::alloc::{disk_groups::Target, write_point::WritePointSpecifier};
-use crate::btree::{bkey::{BkeySC, BkeyV}, iter::{is_restart, TransAttempt}};
+use crate::btree::{bkey::{BkeySC, BkeyV}, iter::TransAttempt};
 use crate::data::update::{DataUpdateOpts, DataUpdateType};
 use crate::opts::InodeOpts;
 use crate::util::{time_stats::TimeStat, atomic::try_update, refcount::TryRefcount, task::Resume};
@@ -226,7 +226,7 @@ pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, k: BkeySC<
         }
         // not swallowed: it'd leave the transaction poisoned, for a panic at
         // the transaction's drop
-        Err(e) if is_restart(&e) => Err(e),
+        Err(e) if e.is_restart() => Err(e),
         Err(e) => {
             fs.event_inc_trace(events::data_read_nopromote, |out| {
                 prt!(out, "{e}\n{}", k.to_text(fs));

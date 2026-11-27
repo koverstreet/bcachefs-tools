@@ -30,7 +30,7 @@ use bitflags::bitflags;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
-    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::c;
@@ -777,7 +777,7 @@ fn inum_to_path_up(
     }
 
     match ret {
-        Err(e) if !is_restart(&e) && !fail_on_err => {
+        Err(e) if !e.is_restart() && !fail_on_err => {
             write!(path.note, "({}: disconnected at {}.{})", e, inum, snapshot);
             Ok(())
         }
@@ -801,7 +801,7 @@ fn __inum_to_path(
     let ret = inum_to_path_up(t, subvol, inum, snapshot, stop_subvol, fail_on_err, &mut path);
 
     match &ret {
-        Err(e) if is_restart(e) => {}
+        Err(e) if e.is_restart() => {}
         Ok(()) if path.is_empty() => write!(out, "/"),
         _ => path.print(out),
     }

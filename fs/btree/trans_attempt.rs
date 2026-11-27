@@ -180,12 +180,6 @@ impl Drop for TransMayDropUpdates<'_, '_> {
     }
 }
 
-/// Whether @e is a transaction restart: the attempt is over, and the loop
-/// it's in begins again.
-pub fn is_restart(e: &BchError) -> bool {
-    e.matches(Errcode::transaction_restart)
-}
-
 impl<'t> BtreeTrans<'t> {
     pub fn lockrestart_do<T, F>(&self, mut f: F) -> Result<T, BchError>
     where
@@ -195,7 +189,7 @@ impl<'t> BtreeTrans<'t> {
             let t = self.begin();
 
             match f(&t) {
-                Err(e) if is_restart(&e) => continue,
+                Err(e) if e.is_restart() => continue,
                 Err(e) => return Err(e),
                 Ok(v) => {
                     t.verify_not_restarted();
@@ -217,7 +211,7 @@ impl<'t> BtreeTrans<'t> {
             let t = TransAttempt::new(self, self.begin_raw(paths, AttemptKey(())));
 
             match f(&t, paths) {
-                Err(e) if is_restart(&e) => continue,
+                Err(e) if e.is_restart() => continue,
                 Err(e) => return Err(e),
                 Ok(v) => {
                     t.verify_not_restarted();
@@ -655,7 +649,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                     }
                     return Ok(v);
                 }
-                Err(e) if is_restart(&e) => {
+                Err(e) if e.is_restart() => {
                     retry = trans.begin();
                     t = &retry;
                 }

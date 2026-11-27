@@ -1025,6 +1025,12 @@ impl BchError {
         self.0 != 0 && self.chain().any(|e| e == class)
     }
 
+    /// Whether this is a transaction restart: the attempt is over, and the loop
+    /// it's in begins again.
+    pub fn is_restart(&self) -> bool {
+        self.matches(Errcode::transaction_restart)
+    }
+
     pub fn errno(&self) -> i32 {
         self.chain().last().unwrap() as i32
     }

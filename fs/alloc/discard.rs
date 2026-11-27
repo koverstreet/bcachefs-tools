@@ -52,7 +52,7 @@ use crate::alloc::lru::LruPos;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          LoopFlow, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -728,7 +728,7 @@ fn do_discards(fs: &Fs) {
         // trigger's updates to it go through the write buffer
         if r.flush_wb && flushed_wb < 2 {
             match trans.write_buffer_flush_sync() {
-                Err(e) if !is_restart(&e) => break Err(e),
+                Err(e) if !e.is_restart() => break Err(e),
                 _ => {}
             }
             again = true;

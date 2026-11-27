@@ -1218,7 +1218,7 @@ fn __write_index(op: &mut Op, update: Option<&DataUpdateIndex>, flush: Option<&m
                 Some(u) => crate::data::update_index::index_update(&btree_trans!(fs), op, u),
             };
 
-            assert!(!ret.as_ref().is_err_and(crate::btree::iter::is_restart),
+            assert!(!ret.as_ref().is_err_and(BchError::is_restart),
                     "a write's index update returned a transaction restart");
             assert!(keylist_sectors(&op.insert_keys) == 0 || ret.is_err(),
                     "a write's index update left keys, without an error");

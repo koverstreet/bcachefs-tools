@@ -34,7 +34,7 @@ use crate::fs::{Dev, FsFlag, Fs};
 use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags,
     BkeyValidateContext, BkeyValidateFrom};
 use crate::btree::trans::TransGuard;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::errcode::{Errcode, BchError};
 use crate::{prt, new_lock};
 use crate::sb::errors::{FsckFlags, SbErrorId, SbErrorEntryCpu};
@@ -813,7 +813,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
 {
     path.reset();
     match crate::posix::namei::inum_snapshot_to_path(t, inum, snapshot, path) {
-        Err(e) if !is_restart(&e) => {}
+        Err(e) if !e.is_restart() => {}
         r => return r,
     }
 
@@ -827,7 +827,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
         if snap != snapshot && k.k.is_inode() {
             path.reset();
             match crate::posix::namei::inum_snapshot_to_path(t, inum, snap, path) {
-                Err(e) if !is_restart(&e) => ret = Err(e),
+                Err(e) if !e.is_restart() => ret = Err(e),
                 r => return r,
             }
         }
@@ -901,7 +901,7 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
     } else {
         Ok(())
     };
-    if ret.as_ref().is_err_and(is_restart) {
+    if ret.as_ref().is_err_and(BchError::is_restart) {
         return ret;
     }
 

@@ -30,7 +30,7 @@ use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_eq, bkey_lt, bkey_min, pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{polonius_key, BtreeIter, BtreeIterFlags,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -637,7 +637,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
             let done = trans.lockrestart_do(|t| {
                 let Some(k) = iter.peek(t)?.map(|k| *k.k) else { return Ok(true) };
                 repair_freespace_key(t, &iter, FreespaceCheck::Fsck)
-                    .inspect_err(|e| if !is_restart(e) { bch_err!(fs, "while checking {k}") })
+                    .inspect_err(|e| if !e.is_restart() { bch_err!(fs, "while checking {k}") })
                     .map(|()| false)
             })?;
             if done {

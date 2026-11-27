@@ -57,7 +57,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags,
                          CommitFlags, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -375,7 +375,7 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, k: BkeySC<'
             }
             Ok(())
         }
-        Err(e) if !is_restart(&e) => {
+        Err(e) if !e.is_restart() => {
             // out of space, say: left for a later pass, once something's changed
             stripe_park(t, s, Some(e));
             Ok(())
@@ -543,12 +543,12 @@ impl<'a, 'f> Walker<'a, 'f> {
 
         let sectors = key_sectors(fs, k);
         let ret = ctxt.move_extent(t, None, &opts, &d, iter, level, k, None);
-        if !matches!(&ret, Err(e) if is_restart(e)) {
+        if !matches!(&ret, Err(e) if e.is_restart()) {
             ctxt.stats().walked(iter, sectors);
         }
         match ret {
             Ok(()) => {}
-            Err(e) if is_restart(&e) || e.matches(err::data_update_fail_need_copygc) => return Err(e),
+            Err(e) if e.is_restart() || e.matches(err::data_update_fail_need_copygc) => return Err(e),
             Err(e) if move_err_parks(e) => {
                 park(t, iter, level, k, ParkReason::MoveFailed { err: e, opts: &opts, data_opts: &d })?;
             }
@@ -743,7 +743,7 @@ impl<'f> Reconciler<'f, '_> {
         }
 
         match cookie.run(&self.ctxt, &mut p.w.s, &mut p.w.last_flushed) {
-            Err(e) if is_restart(&e) => panic!("transaction restart out of a reconcile scan: {e}"),
+            Err(e) if e.is_restart() => panic!("transaction restart out of a reconcile scan: {e}"),
             ret => p.sectors_scanned += ret?,
         }
         Ok(())
@@ -796,7 +796,7 @@ impl<'f> Reconciler<'f, '_> {
                     p.copygc_runs = fs.copygc_wait_run(p.copygc_runs);
                     continue;
                 }
-                Err(e) if is_restart(&e) => continue,
+                Err(e) if e.is_restart() => continue,
                 // the pass looks again, and waits
                 Err(e) if e.matches(err::reconcile_scan_stop) => return Ok(()),
                 Err(e) => return Err(e),

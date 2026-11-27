@@ -8,7 +8,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_buf::BtreeKeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags,
                          TransAttempt};
 use crate::btree::scrub::{read_replicas, ReplicaRead, Replicas};
 use crate::c;
@@ -219,7 +219,7 @@ fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &Ino
         assert!(k2.and_val_eq(k), "the journal's key is the btree's: journal keys are frozen");
 
         let ret = m.move_extent(t, None, io_opts, &data_opts, iter.iter(), level, k, Some(found.get_pinned()));
-        if !matches!(&ret, Err(e) if is_restart(e)) {
+        if !matches!(&ret, Err(e) if e.is_restart()) {
             m.stats().walked(iter.iter(), key_sectors(t.fs(), k));
         }
         ret
@@ -516,7 +516,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     };
 
     let ret = m.move_extent(t, None, &io_opts, &data_opts, &iter, 0, k, None);
-    if !matches!(&ret, Err(e) if is_restart(e)) {
+    if !matches!(&ret, Err(e) if e.is_restart()) {
         m.stats().walked(&iter, key_sectors(fs, k));
     }
     ret.map(|()| Outcome::Repaired)

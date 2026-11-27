@@ -12,7 +12,7 @@ use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::data::ec::format::Stripe;
@@ -563,7 +563,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, ca: 
 
     let ret = match repair_bad_block(ctxt, trans, s, block) {
         Ok(false) => return Ok(()),
-        Err(e) if is_restart(&e) => return Err(e),
+        Err(e) if e.is_restart() => return Err(e),
         r => r.map(|_| ()),
     };
 

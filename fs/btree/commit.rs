@@ -15,7 +15,7 @@ use crate::btree::bkey::{bkey_validate, BkeyI, BkeySC, ValidateFlags, BKEY_U64S,
     BkeyValidateContext, BkeyValidateFrom};
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::btree::interior::{merge, split_leaf};
-use crate::btree::iter::{is_restart, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
+use crate::btree::iter::{BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
     BtreeIterUpdateTriggerFlags};
 use crate::btree::{journal_overlay, BtreeNodeType};
 use crate::btree::key_cache::{btree_insert_key_cached, btree_key_cache_drop, key_buf};
@@ -420,7 +420,7 @@ impl BtreeTrans<'_> {
                 return Err(self.restart(Errcode::transaction_restart_split_with_interior_updates));
             }
 
-            if ret.as_ref().is_err_and(is_restart) {
+            if ret.as_ref().is_err_and(BchError::is_restart) {
                 fs.event_inc_trace(events::trans_restart_btree_node_split, |out| {
                     prt!(out, "{}\n", self.fn_name());
                     self.path_to_text(out, paths, path);
@@ -463,7 +463,7 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let ret = self.commit_error_inner(t, paths, res, flags, i, err);
 
-        assert!(ret.as_ref().is_err_and(is_restart) == (self.restarted().0 != 0));
+        assert!(ret.as_ref().is_err_and(BchError::is_restart) == (self.restarted().0 != 0));
 
         if let Some(err) = ret.as_ref().err().filter(|e| e.matches(c::ENOSPC) && has(flags, CommitFlags::NO_ENOSPC)) {
             fs_inconsistent!(fs, "commit_error: incorrectly got {err}\n");

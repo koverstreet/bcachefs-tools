@@ -23,7 +23,7 @@ use crate::posix::{dirent_format, inode, namei, str_hash};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::c;
@@ -104,7 +104,7 @@ fn check_dir_nlink(
     // key, and a declined repair would find the same count and begin another,
     // forever.
     if let Err(e) = namei::inum_snapshot_to_path(t, inum, snapshot, &mut path) {
-        if is_restart(&e) {
+        if e.is_restart() {
             return Err(e);
         }
     }
