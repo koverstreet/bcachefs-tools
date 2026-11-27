@@ -68,7 +68,7 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
 
     #[cfg(kernel)]
     if let Some(stdio) = fs.stdio.get(false) {
-        let _ = stdio.write(true, &buf.as_bytes()[2..]);
+        let _ = stdio.try_write(&buf.as_bytes()[2..]);
         return;
     }
     crate::os::printk::printk(buf.as_c_str())
@@ -207,7 +207,7 @@ fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
 
     #[cfg(kernel)]
     if let Some(stdio) = fs.stdio.get(false) {
-        let _ = stdio.write(true, &s[..len]);
+        let _ = stdio.try_write(&s[..len]);
         return;
     }
 
@@ -223,7 +223,7 @@ fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
 pub fn print_user(fs: &Fs, s: &[u8]) {
     #[cfg(kernel)]
     if let Some(stdio) = fs.stdio.get(true) {
-        let _ = stdio.write(true, s);
+        let _ = stdio.try_write(s);
         return;
     }
     print_bytes(fs, Some(LogLevel::ERR.num()), s)

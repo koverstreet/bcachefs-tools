@@ -1022,7 +1022,7 @@ pub mod ioctl {
             Ok(()) => fs.fsck_errcode(&mut buf),
         };
         if ret != 0 {
-            let _ = stdio.write(false, buf.as_bytes());
+            let _ = stdio.write(buf.as_bytes());
         }
 
         // shutting down attached, so what it says reaches the user too; the
@@ -1064,7 +1064,7 @@ pub mod ioctl {
                 prt!(&mut buf, "Cannot run passes ");
                 crate::util::names::prt_set::<RecoveryPass>(&mut buf, passes & !online);
                 prt!(&mut buf, " online\n");
-                let _ = stdio.write(false, buf.as_bytes());
+                let _ = stdio.write(buf.as_bytes());
                 return -fs.err(Errcode::EINVAL_fsck_online_bad_passes).raw();
             }
         }
@@ -1103,7 +1103,7 @@ pub mod ioctl {
         });
 
         if !buf.as_bytes().is_empty() {
-            let _ = stdio.write(false, buf.as_bytes());
+            let _ = stdio.write(buf.as_bytes());
         }
         ret
     }

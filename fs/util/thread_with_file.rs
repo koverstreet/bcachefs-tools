@@ -62,7 +62,8 @@ use crate::util::ffi::c_char;
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::os::file::{file_data, Any, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
 use crate::util::futex::EventCount;
-use crate::os::kernel::current_comm;
+use crate::os::kernel::{current_comm, HZ};
+use core::time::Duration;
 use crate::os::kthread::Kthread;
 use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
@@ -238,10 +239,18 @@ impl StdioRedirect {
         self.has_room(&self.input) || self.input.lock().lines == 0
     }
 
-    /// The thread's output, written: @msg in whole, or an error - EPIPE if
-    /// the file's closed, and if @nonblocking, EAGAIN rather than wait for
-    /// the reader to make room.
-    pub fn write(&self, nonblocking: bool, msg: &[u8]) -> Result<(), BchError> {
+    /// The thread's output, written: @msg in whole, waiting for the reader to
+    /// make room if it must - EPIPE if the file's closed.
+    pub fn write(&self, msg: &[u8]) -> Result<(), BchError> {
+        self.put(msg, true)
+    }
+
+    /// write(), without waiting: EAGAIN rather than wait for room.
+    pub fn try_write(&self, msg: &[u8]) -> Result<(), BchError> {
+        self.put(msg, false)
+    }
+
+    fn put(&self, msg: &[u8], wait: bool) -> Result<(), BchError> {
         let out = &self.output;
         loop {
             if self.done() {
@@ -259,7 +268,7 @@ impl StdioRedirect {
                 return Ok(());
             }
 
-            if nonblocking {
+            if !wait {
                 return Err(Errcode::EAGAIN_thread_with_file_write.into());
             }
 
@@ -267,13 +276,13 @@ impl StdioRedirect {
         }
     }
 
-    /// A line of input, newline and all, into @line - waiting at most
-    /// @timeout jiffies, MAX_SCHEDULE_TIMEOUT being forever: ETIME if it runs
-    /// out, EPIPE if the file's closed.
-    pub fn readline_timeout(&self, line: &mut Vec<u8>, timeout: c_ulong) -> Result<(), BchError> {
+    /// A line of input, newline and all, into @line - waiting at most @timeout,
+    /// None being forever: ETIME if it runs out, EPIPE if the file's closed.
+    pub fn readline(&self, line: &mut Vec<u8>, timeout: Option<Duration>) -> Result<(), BchError> {
         let input = &self.input;
+        let jiffies = timeout.map_or(usize::MAX, |t| (t.as_millis() as usize).saturating_mul(HZ) / 1000);
         loop {
-            let n = input.events.wait_until(Sleep::IDLE.timeout(timeout as _), || {
+            let n = input.events.wait_until(Sleep::IDLE.timeout(jiffies), || {
                 if self.done() {
                     return Some(None);
                 }
@@ -418,8 +427,10 @@ impl<T: StdioFile> FileOps for Stdio<T> {
         self.redirect.poll(file, &pt)
     }
 
+    /// What close(2) returns: the thread's status once it's done - stored before
+    /// done is set - and EINTR for a close that comes first, stopping it.
     fn flush(&self, _file: &File<Self::Data>) -> i32 {
-        self.ret.load(Ordering::Relaxed)
+        if self.redirect.done() { self.ret.load(Ordering::Relaxed) } else { -(c::EINTR as i32) }
     }
 
     fn unlocked_ioctl(&self, _file: &File<Self::Data>, cmd: u32, arg: c_ulong) -> c_long {

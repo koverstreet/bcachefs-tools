@@ -4,7 +4,7 @@ use super::{Question, Reply, UNANSWERED};
 use crate::c;
 use crate::fs::Fs;
 use crate::util::alloc::{Arc, Vec};
-use crate::os::kernel::{jiffies, HZ};
+use crate::os::kernel::ktime_get_ns;
 use crate::util::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
 
@@ -27,22 +27,17 @@ impl Prompt {
         let mut rec = Printbuf::new();
         q.record(&mut rec);
 
-        let mut slow = slow.map(|s| {
-            (jiffies().wrapping_add(s.after.as_millis() as usize * HZ / 1000), s.then)
-        });
+        let mut slow = slow.map(|s| (ktime_get_ns().saturating_add(s.after.as_nanos() as u64), s.then));
         let mut line = Vec::new();
 
         loop {
-            if self.0.write(false, rec.as_bytes()).is_err() {
+            if self.0.write(rec.as_bytes()).is_err() {
                 return Reply::Unanswered;
             }
 
             loop {
-                let timeout = match &slow {
-                    Some((at, _)) => (at.wrapping_sub(jiffies()) as isize).max(0) as usize,
-                    None          => isize::MAX as usize,
-                };
-                match self.0.readline_timeout(&mut line, timeout) {
+                let timeout = slow.as_ref().map(|(at, _)| Duration::from_nanos(at.saturating_sub(ktime_get_ns())));
+                match self.0.readline(&mut line, timeout) {
                     Ok(()) => break,
                     Err(e) if e.matches(c::ETIME) => {
                         if let Some((_, then)) = slow.take() {
