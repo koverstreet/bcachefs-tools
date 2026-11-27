@@ -10,7 +10,7 @@
 // allocator.
 
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bcachefs_kernel::format::Sb;
 use bcachefs_kernel::sb::{members_format::Member, self, SbFieldType, io::SbState};
@@ -116,4 +116,91 @@ pub fn sb_to_text_with_names(
 
     // sbs (Vec<(PathBuf, SbHandle)>) is dropped here — freed by
     // Rust's allocator, not kvfree. This is the whole point.
+}
+
+/// Print a concise one-line-per-member summary: device index, path (or
+/// "(not found)" if no matching device was scanned), state, error
+/// counters, and a short issue tag ("ok" if none apply).
+///
+/// Reuses the same UUID-based device-path discovery as
+/// sb_to_text_with_names(), retaining the supplied member path even when
+/// discovery cannot enumerate it. No online filesystem is required.
+pub fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb, device_path: &Path) -> anyhow::Result<()> {
+    let uuid = uuid::Uuid::from_bytes(sb.user_uuid.b);
+    let device_str = format!("UUID={}", uuid);
+
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
+    let sbs = device_scan::scan_sbs(&device_str, &opts)?;
+
+    out.aligned(|sub| {
+        write!(sub, "Device\tPath\tState\tRead err\tWrite err\tChecksum err\tIssues\r\n");
+
+        let mut print_member = |idx: u32, m: c::bch_member, has_errors: bool| {
+            if !m.alive() {
+                return;
+            }
+
+            let path = if idx == sb.dev_idx as u32 {
+                Some(device_path.to_string_lossy().into_owned())
+            } else {
+                find_dev(&sbs, idx).map(|(path, _)| path.to_string_lossy().into_owned())
+            };
+            let missing = path.is_none();
+            let path = path.unwrap_or_else(|| "(not found)".to_string());
+
+            let state = m.state();
+            // members_v1 entries predate the error counters: unavailable, not zero
+            let (err_read, err_write, err_checksum, err_flush) = if has_errors {
+                (m.errors[0].get(), m.errors[1].get(), m.errors[2].get(), m.flush_errors.get())
+            } else {
+                (0, 0, 0, 0)
+            };
+
+            let mut issues = Vec::new();
+            if missing {
+                issues.push("missing".to_string());
+            }
+            if state != c::MemberState::rw {
+                issues.push(format!("state={state}"));
+            }
+            if err_read != 0 {
+                issues.push(format!("read_errors={err_read}"));
+            }
+            if err_write != 0 {
+                issues.push(format!("write_errors={err_write}"));
+            }
+            if err_checksum != 0 {
+                issues.push(format!("checksum_errors={err_checksum}"));
+            }
+            if err_flush != 0 {
+                issues.push(format!("flush_errors={err_flush}"));
+            }
+            let issues = match (issues.is_empty(), has_errors) {
+                (true, true) => "ok".to_string(),
+                (true, false) => "no error counters (members_v1)".to_string(),
+                _ => issues.join(","),
+            };
+            let counter = |v: u64| if has_errors { v.to_string() } else { "n/a".to_string() };
+
+            write!(
+                sub, "{idx}\t{path}\t{state}\t{}\t{}\t{}\t{issues}\r\n",
+                counter(err_read), counter(err_write), counter(err_checksum)
+            );
+        };
+
+        if let Some(members) = sb::members::members_v2(sb) {
+            for idx in 0..members.nr_devices() {
+                if let Some(m) = members.get(idx) {
+                    print_member(idx, m, true);
+                }
+            }
+        } else if let Some(members) = sb::members::members_v1(sb) {
+            for idx in 0..members.nr_devices() {
+                if let Some(m) = members.get(idx) {
+                    print_member(idx, m, false);
+                }
+            }
+        }
+    });
+    Ok(())
 }

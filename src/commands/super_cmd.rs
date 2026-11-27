@@ -37,6 +37,11 @@ pub struct ShowSuperCli {
     #[arg(short, long)]
     layout: bool,
 
+    /// Print a concise one-line-per-member summary (path, state, errors)
+    /// instead of the full superblock dump
+    #[arg(short = 's', long = "summary", conflicts_with_all = ["fields", "field_only", "layout"])]
+    summary: bool,
+
     /// Device path
     device: String,
 }
@@ -80,6 +85,14 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         let sb = bcachefs_kernel::sb::io::SbBuf::from_sb(
             fs.dev_sb(&fs.sb_lock(), &ca).expect("an online device's superblock").sb());
         let sb = sb.sb();
+
+        if cli.summary {
+            let mut buf = Printbuf::new();
+            crate::wrappers::sb_display::sb_members_summary_to_text(
+                &mut buf, sb, std::path::Path::new(&cli.device))?;
+            print!("{}", buf);
+            continue;
+        }
 
         let mut fields = fields;
         if print_default_fields {
