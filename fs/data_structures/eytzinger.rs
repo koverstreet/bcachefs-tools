@@ -170,7 +170,7 @@ macro_rules! eytzinger_impl {
             }
 
             /// The nodes, in order.
-            pub fn iter(&self) -> impl Iterator<Item = $t> {
+            pub fn iter(&self) -> impl Iterator<Item = $t> + use<> {
                 let e = *self;
                 let node = |i: $t| (i != 0).then_some(i);
                 core::iter::successors(node(e.first()), move |&i| node(e.next(i)))
@@ -227,13 +227,18 @@ macro_rules! eytzinger_impl {
             }
 
             /// The nodes, in order.
-            pub fn iter(&self) -> impl Iterator<Item = $t> {
+            pub fn iter(&self) -> impl Iterator<Item = $t> + use<> {
+                self.iter_from(self.first())
+            }
+
+            /// The nodes from @i on, in order.
+            pub fn iter_from(&self, i: Option<$t>) -> impl Iterator<Item = $t> + use<> {
                 let e = *self;
-                core::iter::successors(e.first(), move |&i| e.next(i))
+                core::iter::successors(i, move |&i| e.next(i))
             }
 
             /// The nodes, in reverse order.
-            pub fn iter_rev(&self) -> impl Iterator<Item = $t> {
+            pub fn iter_rev(&self) -> impl Iterator<Item = $t> + use<> {
                 let e = *self;
                 core::iter::successors(e.last(), move |&i| e.prev(i))
             }
