@@ -456,7 +456,8 @@ fn check_deleted<'a, 't>(
  * know" to disk: a node with a zeroed parent masquerades as a tree root and
  * gets consumed by the tree-pointer repair or the deletion machinery.
  * Repairs commit and restart, so decisions only see settled state. The
- * in-memory snapshot table serves as the reverse index (live nodes only: a
+ * reverse index is a scan of the btree, nodes_naming(): it sees the node's own
+ * pending repairs, which the in-memory table doesn't (live nodes only: a
  * tombstone's child pointer is a splice breadcrumb, not a claim).
  */
 
@@ -875,8 +876,14 @@ fn check_edge<'a, 't>(
         }
     }
 
-    // Or another node claims the edge and tree and depth agree - re-aim ours:
-    if let Some(repl) = fs.snapshots.table_find_edge(n.v(), id, role == Role::Child) {
+    // Or one other node claims the edge, and tree and depth agree - re-aim ours.
+    // Other than the nodes we already point at: intact edges, the disputed
+    // pointer's stale target, cycles.
+    let [c0, c1] = n.v().children();
+    let known = [n.v().parent(), c0, c1];
+    let mut claims = nodes_naming(t, id, role.other())?;
+    claims.retain(|c| !known.contains(c));
+    if let &[repl] = &claims[..] {
         if let Some(r) = lookup_node(t, repl)? {
             if parent_child_consistent(n.v(), id, role, &r.v, repl) &&
                fsck_err!(t, snapshot_edge_bad,

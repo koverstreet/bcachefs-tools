@@ -784,30 +784,6 @@ impl FsSnapshots {
             .min())
     }
 
-    /// The unique live node claiming an edge with @id - as its parent if
-    /// @parent, else as its child - other than the nodes @s, @id's key,
-    /// already points at (intact edges, stale entries for the disputed
-    /// pointer, cycles). None if there's none, or more than one: fsck's edge
-    /// repair must not guess.
-    ///
-    /// Live nodes only: a tombstone's child pointer is a splice breadcrumb,
-    /// not a claim.
-    pub fn table_find_edge(&self, s: &Snapshot, id: u32, parent: bool) -> Option<u32> {
-        let known = [s.parent.get(), s.children[0].get(), s.children[1].get()];
-        self.with_table(|t| {
-            let mut claims = t.0.iter().enumerate()
-                .filter(|(_, n)| n.state() == SnapshotIdState::SNAPSHOT_ID_live)
-                .filter(|(_, n)| if parent { n.children().contains(&id) } else { n.parent() == id })
-                .map(|(idx, _)| u32::MAX - idx as u32)
-                .filter(|n_id| !known.contains(n_id));
-
-            match (claims.next(), claims.next()) {
-                (Some(n), None) => Some(n),
-                _               => None,
-            }
-        })
-    }
-
     /// For node @id, about to be created.
     pub fn table_make_room(&self, id: u32) -> Result<(), BchError> {
         self.table_write().make_room(id)
