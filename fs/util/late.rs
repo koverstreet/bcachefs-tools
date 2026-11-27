@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Late<T, L>: a filesystem's, made after it is - when it goes read-write, or
-//! a compression type is first wanted - in place and with C's layout: T says
+//! a compression type is first wanted - or a module's static, made at its
+//! init (ModuleInit); in place and with C's layout: T says
 //! whether it's been made, as a pointer's null or a mempool's elements do, so
 //! there's no flag for C to see. Published, as LockedBy's published half is:
 //! anyone's to read, made under lock L. Using it before it's made panics; that
@@ -11,6 +12,7 @@ use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use pin_init::PinInit;
 
+use crate::os::module::{Quiesced, ThisModule};
 use crate::util::alloc::init_at;
 
 /// Zeroed is not yet made, and what's not made owns nothing: is_made() is
@@ -39,6 +41,13 @@ impl LateLock for StateLock {
 pub enum SbLock {}
 impl LateLock for SbLock {
     type Guard<'a> = crate::fs::SbLockGuard<'a>;
+}
+
+/// A module's static: made at module init, as nothing else of ours runs, and
+/// dropped at its exit - exit().
+pub enum ModuleInit {}
+impl LateLock for ModuleInit {
+    type Guard<'a> = ThisModule;
 }
 
 #[repr(transparent)]
@@ -70,6 +79,19 @@ impl<T: LateInit, L: LateLock> Late<T, L> {
     pub fn stop(&self) where T: LateStop {
         if self.is_made() {
             (**self).stop()
+        }
+    }
+}
+
+impl<T: LateInit> Late<T, ModuleInit> {
+    /// Dropped, and unmade again: a no-op on one never made.
+    pub fn exit(&self, _: &Quiesced<'_>) {
+        if self.is_made() {
+            let slot = self.0.get();
+            unsafe {
+                core::ptr::drop_in_place(slot);
+                core::ptr::write_bytes(slot, 0, 1);
+            }
         }
     }
 }

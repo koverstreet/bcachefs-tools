@@ -7,62 +7,58 @@
 use super::{Header, TaskRef};
 use crate::data_structures::fast_list::FastList;
 use crate::locking::MemallocFlags;
-use crate::os::{kernel::msleep, module::{Quiesced, ThisModule}};
+use crate::os::kernel::msleep;
+use crate::util::late::{Late, LateInit, ModuleInit};
 use crate::prt;
 use crate::errcode::BchError;
-use crate::util::alloc::init_at;
 use crate::util::log::Log;
 use crate::util::printbuf::Msg;
 use crate::util::rcu::{self, ReadGuard};
 use crate::util::Printbuf;
 use core::ffi::c_void;
 use core::ptr::NonNull;
+use pin_init::{pin_data, pin_init, PinInit};
 
+#[pin_data]
 #[repr(transparent)]
-pub struct TaskList(FastList<c_void>);
+#[derive(::pin_init::Zeroable)]
+pub struct TaskList {
+    #[pin]
+    list: FastList<c_void>,
+}
 
 /// Tasks of no filesystem's.
-pub static TASKS: TaskList = TaskList(::pin_init::zeroed());
+pub static TASKS: Late<TaskList, ModuleInit> = ::pin_init::zeroed();
+
+impl LateInit for TaskList {
+    fn is_made(&self) -> bool {
+        self.list.is_made()
+    }
+}
 
 impl TaskList {
+    pub fn new() -> impl PinInit<Self, BchError> {
+        pin_init!(Self { list <- FastList::new() }? BchError)
+    }
+
     /// A list made and torn down by its owner, as a filesystem's async object
     /// lists are.
     pub fn of(list: &FastList<c_void>) -> &TaskList {
         unsafe { &*core::ptr::from_ref(list).cast::<TaskList>() }
     }
 
-    /// A static's, made in place at module init. Panics if it was made already.
-    pub fn init(&'static self, _: &ThisModule) -> Result<(), BchError> {
-        assert!(!self.0.is_made(), "the module's task list made twice");
-        // SAFETY: zeroed, at module init, before any task is made
-        unsafe { init_at(FastList::new(), core::ptr::from_ref(&self.0).cast_mut()) }
-    }
-
-    /// A static's, dropped in place and zeroed again: a no-op on one never made.
-    pub fn exit(&'static self, _: &Quiesced<'_>) {
-        if self.0.is_made() {
-            let list = core::ptr::from_ref(&self.0).cast_mut();
-            // SAFETY: at module exit, past the barrier: with no filesystem, the
-            // last tasks - those freed after a grace period - have run
-            unsafe {
-                core::ptr::drop_in_place(list);
-                core::ptr::write_bytes(list, 0, 1);
-            }
-        }
-    }
-
     /// The list's a debugging aid: no room isn't an error, the task just
     /// isn't listed - 0, which remove() ignores.
     pub(super) fn add(&self, task: TaskRef) -> u32 {
-        self.0.add(task.0.cast()).unwrap_or(0)
+        self.list.add(task.0.cast()).unwrap_or(0)
     }
 
     pub(super) fn remove(&self, idx: u32) {
-        self.0.remove(idx)
+        self.list.remove(idx)
     }
 
     pub fn items_from<'g>(&'g self, idx: usize, rcu: &'g ReadGuard) -> impl Iterator<Item = (usize, TaskRef)> + 'g {
-        self.0.items_from(idx, rcu).map(|(idx, task)| (idx, TaskRef(task.cast())))
+        self.list.items_from(idx, rcu).map(|(idx, task)| (idx, TaskRef(task.cast())))
     }
 
     /// Before the list goes: a task comes off it as it finishes, after its

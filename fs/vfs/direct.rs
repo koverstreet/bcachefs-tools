@@ -27,6 +27,7 @@ use crate::os::iov_iter::IovIter;
 use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::unlikely;
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, CompletionReturn, DoneWith, Resume, Return, Spawn, TaskSlot,
@@ -41,20 +42,20 @@ type F = ReadFlags;
 type Splits<'s> = Scope<'s, Result<(), BchError>, waiter::Async>;
 type Pool = &'static Mempool;
 
-static DIOS: Mempool = ::pin_init::zeroed();
-static SPLITS: Mempool = ::pin_init::zeroed();
-static DIO_BVECS: BvecMempool = ::pin_init::zeroed();
-static SPLIT_BVECS: BvecMempool = ::pin_init::zeroed();
+static DIOS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static SPLITS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static DIO_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
+static SPLIT_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let dio = exclusive_size::<DioBio<Pinned>, DioFut<'static, Pinned>, Pool>()
         .max(exclusive_size::<DioBio<Callers>, DioFut<'static, Callers>, Pool>());
     let split = exclusive_size::<DioBio<Pinned>, SplitFut<'static, Pinned>, Pool>()
         .max(exclusive_size::<DioBio<Callers>, SplitFut<'static, Callers>, Pool>());
-    Mempool::init_static(&DIOS, Mempool::new(4, dio), m)?;
-    Mempool::init_static(&SPLITS, Mempool::new(1, split), m)?;
-    BvecMempool::init_static(&DIO_BVECS, 4, m)?;
-    BvecMempool::init_static(&SPLIT_BVECS, 1, m)
+    DIOS.init(m, || Mempool::new(4, dio))?;
+    SPLITS.init(m, || Mempool::new(1, split))?;
+    DIO_BVECS.init(m, || BvecMempool::new(4))?;
+    SPLIT_BVECS.init(m, || BvecMempool::new(1))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -164,7 +165,7 @@ async fn read_splits<P: UserPage>(fs: &Fs, rbio: &Rbio, iter: &mut CallersIter, 
     let started = {
         let err_report = rbio.err_report.as_deref();
         core::iter::from_fn(|| (iter.get().count() != 0).then(|| {
-            let mut split = TaskSlot::exclusive_bio_in(&SPLITS, &SPLIT_BVECS, iter.get().bio_pages(),
+            let mut split = TaskSlot::exclusive_bio_in(&*SPLITS, &SPLIT_BVECS, iter.get().bio_pages(),
                                                        c::req_op_REQ_OP_READ, |b| {
                 pin_init!(DioBio::<P> { rbio <- Rbio::new(rbio.opts, rbio.subvol, err_report, b.init()) }? BchError)
             }).expect("a split's box: its pool waits for an element, and an Rbio's init can't fail");
@@ -250,7 +251,7 @@ fn read_of<P: UserPage>(req: &mut Kiocb<'_, InodeFile>, iter: &mut IovIter<'_>, 
     let inum = inode.inum();
     let subvol = inum.subvol as u32;
 
-    let dio = TaskSlot::exclusive_bio_in(&DIOS, &DIO_BVECS, iter.bio_pages(), c::req_op_REQ_OP_READ, |b| {
+    let dio = TaskSlot::exclusive_bio_in(&*DIOS, &DIO_BVECS, iter.bio_pages(), c::req_op_REQ_OP_READ, |b| {
         pin_init!(DioBio::<P> { rbio <- Rbio::new(opts, subvol, err_report, b.init()) }? BchError)
     })?;
     let flags = F::retry_if_stale | F::may_promote | F::user_mapped | flags;

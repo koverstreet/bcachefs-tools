@@ -103,6 +103,7 @@ use crate::util::gather::{Gather, Scope};
 use crate::os::kernel::{local_clock, READ};
 use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Global};
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::read_lock;
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
@@ -447,24 +448,24 @@ crate::has_bio!(FragmentBio, rbio.bio);
 
 /// A fragment's task, in place: freed when it's done, after its read is - so
 /// from a pool of the module's, as the box may outlive the filesystem.
-static FRAGMENTS: Mempool = ::pin_init::zeroed();
+static FRAGMENTS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
 
 /// The fragments read in their caller's task - a retry's, a data update's, a
 /// page cache extent's: each caller has one at a time, read and dropped before
 /// the next is made, so one in reserve keeps them all going.
-static FRAGMENT_BIOS: Mempool = ::pin_init::zeroed();
+static FRAGMENT_BIOS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
 
-static FRAGMENT_BVECS: BvecMempool = ::pin_init::zeroed();
-static FRAGMENT_BIO_BVECS: BvecMempool = ::pin_init::zeroed();
+static FRAGMENT_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
+static FRAGMENT_BIO_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 type Pool = &'static Mempool;
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>();
-    Mempool::init_static(&FRAGMENTS, Mempool::new(1, size), m)?;
-    Mempool::init_static(&FRAGMENT_BIOS, Mempool::new(1, size_of::<Rbio<Pages<'static>>>()), m)?;
-    BvecMempool::init_static(&FRAGMENT_BVECS, 1, m)?;
-    BvecMempool::init_static(&FRAGMENT_BIO_BVECS, 1, m)
+    FRAGMENTS.init(m, || Mempool::new(1, size))?;
+    FRAGMENT_BIOS.init(m, || Mempool::new(1, size_of::<Rbio<Pages<'static>>>()))?;
+    FRAGMENT_BVECS.init(m, || BvecMempool::new(1))?;
+    FRAGMENT_BIO_BVECS.init(m, || BvecMempool::new(1))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -1339,7 +1340,7 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().opf();
 
         let _noio = MemallocFlags::noio();
-        let (pool, bvecs) = (&FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc());
+        let (pool, bvecs) = (&*FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc());
         let kind = match how {
             How::Promote(p) => Kind::Promote(orig, p.task),
             How::Bounce(size, gfp) => {
@@ -1397,7 +1398,7 @@ impl<'r> Planned<'r, '_> {
         let opf = orig.bio().opf();
 
         let _noio = MemallocFlags::noio();
-        let home = &FRAGMENTS;
+        let home = &*FRAGMENTS;
         let mut slot = match bounce {
             Some((size, _)) => TaskSlot::exclusive_bio_in(home, &FRAGMENT_BVECS, pages::nr_vecs(size), 0, |b| {
                 pin_init!(FragmentBio { rbio <- Rbio::fragment(orig, b.init()) }? BchError)
@@ -1442,7 +1443,7 @@ impl<'r> Planned<'r, '_> {
         }
 
         let _noio = MemallocFlags::noio();
-        let slot = match TaskSlot::exclusive_in(&FRAGMENTS, ()) {
+        let slot = match TaskSlot::exclusive_in(&*FRAGMENTS, ()) {
             Ok(slot) => slot,
             // the promote ended with the error, not dropped unstarted
             Err(e) => {

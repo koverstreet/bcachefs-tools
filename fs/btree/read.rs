@@ -63,6 +63,7 @@ use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
 use crate::util::log::LogLevel;
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
@@ -133,13 +134,13 @@ crate::has_bio!(NodeReadBio, bio);
 /// The module's, not the filesystem's: a box is freed a grace period after its
 /// read, when the filesystem may be gone. A mempool: node reads must make
 /// progress under memory pressure.
-static NODE_READS: Mempool = ::pin_init::zeroed();
-static NODE_READ_BVECS: BvecMempool = ::pin_init::zeroed();
+static NODE_READS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static NODE_READ_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<NodeReadBio, NodeReadFut<'static>, &'static Mempool>();
-    Mempool::init_static(&NODE_READS, Mempool::new(1, size), m)?;
-    BvecMempool::init_static(&NODE_READ_BVECS, 1, m)
+    NODE_READS.init(m, || Mempool::new(1, size))?;
+    NODE_READ_BVECS.init(m, || BvecMempool::new(1))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -935,7 +936,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
          * Not buf_nr_bvecs(): a retry maps the bio onto the buffer read_done()
          * swapped in, which may be vmalloc where this one is direct mapped
          */
-        TaskSlot::exclusive_bio_in(&NODE_READS, &NODE_READ_BVECS, bytes.div_ceil(PAGE_SIZE) as u16,
+        TaskSlot::exclusive_bio_in(&*NODE_READS, &NODE_READ_BVECS, bytes.div_ceil(PAGE_SIZE) as u16,
                                    c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META,
                                    |bio| pin_init!(NodeReadBio { bio <- bio.init::<BchError, _>() }? BchError))
     }.expect("a node read's box: its pool waits for an element");

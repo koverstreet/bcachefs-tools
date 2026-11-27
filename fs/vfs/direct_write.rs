@@ -28,6 +28,7 @@ use crate::os::iov_iter::{HeldIovIter, IovIter};
 use crate::os::user_pages::{Callers, Pinned, UserPage};
 use crate::os::kernel::{current_id, likely, task_io_account_write, unlikely, Mm};
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::os::ops::IntoRaw;
 use crate::os::workqueue::Queue;
 use crate::util::refcount::TryRefcount;
@@ -71,14 +72,14 @@ crate::has_bio!(Dio<P>, wbio, owns Holds<P> where P: UserPage);
 
 type Pool = &'static Mempool;
 
-static DIO_WRITES: Mempool = ::pin_init::zeroed();
-static DIO_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
+static DIO_WRITES: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static DIO_WRITE_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<Dio<Pinned>, DioWriteFut<'static, Pinned>, Pool>()
         .max(exclusive_size::<Dio<Callers>, DioWriteFut<'static, Callers>, Pool>());
-    Mempool::init_static(&DIO_WRITES, Mempool::new(4, size), m)?;
-    BvecMempool::init_static(&DIO_WRITE_BVECS, 4, m)
+    DIO_WRITES.init(m, || Mempool::new(4, size))?;
+    DIO_WRITE_BVECS.init(m, || BvecMempool::new(4))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -370,7 +371,7 @@ fn direct_write_of<P: UserPage>(k: &mut Kiocb<'_, InodeFile>, it: &mut IovIter<'
         let opts = inode_opts::get_inode(fs, &inode.inode());
         let nr_vecs = it.bio_pages();
 
-        let mut dio = match TaskSlot::exclusive_bio_in(&DIO_WRITES, &DIO_WRITE_BVECS, nr_vecs,
+        let mut dio = match TaskSlot::exclusive_bio_in(&*DIO_WRITES, &DIO_WRITE_BVECS, nr_vecs,
                                                        c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE, |b| {
             pin_init!(Dio::<P> {
                 pos:       ki_pos,

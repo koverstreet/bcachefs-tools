@@ -26,6 +26,7 @@ use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, Exclusive, Resume, Spawn, TaskSlot};
 use crate::os::kernel::{local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::os::workqueue::Queue;
 use crate::util::sleep::Sleep;
 use crate::os::ops::from_raw;
@@ -50,12 +51,12 @@ type Pool = &'static Mempool;
 /// An io, being filled: its task not started.
 type IoSlot = TaskSlot<'static, Io, WritepageFut<'static>, Pool, Exclusive>;
 
-static WRITEPAGES: Mempool = ::pin_init::zeroed();
-static WRITEPAGE_BVECS: BvecMempool = ::pin_init::zeroed();
+static WRITEPAGES: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static WRITEPAGE_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
-    Mempool::init_static(&WRITEPAGES, Mempool::new(4, exclusive_size::<Io, WritepageFut<'static>, Pool>()), m)?;
-    BvecMempool::init_static(&WRITEPAGE_BVECS, 4, m)
+    WRITEPAGES.init(m, || Mempool::new(4, exclusive_size::<Io, WritepageFut<'static>, Pool>()))?;
+    WRITEPAGE_BVECS.init(m, || BvecMempool::new(4))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -164,7 +165,7 @@ fn writepage_do_io(w: &mut WritepageState) {
 fn writepage_io_alloc(fs: &Fs, wbc: &Wbc, w: &mut WritepageState, mapping: Mapping,
                       sector: u64, nr_replicas: u32, res_nr_replicas: u32) {
     let opts = w.opts;
-    let mut slot = IoSlot::exclusive_bio_in(&WRITEPAGES, &WRITEPAGE_BVECS, c::BIO_MAX_VECS as u16,
+    let mut slot = IoSlot::exclusive_bio_in(&*WRITEPAGES, &WRITEPAGE_BVECS, c::BIO_MAX_VECS as u16,
                                             c::req_op_REQ_OP_WRITE, |b| {
         pin_init!(Io {
             mapping,

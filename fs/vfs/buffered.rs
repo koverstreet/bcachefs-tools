@@ -40,6 +40,7 @@ use crate::os::bio::{Bvec, BvecMempool, Holds};
 use crate::util::gather::{Gather, GatherRef};
 use crate::os::kernel::PAGE_SIZE;
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::snapshots::subvolume::for_each_in_subvolume_max;
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
@@ -216,13 +217,13 @@ impl PinnedDrop for ReadBio {
 
 /// A read's box is freed when its task is done, after the read - when the
 /// filesystem may be gone: so from a pool of the module's.
-static READS: Mempool = ::pin_init::zeroed();
-static READ_BVECS: BvecMempool = ::pin_init::zeroed();
+static READS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static READ_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<ReadBio, read::ExtentFut<'static>, &'static Mempool>();
-    Mempool::init_static(&READS, Mempool::new(1, size), m)?;
-    BvecMempool::init_static(&READ_BVECS, 1, m)
+    READS.init(m, || Mempool::new(1, size))?;
+    READ_BVECS.init(m, || BvecMempool::new(1))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -265,7 +266,7 @@ fn read_extent(t: &TransAttempt<'_, '_>, w: &PagecacheRead<'_>, iter: &mut Reada
     let (subvol, nr_vecs) = (w.inode.inum().subvol as u32, iter.nr_parts(to) as u16);
     /* not waited for with btree locks held: its pool's wait is for an extent's read in flight */
     let mut slot = t.allocate_dropping_locks_norelock(|| {
-        TaskSlot::exclusive_bio_in(&READS, &READ_BVECS, nr_vecs, c::req_op_REQ_OP_READ,
+        TaskSlot::exclusive_bio_in(&*READS, &READ_BVECS, nr_vecs, c::req_op_REQ_OP_READ,
                                    |b| pin_init!(ReadBio {
             rbio   <- Rbio::new(w.opts, subvol, None, b.init()),
             single: w.single.map(Single::get_pinned),

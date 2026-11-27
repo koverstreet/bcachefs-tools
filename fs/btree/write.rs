@@ -39,6 +39,7 @@ use crate::util::backref::BackRef;
 use crate::os::bio::{Bio, BioInPlace, BioOwner, BvecMempool};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
+use crate::util::late::{Late, ModuleInit};
 use crate::os::workqueue::Queue;
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, TaskSlot};
@@ -69,13 +70,13 @@ const WRITE_OPF: u32 = c::req_op_REQ_OP_WRITE | c::REQ_META | c::REQ_SYNC | c::R
 /// The module's, not the filesystem's: a write's box is freed a grace period
 /// after its write, when the filesystem may be gone. A mempool: node writes
 /// must make progress under memory pressure.
-static NODE_WRITES: Mempool = ::pin_init::zeroed();
-static NODE_WRITE_BVECS: BvecMempool = ::pin_init::zeroed();
+static NODE_WRITES: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+static NODE_WRITE_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<Bio, NodeWriteFut<'static>, &'static Mempool>();
-    Mempool::init_static(&NODE_WRITES, Mempool::new(1, size), m)?;
-    BvecMempool::init_static(&NODE_WRITE_BVECS, 1, m)
+    NODE_WRITES.init(m, || Mempool::new(1, size))?;
+    NODE_WRITE_BVECS.init(m, || BvecMempool::new(1))
 }
 
 pub fn pools_exit(q: &Quiesced<'_>) {
@@ -456,7 +457,7 @@ fn submit_write(fs: &Fs, b: LockedNode<'_, BtreeNode>, old: BtreeNodeFlags, ty: 
 
     let slot = {
         let _noio = MemallocFlags::noio();
-        TaskSlot::exclusive_bio_in(&NODE_WRITES, &NODE_WRITE_BVECS, c::BIO_MAX_VECS as u16, WRITE_OPF,
+        TaskSlot::exclusive_bio_in(&*NODE_WRITES, &NODE_WRITE_BVECS, c::BIO_MAX_VECS as u16, WRITE_OPF,
                                    BioInPlace::init::<BchError, _>)
     }.expect("a node write's box: its pool waits for an element");
 

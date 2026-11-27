@@ -74,7 +74,7 @@ crate::init_fn! {
         BCACHEFS_KOBJ.init();
 
         crate::util::maybe_rcu_alloc::free_init()?;
-        crate::util::task::TASKS.init(m)?;
+        crate::util::task::TASKS.init(m, crate::util::task::TaskList::new)?;
         crate::data::read::pools_init(m)?;
         crate::btree::read::pools_init(m)?;
         crate::btree::write::pools_init(m)?;

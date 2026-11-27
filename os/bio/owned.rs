@@ -41,8 +41,9 @@ use crate::c;
 use crate::data_structures::dst_vec::DstVec;
 use crate::errcode::{BchError, Errcode};
 use crate::locking::MemallocFlags;
-use crate::os::{blkdev::BlockDevice, module::{Quiesced, ThisModule}};
+use crate::os::blkdev::BlockDevice;
 use crate::util::alloc::{Flags, init_at, stateless, Alloc, AllocError, Allocator, Kmalloc};
+use crate::util::late::LateInit;
 use crate::util::mempool::Mempool;
 
 /// A bio bio_init() made, for the initializer of what it's in: 'a is as long
@@ -235,18 +236,18 @@ impl BvecMempool {
         pin_init!(Self { pool <- Mempool::new(min_nr, Self::element_size()) }? BchError)
     }
 
-    pub fn init_static(this: &'static Self, min_nr: usize, m: &ThisModule) -> Result<(), BchError> {
-        Mempool::init_static(&this.pool, Mempool::new(min_nr, Self::element_size()), m)
-    }
-
     fn element_size() -> usize {
         DstVec::<c::bio_vec, u16, BvecAlloc>::alloc_size(c::BIO_MAX_VECS as usize)
     }
+}
 
-    pub fn exit(&self, q: &Quiesced<'_>) {
-        self.pool.exit(q)
+impl LateInit for BvecMempool {
+    fn is_made(&self) -> bool {
+        LateInit::is_made(&self.pool)
     }
+}
 
+impl BvecMempool {
     /// For its bios to take bvecs from: a static's, which outlives them all.
     pub fn alloc(&'static self) -> BvecAlloc {
         BvecAlloc(Bvecs::Pool(NonNull::from(self)))
