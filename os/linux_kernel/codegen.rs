@@ -172,8 +172,6 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "fault_in_readable", "filemap_write_and_wait_range", "filemap_flush",
     "totalram_pages", "si_mem_available", "set_freezable", "freezing", "try_to_freeze",
     "bio_set_dev",
-    // os/bio/owned.rs
-    "bio_inc_remaining",
     // os/linux_kernel/bio.rs: a bvec of memory, which a Bio pushes - static
     // inlines, and an export
     "virt_to_folio", "folio_address", "vmalloc_to_page",

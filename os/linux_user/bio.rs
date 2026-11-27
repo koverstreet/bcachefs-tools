@@ -6,7 +6,6 @@
 use crate::c;
 use crate::os::kernel::PAGE_SIZE;
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicI32, Ordering::{AcqRel, SeqCst}};
 
 /*
  * As the kernel's, so Rust reads one the same in both builds. A page is its
@@ -35,10 +34,6 @@ pub struct bvec_iter {
     pub bi_bvec_done: u32,	/* number of bytes completed in current bvec */
 }
 
-unsafe fn flagged(bio: *const c::bio, bit: u32) -> bool {
-    unsafe { (*bio).bi_flags & (1 << bit) != 0 }
-}
-
 /// The bvecs of @len bytes at @buf: one, its page - its address here - and
 /// the offset into it, however many pages it spans.
 ///
@@ -62,50 +57,13 @@ pub fn buf_bio_bytes(_p: *const u8, len: usize) -> usize {
     len
 }
 
-unsafe fn remaining_done(bio: *mut c::bio) -> bool {
-    /*
-     * If we're not chaining, then ->__bi_remaining is always 1 and
-     * we always end io on the first invocation.
-     */
-    if !unsafe { flagged(bio, c::BIO_CHAIN) } {
-        return true;
-    }
-
-    let remaining = unsafe { AtomicI32::from_ptr(&raw mut (*bio).__bi_remaining.counter) };
-    let r = remaining.fetch_sub(1, AcqRel);
-    assert!(r > 0, "bio_endio() of a chained bio with {r} remaining");
-
-    if r == 1 {
-        unsafe { (*bio).bi_flags &= !(1 << c::BIO_CHAIN) };
-        return true;
-    }
-    false
-}
-
 /// # Safety
 /// @bio is a bio whose IO is done: nothing else completes it.
 pub unsafe fn endio(bio: *mut c::bio) {
     unsafe {
-        if !remaining_done(bio) {
-            return;
-        }
         if let Some(end_io) = (*bio).bi_end_io {
             end_io(bio);
         }
-    }
-}
-
-/*
- * Increment chain count for the bio. Make sure the CHAIN flag update
- * is visible before the raised count.
- */
-///
-/// # Safety
-/// @bio is a bio.
-pub unsafe fn inc_remaining(bio: *mut c::bio) {
-    unsafe {
-        (*bio).bi_flags |= 1 << c::BIO_CHAIN;
-        AtomicI32::from_ptr(&raw mut (*bio).__bi_remaining.counter).fetch_add(1, SeqCst);
     }
 }
 

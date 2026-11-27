@@ -13,12 +13,6 @@ pub unsafe fn endio(bio: *mut c::bio) {
 }
 
 /// # Safety
-/// @bio is a bio.
-pub unsafe fn inc_remaining(bio: *mut c::bio) {
-    unsafe { c::bio_inc_remaining(bio) }
-}
-
-/// # Safety
 /// @bio is a bio, not used after.
 pub unsafe fn uninit(bio: *mut c::bio) {
     unsafe { c::bio_uninit(bio) }
