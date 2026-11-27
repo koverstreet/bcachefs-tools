@@ -157,7 +157,7 @@ pub(crate) fn csum_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let h = InlineDataRef::of(v.k).and_then(|d| d.csum).expect("an inline data key with a checksum");
     let ty = h.csum_type.get();
     bkey_fsck_err_on!(v, ty.0 >= CsumType::NR || ty.is_encryption(),
-                      id::inline_data_csum_type_bad, "inline data with checksum type {}", ty.0)
+                      inline_data_csum_type_bad, "inline data with checksum type {}", ty.0)
 }
 
 impl BkeyOps for InlineData {

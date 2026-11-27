@@ -33,7 +33,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, BKEY_PTRS_MAX, Csum, Bkey, BKEY_U64s_MAX, CsumType};
 use crate::fs::Fs;
 use crate::btree::trigger::Trigger;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::types::Le16;
 use crate::util::alloc::Vec;
 use crate::util::rcu::read_lock;
@@ -309,17 +309,17 @@ impl BkeyOps for Stripe {
         let s = v.k.arm::<Stripe>().expect("a stripe").v();
 
         // checked before val_u64s(), which shifts by it
-        bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, id::stripe_csum_granularity_bad,
+        bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, stripe_csum_granularity_bad,
                           "invalid csum granularity ({} >= 31)", s.csum_granularity_bits)?;
 
         bkey_fsck_err_on!(v, bkey_eq(v.k.k.p, POS_MIN) || v.k.k.p > pos(0, u32::MAX.into()),
-                          id::stripe_pos_bad, "stripe at bad pos")?;
+                          stripe_pos_bad, "stripe at bad pos")?;
 
         let val_u64s = v.k.val_bytes().len() / 8;
-        bkey_fsck_err_on!(v, val_u64s < s.val_u64s() as usize, id::stripe_val_size_bad,
+        bkey_fsck_err_on!(v, val_u64s < s.val_u64s() as usize, stripe_val_size_bad,
                           "incorrect value size ({} < {})", val_u64s, s.val_u64s())?;
 
-        bkey_fsck_err_on!(v, s.sectors.get() == 0, id::stripe_sectors_zero, "invalid sectors zero")?;
+        bkey_fsck_err_on!(v, s.sectors.get() == 0, stripe_sectors_zero, "invalid sectors zero")?;
 
         bkey_ptrs_validate(v)
     }

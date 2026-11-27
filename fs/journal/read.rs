@@ -461,10 +461,10 @@ impl ReadState<'_> {
 
             dup.ptrs.push(entry_ptr).map_err(|_| fs.err(Errcode::ENOMEM_journal_entry_add))?;
 
-            fsck_err_on!(fs, same_device, id::journal_entry_dup_same_device,
+            fsck_err_on!(fs, same_device, journal_entry_dup_same_device,
                          "duplicate journal entry on same device\n{}", buf)?;
 
-            fsck_err_on!(fs, not_identical, id::journal_entry_replicas_data_mismatch,
+            fsck_err_on!(fs, not_identical, journal_entry_replicas_data_mismatch,
                          "found duplicate but non identical journal entries\n{}", buf)?;
 
             if identical || !entry_ptr.csum_good {
@@ -1114,7 +1114,7 @@ fn journal_check_for_missing(fs: &Fs, entries: &JournalEntries, start_seq: u64, 
             journal_ptrs_to_text(&mut buf, fs, i);
             prt!(&mut buf, ", continue?");
 
-            fsck_err!(fs, id::journal_entries_missing, "{}", buf)?;
+            fsck_err!(fs, journal_entries_missing, "{}", buf)?;
 
             seq = missing.end;
         }
@@ -1310,7 +1310,7 @@ pub fn journal_read(fs: &Fs) -> Result<JournalStartInfo, BchError> {
             return Ok(JournalStartInfo::default());
         }
         Newest::NoFlush { cur_seq } => {
-            fsck_err_on!(fs, fs.sb.clean.get() == 0, id::dirty_but_no_journal_entries_post_drop_nonflushes,
+            fsck_err_on!(fs, fs.sb.clean.get() == 0, dirty_but_no_journal_entries_post_drop_nonflushes,
                          "journal read done, but no entries found after dropping non-flushes")?;
             return Ok(JournalStartInfo { cur_seq, ..Default::default() });
         }
@@ -1365,7 +1365,7 @@ pub fn journal_read(fs: &Fs) -> Result<JournalStartInfo, BchError> {
         }
 
         if fs.journal_seq_is_blacklisted(seq, true) {
-            fsck_err_on!(fs, !i.j.no_flush(), id::jset_seq_blacklisted,
+            fsck_err_on!(fs, !i.j.no_flush(), jset_seq_blacklisted,
                          "found blacklisted journal entry {}", seq)?;
             i.ignore_blacklisted = true;
         }

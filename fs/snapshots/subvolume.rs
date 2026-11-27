@@ -300,12 +300,12 @@ impl BkeyOps for Subvolume {
         let s = val(k).expect("a subvolume");
 
         bkey_fsck_err_on!(v, k.k.p.inode != 0 || k.k.p.offset < 1 || k.k.p.offset > i32::MAX as u64,
-                          id::subvol_pos_bad, "invalid pos")?;
-        bkey_fsck_err_on!(v, s.snapshot == 0, id::subvol_snapshot_bad, "invalid snapshot")?;
-        bkey_fsck_err_on!(v, s.inode == 0, id::subvol_inode_bad, "invalid inode")?;
+                          subvol_pos_bad, "invalid pos")?;
+        bkey_fsck_err_on!(v, s.snapshot == 0, subvol_snapshot_bad, "invalid snapshot")?;
+        bkey_fsck_err_on!(v, s.inode == 0, subvol_inode_bad, "invalid inode")?;
 
         if has_field!(k, pad) {
-            bkey_fsck_err_on!(v, s.pad != 0, id::subvol_pad_nonzero, "reserved pad field nonzero")?;
+            bkey_fsck_err_on!(v, s.pad != 0, subvol_pad_nonzero, "reserved pad field nonzero")?;
         }
 
         // Only at commit, never on existing keys. Only Ok(false) fails: is_leaf()
@@ -314,13 +314,13 @@ impl BkeyOps for Subvolume {
         if v.from.from() == BkeyValidateFrom::commit &&
            v.fs.opts().no_commit_validate.get() == 0 {
             if has_field!(k, state) {
-                bkey_fsck_err_on!(v, s.state != 0 && s.state_field().is_none(), id::subvol_state_bad,
+                bkey_fsck_err_on!(v, s.state != 0 && s.state_field().is_none(), subvol_state_bad,
                                   "invalid state {:#x}", s.state.get())?;
             }
 
             let snapshot = s.snapshot.get();
             bkey_fsck_err_on!(v, matches!(v.fs.snapshots.is_leaf(snapshot), Ok(false)),
-                              id::subvol_snapshot_not_leaf,
+                              subvol_snapshot_not_leaf,
                               "snapshot {snapshot} is an interior node (subvolumes only reference leaves)")?;
         }
         Ok(())
@@ -413,7 +413,7 @@ fn check_subvol<'a, 't>(
         let upgrading = fs.version_upgrade_complete() <
             MetadataVersion::per_dev_fragmentation_lru;
         if upgrading ||
-           fsck_err!(t, id::subvol_state_bad,
+           fsck_err!(t, subvol_state_bad,
                      "subvolume state unset, recovering from legacy flags:\n{}", s.to_text(fs))? {
             let state = s.v().state_from_flags();
             s.v_mut(t)?.state = state.0.into();
@@ -428,15 +428,15 @@ fn check_subvol<'a, 't>(
         // Codewords are >= 14 bits apart: within 6 bits, the nearest is the
         // original
         let fix = if dist <= 2 {
-            fsck_err!(t, id::subvol_state_bitflip,
+            fsck_err!(t, subvol_state_bitflip,
                       "subvolume state {raw:#x} is a {dist}-bit flip of {nearest} - correcting:\n{}",
                       s.to_text(fs))?
         } else if dist <= 6 {
-            fsck_err!(t, id::subvol_state_bad,
+            fsck_err!(t, subvol_state_bad,
                       "subvolume state {raw:#x} is {dist} bits from {nearest} - correcting:\n{}",
                       s.to_text(fs))?
         } else {
-            fsck_err_report!(fs, id::subvol_state_bad,
+            fsck_err_report!(fs, subvol_state_bad,
                              "subvolume has invalid state {raw:#x} (nearest codeword {nearest} is {dist} bits away):\n{}",
                              s.to_text(fs));
             return fs.throw(Errcode::fsck_repair_unimplemented);
@@ -459,7 +459,7 @@ fn check_subvol<'a, 't>(
     if parent != 0 {
         match __get_snapshot(t, parent, false) {
             Err(e) if e.matches(c::ENOENT) => {
-                if fsck_err!(t, id::subvol_creation_parent_missing,
+                if fsck_err!(t, subvol_creation_parent_missing,
                              "subvolume {id} has creation_parent {parent}, which doesn't exist:\n{}",
                              s.to_text(fs))? {
                     s.v_mut(t)?.creation_parent = 0.into();
@@ -494,7 +494,7 @@ fn check_subvol<'a, 't>(
     if backref != 0 && backref as u64 != id {
         match get(t, backref, false) {
             Ok(other) if other.snapshot() == snapid => {
-                fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
+                fsck_err_report!(fs, snapshot_subvol_backref_wrong,
                                  "snapshot {snapid} is claimed by subvolume {backref}, which it backrefs, and also by {id}:\n{}\n{}",
                                  s.to_text(fs), n.v());
                 return fs.throw(Errcode::fsck_repair_unimplemented);
@@ -508,7 +508,7 @@ fn check_subvol<'a, 't>(
     // at isn't decidable here. Before the unlinked branch, since
     // set_deleted() would mark an interior node will_delete.
     if n.v().children()[0] != 0 {
-        fsck_err_report!(fs, id::subvol_snapshot_not_leaf,
+        fsck_err_report!(fs, subvol_snapshot_not_leaf,
                          "subvolume points to interior snapshot node:\n{}\n{}",
                          s.to_text(fs), n.v());
         return fs.throw(Errcode::fsck_repair_unimplemented);
@@ -528,21 +528,21 @@ fn check_subvol<'a, 't>(
     // backref, and its backref repair needs the state live, so a torn snapshot
     // deletion - will_delete set, backref cleared, no tombstone - gets past
     // both. Backref first: set_state() derives SUBVOL_OBSOLETE from it.
-    if fsck_err_on!(t, backref as u64 != id, id::snapshot_subvol_backref_wrong,
+    if fsck_err_on!(t, backref as u64 != id, snapshot_subvol_backref_wrong,
                     "subvolume points to a snapshot that doesn't point back:\n{}\n{}",
                     s.to_text(fs), n.v())? {
         n.v_mut(t)?.subvol = (id as u32).into();
     }
 
     if fsck_err_on!(t, n.v().state_decoded() != Some(SnapshotState::live),
-                    id::snapshot_subvol_state_mismatch,
+                    snapshot_subvol_state_mismatch,
                     "subvolume points to a snapshot that isn't live:\n{}\n{}",
                     s.to_text(fs), n.v())? {
         n.v_mut(t)?.set_state(SnapshotState::live);
     }
 
     if fsck_err_on!(t, id == BCACHEFS_ROOT_SUBVOL as u64 && s.v().fs_path_parent() != 0,
-                    id::subvol_root_fs_path_parent_nonzero,
+                    subvol_root_fs_path_parent_nonzero,
                     "root subvolume has nonzero fs_path_parent\n{}", s.to_text(fs))? {
         s.v_mut(t)?.fs_path_parent = 0.into();
     }
@@ -554,7 +554,7 @@ fn check_subvol<'a, 't>(
         let ck = children_iter.peek_slot(t)?.expect("a slot always has a key");
 
         if fsck_err_on!(t, ck.k.key_type() != BkeyType::set,
-                        id::subvol_children_not_set,
+                        subvol_children_not_set,
                         "subvolume not set in subvolume_children btree at {}:{}\n{}",
                         { p.inode }, { p.offset }, s.to_text(fs))? {
             t.bit_mod(Btree::subvolume_children, p, true)?;
@@ -564,7 +564,7 @@ fn check_subvol<'a, 't>(
     let root = SubvolInum { subvol: id, inum: s.v().inode.get() };
     match inode::peek(t, &mut BtreeIter::uninit(t.trans()), root, BtreeIterFlags::empty()) {
         Ok(mut inode) => {
-            if fsck_err_on!(t, inode.bi_subvol as u64 != id, id::subvol_root_wrong_bi_subvol,
+            if fsck_err_on!(t, inode.bi_subvol as u64 != id, subvol_root_wrong_bi_subvol,
                             "subvol root {}:{} has wrong bi_subvol field: got {}, should be {id}\n{}\nsnapshot {snapid}: {}\n{}",
                             inode.bi_inum, inode.bi_snapshot, inode.bi_subvol,
                             s.to_text(fs), n.v(), inode)? {
@@ -574,7 +574,7 @@ fn check_subvol<'a, 't>(
             }
         }
         Err(e) if e.matches(c::ENOENT) => {
-            if fsck_err!(t, id::subvol_to_missing_root,
+            if fsck_err!(t, subvol_to_missing_root,
                          "subvolume {id} points to missing subvolume root {}:{}",
                          root.inum, s.v().snapshot())? {
                 // Recreated empty; check_directory_structure reattaches its
@@ -608,7 +608,7 @@ fn check_subvol<'a, 't>(
         };
 
         if fsck_err_on!(t, st.master_subvol.get() as u64 != id,
-                        id::subvol_not_master_and_not_snapshot,
+                        subvol_not_master_and_not_snapshot,
                         "subvolume {id} is not set as snapshot but is not master subvolume")? {
             s.v_mut(t)?.set_snap(true);
         }
@@ -644,7 +644,7 @@ fn check_subvol_child(
     // A missing subvolume means a stray entry, not a failed pass
     if fsck_err_on!(t, s.is_none_or(|s| s.state_decoded() != Some(SubvolumeState::live) ||
                                         s.fs_path_parent().get() as u64 != k.k.p.inode),
-                    id::subvol_children_bad,
+                    subvol_children_bad,
                     "incorrect entry in subvolume_children btree {}:{}",
                     { k.k.p.inode }, { k.k.p.offset })? {
         t.delete_at(iter, UpdateTriggerFlags::empty())?;

@@ -18,7 +18,6 @@ use crate::locking::Guard as _;
 use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
-use crate::init::error::id;
 use crate::os::{bio::BioSet, kernel::jiffies};
 use crate::{bch_err, fsck_err_on, warn_on};
 use cstruct_macros::MaybeZeroable;
@@ -191,7 +190,7 @@ impl Journal {
                 let r = DevlistEntry::new(DataType::journal, seq_devs);
 
                 fsck_err_on!(fs, !self.flags.get(JournalFlag::degraded) && !fs.replicas_marked(&r),
-                             id::journal_entry_replicas_not_marked,
+                             journal_entry_replicas_not_marked,
                              "superblock not marked as containing replicas for journal entry {}\n{}",
                              seq, *r)?;
 

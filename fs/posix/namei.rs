@@ -946,11 +946,11 @@ fn check_dirent_inode_dirent(
     }
 
     if !target.has_backpointer() {
-        fsck_err_on!(t, target.is_dir(), id::inode_dir_missing_backpointer,
+        fsck_err_on!(t, target.is_dir(), inode_dir_missing_backpointer,
                      "directory with missing backpointer\n{}\n{}",
                      d.k().to_text(fs), target)?;
 
-        fsck_err_on!(t, target.flag(InodeFlags::unlinked), id::inode_unlinked_but_has_dirent,
+        fsck_err_on!(t, target.flag(InodeFlags::unlinked), inode_unlinked_but_has_dirent,
                      "inode unlinked but has dirent\n{}\n{}",
                      d.k().to_text(fs), target)?;
 
@@ -966,7 +966,7 @@ fn check_dirent_inode_dirent(
     let bp = bp_iter.peek_slot_typed::<dirent_format::Dirent>(t).found()?;
 
     let Some(bp) = bp else {
-        if fsck_err!(t, id::inode_wrong_backpointer,
+        if fsck_err!(t, inode_wrong_backpointer,
                      "inode has wrong backpointer:\n\
                       got       {}:{}\n\
                       should be {}:{}\n{}\n{}",
@@ -1021,7 +1021,7 @@ fn check_dirent_inode_dirent(
         let what = if target.is_dir() { "directory" } else { "subvolume" };
 
         if in_fsck {
-            if fsck_err!(t, id::inode_dir_multiple_links,
+            if fsck_err!(t, inode_dir_multiple_links,
                          "{} {}:{} with multiple links\n{}",
                          what, target.bi_inum, target.bi_snapshot, buf)? {
                 dirent::fsck_remove(t, remove)?;
@@ -1042,7 +1042,7 @@ fn check_dirent_inode_dirent(
         // hardlinked file with nlink 0:
         // We're just adjusting nlink here so check_nlinks() will pick it up,
         // it ignores inodes with nlink 0
-        if fsck_err_on!(t, target.bi_nlink == 0, id::inode_multiple_links_but_nlink_0,
+        if fsck_err_on!(t, target.bi_nlink == 0, inode_multiple_links_but_nlink_0,
                         "inode {}:{} type {} has multiple links but i_nlink 0\n{}",
                         target.bi_inum, target.bi_snapshot,
                         d_type_str(d.d_type()), buf)? {
@@ -1069,7 +1069,7 @@ fn __check_dirent_target(
 
     let d_type = target.d_type();
 
-    if fsck_err_on!(t, d.d_type() != d_type, id::dirent_d_type_wrong,
+    if fsck_err_on!(t, d.d_type() != d_type, dirent_d_type_wrong,
                     "incorrect d_type: got {}, should be {}:\n{}",
                     d_type_str(d.d_type()),
                     d_type_str(d_type),
@@ -1191,7 +1191,7 @@ pub fn check_inode_has_case_insensitive(
 
         inum_snapshot_to_path(t, inode.bi_inum, inode.bi_snapshot, &mut buf)?;
 
-        if fsck_err!(t, id::inode_has_case_insensitive_not_set, "{}", buf)? {
+        if fsck_err!(t, inode_has_case_insensitive_not_set, "{}", buf)? {
             inode.set_flag(InodeFlags::has_case_insensitive, true);
             *do_update = true;
         }
@@ -1217,7 +1217,7 @@ pub fn check_inode_has_case_insensitive(
 
             inum_snapshot_to_path(t, dir.bi_inum, dir.bi_snapshot, &mut buf)?;
 
-            if fsck_err!(t, id::inode_parent_has_case_insensitive_not_set, "{}", buf)? {
+            if fsck_err!(t, inode_parent_has_case_insensitive_not_set, "{}", buf)? {
                 dir.set_flag(InodeFlags::has_case_insensitive, true);
                 inode::fsck_write(t, &mut dir)?;
                 repairing_parents = true;

@@ -17,7 +17,7 @@ use crate::data::ec::format::Stripe;
 use crate::btree::bbpos::Bbpos;
 use crate::data::reconcile::format::{ExtentRebalanceV1, ExtentReconcile,
     ExtentReconcileBp, ReconcileOpt, ReconcileWorkId};
-use crate::init::{dev::DevsMask, error::{id, BkeyValidate}};
+use crate::init::{dev::DevsMask, error::BkeyValidate};
 use crate::opts::InodeOpts;
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
@@ -230,7 +230,7 @@ fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeyS
     let want = rb_bp(btree, level, k);
 
     if !bp_k.arm::<Backpointer>().is_some_and(|bp| plain_bytes(bp.v()) == plain_bytes(&want)) {
-        fsck_err!(t, id::btree_ptr_to_bad_reconcile_bp,
+        fsck_err!(t, btree_ptr_to_bad_reconcile_bp,
                   "btree ptr points to bad/missing reconcile bp\n{}\n{}", k.to_text(fs), bp_k.to_text(fs))?;
         return Ok(());
     }
@@ -379,12 +379,12 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
 
 /// A reconcile entry against itself.
 pub fn extent_reconcile_validate(v: &BkeyValidate<'_, '_>, r: &ExtentReconcile) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, r.pending() != 0 && r.need_rb() == 0, id::extent_reconcile_bad_pending,
+    bkey_fsck_err_on!(v, r.pending() != 0 && r.need_rb() == 0, extent_reconcile_bad_pending,
                       "pending incorrectly set")?;
     bkey_fsck_err_on!(v, r.hipri() != 0 &&
                          r.need_rb() & (1 << ReconcileOpt::data_replicas.0) == 0,
-                      id::extent_reconcile_bad_hipri, "hipri incorrectly set")?;
-    bkey_fsck_err_on!(v, r.data_replicas() == 0, id::extent_reconcile_bad_replicas, "bad replicas")
+                      extent_reconcile_bad_hipri, "hipri incorrectly set")?;
+    bkey_fsck_err_on!(v, r.data_replicas() == 0, extent_reconcile_bad_replicas, "bad replicas")
 }
 
 /// The io options a reconcile entry, or a rebalance_v1 one, holds - each
@@ -462,7 +462,7 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
     let btree = Btree(v.btree_id.into());
 
     if v.level == 0 {
-        if fsck_err!(t, id::reconcile_bp_to_leaf_node_key, "reconcile bp to leaf node key\n{}",
+        if fsck_err!(t, reconcile_bp_to_leaf_node_key, "reconcile bp to leaf node key\n{}",
                      bp.untyped().to_text(fs))? {
             delete_bp(t, bp)?;
         }
@@ -492,7 +492,7 @@ pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut Btre
         Some(k) => prt!(out, "{}", BkeySC::from(&**k).to_text(fs)),
         None    => prt!(out, "(no key)"),
     });
-    if fsck_err!(t, id::reconcile_bp_to_missing_btree_ptr, "reconcile backpointer to missing/incorrect btree ptr\n{}\n{}",
+    if fsck_err!(t, reconcile_bp_to_missing_btree_ptr, "reconcile backpointer to missing/incorrect btree ptr\n{}\n{}",
                  bp.untyped().to_text(fs), node_key)? {
         delete_bp(t, bp)?;
     }

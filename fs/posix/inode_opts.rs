@@ -34,7 +34,6 @@ use crate::data::reconcile::trigger::{BkeyVReconcile, PerSnapshotIoOpts, Snapsho
 use crate::data::reflink::Indirect;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
 use crate::snapshots::{snapshot, subvolume};
 use crate::os::kernel::unlikely;
@@ -585,7 +584,7 @@ fn propagate_one(
         writeln!(buf, "inum {inum} set at snapshot {origin_snapshot}, ancestor {ancestor} should be:");
         ancestor_inode.to_text(&mut buf);
 
-        if !fsck_err_flags!(t, POS_MIN, flags, id::inode_opts_not_propagated, "{}", buf.as_str())? {
+        if !fsck_err_flags!(t, POS_MIN, flags, inode_opts_not_propagated, "{}", buf.as_str())? {
             return Ok(ControlFlow::Continue(()));
         }
 

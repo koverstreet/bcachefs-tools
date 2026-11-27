@@ -15,7 +15,7 @@ use crate::data::compress::bch_compression_opt;
 use crate::data::extents_format::ExtentPtr;
 use crate::data::reconcile::format::{ExtentReconcile, ReconcileOpt, ReconcileOpt_arms};
 use crate::data::reconcile::work::ReconcileScan;
-use crate::init::{dev::DevsMask, error::id};
+use crate::init::dev::DevsMask;
 use crate::opts::InodeOpts;
 use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::durability::BkeyVDurability;
@@ -313,7 +313,7 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOp
         }
         ReconcileOpt_arms!(diff);
     });
-    fsck_err!(t, id::extent_io_opts_not_set, "extent with incorrect/missing reconcile opts:\n{}\nnew reconcile : {}{}",
+    fsck_err!(t, extent_io_opts_not_set, "extent with incorrect/missing reconcile opts:\n{}\nnew reconcile : {}{}",
               k.as_sc().untyped().to_text(fs), Msg(|out: &mut Printbuf| extent_reconcile_to_text(out, Some(fs), new)), diff)?;
     Ok(())
 }
@@ -389,7 +389,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
 fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>,
                               mut k: TransBkey<'_, '_, Stripe<Validated>>, needs: bool) -> Result<(), BchError> {
     if needs && k.v().needs_reconcile() == 0 && !dev_scan_cookie_set(t, &k, s.map(|s| &mut s.dev_cookie))? {
-        fsck_err!(t, id::stripe_needs_reconcile_not_set, "stripe with needs_reconcile incorrectly unset\n{}",
+        fsck_err!(t, stripe_needs_reconcile_not_set, "stripe with needs_reconcile incorrectly unset\n{}",
                   k.to_text(t.fs()))?;
     }
     k.v_mut().bits.set_needs_reconcile(needs.into());

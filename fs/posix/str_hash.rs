@@ -16,7 +16,6 @@ use crate::posix::check::{self, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::os::{checksum::{Checksum, Crc32c, Crc64}, unicode::UnicodeMap};
 // a glob: userspace's are RustCrypto's, called through their traits
 use crate::os::crypto::*;
@@ -504,7 +503,7 @@ pub fn repair_inode_hash_info(
     assert_eq!(bad_inode.bi_inum, snapshot_root.bi_inum);
     assert!(snapshot::is_ancestor(t, bad_inode.bi_snapshot, snapshot_root.bi_snapshot));
 
-    if !fsck_err!(t, id::inode_snapshot_mismatch,
+    if !fsck_err!(t, inode_snapshot_mismatch,
                   "inum {}: inode hash info in snapshots {}, {} mismatch\n{} {:x}\n{} {:x}\n\
                    setting the version in snapshot {} to the snapshot root's",
                   snapshot_root.bi_inum, bad_inode.bi_snapshot, snapshot_root.bi_snapshot,
@@ -694,7 +693,7 @@ impl Repair<'_, '_> {
         let res = hash_pick_winner::<T>(t, k, dup)?;
         let rename = matches!(res, DupResolution::RenameK);
 
-        if !inode_fsck_err!(t, k.k.p, id::hash_table_key_duplicate,
+        if !inode_fsck_err!(t, k.k.p, hash_table_key_duplicate,
                             "duplicate hash table keys{}\n{}\n{}",
                             if rename { ", both point to valid inodes" } else { "" },
                             k.to_text(fs), dup.to_text(fs))? {
@@ -766,7 +765,7 @@ impl Repair<'_, '_> {
     {
         self.check_hash_info(t, k.k.p.inode)?;
 
-        if fsck_err!(t, id::hash_table_key_wrong_offset,
+        if fsck_err!(t, hash_table_key_wrong_offset,
                      "hash table key at wrong offset: should be at {hash}\n{}",
                      k.to_text(t.fs()))? {
             return self.repair_key::<T>(t, k, None);
@@ -782,7 +781,7 @@ impl Repair<'_, '_> {
         let d = Dirent::new(k).expect("a dirent");
 
         if !fsck_err_on!(t, (d.v().d_casefold() != 0) == self.hash_info.cf_encoding.is_none(),
-                         id::dirent_casefold_mismatch,
+                         dirent_casefold_mismatch,
                          "dirent casefold does not match dir casefold\n{}", k.to_text(fs))? {
             return Ok(());
         }

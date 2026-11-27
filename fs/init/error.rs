@@ -9,7 +9,7 @@
 //! and a `goto fsck_err`; here it's Result<bool>, and the `?` is the goto:
 //!
 //! ```ignore
-//! if fsck_err_on!(trans, nlink != count, id::inode_wrong_nlink,
+//! if fsck_err_on!(trans, nlink != count, inode_wrong_nlink,
 //!                 "inode has wrong i_nlink ({}, should be {})", nlink, count)? {
 //!     repair
 //! }
@@ -1056,6 +1056,9 @@ pub(crate) fn io_error_work(ca: &Dev) {
 
 // ── Macros: the functions above, with message!() written for you ──────────
 //
+// The error is named bare, as C pastes BCH_FSCK_ERR_##err; one chosen at
+// runtime is parenthesized: fsck_err!(t, (acl.flag_wrong()), ...).
+//
 // Each reports and repairs through outlined(): the message's arguments and the
 // error path's frames out of the caller's - a check, often, whose frame is
 // under btree lookups and lock waits.
@@ -1067,66 +1070,73 @@ pub fn outlined<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __fsck_err_id {
+    ($err:ident)  => { $crate::init::error::id::$err };
+    (($err:expr)) => { $err };
+}
+
 #[macro_export]
 macro_rules! bkey_fsck_err {
-    ($v:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::bkey_fsck_err($v, $err, $crate::message!($($msg)*)))
+    ($v:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::bkey_fsck_err($v, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! bkey_fsck_err_on {
-    ($v:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
+    ($v:expr, $cond:expr, $err:tt, $($msg:tt)*) => {
         if $cond { Err($crate::bkey_fsck_err!($v, $err, $($msg)*)) } else { Ok(()) }
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err {
-    ($ctx:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::fsck_err($ctx, $err, $crate::message!($($msg)*)))
+    ($ctx:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::fsck_err($ctx, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err_on {
-    ($ctx:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
+    ($ctx:expr, $cond:expr, $err:tt, $($msg:tt)*) => {
         if $cond { $crate::fsck_err!($ctx, $err, $($msg)*) } else { Ok(false) }
     };
 }
 
 #[macro_export]
 macro_rules! mustfix_fsck_err {
-    ($ctx:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::mustfix_fsck_err($ctx, $err, $crate::message!($($msg)*)))
+    ($ctx:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::mustfix_fsck_err($ctx, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! mustfix_fsck_err_on {
-    ($ctx:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
+    ($ctx:expr, $cond:expr, $err:tt, $($msg:tt)*) => {
         if $cond { $crate::mustfix_fsck_err!($ctx, $err, $($msg)*) } else { Ok(false) }
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err_flags {
-    ($ctx:expr, $pos:expr, $flags:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::fsck_err_flags($ctx, $pos, $flags, $err, $crate::message!($($msg)*)))
+    ($ctx:expr, $pos:expr, $flags:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::fsck_err_flags($ctx, $pos, $flags, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! log_fsck_err {
-    ($ctx:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::log_fsck_err($ctx, $err, $crate::message!($($msg)*)))
+    ($ctx:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::log_fsck_err($ctx, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err_report {
-    ($fs:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::fsck_err_report($fs, $err, $crate::message!($($msg)*)))
+    ($fs:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::fsck_err_report($fs, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }
 
@@ -1153,7 +1163,7 @@ macro_rules! fs_fatal_error {
 
 #[macro_export]
 macro_rules! inode_fsck_err {
-    ($trans:expr, $pos:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::outlined(|| $crate::init::error::inode_fsck_err($trans, $pos, $err, $crate::message!($($msg)*)))
+    ($trans:expr, $pos:expr, $err:tt, $($msg:tt)*) => {
+        $crate::init::error::outlined(|| $crate::init::error::inode_fsck_err($trans, $pos, $crate::__fsck_err_id!($err), $crate::message!($($msg)*)))
     };
 }

@@ -16,7 +16,6 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, Commi
 use crate::posix::logged_ops_format::LoggedOpsInum;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
-use crate::init::error::id;
 use crate::util::{Printbuf, alloc::Vec};
 use crate::{fs_fatal_error, fsck_err_on, new_lock};
 use core::sync::atomic::{Ordering, AtomicU32};
@@ -123,7 +122,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
      * Fixing logs the error to the journal via the transaction: close()
      * commits that before the resume, which runs transactions of its own.
      */
-    fsck_err_on!(t, fs.flags.get(FsFlag::clean_recovery), id::logged_op_but_clean,
+    fsck_err_on!(t, fs.flags.get(FsFlag::clean_recovery), logged_op_but_clean,
                  "filesystem marked as clean but have logged op\n{}", k.to_text(fs))?;
 
     Err(t.close(CommitFlags::NO_ENOSPC, |trans| {

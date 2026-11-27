@@ -66,7 +66,6 @@ use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::{damage, passes};
-use crate::init::error::id;
 use crate::locking::{Locked, RwSem};
 use crate::{new_lock, bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck_err, prt,
     trans_inconsistent};
@@ -1088,7 +1087,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &Snapsho
             // node is what a crash in between leaves. Shouldn't occur
             // otherwise; handle it gracefully - it's empty by construction
             // and node_delete re-verifies no-data:
-            fsck_err!(t, id::snapshot_no_keys_childless,
+            fsck_err!(t, snapshot_no_keys_childless,
                       "childless no_keys snapshot node, deleting:\n{}", buf.as_str())
         }
         _ => {

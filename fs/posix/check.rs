@@ -14,7 +14,6 @@ use crate::posix::mode::{umode_t, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::capacity::DiskReservation;
 use crate::util::{alloc::Vec, Printbuf};
@@ -286,7 +285,7 @@ impl InodeWalker {
         let inode_snapshot = fs.snapshots.redundant_interior(e.inode.bi_snapshot)
             .unwrap_or(e.inode.bi_snapshot);
 
-        if !fsck_err_on!(t, k_snapshot != inode_snapshot, id::snapshot_key_missing_inode_snapshot,
+        if !fsck_err_on!(t, k_snapshot != inode_snapshot, snapshot_key_missing_inode_snapshot,
                          "have key for inode {}:{snapshot} but have inode in ancestor snapshot {}\n\
                           unexpected because we should always update the inode when we update a key in that inode\n\
                           {}",
@@ -382,7 +381,7 @@ impl InodeWalker {
                     writeln!(buf, "inode was deleted, will delete key");
                 }
 
-                if !inode_fsck_err!(t, k.k.p, id::key_in_missing_inode, "{buf}")? {
+                if !inode_fsck_err!(t, k.k.p, key_in_missing_inode, "{buf}")? {
                     return Ok(());
                 }
 
@@ -426,7 +425,7 @@ impl InodeWalker {
                     writeln!(buf, "inode has no keys of its own type: changing its type to match");
                 }
 
-                if !inode_fsck_err!(t, k.k.p, id::key_in_wrong_inode_type, "{buf}")? {
+                if !inode_fsck_err!(t, k.k.p, key_in_wrong_inode_type, "{buf}")? {
                     return Ok(());
                 }
 

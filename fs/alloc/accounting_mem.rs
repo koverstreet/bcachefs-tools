@@ -325,7 +325,7 @@ pub(crate) fn gc_accounting_done(fs: &Fs) -> Result<(), BchError> {
 
         trans.unlock_long();
 
-        if !fsck_err!(fs, id::accounting_mismatch, "{buf}")? {
+        if !fsck_err!(fs, accounting_mismatch, "{buf}")? {
             continue;
         }
 
@@ -433,7 +433,7 @@ fn accumulate_newer(ctx: &impl FsckErrCtx, fs: &Fs, jk: &JournalKeys, not_rw: &m
                     };
                     write!(buf, "{}", BkeySC::from(key(j)).to_text(fs));
                 }
-                fsck_err!(ctx, id::accounting_key_version_out_of_order, "{buf}")?;
+                fsck_err!(ctx, accounting_key_version_out_of_order, "{buf}")?;
             } else {
                 version = n.k.bversion;
             }
@@ -530,7 +530,7 @@ fn invalid_dev(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos<Unvalidated>, v
     let fs = t.fs();
     let key = Msg(|out: &mut Printbuf| key_to_text(out, Some(fs), pos));
 
-    if !fsck_err!(t, id::accounting_to_invalid_device, "accounting entry points to invalid device {dev}\n{key}")? {
+    if !fsck_err!(t, accounting_to_invalid_device, "accounting entry points to invalid device {dev}\n{key}")? {
         return Err(fs.err(Errcode::remove_disk_accounting_entry));
     }
 
@@ -559,7 +559,7 @@ fn validate_late(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos<Unvalidated>,
         assert!(r.validate(|d| fs.dev_exists(d.into()), &mut Printbuf::new()).is_ok());
 
         let key = Msg(|out: &mut Printbuf| key_to_text(out, Some(fs), pos));
-        if fsck_err_on!(t, !fs.replicas_marked(r), id::accounting_replicas_not_marked,
+        if fsck_err_on!(t, !fs.replicas_marked(r), accounting_replicas_not_marked,
                         "accounting not marked in superblock replicas\n{key}")? {
             fs.mark_replicas(r)?;
             /*

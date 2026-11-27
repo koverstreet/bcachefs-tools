@@ -764,17 +764,17 @@ pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a
 /// What every inode version is validated for: its position - inode 0, and
 /// above the block device range.
 fn validate_pos(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, v.k.k.p.inode != 0, id::inode_pos_inode_nonzero,
+    bkey_fsck_err_on!(v, v.k.k.p.inode != 0, inode_pos_inode_nonzero,
                       "nonzero k.p.inode")?;
 
     bkey_fsck_err_on!(v, v.k.k.p.offset < BLOCKDEV_INODE_MAX as u64,
-                      id::inode_pos_blockdev_range, "fs inode in blockdev range")
+                      inode_pos_blockdev_range, "fs inode in blockdev range")
 }
 
 /// A str_hash type that isn't one.
 fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: StrHashKind) -> Result<(), BchError> {
     let (str_hash, nr) = (str_hash.0, StrHashKind::NR);
-    bkey_fsck_err_on!(v, str_hash >= nr, id::inode_str_hash_invalid,
+    bkey_fsck_err_on!(v, str_hash >= nr, inode_str_hash_invalid,
                       "invalid str hash type ({str_hash} >= {nr})")
 }
 
@@ -823,7 +823,7 @@ impl BkeyOps for InodeV3 {
         let min = INODEv3_FIELDS_START_INITIAL as u64;
         let max = v.k.k.u64s as u64 - crate::btree::bkey::BKEY_U64S as u64;
 
-        bkey_fsck_err_on!(v, start < min || start > max, id::inode_v3_fields_start_bad,
+        bkey_fsck_err_on!(v, start < min || start > max, inode_v3_fields_start_bad,
                           "invalid fields_start (got {start}, min {min} max {max})")?;
 
         validate_str_hash(v, i.str_hash())?;
@@ -839,7 +839,7 @@ impl BkeyOps for InodeV3 {
 
 impl BkeyOps for InodeGeneration {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        bkey_fsck_err_on!(v, v.k.k.p.inode != 0, id::inode_pos_inode_nonzero,
+        bkey_fsck_err_on!(v, v.k.k.p.inode != 0, inode_pos_inode_nonzero,
                           "nonzero k.p.inode")
     }
 
@@ -1061,7 +1061,7 @@ pub fn create<'a>(
 impl BkeyOps for InodeAllocCursor {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         bkey_fsck_err_on!(v, v.k.k.p.inode != LoggedOpsInum::LOGGED_OPS_INUM_inode_cursors.0 as u64,
-                          id::inode_alloc_cursor_inode_bad, "k.p.inode bad")
+                          inode_alloc_cursor_inode_bad, "k.p.inode bad")
     }
 
     /// The cursor, and the range it hands out.
@@ -1263,7 +1263,7 @@ fn may_delete_deleted_inode(
     let k_pos = k.k.p;
 
     let k = k.arm::<Inodes>();
-    if fsck_err_on!(t, from_deleted_inodes && k.is_none(), id::deleted_inode_missing,
+    if fsck_err_on!(t, from_deleted_inodes && k.is_none(), deleted_inode_missing,
                     "nonexistent inode {}:{} in deleted_inodes btree", { p.offset }, { p.snapshot })? {
         return delete();
     }
@@ -1289,7 +1289,7 @@ fn may_delete_deleted_inode(
     if inode.is_dir() {
         let ret = dirent::empty_dir_snapshot(t, p.offset, 0, p.snapshot);
         let not_empty = matches!(&ret, Err(e) if e.matches(c::ENOTEMPTY));
-        if fsck_err_on!(t, from_deleted_inodes && not_empty, id::deleted_inode_is_dir,
+        if fsck_err_on!(t, from_deleted_inodes && not_empty, deleted_inode_is_dir,
                         "non empty directory {}:{} in deleted_inodes btree",
                         { p.offset }, { p.snapshot })? {
             return delete();
@@ -1299,7 +1299,7 @@ fn may_delete_deleted_inode(
 
     let not_unlinked = (!inode.flag(InodeFlags::unlinked))
         .then(|| fs.err(Errcode::inode_not_unlinked));
-    if fsck_err_on!(t, from_deleted_inodes && not_unlinked.is_some(), id::deleted_inode_not_unlinked,
+    if fsck_err_on!(t, from_deleted_inodes && not_unlinked.is_some(), deleted_inode_not_unlinked,
                     "non-deleted inode {}:{} in deleted_inodes btree", { p.offset }, { p.snapshot })? {
         return delete();
     }
@@ -1310,7 +1310,7 @@ fn may_delete_deleted_inode(
     let has_child = inode.flag(InodeFlags::has_child_snapshot)
         .then(|| fs.err(Errcode::inode_has_child_snapshot));
     if fsck_err_on!(t, from_deleted_inodes && has_child.is_some(),
-                    id::deleted_inode_has_child_snapshots,
+                    deleted_inode_has_child_snapshots,
                     "inode with child snapshots {}:{} in deleted_inodes btree",
                     { p.offset }, { p.snapshot })? {
         return delete();
@@ -1320,7 +1320,7 @@ fn may_delete_deleted_inode(
     }
 
     if has_child_snapshots(t, k_pos)? {
-        if fsck_err!(t, id::inode_has_child_snapshots_wrong,
+        if fsck_err!(t, inode_has_child_snapshots_wrong,
                      "inode has_child_snapshots flag wrong (should be set)\n{}", inode)? {
             inode.set_flag(InodeFlags::has_child_snapshot, true);
             fsck_write(t, inode)?;
@@ -1336,7 +1336,7 @@ fn may_delete_deleted_inode(
 
     if from_deleted_inodes {
         if fs.flags.get(FsFlag::clean_recovery) &&
-           !fsck_err!(t, id::deleted_inode_but_clean,
+           !fsck_err!(t, deleted_inode_but_clean,
                       "filesystem marked as clean but have deleted inode {}:{}",
                       { p.offset }, { p.snapshot })? {
             return Ok(false);

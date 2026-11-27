@@ -293,7 +293,7 @@
  * mount by re-scanning for snapshots still marked for deletion.
  */
 
-use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::{id, BkeyValidate}, passes};
+use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::BkeyValidate, passes};
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MAX, POS_MIN,
                          BkeyOps, BkeyValidateFrom};
 use crate::btree::trigger::{Trigger, TriggerOp};
@@ -1197,34 +1197,34 @@ impl BkeyOps for Snapshot {
         let id = k.k.p.offset;
 
         bkey_fsck_err_on!(v, bkey_gt(k.k.p, pos(0, u32::MAX as u64)) || bkey_lt(k.k.p, pos(0, 1)),
-                          id::snapshot_pos_bad, "bad pos")?;
+                          snapshot_pos_bad, "bad pos")?;
 
         let parent = s.parent.get();
         bkey_fsck_err_on!(v, parent != 0 && parent as u64 <= id,
-                          id::snapshot_parent_bad, "bad parent node ({parent} <= {id})")?;
+                          snapshot_parent_bad, "bad parent node ({parent} <= {id})")?;
 
         let children = s.children.map(|c| c.get());
         bkey_fsck_err_on!(v, children[0] < children[1],
-                          id::snapshot_children_not_normalized, "children not normalized")?;
+                          snapshot_children_not_normalized, "children not normalized")?;
         bkey_fsck_err_on!(v, children[0] != 0 && children[0] == children[1],
-                          id::snapshot_child_duplicate, "duplicate child nodes")?;
+                          snapshot_child_duplicate, "duplicate child nodes")?;
         for c in children {
             bkey_fsck_err_on!(v, c as u64 >= id,
-                              id::snapshot_child_bad, "bad child node ({c} >= {id})")?;
+                              snapshot_child_bad, "bad child node ({c} >= {id})")?;
         }
 
         if has_field!(k, skip) {
             let skip = s.skip.map(|s| s.get());
             bkey_fsck_err_on!(v, skip[0] > skip[1] || skip[1] > skip[2],
-                              id::snapshot_skiplist_not_normalized, "skiplist not normalized")?;
+                              snapshot_skiplist_not_normalized, "skiplist not normalized")?;
             for i in skip {
                 bkey_fsck_err_on!(v, i != 0 && i < parent,
-                                  id::snapshot_skiplist_bad, "bad skiplist node {i}")?;
+                                  snapshot_skiplist_bad, "bad skiplist node {i}")?;
             }
         }
 
         if has_field!(k, pad) {
-            bkey_fsck_err_on!(v, s.pad.get() != 0, id::snapshot_pad_nonzero, "reserved pad field nonzero")?;
+            bkey_fsck_err_on!(v, s.pad.get() != 0, snapshot_pad_nonzero, "reserved pad field nonzero")?;
         }
 
         // Commit-only checks - defense in depth: catch the buggy writer in the
@@ -1237,7 +1237,7 @@ impl BkeyOps for Snapshot {
             let state = if has_field!(k, state) { s.state.get() } else { 0 };
 
             bkey_fsck_err_on!(v, state != 0 && state_field(state).is_none(),
-                              id::snapshot_state_bad, "invalid state {state:#x}")?;
+                              snapshot_state_bad, "invalid state {state:#x}")?;
 
             // A subvol backref is only legal on a live or will_delete leaf:
             // subvolumes only reference leaves, and no_keys/deleted nodes were
@@ -1252,7 +1252,7 @@ impl BkeyOps for Snapshot {
                                (state != 0 &&
                                 st != SnapshotState::live &&
                                 st != SnapshotState::will_delete)),
-                              id::snapshot_should_not_have_subvol,
+                              snapshot_should_not_have_subvol,
                               "snapshot with subvol must be a live or will_delete leaf")?;
         }
         Ok(())
@@ -1288,7 +1288,7 @@ impl BkeyOps for SnapshotTree {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let p = v.k.k.p;
         bkey_fsck_err_on!(v, bkey_gt(p, pos(0, u32::MAX as u64)) || bkey_lt(p, pos(0, 1)),
-                          id::snapshot_tree_pos_bad, "bad pos")?;
+                          snapshot_tree_pos_bad, "bad pos")?;
         Ok(())
     }
 

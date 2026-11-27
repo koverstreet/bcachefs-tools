@@ -487,7 +487,7 @@ use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BucketGens,
     BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
 use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
 use crate::errcode::{Errcode, BchError};
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::opts::data_type_str;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::rcu::read_lock;
@@ -723,7 +723,7 @@ fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let (have, want) = (v.k.k.val_u64s(), alloc_v1_val_u64s(a.v()));
 
     // allow for unknown fields
-    bkey_fsck_err_on!(v, have < want, id::alloc_v1_val_size_bad, "incorrect value size ({have} < {want})")
+    bkey_fsck_err_on!(v, have < want, alloc_v1_val_size_bad, "incorrect value size ({have} < {want})")
 }
 
 fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -731,23 +731,23 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let a = AllocV4::val_copy_pad(v.k).expect("an alloc_v4");
     let (want, have) = (a.u64s_noerror(), v.k.k.val_u64s());
 
-    bkey_fsck_err_on!(v, want > have, id::alloc_v4_val_size_bad, "bad val size ({want} > {have})")?;
+    bkey_fsck_err_on!(v, want > have, alloc_v4_val_size_bad, "bad val size ({want} > {have})")?;
 
     // Backpointers stored after the value, as before they moved to the
     // backpointers btree (no_bps_in_alloc_keys): a value is read by its
     // length, where these would read as fields added since. Dropping the key
     // flags the alloc btree as having lost data, and check_allocations
     // rebuilds it.
-    bkey_fsck_err_on!(v, a.nr_backpointers() != 0, id::alloc_v4_inline_backpointers,
+    bkey_fsck_err_on!(v, a.nr_backpointers() != 0, alloc_v4_inline_backpointers,
                       "{} backpointers inline, from before they moved to the backpointers btree",
                       a.nr_backpointers())?;
 
     let data_type = a.alloc_data_type(a.data_type());
-    bkey_fsck_err_on!(v, data_type != a.data_type(), id::alloc_key_data_type_bad,
+    bkey_fsck_err_on!(v, data_type != a.data_type(), alloc_key_data_type_bad,
                       "invalid data type (got {} should be {})", a.data_type().0, data_type.0)?;
 
     for (rw, name) in [(READ, "read"), (WRITE, "write")] {
-        bkey_fsck_err_on!(v, a.io_time[rw] > LRU_TIME_MAX, id::alloc_key_io_time_bad,
+        bkey_fsck_err_on!(v, a.io_time[rw] > LRU_TIME_MAX, alloc_key_io_time_bad,
                           "invalid io_time[{name}]: {}, max {}", a.io_time[rw], LRU_TIME_MAX)?;
     }
 
@@ -755,14 +755,14 @@ fn alloc_v4_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     match a.data_type() {
         DataType::free | DataType::need_gc_gens | DataType::need_discard =>
             bkey_fsck_err_on!(v, stripe != 0 || dirty != 0 || cached != 0 || refcount != 0,
-                              id::alloc_key_empty_but_have_data,
+                              alloc_key_empty_but_have_data,
                               "empty data type free but have data {stripe}.{dirty}.{cached} {refcount}"),
         DataType::sb | DataType::journal | DataType::btree | DataType::user | DataType::parity =>
-            bkey_fsck_err_on!(v, dirty == 0 && stripe == 0 && refcount == 0, id::alloc_key_dirty_sectors_0,
+            bkey_fsck_err_on!(v, dirty == 0 && stripe == 0 && refcount == 0, alloc_key_dirty_sectors_0,
                               "data_type {} but dirty_sectors==0", data_type_str(a.data_type())),
         DataType::cached =>
             bkey_fsck_err_on!(v, cached == 0 || dirty != 0 || stripe != 0 || refcount != 0,
-                              id::alloc_key_cached_inconsistency, "data type inconsistency"),
+                              alloc_key_cached_inconsistency, "data type inconsistency"),
         _ => Ok(()),
     }
 }
@@ -787,7 +787,7 @@ impl BkeyOps for Alloc {
 impl BkeyOps for AllocV2 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let a = v.k.arm::<AllocV2>().expect("an alloc_v2");
-        bkey_fsck_err_on!(v, AllocUnpacked::v2(a).is_none(), id::alloc_v2_unpack_error, "unpack error")
+        bkey_fsck_err_on!(v, AllocUnpacked::v2(a).is_none(), alloc_v2_unpack_error, "unpack error")
     }
 
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
@@ -800,7 +800,7 @@ impl BkeyOps for AllocV2 {
 impl BkeyOps for AllocV3 {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let a = v.k.arm::<AllocV3>().expect("an alloc_v3");
-        bkey_fsck_err_on!(v, AllocUnpacked::v3(a).is_none(), id::alloc_v3_unpack_error, "unpack error")
+        bkey_fsck_err_on!(v, AllocUnpacked::v3(a).is_none(), alloc_v3_unpack_error, "unpack error")
     }
 
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
@@ -1076,7 +1076,7 @@ impl BucketGensPos {
 impl BkeyOps for BucketGens {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let (have, want) = (v.k.k.val_bytes(), size_of::<BucketGens>());
-        bkey_fsck_err_on!(v, have != want, id::bucket_gens_val_size_bad, "bad val size ({have} != {want})")
+        bkey_fsck_err_on!(v, have != want, bucket_gens_val_size_bad, "bad val size ({have} != {want})")
     }
 
     #[cold]
@@ -1420,7 +1420,7 @@ fn alloc_check_no_stripe_refs(t: &TransAttempt<'_, '_>, old: BkeySC<'_>, new: Bk
         let buf = transition_text(fs, format_args!("bucket stripe_refcount went to 0 in {}, but stripe {} still references it",
                                                    t.fn_name(), { k.k.p.offset }),
                                   old, new);
-        crate::log_fsck_err!(t, id::alloc_key_stripe_refcount_wrong, "{buf}")?;
+        crate::log_fsck_err!(t, alloc_key_stripe_refcount_wrong, "{buf}")?;
     }
     Ok(())
 }
@@ -1483,7 +1483,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
                 let buf = transition_text(fs, format_args!("bucket going nonempty but not open in {}",
                                                            t.fn_name()),
                                           op.old, as_sc(&new));
-                crate::log_fsck_err!(t, id::alloc_key_bucket_nonempty_to_empty_not_open, "{buf}")?;
+                crate::log_fsck_err!(t, alloc_key_bucket_nonempty_to_empty_not_open, "{buf}")?;
             }
 
             new_a.io_time[READ] = fs.current_io_time(READ);
@@ -1528,7 +1528,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         // worker. Otherwise the journal seqs are residue
         if new_a.data_type() == DataType::free &&
            (new_a.need_discard() || new_a.journal_seq_nonempty != 0 || new_a.journal_seq_empty != 0) {
-            crate::log_fsck_err!(t, id::alloc_key_data_type_free_dirty_bookkeeping,
+            crate::log_fsck_err!(t, alloc_key_data_type_free_dirty_bookkeeping,
                 "bucket marked free still has discard/journal bookkeeping\n\
                  NEED_DISCARD={}, journal_seq_nonempty={}, journal_seq_empty={}\n{}",
                 u8::from(new_a.need_discard()), new_a.journal_seq_nonempty, new_a.journal_seq_empty,
@@ -1588,7 +1588,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         assert!(seq != 0, "an atomic alloc trigger with no journal reservation");
 
         if new_a.journal_seq_nonempty > seq {
-            crate::log_fsck_err!(t, id::alloc_key_journal_seq_in_future,
+            crate::log_fsck_err!(t, alloc_key_journal_seq_in_future,
                 "bucket journal seq in future (currently at {})\n{}",
                 fs.journal_cur_seq(), as_sc(&new_key(new_a)).to_text(fs))?;
             new_a.journal_seq_nonempty = seq;

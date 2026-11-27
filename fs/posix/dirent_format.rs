@@ -28,7 +28,7 @@ use crate::format::Val;
 use crate::posix::str_hash::HashInfo;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::typeinfo::AccessError;
 use crate::types::{Le32, Le64};
 use crate::util::os_str::{OsStr, OsStrExt};
@@ -306,10 +306,10 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let d = v.k.arm::<Dirent>().expect("a dirent").v();
     let raw = RawNames::new(v.k);
 
-    bkey_fsck_err_on!(v, raw.name_len == 0, id::dirent_empty_name,
+    bkey_fsck_err_on!(v, raw.name_len == 0, dirent_empty_name,
                       "empty name")?;
 
-    bkey_fsck_err_on!(v, raw.name_len + raw.cf_len > raw.block_len, id::dirent_val_too_big,
+    bkey_fsck_err_on!(v, raw.name_len + raw.cf_len > raw.block_len, dirent_val_too_big,
                       "dirent names exceed bkey size ({} + {} > {})",
                       raw.name_len, raw.cf_len, raw.block_len)?;
 
@@ -319,30 +319,30 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
     bkey_fsck_err_on!(v, v.from.flags().contains(ValidateFlags::commit) &&
                       name.len() > DIRENT_NAME_MAX as usize,
-                      id::dirent_name_too_long,
+                      dirent_name_too_long,
                       "dirent name too big ({} > {})", name.len(), DIRENT_NAME_MAX)?;
 
-    bkey_fsck_err_on!(v, name.contains(&0), id::dirent_name_embedded_nul,
+    bkey_fsck_err_on!(v, name.contains(&0), dirent_name_embedded_nul,
                       "dirent has stray data after name's NUL")?;
 
-    bkey_fsck_err_on!(v, name == b"." || name == b"..", id::dirent_name_dot_or_dotdot,
+    bkey_fsck_err_on!(v, name == b"." || name == b"..", dirent_name_dot_or_dotdot,
                       "invalid name")?;
 
-    bkey_fsck_err_on!(v, name.contains(&b'/'), id::dirent_name_has_slash,
+    bkey_fsck_err_on!(v, name.contains(&b'/'), dirent_name_has_slash,
                       "name with /")?;
 
     bkey_fsck_err_on!(v, d.d_type() as u32 != DT_SUBVOL && d.d_inum() == v.k.k.p.inode,
-                      id::dirent_to_itself,
+                      dirent_to_itself,
                       "dirent points to own directory")?;
 
     if let DirentName::Casefolded { cf, .. } = names {
         let cf = cf.as_bytes();
         bkey_fsck_err_on!(v, v.from.from() == BkeyValidateFrom::commit &&
                           cf.len() > DIRENT_NAME_MAX as usize,
-                          id::dirent_cf_name_too_big,
+                          dirent_cf_name_too_big,
                           "dirent w/ cf name too big ({} > {})", cf.len(), DIRENT_NAME_MAX)?;
 
-        bkey_fsck_err_on!(v, cf.contains(&0), id::dirent_stray_data_after_cf_name,
+        bkey_fsck_err_on!(v, cf.contains(&0), dirent_stray_data_after_cf_name,
                           "dirent has stray data after cf name's NUL")?;
     }
 

@@ -22,7 +22,6 @@ use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, Subvolume, SubvolumeState};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::snapshots::subvolume;
 use crate::{bch_err_msg, mustfix_fsck_err, mustfix_fsck_err_on};
 use core::ops::ControlFlow;
@@ -51,7 +50,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             let root_snapshot = root_snapshot_from_snapshots(t)?;
 
             // mustfix: true, or an error - never left unfixed.
-            if !mustfix_fsck_err!(t, id::root_subvol_missing, "root subvol missing")? {
+            if !mustfix_fsck_err!(t, root_subvol_missing, "root subvol missing")? {
                 return Ok(());
             }
 
@@ -76,7 +75,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     match inode::find_by_inum_snapshot(t, BCACHEFS_ROOT_INO as u64, snapshot,
                                        BtreeIterFlags::empty()).found()? {
         None => {
-            if mustfix_fsck_err!(t, id::root_dir_missing, "root directory missing")? {
+            if mustfix_fsck_err!(t, root_dir_missing, "root directory missing")? {
                 let mut root_inode = inode::init(fs, 0, 0, root_dir_mode, dev_t::NONE, None);
                 root_inode.bi_inum     = inum;
                 root_inode.bi_snapshot = snapshot;
@@ -87,7 +86,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
         }
         Some(mut root_inode) => {
             if mustfix_fsck_err_on!(t, !root_inode.is_dir(),
-                                    id::root_inode_not_dir, "root inode not a directory")? {
+                                    root_inode_not_dir, "root inode not a directory")? {
                 // The inode exists: fix only the mode. Reinitializing it
                 // generates a fresh hash_seed - invalidating the hash offset of
                 // every dirent in the root directory - and wipes bi_subvol:

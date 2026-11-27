@@ -20,7 +20,7 @@ use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::{check, inode, inode_opts, namei, str_hash};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::{Fs, FsFlag};
-use crate::init::{error::id, progress::Progress};
+use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::posix::xattr::{XattrType, self, Xattrs};
@@ -56,10 +56,10 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut InodeUnpacked) -> 
 
     let repair = match d {
         None =>
-            inode_fsck_err!(t, pos, id::inode_points_to_missing_dirent,
+            inode_fsck_err!(t, pos, inode_points_to_missing_dirent,
                             "inode points to missing dirent\n{u}")?,
         Some(k) if !points =>
-            inode_fsck_err!(t, pos, id::inode_points_to_wrong_dirent,
+            inode_fsck_err!(t, pos, inode_points_to_wrong_dirent,
                             "{}", namei::dirent_inode_mismatch(fs, k, u))?,
         Some(_) => false,
     };
@@ -72,7 +72,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut InodeUnpacked) -> 
 
     if let Some(k) = d {
         if points &&
-           fsck_err_on!(t, u.flag(InodeFlags::unlinked), id::inode_unlinked_but_has_dirent,
+           fsck_err_on!(t, u.flag(InodeFlags::unlinked), inode_unlinked_but_has_dirent,
                         "inode unlinked but has dirent\n{u}\n{}", k.to_text(fs))? {
             // A dirent points here, so the unlinked flag is wrong, and
             // clearing it is the whole repair: nlink becomes 1 (check_nlinks
@@ -178,14 +178,14 @@ fn check_inode_subvol(
     let snap = MaybeSnapshot(snapshot.as_ref());
     let repair = match subvol {
         None =>
-            fsck_err!(t, id::inode_bi_subvol_missing,
+            fsck_err!(t, inode_bi_subvol_missing,
                       "inode bi_subvol points to missing subvolume {}\n{u}\nsnapshot {}: {snap}",
                       u.bi_subvol, u.bi_snapshot)?,
         Some(s) =>
             fsck_err_on!(t,
                          s.inode.get() != u.bi_inum ||
                          !snapshot::is_ancestor(t, s.snapshot.get(), pos.snapshot),
-                         id::inode_bi_subvol_wrong,
+                         inode_bi_subvol_wrong,
                          "inode points to subvol {}, but subvol points to {}:{}\n{u}\nsnapshot {}: {snap}",
                          u.bi_subvol, s.inode.get(), s.snapshot.get(),
                          u.bi_snapshot)?,
@@ -219,7 +219,7 @@ fn check_unlinked_dir(
         Err(e) => return Err(e),
     }
 
-    if !inode_fsck_err!(t, pos, id::inode_dir_unlinked_but_not_empty,
+    if !inode_fsck_err!(t, pos, inode_dir_unlinked_but_not_empty,
                         "dir unlinked but not empty\n{u}")? {
         return Ok(false);
     }
@@ -292,7 +292,7 @@ fn check_inode<'t>(
     // bi_parent_subvol, and a bogus one makes a good backpointer look broken.
     if fsck_err_on!(t, u.bi_parent_subvol != 0 &&
                     (u.bi_subvol == 0 || u.bi_subvol == BCACHEFS_ROOT_SUBVOL),
-                    id::inode_bi_parent_nonzero,
+                    inode_bi_parent_nonzero,
                     "inode has nonzero bi_parent_subvol but is not a subvolume root\n{u}")? {
         u.bi_parent_subvol = 0;
         changed = true;
@@ -306,14 +306,14 @@ fn check_inode<'t>(
         changed |= check_unlinked_dir(t, pos, &mut u)?;
     }
 
-    if fsck_err_on!(t, u.is_dir() && u.bi_size != 0, id::inode_dir_has_nonzero_i_size,
+    if fsck_err_on!(t, u.is_dir() && u.bi_size != 0, inode_dir_has_nonzero_i_size,
                     "directory with nonzero i_size\n{u}")? {
         u.bi_size = 0;
         changed = true;
     }
 
     if let Some(rdev) = rdev_in_user_encoding(&u) &&
-       fsck_err!(t, id::inode_rdev_user_encoding,
+       fsck_err!(t, inode_rdev_user_encoding,
                  "device inode's number {} is in userspace's encoding: should be {rdev}\n{u}",
                  u.rdev())? {
         u.bi_dev = rdev.to_disk();
@@ -322,7 +322,7 @@ fn check_inode<'t>(
 
     let has_child = inode::has_child_snapshots(t, pos)?;
     if fsck_err_on!(t, has_child != u.flag(InodeFlags::has_child_snapshot),
-                    id::inode_has_child_snapshots_wrong,
+                    inode_has_child_snapshots_wrong,
                     "inode has_child_snapshots flag wrong (should be {})\n{u}", has_child as u32)? {
         u.set_flag(InodeFlags::has_child_snapshot, has_child);
         changed = true;
@@ -340,12 +340,12 @@ fn check_inode<'t>(
             // resume. (The online arm isn't reached: check_inodes isn't
             // PASS_ONLINE.)
             if !on_deleted_list(t, pos)? &&
-               fsck_err!(t, id::unlinked_inode_not_on_deleted_list,
+               fsck_err!(t, unlinked_inode_not_on_deleted_list,
                          "inode unlinked, but not on deleted list\n{u}")? {
                 t.bit_mod_buffered(Btree::deleted_inodes, pos, true)?;
             }
         } else if !inode::or_descendents_is_open(t, pos)? &&
-                  fsck_err!(t, id::inode_unlinked_and_not_open,
+                  fsck_err!(t, inode_unlinked_and_not_open,
                             "inode unlinked and not open\n{u}")? {
             return Err(t.close(CommitFlags::NO_ENOSPC, |trans|
                 bch_err_msg!(fs, inode::rm_snapshot(trans, u.bi_inum, pos.snapshot),
@@ -355,7 +355,7 @@ fn check_inode<'t>(
 
     let has_opts = u.has_opts();
     if fsck_err_on!(t, u.flag(InodeFlags::has_inode_opts) != has_opts,
-                    id::inode_has_inode_opts_flag_wrong,
+                    inode_has_inode_opts_flag_wrong,
                     "inode has_inode_opts flag wrong, should be {}\n{u}", has_opts as u32)? {
         u.set_flag(InodeFlags::has_inode_opts, has_opts);
         changed = true;
@@ -369,7 +369,7 @@ fn check_inode<'t>(
     // circuit - is check_xattrs'.
     for acl in AclType::ALL {
         if u.flag(acl.inode_flag()) &&
-           fsck_err_on!(t, !has_xattr_type(t, &u, acl.xattr_type())?, acl.flag_wrong(),
+           fsck_err_on!(t, !has_xattr_type(t, &u, acl.xattr_type())?, (acl.flag_wrong()),
                         "inode has BCH_INODE_has_{}_acl set but no acl xattr\n{u}", acl.name())? {
             u.set_flag(acl.inode_flag(), false);
             changed = true;
@@ -388,7 +388,7 @@ fn check_inode<'t>(
     }
 
     let cur_seq = fs.journal_cur_seq();
-    if fsck_err_on!(t, u.bi_journal_seq > cur_seq, id::inode_journal_seq_in_future,
+    if fsck_err_on!(t, u.bi_journal_seq > cur_seq, inode_journal_seq_in_future,
                     "inode journal seq in future (currently at {cur_seq})\n{u}")? {
         u.bi_journal_seq = cur_seq;
         changed = true;

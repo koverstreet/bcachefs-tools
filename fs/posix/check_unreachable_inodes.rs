@@ -21,7 +21,7 @@ use crate::posix::inode::InodeUnpacked;
 use crate::posix::lostfound::{self, inode_should_reattach};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
-use crate::init::{error::id, progress::Progress};
+use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
 use crate::{bch_err, inode_fsck_err};
 use crate::posix::dirent::Dirent;
@@ -261,7 +261,7 @@ fn check_unreachable_inode(
     // Attached in a descendant: propagate that, rather than a lost+found
     // entry visible in every view below
     if let Some(d) = find_attached_dirent_in_descendant(t, &u)? {
-        return if inode_fsck_err!(t, pos, id::inode_unreachable_dirent_in_descendant,
+        return if inode_fsck_err!(t, pos, inode_unreachable_dirent_in_descendant,
                                   "unreachable inode with dirent in descendant snapshot {}, propagating:\n{u}",
                                   d.k().p.snapshot)? {
             reattach_via_descendant_dirent(t, &mut u, d)
@@ -270,7 +270,7 @@ fn check_unreachable_inode(
         };
     }
 
-    if inode_fsck_err!(t, pos, id::inode_unreachable, "unreachable inode:\n{u}")? {
+    if inode_fsck_err!(t, pos, inode_unreachable, "unreachable inode:\n{u}")? {
         return lostfound::reattach_inode(t, &mut u);
     }
 

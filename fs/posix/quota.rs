@@ -21,7 +21,7 @@ use crate::posix::quota_format::{SbFieldQuota, Quota, QuotaCounter, QuotaType};
 use crate::util::{vstructs::{Unvalidated, Validated}, Printbuf};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::sb::io::SbFieldOps;
 use crate::{bkey_fsck_err_on, new_lock};
 use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
@@ -153,7 +153,7 @@ impl SbFieldOps for SbFieldQuota<Validated> {
 impl crate::btree::bkey::BkeyOps for Quota {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let ty = v.k.k.p.inode;
-        bkey_fsck_err_on!(v, ty >= QuotaType::NR as u64, id::quota_type_invalid,
+        bkey_fsck_err_on!(v, ty >= QuotaType::NR as u64, quota_type_invalid,
                           "invalid quota type ({ty} >= {})", QuotaType::NR)
     }
 

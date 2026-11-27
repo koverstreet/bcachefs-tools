@@ -41,7 +41,7 @@ use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
 use crate::data::{ptrs::{self, Ptrs}, io_misc};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::init::{damage, error::id, progress::Progress};
+use crate::init::{damage, progress::Progress};
 use crate::snapshots::snapshot;
 use crate::util::{alloc::Vec, Printbuf};
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
@@ -137,7 +137,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
 
         if fsck_err_on!(t, !i.inode.flag(InodeFlags::i_sectors_dirty) &&
                         i.inode.bi_sectors != i.count,
-                        id::inode_i_sectors_wrong,
+                        inode_i_sectors_wrong,
                         "incorrect i_sectors: got {}, should be {}\n{}",
                         i.inode.bi_sectors, i.count, buf)? {
             // The walker learns the fix only with the write: a restart
@@ -241,7 +241,7 @@ fn overlapping_extents_found(
 
     write!(buf, "\noverwriting {} extent", if first { "first" } else { "second" });
 
-    if !inode_fsck_err!(t, k1.k.p, id::extent_overlapping, "{buf}")? {
+    if !inode_fsck_err!(t, k1.k.p, extent_overlapping, "{buf}")? {
         return Ok(false);
     }
 
@@ -341,7 +341,7 @@ fn check_extent_past_end(
 
         if fsck_err_on!(t, k.k.p.offset > last_block &&
                         !k.extent_is_reservation(fs),
-                        id::extent_past_end_of_inode,
+                        extent_past_end_of_inode,
                         "extent type past end of inode {}:{}, i_size {}\n{}",
                         i.inode.bi_inum, i.inode.bi_snapshot, i.inode.bi_size,
                         k.to_text(fs))? {

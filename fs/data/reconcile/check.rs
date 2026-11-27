@@ -107,7 +107,7 @@ fn reconcile_phys_wrong(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, Backpointer>, w
         prt!(out, "\nfor {}", e.to_text(fs));
     });
 
-    if fsck_err!(t, id::backpointer_reconcile_phys_wrong, "backpointer reconcile phys should be {}, is {}\n{}{}",
+    if fsck_err!(t, backpointer_reconcile_phys_wrong, "backpointer reconcile phys should be {}, is {}\n{}{}",
                  want, bp.v().reconcile_phys(), bp.untyped().to_text(fs), for_extent)? {
         backpointer_set_reconcile_phys(t, bp, want)?;
         return Ok(true);
@@ -197,7 +197,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
         let shown = match data_k { Some(k) => k, None => BkeySC::<Deleted>::from(&deleted).untyped() };
         last_flushed.maybe_flush(t, shown)?;
 
-        if fsck_err!(t, id::reconcile_work_incorrectly_set, "extent should be set in {}\n{}: {}",
+        if fsck_err!(t, reconcile_work_incorrectly_set, "extent should be set in {}\n{}: {}",
                      Msg(|out: &mut Printbuf| btrees_to_text(out, want, set)), btree, shown.to_text(fs))? {
             for k in work {
                 fix_work_btree(t, want, pos, k)?;
@@ -322,7 +322,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
         let shown = match bp { Some(bp) => bp.untyped(), None => BkeySC::<Deleted>::from(&deleted).untyped() };
         last_flushed.maybe_flush(t, shown)?;
 
-        if fsck_err!(t, id::reconcile_work_phys_incorrectly_set, "backpointer should be set in {}\n{}",
+        if fsck_err!(t, reconcile_work_phys_incorrectly_set, "backpointer should be set in {}\n{}",
                      Msg(|out: &mut Printbuf| btrees_to_text(out, want, set)), shown.to_text(fs))? {
             for k in work {
                 fix_work_btree(t, want, pos, k)?;
@@ -380,13 +380,13 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         t.btree_node_update_key_at_pos(btree, level, n)
     };
 
-    if fsck_err_on!(t, bp_pos.inode != 0 && bp_pos.offset == 0, id::btree_ptr_with_no_reconcile_bp,
+    if fsck_err_on!(t, bp_pos.inode != 0 && bp_pos.offset == 0, btree_ptr_with_no_reconcile_bp,
                     "btree ptr with no reconcile \n{}", k.to_text(fs))? {
         let bp = add_reconcile_bp(t, btree, level, k.into(), bp_pos.inode)?;
         return set_bp(bp.offset);
     }
 
-    if fsck_err_on!(t, bp_pos.inode == 0 && bp_pos.offset != 0, id::btree_ptr_with_bad_reconcile_bp,
+    if fsck_err_on!(t, bp_pos.inode == 0 && bp_pos.offset != 0, btree_ptr_with_bad_reconcile_bp,
                     "btree ptr with bad reconcile \n{}", k.to_text(fs))? {
         return set_bp(0);
     }
@@ -404,7 +404,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         return Ok(());
     }
 
-    fsck_err!(t, id::btree_ptr_to_bad_reconcile_bp, "btree ptr points to bad/missing reconcile bp\n{}\n{}",
+    fsck_err!(t, btree_ptr_to_bad_reconcile_bp, "btree ptr points to bad/missing reconcile bp\n{}\n{}",
               k.to_text(fs), bp_k.to_text(fs))?;
 
     let alloc_bp = |iter: &BtreeIter<'_>| -> Result<(), BchError> {
@@ -483,7 +483,7 @@ fn check_stripe_can_widen_one(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k:
         return Ok(());
     }
 
-    if fsck_err!(t, id::stripe_can_widen_wrong, "stripe can_widen={}, should be {}\n{}",
+    if fsck_err!(t, stripe_can_widen_wrong, "stripe can_widen={}, should be {}\n{}",
                  v.can_widen(), correct, k.to_text(fs))? {
         t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty(),
                         |u| Ok(u.v_mut().bits.set_can_widen(correct)))?;

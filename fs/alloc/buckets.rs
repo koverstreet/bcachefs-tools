@@ -386,7 +386,7 @@ impl TransAttempt<'_, '_> {
 
         if b_gen != ptr_gen && ptr.cached() != 0 {
             if fsck_err_on!(self, fs.compat(SbCompat::no_stale_ptrs),
-                            id::stale_ptr_with_no_stale_ptrs_feature,
+                            stale_ptr_with_no_stale_ptrs_feature,
                             "stale cached ptr, but have no_stale_ptrs feature\n{}", k.to_text(fs))? {
                 let mut sb = fs.sb_lock();
                 sb.sb_mut().compat.update(|f| f - SbCompats::no_stale_ptrs);

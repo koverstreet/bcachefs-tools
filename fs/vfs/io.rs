@@ -108,7 +108,7 @@ fn inode_journal_seq(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<u64, 
     let cur_seq = fs.journal_cur_seq();
     let seq = cur_seq.min(u.bi_journal_seq);
 
-    if fsck_err_on!(t, u.bi_journal_seq > cur_seq, id::inode_journal_seq_in_future,
+    if fsck_err_on!(t, u.bi_journal_seq > cur_seq, inode_journal_seq_in_future,
                     "inode journal seq in future (currently at {cur_seq})\n{u}")? {
         u.bi_journal_seq = cur_seq;
         inode::write(t, &mut iter, &mut u)?;

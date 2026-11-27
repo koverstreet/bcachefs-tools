@@ -35,7 +35,7 @@ use crate::posix::check::{self, InodeWalker, SnapshotsSeen};
 use crate::posix::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
-use crate::init::{error::id, progress::Progress};
+use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_ratelimited, bch_info, fsck_err, fsck_err_on, inode_fsck_err};
@@ -109,7 +109,7 @@ fn check_dir_nlink(
         }
     }
 
-    if fsck_err!(t, id::inode_dir_wrong_nlink,
+    if fsck_err!(t, inode_dir_wrong_nlink,
                  "directory with wrong i_nlink: got {}, should be {}\n{path}\n{}",
                  i.inode.bi_nlink, i.count, i.inode)? {
         // The walker learns the fix only with the write: a restart before
@@ -198,11 +198,11 @@ fn check_dirent_parent_subvol<'t>(
     // the dirent is concerned:
     let repair = match (parent_snapshot, new_parent) {
         (Some(parent_snapshot), Some(_)) =>
-            fsck_err!(t, id::dirent_not_visible_in_parent_subvol,
+            fsck_err!(t, dirent_not_visible_in_parent_subvol,
                       "dirent not visible in parent_subvol (not an ancestor of subvol snap {parent_snapshot})\n{}",
                       k.to_text(fs))?,
         _ =>
-            fsck_err!(t, id::dirent_to_missing_parent_subvol,
+            fsck_err!(t, dirent_to_missing_parent_subvol,
                       "dirent parent_subvol points to missing subvolume\n{}", k.to_text(fs))?,
     };
     if !repair {
@@ -249,7 +249,7 @@ fn check_dirent_to_subvol<'t>(
     });
 
     let Some(s) = s else {
-        if inode_fsck_err!(t, k.k.p, id::dirent_to_missing_subvol,
+        if inode_fsck_err!(t, k.k.p, dirent_to_missing_subvol,
                            "dirent points to missing subvolume\n{}", k.to_text(fs))? {
             dirent::fsck_remove(t, k.k.p)?;
         }
@@ -265,7 +265,7 @@ fn check_dirent_to_subvol<'t>(
         let mut path = Printbuf::new();
         namei::inum_to_path(t, SubvolInum { subvol: child as u64, inum: target_inum }, &mut path)?;
 
-        if fsck_err!(t, id::subvol_fs_path_parent_wrong,
+        if fsck_err!(t, subvol_fs_path_parent_wrong,
                      "subvol with wrong fs_path_parent, should be {parent}\n{path}\n{}",
                      s.to_text(fs))? {
             // grown to a whole subvolume: one from before fs_path_parent is
@@ -282,7 +282,7 @@ fn check_dirent_to_subvol<'t>(
         return Err(fs.err(Errcode::fsck_repair_unimplemented));
     };
 
-    if fsck_err_on!(t, parent != subvol_root.bi_parent_subvol, id::inode_bi_parent_wrong,
+    if fsck_err_on!(t, parent != subvol_root.bi_parent_subvol, inode_bi_parent_wrong,
                     "subvol root {target_inum} has wrong bi_parent_subvol: got {}, should be {parent}",
                     subvol_root.bi_parent_subvol)? {
         subvol_root.bi_parent_subvol = parent;
@@ -317,7 +317,7 @@ fn maybe_reconstruct_inum(
             continue;
         }
 
-        if !inode_fsck_err!(t, spos(0, inum, snapshot), id::missing_inode_with_contents,
+        if !inode_fsck_err!(t, spos(0, inum, snapshot), missing_inode_with_contents,
                             "inode {inum}:{snapshot} type {type_} missing, but contents found: reconstruct?")? {
             return Ok(true);
         }
@@ -398,7 +398,7 @@ fn check_dirent_to_inode<'t>(
     // the dirent's down, so an ancestor's is first.
     if let Some(first) = st.target.inodes().first() {
         if !snapshot::is_ancestor(t, d_snapshot, first.inode.bi_snapshot) &&
-           inode_fsck_err!(t, k.k.p, id::dirent_to_inode_in_descendant_snapshot,
+           inode_fsck_err!(t, k.k.p, dirent_to_inode_in_descendant_snapshot,
                            "dirent with inode(s) only in descendant snapshots:\n{}", k.to_text(fs))? {
             move_dirent_to_inode_snapshots(t, k, st)?;
             // The copies are ahead of the walk: a second pass checks them,
@@ -409,7 +409,7 @@ fn check_dirent_to_inode<'t>(
     }
 
     if st.target.inodes().is_empty() &&
-       inode_fsck_err!(t, k.k.p, id::dirent_to_missing_inode,
+       inode_fsck_err!(t, k.k.p, dirent_to_missing_inode,
                        "dirent points to missing inode:\n{}", k.to_text(fs))? {
         dirent::fsck_remove(t, k.k.p)?;
     }
@@ -443,7 +443,7 @@ fn check_dirent_to_inode<'t>(
         }
         let visible_pos = visible.k.p;
 
-        if inode_fsck_err!(t, visible_pos, id::dirent_to_overwritten_inode,
+        if inode_fsck_err!(t, visible_pos, dirent_to_overwritten_inode,
                            "dirent points to inode overwritten in snapshot {snapshot}:\n{}",
                            k.to_text(fs))? {
             str_hash::delete_at::<Dirents>(t, &st.hash_info, &mut delete_iter,

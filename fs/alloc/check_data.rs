@@ -179,7 +179,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: Btree, leve
     // in the extents btree or not; elsewhere report without recording
     let damage_pos = if btree == Btree::extents && !is_btree_ptr { k.k.p } else { POS_MIN };
 
-    if inode_fsck_err!(t, damage_pos, id::dup_backpointer_to_bad_csum_extent, "{}", msg)? {
+    if inode_fsck_err!(t, damage_pos, dup_backpointer_to_bad_csum_extent, "{}", msg)? {
         bkey_drop_device_and_update(t, btree, level, k, dev,
                                     ErrorKeyReason::double_allocation)?;
         return Ok(true);
@@ -220,12 +220,12 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
         } else {
             (id::ptr_to_invalid_device, "missing")
         };
-        return Ok(drop_if(fsck_err!(t, err, "pointer to {what} device {dev}\nwhile marking {marking}")?));
+        return Ok(drop_if(fsck_err!(t, (err), "pointer to {what} device {dev}\nwhile marking {marking}")?));
     };
 
     let b = ca.ptr_bucket(&p.ptr);
     let Some(g) = ca.gc_bucket(b) else {
-        return Ok(drop_if(fsck_err!(t, id::ptr_to_invalid_device,
+        return Ok(drop_if(fsck_err!(t, ptr_to_invalid_device,
                                     "pointer to invalid bucket on device {dev}\nwhile marking {marking}")?));
     };
 
@@ -243,7 +243,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     let mut fix = PtrFix::empty();
 
     let gen_valid = g.lock.lock().gen_valid() != 0;
-    if fsck_err_on!(t, !gen_valid, id::ptr_to_missing_alloc_key,
+    if fsck_err_on!(t, !gen_valid, ptr_to_missing_alloc_key,
                     "bucket {dev}:{b} data type {ptr_type} ptr gen {ptr_gen} missing in alloc btree\n\
                      while marking {marking}")? {
         if cached {
@@ -257,7 +257,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
 
     let generation = g.lock.lock().generation;
 
-    if fsck_err_on!(t, gen_cmp(ptr_gen, generation) > 0, id::ptr_gen_newer_than_bucket_gen,
+    if fsck_err_on!(t, gen_cmp(ptr_gen, generation) > 0, ptr_gen_newer_than_bucket_gen,
                     "bucket {dev}:{b} data type {ptr_type} ptr gen in the future: {ptr_gen} > {generation}\n\
                      while marking {marking}")? {
         if cached {
@@ -269,14 +269,14 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     }
 
     if !cached {
-        if fsck_err_on!(t, gen_cmp(ptr_gen, generation) < 0, id::stale_dirty_ptr,
+        if fsck_err_on!(t, gen_cmp(ptr_gen, generation) < 0, stale_dirty_ptr,
                         "bucket {dev}:{b} data type {ptr_type} stale dirty ptr: {ptr_gen} < {generation}\n\
                          while marking {marking}")? {
             // XXX: if it's a data pointer, read it and see if it's good
             fix |= PtrFix::RESET_GEN;
         }
     } else if fsck_err_on!(t, i32::from(gen_cmp(generation, ptr_gen)) > BUCKET_GC_GEN_MAX as i32,
-                           id::ptr_gen_newer_than_bucket_gen,
+                           ptr_gen_newer_than_bucket_gen,
                            "bucket {dev}:{b} gen {generation} data type {ptr_type}: ptr gen {ptr_gen} too stale\n\
                             while marking {marking}")? {
         return Ok(PtrFix::DROP);
@@ -287,7 +287,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     }
 
     let bucket_type = DataType(g.lock.lock().data_type().into());
-    if fsck_err_on!(t, bucket_type.mismatches(data_type), id::ptr_bucket_data_type_mismatch,
+    if fsck_err_on!(t, bucket_type.mismatches(data_type), ptr_bucket_data_type_mismatch,
                     "bucket {dev}:{b} gen {generation} different types of data in same bucket: {}, {}\n\
                      while marking {marking}", data_type_str(bucket_type), data_type_str(data_type))? {
         if bucket_type == DataType::journal {
@@ -334,9 +334,9 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
             (alive, alive && ptr_matches_stripe_m(&m, p))
         });
 
-        if fsck_err_on!(t, !alive, id::ptr_to_missing_stripe,
+        if fsck_err_on!(t, !alive, ptr_to_missing_stripe,
                         "pointer to nonexistent stripe {idx}\nwhile marking {marking}")? ||
-           fsck_err_on!(t, alive && !matches, id::ptr_to_incorrect_stripe,
+           fsck_err_on!(t, alive && !matches, ptr_to_incorrect_stripe,
                         "pointer does not match stripe {idx}\nwhile marking {marking}")? {
             fix |= PtrFix::DROP_STRIPE;
         }
@@ -393,13 +393,13 @@ fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: Btree, mut new
     let damage_pos = if btree == Btree::extents { new.k().p } else { POS_MIN };
 
     if found_good_cached_ptr {
-        inode_fsck_err!(t, damage_pos, id::extent_ptrs_all_invalid_but_cached,
+        inode_fsck_err!(t, damage_pos, extent_ptrs_all_invalid_but_cached,
                         "extent without valid dirty pointers\n{}", new.as_sc().to_text(fs))?;
 
         let opts = get_io_opts(t, None, new.as_sc())?;
         new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;
     } else {
-        inode_fsck_err!(t, damage_pos, id::extent_ptrs_all_invalid,
+        inode_fsck_err!(t, damage_pos, extent_ptrs_all_invalid,
                         "extent without valid pointers\n{}", new.as_sc().to_text(fs))?;
 
         new.set_error(fs, ErrorKeyReason::no_valid_pointers_repair);

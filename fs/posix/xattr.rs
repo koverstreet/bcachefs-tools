@@ -22,7 +22,7 @@ use crate::posix::xattr_format::Xattr;
 use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::posix::str_hash::{self, HashTable, HashInfo};
 use crate::util::{os_str::{OsStr, OsStrExt}, vstructs::{InPlace, Unvalidated, Validated}, Printbuf};
 use crate::format::Btree;
@@ -206,20 +206,20 @@ impl crate::btree::bkey::BkeyOps for Xattr {
         let have     = v.k.val_bytes().len() / size_of::<u64>();
 
         let want = val_u64s(name_len, val_len);
-        bkey_fsck_err_on!(v, have < want, id::xattr_val_size_too_small,
+        bkey_fsck_err_on!(v, have < want, xattr_val_size_too_small,
                           "value too small ({} < {})", have, want)?;
 
         // XXX why +4 ?
         let max = val_u64s(name_len, val_len + 4);
-        bkey_fsck_err_on!(v, have > max, id::xattr_val_size_too_big,
+        bkey_fsck_err_on!(v, have > max, xattr_val_size_too_big,
                           "value too big ({} > {})", have, max)?;
 
-        bkey_fsck_err_on!(v, !x.ty().known(), id::xattr_invalid_type,
+        bkey_fsck_err_on!(v, !x.ty().known(), xattr_invalid_type,
                           "invalid type ({})", x.x_type)?;
 
         // within the value, by the size checked above
         let name = &x.x_name_and_value[..name_len];
-        bkey_fsck_err_on!(v, name.contains(&0), id::xattr_name_invalid_chars,
+        bkey_fsck_err_on!(v, name.contains(&0), xattr_name_invalid_chars,
                           "xattr name has invalid characters")
     }
 

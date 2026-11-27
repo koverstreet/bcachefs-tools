@@ -20,7 +20,6 @@ use crate::data::ec::stripe::{carried_blocks, ptr_in_block, Block};
 use crate::data::ptrs::{brand, BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, Ptrs, PtrsMut};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::debug::trace::{events, TraceEvent};
 use crate::sb::errors::FsckFlags;
 use crate::{bch_err, fs_inconsistent, fsck_err_flags, prt};
@@ -160,7 +159,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         // Only carrying an extent of the old stripe's has a stripe pointer to
         // drop: the new stripe's own blocks - old_idx == new_idx - have none
         if p.ec.idx() != old_idx {
-            fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, id::stripe_update_stale_stripe_ptr,
+            fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, stripe_update_stale_stripe_ptr,
                             "dropping stale stripe pointer (idx {}) while updating extent\n{}",
                             p.ec.idx(), k.to_text(fs))?;
         }

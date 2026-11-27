@@ -52,7 +52,7 @@ use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
 use crate::errcode::{Errcode, BchError};
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
@@ -123,9 +123,9 @@ impl BkeyOps for Backpointer {
         let bp = v.k.arm::<Backpointer>().expect("a backpointer");
         let level = bp.v().level;
 
-        bkey_fsck_err_on!(v, u32::from(level) > BTREE_MAX_DEPTH, id::backpointer_level_bad,
+        bkey_fsck_err_on!(v, u32::from(level) > BTREE_MAX_DEPTH, backpointer_level_bad,
                           "backpointer level bad: {level} >= {}", BTREE_MAX_DEPTH)?;
-        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(MEMBER_INVALID), id::backpointer_dev_bad,
+        bkey_fsck_err_on!(v, bp.k.p.inode == u64::from(MEMBER_INVALID), backpointer_dev_bad,
                           "backpointer for MEMBER_INVALID")
     }
 
@@ -397,7 +397,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, Backpoi
         }
     }
 
-    if fsck_err!(t, id::backpointer_to_missing_ptr, "{}", buf)? {
+    if fsck_err!(t, backpointer_to_missing_ptr, "{}", buf)? {
         backpointer_del(t, v.bp_btree(), bp.k.p)?;
 
         // Normally, on transaction commit from inside a transaction, we'll

@@ -3,7 +3,7 @@
 //! seen, or rejected - and btree_ptr(_v2)'s own on top of them.
 
 use super::*;
-use crate::init::{passes::RecoveryPass, error::{id, BkeyValidate}};
+use crate::init::{passes::RecoveryPass, error::BkeyValidate};
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
@@ -26,7 +26,7 @@ fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTyp
 
     for ptr2 in p.ptrs(v.fs) {
         bkey_fsck_err_on!(v, !core::ptr::eq(ptr, ptr2) && ptr.dev() == ptr2.dev(),
-                          id::ptr_to_duplicate_device,
+                          ptr_to_duplicate_device,
                           "multiple pointers to same device ({})", ptr.dev())?;
     }
 
@@ -41,13 +41,13 @@ fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, FamilyVal<PtrsTyp
         return Ok(());
     };
 
-    bkey_fsck_err_on!(v, bucket >= nbuckets, id::ptr_after_last_bucket,
+    bkey_fsck_err_on!(v, bucket >= nbuckets, ptr_after_last_bucket,
                       "pointer past last bucket ({} > {})", bucket, nbuckets)?;
-    bkey_fsck_err_on!(v, bucket < u64::from(first_bucket), id::ptr_before_first_bucket,
+    bkey_fsck_err_on!(v, bucket < u64::from(first_bucket), ptr_before_first_bucket,
                       "pointer before first bucket ({} < {})", bucket, first_bucket)?;
     // u32, wrapping, as C's unsigned arithmetic
     bkey_fsck_err_on!(v, bucket_offset.wrapping_add(size_ondisk) > u32::from(bucket_size),
-                      id::ptr_spans_multiple_buckets,
+                      ptr_spans_multiple_buckets,
                       "pointer spans multiple buckets ({} + {} > {})", bucket_offset, size_ondisk, bucket_size)
 }
 
@@ -79,23 +79,23 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     for (i, e) in p.extent_entries(fs).enumerate() {
         let ty = e.ty();
 
-        bkey_fsck_err_on!(v, matches!(e, ExtentEntry::Invalid { .. }), id::extent_ptrs_invalid_entry,
+        bkey_fsck_err_on!(v, matches!(e, ExtentEntry::Invalid { .. }), extent_ptrs_invalid_entry,
                           "invalid extent entry type (got {}, max {})", ty, fs.sb.extent_types_known.get())?;
 
         if let ExtentEntry::PastEnd { bytes, .. } = e {
-            return Err(bkey_fsck_err!(v, id::extent_ptrs_entry_past_end,
+            return Err(bkey_fsck_err!(v, extent_ptrs_entry_past_end,
                 "extent entry at u64 {} runs past the end of the value, {} u64s",
                 (bytes.as_ptr() as usize - entries_start) / 8, entries_u64s));
         }
 
         bkey_fsck_err_on!(v, is_btree_ptr && ty < ExtentEntryType::NR && !btree_ptr_entry_type_allowed(ty),
-                          id::btree_ptr_has_non_ptr, "has non allowed field")?;
+                          btree_ptr_has_non_ptr, "has non allowed field")?;
 
         match e {
             ExtentEntry::ptr(ptr) => {
                 extent_ptr_validate(v, p, ptr, size_ondisk)?;
 
-                bkey_fsck_err_on!(v, ptr.cached() != 0 && have_ec, id::ptr_cached_and_erasure_coded,
+                bkey_fsck_err_on!(v, ptr.cached() != 0 && have_ec, ptr_cached_and_erasure_coded,
                                   "cached, erasure coded ptr")?;
 
                 let real_dev = u32::from(ptr.dev()) != MEMBER_INVALID;
@@ -122,21 +122,21 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 let crc = crc_unpack(k.k, e).expect("a crc");
                 let csum_type = crc.csum_type.get();
 
-                bkey_fsck_err_on!(v, !csum_type.valid(fs), id::ptr_crc_csum_type_unknown,
+                bkey_fsck_err_on!(v, !csum_type.valid(fs), ptr_crc_csum_type_unknown,
                                   "invalid checksum type")?;
                 bkey_fsck_err_on!(v, crc.compression_type.get().0 >= CompressionType::NR,
-                                  id::ptr_crc_compression_type_unknown, "invalid compression type")?;
+                                  ptr_crc_compression_type_unknown, "invalid compression type")?;
 
                 bkey_fsck_err_on!(v, u32::from(crc.offset).wrapping_add(crc.live_size) > crc.uncompressed_size,
-                                  id::ptr_crc_uncompressed_size_too_small,
+                                  ptr_crc_uncompressed_size_too_small,
                                   "checksum offset + key size > uncompressed size")?;
                 bkey_fsck_err_on!(v, crc_is_encoded(&crc) &&
                                      crc.uncompressed_size > fs.opts().encoded_extent_max.get() >> 9 &&
                                      v.from.flags().intersects(ValidateFlags::write |
                                                                ValidateFlags::commit),
-                                  id::ptr_crc_uncompressed_size_too_big, "too large encoded extent")?;
+                                  ptr_crc_uncompressed_size_too_big, "too large encoded extent")?;
                 bkey_fsck_err_on!(v, !crc_is_compressed(&crc) && crc.compressed_size != crc.uncompressed_size,
-                                  id::ptr_crc_uncompressed_size_mismatch,
+                                  ptr_crc_uncompressed_size_mismatch,
                                   "not compressed but compressed != uncompressed size")?;
 
                 // an encrypted extent's crcs all point to one nonce, offset in
@@ -145,46 +145,46 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                     match nonce {
                         None => nonce = Some(n),
                         Some(first) if first != n =>
-                            return Err(bkey_fsck_err!(v, id::ptr_crc_nonce_mismatch, "incorrect nonce")),
+                            return Err(bkey_fsck_err!(v, ptr_crc_nonce_mismatch, "incorrect nonce")),
                         Some(_) => {}
                     }
                 }
 
-                bkey_fsck_err_on!(v, crc_since_last_ptr, id::ptr_crc_redundant, "redundant crc entry")?;
+                bkey_fsck_err_on!(v, crc_since_last_ptr, ptr_crc_redundant, "redundant crc entry")?;
                 crc_since_last_ptr = true;
 
                 size_ondisk = crc.compressed_size;
             }
             ExtentEntry::stripe_ptr(_) => {
-                bkey_fsck_err_on!(v, have_ec, id::ptr_stripe_redundant, "redundant stripe entry")?;
+                bkey_fsck_err_on!(v, have_ec, ptr_stripe_redundant, "redundant stripe entry")?;
                 have_ec = true;
             }
             ExtentEntry::reconcile(r) => extent_reconcile_validate(v, r)?,
             ExtentEntry::flags(_) =>
-                bkey_fsck_err_on!(v, i != 0, id::extent_flags_not_at_start,
+                bkey_fsck_err_on!(v, i != 0, extent_flags_not_at_start,
                                   "extent flags entry not at start")?,
             _ => {}
         }
     }
 
-    bkey_fsck_err_on!(v, nr_ptrs == 0, id::extent_ptrs_no_ptrs, "no ptrs")?;
-    bkey_fsck_err_on!(v, nr_ptrs > BKEY_PTRS_MAX, id::extent_ptrs_too_many_ptrs,
+    bkey_fsck_err_on!(v, nr_ptrs == 0, extent_ptrs_no_ptrs, "no ptrs")?;
+    bkey_fsck_err_on!(v, nr_ptrs > BKEY_PTRS_MAX, extent_ptrs_too_many_ptrs,
                       "too many ptrs: {} > {}", nr_ptrs, BKEY_PTRS_MAX)?;
-    bkey_fsck_err_on!(v, have_written && have_unwritten, id::extent_ptrs_written_and_unwritten,
+    bkey_fsck_err_on!(v, have_written && have_unwritten, extent_ptrs_written_and_unwritten,
                       "extent with unwritten and written ptrs")?;
     bkey_fsck_err_on!(v, k.k.key_type() != BkeyType::extent && have_unwritten,
-                      id::extent_ptrs_unwritten, "has unwritten ptrs")?;
-    bkey_fsck_err_on!(v, crc_since_last_ptr, id::extent_ptrs_redundant_crc, "redundant crc entry")?;
-    bkey_fsck_err_on!(v, have_ec, id::extent_ptrs_redundant_stripe, "redundant stripe entry")?;
+                      extent_ptrs_unwritten, "has unwritten ptrs")?;
+    bkey_fsck_err_on!(v, crc_since_last_ptr, extent_ptrs_redundant_crc, "redundant crc entry")?;
+    bkey_fsck_err_on!(v, have_ec, extent_ptrs_redundant_stripe, "redundant stripe entry")?;
 
     // A dead btree node keeps its pointer - not KEY_TYPE_error - for
     // bch_btree_ptr_v2's other fields
     if !is_btree_ptr {
-        bkey_fsck_err_on!(v, !have_non_inval_dev_ptrs, id::extent_ptrs_all_invalid,
+        bkey_fsck_err_on!(v, !have_non_inval_dev_ptrs, extent_ptrs_all_invalid,
                           "extent without valid pointers")?;
         bkey_fsck_err_on!(v, v.from.from() == BkeyValidateFrom::commit &&
                              !have_non_inval_dev_ptrs_dirty,
-                          id::extent_ptrs_all_invalid, "extent without valid dirty pointers")?;
+                          extent_ptrs_all_invalid, "extent without valid dirty pointers")?;
     }
     Ok(())
 }
@@ -322,7 +322,7 @@ impl BkeyOps for BtreePtr {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let val_u64s = v.k.val_bytes().len() / 8;
 
-        bkey_fsck_err_on!(v, val_u64s > REPLICAS_MAX as usize, id::btree_ptr_val_too_big,
+        bkey_fsck_err_on!(v, val_u64s > REPLICAS_MAX as usize, btree_ptr_val_too_big,
                           "value too big ({} > {})", val_u64s, REPLICAS_MAX)?;
 
         bkey_ptrs_validate(v)
@@ -343,15 +343,15 @@ impl BkeyOps for BtreePtrV2 {
         let bp = v.k.arm::<BtreePtrV2>().expect("a btree_ptr_v2");
         let val_u64s = v.k.val_bytes().len() / 8;
 
-        bkey_fsck_err_on!(v, val_u64s > BKEY_BTREE_PTR_VAL_U64s_MAX, id::btree_ptr_v2_val_too_big,
+        bkey_fsck_err_on!(v, val_u64s > BKEY_BTREE_PTR_VAL_U64s_MAX, btree_ptr_v2_val_too_big,
                           "value too big ({} > {})", val_u64s, BKEY_BTREE_PTR_VAL_U64s_MAX)?;
 
-        bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, id::btree_ptr_v2_min_key_bad,
+        bkey_fsck_err_on!(v, bp.v().min_key >= bp.k.p, btree_ptr_v2_min_key_bad,
                           "min_key > key")?;
 
         if v.from.flags().contains(ValidateFlags::write) &&
            u32::from(v.fs.sb.version_min.get()) >= MetadataVersion::btree_ptr_sectors_written.0 {
-            bkey_fsck_err_on!(v, bp.v().sectors_written.get() == 0, id::btree_ptr_v2_written_0,
+            bkey_fsck_err_on!(v, bp.v().sectors_written.get() == 0, btree_ptr_v2_written_0,
                               "sectors_written == 0")?;
         }
 

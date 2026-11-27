@@ -58,20 +58,20 @@ impl crate::btree::bkey::BkeyOps for Damage {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let val_bytes = v.k.k.val_bytes();
         bkey_fsck_err_on!(v, val_bytes % ENTRY != 0,
-                          id::damage_entries_bad, "val size {val_bytes} not a multiple of entry size")?;
+                          damage_entries_bad, "val size {val_bytes} not a multiple of entry size")?;
 
         let entries = &v.k.arm::<Damage>().expect("a damage key").v().entries;
-        bkey_fsck_err_on!(v, entries.is_empty(), id::damage_entries_bad, "no entries")?;
+        bkey_fsck_err_on!(v, entries.is_empty(), damage_entries_bad, "no entries")?;
 
         let mut prev = 0;
         for (i, e) in entries.iter().enumerate() {
             let id = e.id().0;
             // strictly ascending ids: covers unsorted, dup and zero
-            bkey_fsck_err_on!(v, id <= prev, id::damage_entries_bad,
+            bkey_fsck_err_on!(v, id <= prev, damage_entries_bad,
                               "entry {i}: id {id} nr {} (prev id {prev})", e.nr())?;
             prev = id;
 
-            bkey_fsck_err_on!(v, e.first() > e.last(), id::damage_entries_bad,
+            bkey_fsck_err_on!(v, e.first() > e.last(), damage_entries_bad,
                               "entry {i}: first occurrence after last")?;
         }
         Ok(())
@@ -363,7 +363,7 @@ fn check_damage(fs: &Fs) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(&trans, Btree::damage, POS_MIN, flags);
     iter.for_each_max_commit(&trans, SPOS_MAX, flags, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
         if k.k.key_type() == BkeyType::damage &&
-           fsck_err_on!(t, !inode_exists(t, k.k.p.offset, k.k.p.snapshot)?, id::damage_key_no_inode,
+           fsck_err_on!(t, !inode_exists(t, k.k.p.offset, k.k.p.snapshot)?, damage_key_no_inode,
                         "damage key with no inode:\n{}", k.to_text(fs))? {
             t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         }

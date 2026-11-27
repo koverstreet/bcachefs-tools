@@ -43,7 +43,7 @@ use crate::data::io_misc::fpunch_one;
 use crate::errcode::{Errcode, BchError};
 use crate::data::inline_data::InlineDataRef;
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::sb::errors::FsckFlags;
 use crate::data_structures::genradix::SharedGenRadix;
 use crate::types::{Le32, Le64};
@@ -279,7 +279,7 @@ fn gc_write_reflink_key(
 
     let r_refcount = r.refcount.load(Relaxed) as u32;
 
-    if fsck_err_on!(t, r_refcount as u64 != refcount.get(), id::reflink_v_refcount_wrong,
+    if fsck_err_on!(t, r_refcount as u64 != refcount.get(), reflink_v_refcount_wrong,
                     "reflink key has wrong refcount:\n{}\nshould be {}", k.to_text(fs), r_refcount)? {
         let mut new = t.bkey_make_mut_noupdate(k)?;
 
@@ -370,13 +370,13 @@ impl BkeyOps for ReflinkP {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let p = v.k.arm::<ReflinkP>().expect("a reflink_p").v();
 
-        bkey_fsck_err_on!(v, p.idx() < p.front_pad.get() as u64, id::reflink_p_front_pad_bad,
+        bkey_fsck_err_on!(v, p.idx() < p.front_pad.get() as u64, reflink_p_front_pad_bad,
                           "idx < front_pad ({} < {})", p.idx(), p.front_pad.get())?;
 
         // what it covers ends at an indirect position there can be: what's
         // added to idx - cutting its front, remapping it - stays within that
         let end = p.idx() + v.k.k.size as u64 + p.back_pad.get() as u64;
-        bkey_fsck_err_on!(v, end > ReflinkPIdxFlags::IDX_MAX, id::reflink_p_idx_bad,
+        bkey_fsck_err_on!(v, end > ReflinkPIdxFlags::IDX_MAX, reflink_p_idx_bad,
                           "past the maximum indirect position: idx {} + size {} + back_pad {} > {}",
                           p.idx(), { v.k.k.size }, p.back_pad.get(), ReflinkPIdxFlags::IDX_MAX)
     }
@@ -436,7 +436,7 @@ impl BkeyOps for ReflinkP {
 /// Either kind: reflink_ps' indices are offsets in inode 0, so nothing past it
 /// can be referenced - and gc's table, built in key order, is in offset order.
 fn indirect_pos_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, ReflinkPIdxFlags::IDX_MAX)), id::reflink_v_pos_bad,
+    bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, ReflinkPIdxFlags::IDX_MAX)), reflink_v_pos_bad,
                       "indirect extent above maximum position 0:{}", ReflinkPIdxFlags::IDX_MAX)
 }
 
@@ -548,7 +548,7 @@ fn indirect_extent_missing_error(
     prt!(&mut buf, "{}", p.to_text(fs));
     write!(buf, "\nmissing reflink btree range {}-{}", missing.start, missing.end);
 
-    if inode_fsck_err!(t, p.k.p, id::reflink_p_to_missing_reflink_v, "{}", buf.as_str())? {
+    if inode_fsck_err!(t, p.k.p, reflink_p_to_missing_reflink_v, "{}", buf.as_str())? {
         let mut new = t.bkey_make_mut_noupdate(p)?;
 
         /*
@@ -646,7 +646,7 @@ fn trans_trigger_reflink_p_segment(
     let refcount = k.refcount();
 
     if refcount.get() == 0 && overwrite {
-        fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, id::reflink_refcount_underflow,
+        fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, reflink_refcount_underflow,
                         "indirect extent refcount underflow while marking\n{}\n{}",
                         p.to_text(fs), k.to_text(fs))?;
         return Ok(());

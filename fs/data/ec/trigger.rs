@@ -14,7 +14,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::id, passes};
+use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, passes};
 use crate::fs::{Dev, Fs};
 use crate::alloc::accounting::ReconcileType;
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
@@ -283,7 +283,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
         // - and a btree walk and an fsck error can sleep. As C's.
         let nr_stripes = t.bucket_nr_stripes(bucket)?;
 
-        if fsck_err_on!(t, a.stripe_refcount != nr_stripes, id::alloc_key_stripe_refcount_wrong,
+        if fsck_err_on!(t, a.stripe_refcount != nr_stripes, alloc_key_stripe_refcount_wrong,
                         "bucket {}:{} with incorrect stripe_refcount, should be {nr_stripes}",
                         { bucket.inode }, { bucket.offset })? {
             a.stripe_refcount = nr_stripes;

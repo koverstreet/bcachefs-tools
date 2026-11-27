@@ -27,7 +27,7 @@ use crate::data::extents_format::BtreePtrV2;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{BkeyType, Bpos, Btree, Bkey, BTREE_MAX_DEPTH};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
-use crate::init::{error::id, recovery::btree_lost_data};
+use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::FsckFlags;
 use crate::util::{log::LogMsg, vstructs::{plain_bytes, plain_bytes_mut}, Printbuf};
 use crate::{bch_err, bch_err_fn, bch_err_msg, bch_info, btree_trans, fsck_err_flags, mustfix_fsck_err,
@@ -249,7 +249,7 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, b
             }
         }
 
-        if mustfix_fsck_err!(t, id::btree_node_topology_gap_between_nodes,
+        if mustfix_fsck_err!(t, btree_node_topology_gap_between_nodes,
                              "gap between btree nodes{}", buf.as_str())? {
             commit_topology_repair_log(t)?;
             if nodes_found != 0 {
@@ -259,23 +259,23 @@ fn check_node_boundaries(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, b
         }
     } else if let Some(p) = prev.filter(|p| cur.seq > p.seq) {				/* cur overwrites prev */
         if p.min_key >= cur.min_key {								/* fully? */
-            if mustfix_fsck_err!(t, id::btree_node_topology_overwritten_by_next_node,
+            if mustfix_fsck_err!(t, btree_node_topology_overwritten_by_next_node,
                                  "btree node overwritten by next node{}", buf.as_str())? {
                 commit_topology_repair_log(t)?;
                 return Ok(Repair::DropPrev);
             }
-        } else if mustfix_fsck_err!(t, id::btree_node_topology_bad_max_key,
+        } else if mustfix_fsck_err!(t, btree_node_topology_bad_max_key,
                                     "btree node with incorrect max_key{}", buf.as_str())? {
             commit_topology_repair_log(t)?;
             set_node_max(trans, &mut trans.paths(), p.idx, level - 1, cur.min_key.predecessor())?;
         }
     } else if expected_start >= cur.max_key {						/* fully? */
-        if mustfix_fsck_err!(t, id::btree_node_topology_overwritten_by_prev_node,
+        if mustfix_fsck_err!(t, btree_node_topology_overwritten_by_prev_node,
                              "btree node overwritten by prev node{}", buf.as_str())? {
             commit_topology_repair_log(t)?;
             return Ok(Repair::DropThis);
         }
-    } else if mustfix_fsck_err!(t, id::btree_node_topology_bad_min_key,
+    } else if mustfix_fsck_err!(t, btree_node_topology_bad_min_key,
                                 "btree node with incorrect min_key{}", buf.as_str())? {
         commit_topology_repair_log(t)?;
         set_node_min(trans, &mut trans.paths(), cur.idx, level - 1, expected_start)?;
@@ -389,7 +389,7 @@ fn repair_node_end(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &
         get_scanned_nodes(fs, btree, 0, child_end.successor(), end, &mut buf, &mut nodes_found)?;
     }
 
-    if mustfix_fsck_err!(t, id::btree_node_topology_bad_max_key,
+    if mustfix_fsck_err!(t, btree_node_topology_bad_max_key,
                          "btree node with incorrect max_key{}", buf.as_str())? {
         commit_topology_repair_log(t)?;
 
@@ -494,7 +494,7 @@ fn repair_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &Bk
          * when we start doing online topology repair
          */
         trans.unlock_long();
-        if mustfix_fsck_err_on!(fs, !have_child, id::btree_node_topology_interior_node_empty,
+        if mustfix_fsck_err_on!(fs, !have_child, btree_node_topology_interior_node_empty,
                                 "empty interior btree node at btree={btree} level={level}\n{}",
                                 BkeySC::from(node).to_text(fs))? {
             return Ok(Repair::DropThis);
@@ -556,7 +556,7 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
 
         let autofix = if btree_id_can_reconstruct(btree.0) { FsckFlags::AUTOFIX } else { FsckFlags::empty() };
         fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_FIX | autofix,
-                        id::btree_root_unreadable_and_scan_found_nothing,
+                        btree_root_unreadable_and_scan_found_nothing,
                         "{}btree node scan found no nodes, continue?", msg.as_str())?;
 
         fake_root(0);
@@ -598,13 +598,13 @@ fn check_root_boundaries(t: &TransAttempt<'_, '_>, btree: Btree) -> Result<(usiz
             .is_none_or(|p| p.v().min_key == b.min_key),
             "a btree_ptr_v2's min_key not its node's");
 
-    if mustfix_fsck_err_on!(t, b.min_key != POS_MIN, id::btree_node_topology_bad_root_min_key,
+    if mustfix_fsck_err_on!(t, b.min_key != POS_MIN, btree_node_topology_bad_root_min_key,
                             "btree root with incorrect min_key{}", buf.as_str())? {
         set_node_min(t.trans(), &mut t.trans().paths(), b.idx, level, POS_MIN)?;
     }
 
     /* set_node_min() leaves max_key */
-    if mustfix_fsck_err_on!(t, b.max_key != SPOS_MAX, id::btree_node_topology_bad_root_max_key,
+    if mustfix_fsck_err_on!(t, b.max_key != SPOS_MAX, btree_node_topology_bad_root_max_key,
                             "btree root with incorrect max_key{}", buf.as_str())? {
         set_node_max(t.trans(), &mut t.trans().paths(), b.idx, level, SPOS_MAX)?;
     }

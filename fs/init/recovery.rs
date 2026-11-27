@@ -524,7 +524,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &JsetEntry) -> Result<(), BchError
             let Some(k) = e.entries().next() else { return Ok(()) };
             let id = u32::from(entry.btree_id);
 
-            if fsck_err_on!(fs, id >= BTREE_ID_NR_MAX, id::invalid_btree_id,
+            if fsck_err_on!(fs, id >= BTREE_ID_NR_MAX, invalid_btree_id,
                             "invalid btree id {} (max {})", id, BTREE_ID_NR_MAX)? {
                 return Ok(());
             }
@@ -602,11 +602,11 @@ fn read_btree_roots(fs: &Fs) -> Result<(), BchError> {
         prt!(&mut buf, "btree={} level={}", Btree(i), level);
 
         let fixed = if fs.btree.cache.roots.error(i) != 0 {
-            mustfix_fsck_err!(fs, id::btree_root_bkey_invalid, "invalid btree root {}", buf)?
+            mustfix_fsck_err!(fs, btree_root_bkey_invalid, "invalid btree root {}", buf)?
         } else {
             let read = fs.btree_root_read(Btree(i), key.as_ref(), level.into());
             fs.btree_id_root_set_error(i, ret_to_c(read));
-            mustfix_fsck_err_on!(fs, read.is_err(), id::btree_root_read_error,
+            mustfix_fsck_err_on!(fs, read.is_err(), btree_root_read_error,
                                  "error reading btree root {}: {}", buf, read.err().map_or("", |e| e.msg()))?
         };
         if fixed && btree_id_can_reconstruct(i) {
@@ -705,7 +705,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         if mustfix_fsck_err_on!(fs, fs.sb.clean.get() != 0 &&
                                     journal_start.replay_end != 0 &&
                                     !journal_start.clean,
-                                id::clean_but_journal_not_empty,
+                                clean_but_journal_not_empty,
                                 "filesystem marked clean but journal not empty")? {
             let mut sb = fs.sb_lock();
             sb.published().compat.set(fs.sb.compat.get() - SbCompats::alloc_info);
@@ -718,7 +718,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         let mut last_journal_entry = jk.all_replays_rev().find(|(i, _)| !i.ignored()).map(|(_, j)| j);
 
         if last_journal_entry.is_none() {
-            fsck_err_on!(fs, fs.sb.clean.get() == 0, id::dirty_but_no_journal_entries,
+            fsck_err_on!(fs, fs.sb.clean.get() == 0, dirty_but_no_journal_entries,
                          "no journal entries found")?;
             if clean.is_some() {
                 use_clean = true;

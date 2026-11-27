@@ -179,7 +179,7 @@ pub(crate) fn need_discard_or_freespace_err(
         (id::freespace_key_wrong, Btree::freespace)
     };
 
-    match fsck_err_flags!(t, POS_MIN, flags, err, "bucket incorrectly {}set in {} btree\n{}",
+    match fsck_err_flags!(t, POS_MIN, flags, (err), "bucket incorrectly {}set in {} btree\n{}",
                           if set { "" } else { "un" }, btree, alloc_k.to_text(t.fs())) {
         Err(e) if e.matches(Errcode::fsck_errors_not_fixed) => Ok(false),
         r => r,
@@ -199,7 +199,7 @@ fn check_alloc_key<'t>(
     let bucket = alloc_k.k.p;
 
     let ca = fs.dev_bucket_tryget_noerror(bucket);
-    if fsck_err_on!(t, ca.is_none(), id::alloc_key_to_missing_dev_bucket,
+    if fsck_err_on!(t, ca.is_none(), alloc_key_to_missing_dev_bucket,
                     "alloc key for invalid device:bucket {}:{}", { bucket.inode }, { bucket.offset })? {
         t.delete_at(alloc_iter, UpdateTriggerFlags::empty())?;
     }
@@ -242,7 +242,7 @@ fn check_alloc_key<'t>(
     let (bucket_gens_iter, k) = iters.bucket_gens.peek_slot_shared(t)?;
 
     let bucket_gen = gens_pos.bucket_gen(k);
-    if fsck_err_on!(t, a.v().generation != bucket_gen, id::bucket_gens_key_wrong,
+    if fsck_err_on!(t, a.v().generation != bucket_gen, bucket_gens_key_wrong,
                     "incorrect gen in bucket_gens btree (got {} should be {})\n{}",
                     bucket_gen, a.v().generation, alloc_k.to_text(fs))? {
         let mut g = match k.arm::<BucketGens>() {
@@ -259,7 +259,7 @@ fn check_alloc_key<'t>(
 
     let nr_stripes = t.bucket_nr_stripes(bucket)?;
 
-    if fsck_err_on!(t, a.v().stripe_refcount != nr_stripes, id::alloc_key_stripe_refcount_wrong,
+    if fsck_err_on!(t, a.v().stripe_refcount != nr_stripes, alloc_key_stripe_refcount_wrong,
                     "alloc key with incorrect stripe_refcount, should be {}\n{}",
                     nr_stripes, alloc_k.to_text(fs))? {
         a.v_mut().stripe_refcount = nr_stripes;
@@ -286,7 +286,7 @@ fn check_alloc_hole_freespace<'t>(
     *end = bkey_min(k.k.p, *end);
 
     let p = freespace_iter.pos();
-    if fsck_err_on!(t, k.k.key_type() != BkeyType::set, id::freespace_hole_missing,
+    if fsck_err_on!(t, k.k.key_type() != BkeyType::set, freespace_hole_missing,
                     "hole in alloc btree missing in freespace btree\ndevice {} buckets {}-{}",
                     { p.inode }, { p.offset }, { end.offset })? {
         let size = (end.offset - p.offset).min(u32::MAX.into());
@@ -325,7 +325,7 @@ fn check_alloc_hole_bucket_gens<'t>(
 
         for i in start_pos.idx..gens_end {
             let b = BucketGensPos { key: k.k.p, idx: i }.bucket();
-            if fsck_err_on!(t, gens[i] != 0, id::bucket_gens_hole_wrong,
+            if fsck_err_on!(t, gens[i] != 0, bucket_gens_hole_wrong,
                             "hole in alloc btree at {}:{} with nonzero gen in bucket_gens btree ({})",
                             { b.inode }, { b.offset }, gens[i])? {
                 gens[i] = 0;
@@ -426,7 +426,7 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
     let bucket = p.bucket;
 
     if fs.dev_bucket_tryget_noerror(bucket).is_none() {
-        if fsck_err!(t, id::need_discard_freespace_key_to_invalid_dev_bucket,
+        if fsck_err!(t, need_discard_freespace_key_to_invalid_dev_bucket,
                      "entry in {} btree for nonexistant dev:bucket {}:{}",
                      iter.btree(), { bucket.inode }, { bucket.offset })? {
             t.bit_mod_buffered(Btree::need_discard, iter.pos(), false)?;
@@ -442,7 +442,7 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
        a.journal_seq_empty != p.journal_seq_empty {
         last_flushed.maybe_flush(t, alloc_k)?;
 
-        if fsck_err!(t, id::need_discard_freespace_key_bad, "{}\nincorrectly set at {}:{}:{}:0",
+        if fsck_err!(t, need_discard_freespace_key_bad, "{}\nincorrectly set at {}:{}:{}:0",
                      alloc_k.to_text(fs), iter.btree(), { iter.pos().inode }, { iter.pos().offset })? {
             t.bit_mod_buffered(Btree::need_discard, iter.pos(), false)?;
         }
@@ -500,7 +500,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
 
         if !fs.dev_bucket_exists(pos.bucket) {
-            return bad(fsck_err_flags!(t, POS_MIN, flags, id::need_discard_freespace_key_to_invalid_dev_bucket,
+            return bad(fsck_err_flags!(t, POS_MIN, flags, need_discard_freespace_key_to_invalid_dev_bucket,
                                        "entry in {} btree for nonexistant dev:bucket {}:{}",
                                        iter.btree(), { pos.bucket.inode }, { pos.bucket.offset })?);
         }
@@ -508,7 +508,7 @@ pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         let a = alloc_to_v4(alloc_k);
         let want = FreespacePos::new(pos.bucket, &a);
         if a.data_type() != DataType::free || pos != want {
-            return bad(fsck_err_flags!(t, POS_MIN, flags, id::need_discard_freespace_key_bad,
+            return bad(fsck_err_flags!(t, POS_MIN, flags, need_discard_freespace_key_bad,
                                        "{}\nincorrectly set at {}:{}:{}:0 (genbits {} should be {})",
                                        alloc_k.to_text(fs), iter.btree(), { iter.pos().inode },
                                        { iter.pos().offset }, pos.genbits, want.genbits)?);
@@ -576,7 +576,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
     let end = BucketGensPos { key: k.k.p.nosnap_successor(), idx: 0 }.bucket().offset;
 
     let Some(ca) = fs.dev_get(k.k.p.inode as u32) else {
-        if fsck_err!(t, id::bucket_gens_to_invalid_dev, "bucket_gens key for invalid device:\n{}",
+        if fsck_err!(t, bucket_gens_to_invalid_dev, "bucket_gens key for invalid device:\n{}",
                      k.to_text(fs))? {
             t.delete_at(iter, UpdateTriggerFlags::empty())?;
         }
@@ -586,7 +586,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
     let first_bucket = u64::from(ca.mi.get().first_bucket);
     let nbuckets = ca.mi.get().nbuckets;
 
-    if fsck_err_on!(t, end <= first_bucket || start >= nbuckets, id::bucket_gens_to_invalid_buckets,
+    if fsck_err_on!(t, end <= first_bucket || start >= nbuckets, bucket_gens_to_invalid_buckets,
                     "bucket_gens key for invalid buckets:\n{}", k.to_text(fs))? {
         return t.delete_at(iter, UpdateTriggerFlags::empty());
     }
@@ -596,7 +596,7 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
 
     for b in (start..first_bucket).chain(nbuckets..end) {
         let i = (b & BucketGens::MASK) as usize;
-        if fsck_err_on!(t, gens[i] != 0, id::bucket_gens_nonzero_for_invalid_buckets,
+        if fsck_err_on!(t, gens[i] != 0, bucket_gens_nonzero_for_invalid_buckets,
                         "bucket_gens key has nonzero gen for invalid bucket")? {
             gens[i] = 0;
             need_update = true;
@@ -691,7 +691,7 @@ fn check_alloc_to_lru_ref<'t>(
     }
 
     if a.data_type() == DataType::cached {
-        if fsck_err_on!(t, a.io_time[READ] == 0, id::alloc_key_cached_but_read_time_zero,
+        if fsck_err_on!(t, a.io_time[READ] == 0, alloc_key_cached_but_read_time_zero,
                         "cached bucket with read_time 0\n{}", alloc_k.to_text(fs))? {
             let mut a_mut = t.alloc_to_v4_mut(alloc_k)?;
             a_mut.v_mut().io_time[READ] = fs.current_io_time(READ);

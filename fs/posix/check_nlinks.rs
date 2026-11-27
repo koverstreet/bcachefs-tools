@@ -24,7 +24,6 @@ use crate::posix::dirent::{Dirent, DirentTarget};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::{fsck_err_on, bch_err, bch_err_fn};
-use crate::init::error::id;
 use crate::posix::inode;
 use crate::util::alloc::Vec;
 use core::cmp::max;
@@ -178,7 +177,7 @@ fn check_nlinks_update_inode(
     let unlinked = u.flag(InodeFlags::unlinked);
 
     if fsck_err_on!(t, nlink != link.count || (unlinked && u.bi_nlink != 0),
-                    id::inode_wrong_nlink,
+                    inode_wrong_nlink,
                     "inode has wrong i_nlink ({}, should be {})\n{}", nlink, link.count, u)? {
         u.set_nlink(link.count);
         return inode::fsck_write(t, &mut u);

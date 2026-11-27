@@ -59,7 +59,7 @@ use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{self, Bpos};
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::types::ArmOf;
 use crate::util::{rcu, Printbuf};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, Head, Unvalidated, VStructError};
@@ -263,15 +263,15 @@ impl BkeyOps for Accounting {
         let ver = v.k.k.bversion;
         bkey_fsck_err_on!(v, v.from.flags().contains(ValidateFlags::commit) &&
                           ver.hi == 0 && ver.lo == 0,
-                          id::accounting_key_version_0, "accounting key with version=0")?;
+                          accounting_key_version_0, "accounting key with version=0")?;
 
         let arm = match arm {
             Ok(arm) => arm,
             Err(ArmError::Bad { err, .. }) => {
                 return Err(match replicas_past_end(err) {
-                    Some((devs, room)) => bkey_fsck_err!(v, id::accounting_key_replicas_past_end,
+                    Some((devs, room)) => bkey_fsck_err!(v, accounting_key_replicas_past_end,
                         "accounting key replicas entry with {devs} devs, room for {room}"),
-                    None => bkey_fsck_err!(v, id::accounting_key_replicas_past_end,
+                    None => bkey_fsck_err!(v, accounting_key_replicas_past_end,
                         "accounting key replicas entry: {err}"),
                 });
             }
@@ -279,13 +279,13 @@ impl BkeyOps for Accounting {
         };
 
         if let A::replicas(r) = arm {
-            bkey_fsck_err_on!(v, r.nr_devs == 0, id::accounting_key_replicas_nr_devs_0,
+            bkey_fsck_err_on!(v, r.nr_devs == 0, accounting_key_replicas_nr_devs_0,
                               "accounting key replicas entry with nr_devs=0")?;
             bkey_fsck_err_on!(v, r.nr_required > r.nr_devs || (r.nr_required > 1 && r.nr_required == r.nr_devs),
-                              id::accounting_key_replicas_nr_required_bad,
+                              accounting_key_replicas_nr_required_bad,
                               "accounting key replicas entry with bad nr_required")?;
             bkey_fsck_err_on!(v, r.devs.windows(2).any(|d| u32::from(d[0]) != MEMBER_INVALID && d[0] >= d[1]),
-                              id::accounting_key_replicas_devs_unsorted,
+                              accounting_key_replicas_devs_unsorted,
                               "accounting key replicas entry with unsorted devs")?;
         }
 
@@ -295,11 +295,11 @@ impl BkeyOps for Accounting {
         };
 
         bkey_fsck_err_on!(v, pos.as_bytes()[end..].iter().any(|&b| b != 0),
-                          id::accounting_key_junk_at_end, "junk at end of accounting key")?;
+                          accounting_key_junk_at_end, "junk at end of accounting key")?;
 
         let nr_counters = v.k.arm::<Accounting>().expect("an accounting key").v().d.len();
         bkey_fsck_err_on!(v, nr_counters == 0 || nr_counters > MAX_COUNTERS,
-                          id::accounting_key_nr_counters_wrong,
+                          accounting_key_nr_counters_wrong,
                           "accounting key with {nr_counters} counters, should be {}", pos.nr_counters())
     }
 

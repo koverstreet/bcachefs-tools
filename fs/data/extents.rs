@@ -18,7 +18,7 @@ use crate::data_structures::dst_room::DstRoom;
 use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::{id, BkeyValidate};
+use crate::init::error::BkeyValidate;
 use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated}, Printbuf};
 use cstruct_macros::{MaybeZeroable, bch_enum, TypeInfo};
 use crate::types::Le8;
@@ -553,7 +553,7 @@ impl BkeyOps for Reservation {
         let r = v.k.arm::<Reservation>().expect("a reservation").v();
 
         bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > REPLICAS_MAX,
-                          id::reservation_key_nr_replicas_invalid,
+                          reservation_key_nr_replicas_invalid,
                           "invalid nr_replicas ({})", r.nr_replicas)
     }
 

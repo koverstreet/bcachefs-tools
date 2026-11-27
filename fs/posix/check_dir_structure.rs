@@ -34,7 +34,7 @@ use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
 use crate::snapshots::subvolume::SubvolInum;
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
-use crate::init::{error::id, progress::Progress};
+use crate::init::progress::Progress;
 use crate::snapshots::subvolume;
 use crate::posix::dirent::{self, Dirent};
 use crate::posix::inode::{Inodes, InodeUnpacked};
@@ -144,7 +144,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
             write!(buf, "subvolume loop: ");
             namei::inum_to_path(t, start, &mut buf)?;
 
-            if inode_fsck_err!(t, inode_pos, id::subvol_loop, "{}", buf)? {
+            if inode_fsck_err!(t, inode_pos, subvol_loop, "{}", buf)? {
                 return reattach_subvol(t, root);
             }
             return Ok(());
@@ -156,7 +156,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
                 cur.set_key(pk);
             }
             _ => {
-                if inode_fsck_err!(t, inode_pos, id::subvol_unreachable,
+                if inode_fsck_err!(t, inode_pos, subvol_unreachable,
                                    "unreachable subvolume {}", s.to_text(fs))? {
                     return reattach_subvol(t, root);
                 }
@@ -314,7 +314,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Res
                 }
             }
 
-            if inode_fsck_err!(t, spos(0, inode.bi_inum, inode.bi_snapshot), id::dir_loop,
+            if inode_fsck_err!(t, spos(0, inode.bi_inum, inode.bi_snapshot), dir_loop,
                                "{}", buf)? {
                 bch_err_msg!(fs, remove_backpointer(t, &mut inode), "removing dirent")?;
 

@@ -21,7 +21,6 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::data::ec::format::Stripe;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::sb::errors::FsckFlags;
 use crate::util::{rcu::read_lock, vstructs::Validated};
 use crate::{fsck_err, fsck_err_flags, fsck_err_on};
@@ -65,14 +64,14 @@ fn check_stripe_refs_one(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, last_flushed: 
         let mut iter = BtreeIter::new(t, Btree::bucket_to_stripe, pos(bucket_to_u64(bucket), idx),
                                       BtreeIterFlags::empty());
         let missing = iter.peek_slot(t)?.expect("a slot always has a key").k.key_type() != BkeyType::set;
-        if fsck_err_on!(t, missing, id::stripe_to_missing_bucket_ref,
+        if fsck_err_on!(t, missing, stripe_to_missing_bucket_ref,
                         "stripe block {i} missing bucket ref\n{}", k.to_text(fs))? {
             bucket_stripe_ref_mod(t, bucket, idx, true)?;
         }
 
         let stale = ca.ptr_stale(ptr, &read_lock()).is_some_and(|n| n > 0);
         if stale {
-            fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, id::stripe_read_ptr_stale,
+            fsck_err_flags!(t, POS_MIN, FsckFlags::CAN_IGNORE, stripe_read_ptr_stale,
                             "stripe block {i} points to a bucket that has been reused\n{}", k.to_text(fs))?;
         }
     }
@@ -96,14 +95,14 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     let Some(s) = k.arm::<Stripe>() else {
-        if fsck_err!(t, id::bucket_stripe_ref_to_missing_stripe, "bucket {}:{} points to missing stripe {stripe}",
+        if fsck_err!(t, bucket_stripe_ref_to_missing_stripe, "bucket {}:{} points to missing stripe {stripe}",
                      { bucket.inode }, { bucket.offset })? {
             return bucket_stripe_ref_mod(t, bucket, stripe, false);
         }
         return Ok(());
     };
 
-    if fsck_err_on!(t, !bucket_matches_stripe(fs, bucket, s.v()), id::bucket_stripe_ref_to_incorrect_stripe,
+    if fsck_err_on!(t, !bucket_matches_stripe(fs, bucket, s.v()), bucket_stripe_ref_to_incorrect_stripe,
                     "bucket {}:{} doesn't match stripe {stripe}", { bucket.inode }, { bucket.offset })? {
         return bucket_stripe_ref_mod(t, bucket, stripe, false);
     }

@@ -30,7 +30,7 @@ use crate::format::{Bpos, Btree, BtreeFlags, DataType, BTREE_MAX_DEPTH, Deleted}
 use crate::locking::{Locked, RwSem, SeqLock};
 use crate::{new_lock, bch_err_fn, bch_err_msg, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
 use crate::fs::{Dev, Fs, FsFlag};
-use crate::init::{error::id, progress::Progress};
+use crate::init::progress::Progress;
 use crate::types::Le16;
 use crate::util::Printbuf;
 use crate::os::kernel::READ;
@@ -184,12 +184,12 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
             "key version {version} past the journal's seq {}", fs.journal_cur_seq());
 
     let key_version = fs.key_version.load(Relaxed) as u64;
-    if fsck_err_on!(t, btree != Btree::accounting && version > key_version, id::bkey_version_in_future,
+    if fsck_err_on!(t, btree != Btree::accounting && version > key_version, bkey_version_in_future,
                     "key version number higher than recorded {key_version}\n{}", k.to_text(fs))? {
         fs.key_version.store(version as i64, Relaxed);
     }
 
-    if mustfix_fsck_err_on!(t, level != 0 && !fs.btree_bitmap_marked(k, false), id::btree_bitmap_not_marked,
+    if mustfix_fsck_err_on!(t, level != 0 && !fs.btree_bitmap_marked(k, false), btree_bitmap_not_marked,
                             "btree ptr not marked in member info btree allocated bitmap\n{}", k.to_text(fs))? {
         fs.btree_bitmap_mark(k);
     }
@@ -382,7 +382,7 @@ fn alloc_write_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, ca: &Dev, k: 
         m.dirty_sectors = gc.dirty_sectors;
     }
 
-    if fsck_err_on!(t, new.data_type != gc.data_type, id::alloc_key_data_type_wrong,
+    if fsck_err_on!(t, new.data_type != gc.data_type, alloc_key_data_type_wrong,
                     "bucket {}:{} gen {} has wrong data_type: got {}, should be {}",
                     inode, offset, gc.generation, new.data_type(), gc.data_type())? {
         new.data_type = gc.data_type;
@@ -402,7 +402,7 @@ fn alloc_write_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, ca: &Dev, k: 
 
     macro_rules! copy_bucket_field {
         ($err:ident, $f:ident) => {
-            if fsck_err_on!(t, new.$f != gc.$f, id::$err,
+            if fsck_err_on!(t, new.$f != gc.$f, $err,
                             "bucket {}:{} gen {} data type {} has wrong {}: got {}, should be {}",
                             inode, offset, gc.generation, gc.data_type(), stringify!($f),
                             u64::from(new.$f), u64::from(gc.$f))? {
@@ -492,9 +492,9 @@ fn gc_write_stripes_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeyS
         prt!(&mut buf, "{}", k.to_text(fs));
     }
 
-    if fsck_err_on!(t, parity_bad, id::stripe_parity_block_sector_count_wrong,
+    if fsck_err_on!(t, parity_bad, stripe_parity_block_sector_count_wrong,
                     "stripe parity block with nonzero sector count\n{}", buf.as_str())? ||
-       fsck_err_on!(t, bad, id::stripe_sector_count_wrong, "{}", buf.as_str())? {
+       fsck_err_on!(t, bad, stripe_sector_count_wrong, "{}", buf.as_str())? {
         let mut new = t.bkey_make_mut_noupdate(s)?;
 
         let counts = new.v_mut().blockcounts_mut().expect("the block counts it had");

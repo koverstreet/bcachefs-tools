@@ -19,7 +19,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard, btree_id_is_alloc};
 use crate::journal::entries::{entry_u64s, EntryWriter, NoRoom};
 use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
-use crate::sb::{errors::SbErrorId, io::{entries_end, SbFieldOps, SbResize}};
+use crate::sb::io::{entries_end, SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::Vec;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, Validated,
@@ -95,7 +95,7 @@ impl Fs {
         let (version, big_endian) = (sb.sb().version.get(), sb.sb().big_endian());
 
         let Some(f) = sb.field::<Section>() else {
-            if fsck_err!(self, SbErrorId::sb_clean_missing,
+            if fsck_err!(self, sb_clean_missing,
                          "superblock marked clean but clean section not present")? {
                 sb.sb_mut().set_clean(false);
                 sb.published().clean.set(0);
@@ -151,7 +151,7 @@ impl Fs {
     /// and that can't be fixed.
     pub(crate) fn verify_superblock_clean(&self, clean: &Section, j: &Jset) -> Result<bool, BchError> {
         if mustfix_fsck_err_on!(self, j.seq != clean.journal_seq,
-                SbErrorId::sb_clean_journal_seq_mismatch,
+                sb_clean_journal_seq_mismatch,
                 "superblock journal seq ({}) doesn't match journal ({}) after clean shutdown",
                 clean.journal_seq.get(), j.seq.get())? {
             return Ok(false);
@@ -168,7 +168,7 @@ impl Fs {
                 (Some((l1, Some(k1))), Some((l2, Some(k2)))) => l1 == l2 && k1.as_bytes() == k2.as_bytes(),
                 _ => false,
             };
-            mustfix_fsck_err_on!(self, !same, SbErrorId::sb_clean_btree_root_mismatch,
+            mustfix_fsck_err_on!(self, !same, sb_clean_btree_root_mismatch,
                 "superblock btree root {id} doesn't match journal after clean shutdown\n\
                  sb:      {}\n\
                  journal: {}\n", RootText(self, &sb), RootText(self, &journal))?;

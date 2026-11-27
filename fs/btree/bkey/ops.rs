@@ -104,7 +104,7 @@ pub struct Ops {
 /// A value that's nothing but its key: hash_whiteout's, set's.
 fn empty_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let n = v.k.k.val_bytes();
-    crate::bkey_fsck_err_on!(v, n != 0, crate::init::error::id::bkey_val_size_nonzero,
+    crate::bkey_fsck_err_on!(v, n != 0, bkey_val_size_nonzero,
                              "incorrect value size ({n} != 0)")
 }
 
@@ -237,7 +237,7 @@ pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     }
 
     let (have, min) = (v.k.k.val_bytes(), v.k.k.key_type().min_val_size());
-    crate::bkey_fsck_err_on!(v, have < min, crate::init::error::id::bkey_val_size_too_small,
+    crate::bkey_fsck_err_on!(v, have < min, bkey_val_size_too_small,
                              "bad val size ({have} < {min})")?;
 
     (v.k.k.key_type().ops().validate)(v)
@@ -258,7 +258,6 @@ impl fmt::Display for NodeType {
 /// The key's header: its type allowed in its btree, its size and position
 /// what its btree's keys' are.
 pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    use crate::init::error::id;
     use crate::bkey_fsck_err_on;
     let k = v.k.k;
 
@@ -266,7 +265,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    bkey_fsck_err_on!(v, usize::from(k.u64s) < crate::btree::bkey::BKEY_U64S, id::bkey_u64s_too_small,
+    bkey_fsck_err_on!(v, usize::from(k.u64s) < crate::btree::bkey::BKEY_U64S, bkey_u64s_too_small,
                       "u64s too small ({} < {})", k.u64s, crate::btree::bkey::BKEY_U64S)?;
 
     // a leaf's btree, None for an interior node; past the btrees this code
@@ -288,22 +287,22 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     };
 
     bkey_fsck_err_on!(v, strict && known && allowed & (1 << k.type_) == 0,
-                      id::bkey_invalid_type_for_btree, "invalid key type for btree {} ({})",
+                      bkey_invalid_type_for_btree, "invalid key type for btree {} ({})",
                       NodeType(btree), ty.name().unwrap_or("(unknown)"))?;
 
     if btree.is_some_and(|b| b.is_extents()) && !k.key_type().is_extent_whiteout() {
-        bkey_fsck_err_on!(v, k.size == 0, id::bkey_extent_size_zero, "size == 0")?;
-        bkey_fsck_err_on!(v, u64::from(k.size) > k.p.offset, id::bkey_extent_size_greater_than_offset,
+        bkey_fsck_err_on!(v, k.size == 0, bkey_extent_size_zero, "size == 0")?;
+        bkey_fsck_err_on!(v, u64::from(k.size) > k.p.offset, bkey_extent_size_greater_than_offset,
                           "size greater than offset ({} > {})", k.size, { k.p.offset })?;
     } else {
-        bkey_fsck_err_on!(v, k.size != 0, id::bkey_size_nonzero, "size != 0")?;
+        bkey_fsck_err_on!(v, k.size != 0, bkey_size_nonzero, "size != 0")?;
     }
 
     if let Some(b) = btree {
         if b.has_snapshots() {
-            bkey_fsck_err_on!(v, k.p.snapshot == 0, id::bkey_snapshot_zero, "snapshot == 0")?;
+            bkey_fsck_err_on!(v, k.p.snapshot == 0, bkey_snapshot_zero, "snapshot == 0")?;
         } else if !b.has_snapshot_field() {
-            bkey_fsck_err_on!(v, k.p.snapshot != 0, id::bkey_snapshot_nonzero, "nonzero snapshot")?;
+            bkey_fsck_err_on!(v, k.p.snapshot != 0, bkey_snapshot_nonzero, "nonzero snapshot")?;
         } else {
             /*
              * btree uses snapshot field but it's not required to be
@@ -311,7 +310,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
              */
         }
 
-        bkey_fsck_err_on!(v, k.p == crate::btree::bkey::POS_MAX, id::bkey_at_pos_max, "key at POS_MAX")?;
+        bkey_fsck_err_on!(v, k.p == crate::btree::bkey::POS_MAX, bkey_at_pos_max, "key at POS_MAX")?;
     }
     Ok(())
 }

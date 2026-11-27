@@ -270,7 +270,7 @@ pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, 
      * initialized and can't stand in for the check.
      */
     if unlikely(!fs.compress.workspace[opt].is_made()) {
-        if !fsck_err!(fs, id::compression_type_not_marked_in_sb,
+        if !fsck_err!(fs, compression_type_not_marked_in_sb,
                       "compression type {} set but not marked in superblock", t)? {
             return fs.throw(e::compression_workspace_not_initialized);
         }
@@ -481,7 +481,7 @@ fn compress<'a>(fs: &Fs, dst: Out<'a>, src: &[u8], src_len: &mut usize,
     };
 
     if unlikely(!fs.compress.workspace[t].is_made()) {
-        let fix = fsck_err!(fs, id::compression_opt_not_marked_in_sb,
+        let fix = fsck_err!(fs, compression_opt_not_marked_in_sb,
                             "compression opt {} set but not marked in superblock", opts(t as u32));
         // not to fix, fsck_err() failing, or no memory for the pools: don't compress
         if !matches!(fix, Ok(true)) || check_set_has_compressed_data(fs, t as u8).is_err() {

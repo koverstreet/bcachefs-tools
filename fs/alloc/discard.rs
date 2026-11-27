@@ -918,7 +918,7 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &Dev, lru_k: BkeySC<'_>,
     let bucket = u64_to_bucket(lru_pos.offset);
 
     if fs.dev_bucket_tryget_noerror(bucket).is_none() {
-        if fsck_err!(t, id::lru_entry_to_invalid_bucket,
+        if fsck_err!(t, lru_entry_to_invalid_bucket,
                      "lru key points to nonexistent device:bucket {}:{}", { bucket.inode }, { bucket.offset })? {
             return t.bit_mod_buffered(Btree::lru, lru_pos, false);
         }

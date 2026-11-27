@@ -221,9 +221,9 @@ pub(crate) use {btree_err, btree_err_on};
 pub fn bkey_in_btree_node(v: &BkeyValidate<'_, '_>, contents: &NodeContents) -> Result<(), BchError> {
     let data = contents.data();
 
-    bkey_fsck_err_on!(v, v.k.k.p < data.min_key, id::bkey_before_start_of_btree_node,
+    bkey_fsck_err_on!(v, v.k.k.p < data.min_key, bkey_before_start_of_btree_node,
                       "key before start of btree node")?;
-    bkey_fsck_err_on!(v, v.k.k.p > data.max_key, id::bkey_after_end_of_btree_node,
+    bkey_fsck_err_on!(v, v.k.k.p > data.max_key, bkey_after_end_of_btree_node,
                       "key past end of btree node")
 }
 

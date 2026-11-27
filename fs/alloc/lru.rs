@@ -33,7 +33,7 @@ use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_END, LRU_BUCKET_FRAGMENT
     LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
 use crate::btree::bbpos::Bbpos;
 use crate::errcode::BchError;
-use crate::init::{error::{id, BkeyValidate}, progress::Progress};
+use crate::init::{error::BkeyValidate, progress::Progress};
 use crate::{bkey_fsck_err_on, fsck_err};
 use core::ops::RangeInclusive;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
@@ -161,7 +161,7 @@ impl LruPos {
 
 impl BkeyOps for Lru {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-        bkey_fsck_err_on!(v, LruPos::from_bpos(v.k.k.p).time == 0, id::lru_entry_at_time_0,
+        bkey_fsck_err_on!(v, LruPos::from_bpos(v.k.k.p).time == 0, lru_entry_at_time_0,
                           "lru entry at time=0")
     }
 
@@ -266,7 +266,7 @@ pub(crate) fn lru_check_set(
     if lru_k.k.key_type() != BkeyType::set {
         last_flushed.maybe_flush(t, referring_k)?;
 
-        if fsck_err!(t, id::alloc_key_to_missing_lru_entry, "missing {} lru entry at pos {}\n{}",
+        if fsck_err!(t, alloc_key_to_missing_lru_entry, "missing {} lru entry at pos {}\n{}",
                      pos.lru_id().lru_type(), iter.pos(), referring_k.to_text(fs))? {
             lru_mod(t, pos, true)?;
         }
@@ -332,7 +332,7 @@ fn check_lru_key(
     if pos.id != want_id || pos.time != time {
         last_flushed.maybe_flush(t, lru_k)?;
 
-        if fsck_err!(t, id::lru_entry_bad,
+        if fsck_err!(t, lru_entry_bad,
                      "incorrect lru entry: lru {}, expected id {} time {}\n{}\nfor {}",
                      ty, want_id, time, lru_k.to_text(fs), k.to_text(fs))? {
             return t.bit_mod_buffered(Btree::lru, lru_iter.pos(), false);

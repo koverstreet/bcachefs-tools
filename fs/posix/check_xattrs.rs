@@ -52,7 +52,7 @@ fn check_acl_flag(
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         if !i.whiteout &&
-           fsck_err_on!(t, !i.inode.flag(flag), acl.flag_wrong(),
+           fsck_err_on!(t, !i.inode.flag(flag), (acl.flag_wrong()),
                         "inode has {0} acl xattr but BCH_INODE_has_{0}_acl not set\n{1}\n{2}",
                         acl.name(), i.inode, k.to_text(fs))? {
             let mut u = i.inode;

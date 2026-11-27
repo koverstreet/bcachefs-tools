@@ -109,7 +109,7 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
     let Some(bucket) = bucket else {
         backpointers_maybe_flush(t, k, last_flushed.borrow())?;
 
-        if fsck_err!(t, id::backpointer_to_missing_device, "backpointer for missing device:\n{}",
+        if fsck_err!(t, backpointer_to_missing_device, "backpointer for missing device:\n{}",
                      k.to_text(fs))? {
             backpointer_del(t, Btree::backpointers, k.k.p)?;
         }
@@ -123,7 +123,7 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
         backpointers_maybe_flush(t, k, last_flushed.borrow())?;
 
         let p = alloc_iter.pos();
-        if fsck_err!(t, id::backpointer_to_missing_alloc, "backpointer for nonexistent alloc key: {}:{}:0\n{}",
+        if fsck_err!(t, backpointer_to_missing_alloc, "backpointer for nonexistent alloc key: {}:{}:0\n{}",
                      { p.inode }, { p.offset }, k.to_text(fs))? {
             backpointer_del(t, Btree::backpointers, k.k.p)?;
         }
@@ -157,7 +157,7 @@ fn bp_missing(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<Backp
         prt!(&mut buf, "\ngot:  {}", bp_found.to_text(fs));
     }
 
-    if fsck_err!(t, id::ptr_to_missing_backpointer, "{}", buf)? {
+    if fsck_err!(t, ptr_to_missing_backpointer, "{}", buf)? {
         bucket_backpointer_mod(t, extent, bp, true)?;
     }
     Ok(())
@@ -352,7 +352,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
         // of them reads the other's bytes. The pos-ful report records against
         // the first inode; record the second explicitly (KEY_TYPE_extent only
         // lives in the extents btree, so both attribute):
-        if inode_fsck_err!(t, extent.k.p, id::dup_extents_to_reflink, "{}", buf)? {
+        if inode_fsck_err!(t, extent.k.p, dup_extents_to_reflink, "{}", buf)? {
             damage::record(t, other_extent.k.p, id::dup_extents_to_reflink)?;
             extents_to_reflink(t,
                 &DupExtent { btree, level: bp.v.level, k: extent.into(), overlap: k1_start..k1_start + overlap_len },
