@@ -45,10 +45,18 @@ use crate::util::alloc::{Frees, init_at, Alloc, AllocError, Allocator, Kmalloc, 
 use crate::util::late::LateInit;
 use crate::util::mempool::Mempool;
 
-/// A bio bio_init() made, for the initializer of what it's in: 'a is as long
-/// as that may borrow from what it's made of - a clone's source - and as long
-/// as its box may live. Invariant, so an initializer can't shorten it.
-pub struct BioInPlace<'a>(*mut c::bio, PhantomData<fn(&'a ()) -> &'a ()>);
+/// Where a bio goes in what it's in, and what it's made with, for that one's
+/// initializer: the bio's field's makes it - bio_init() - so a bio is made
+/// only once its field is, and dropped by pin-init as any field is. 'a is as
+/// long as it may borrow from what it's made of - a clone's source - and as
+/// long as its box may live. Invariant, so an initializer can't shorten it.
+pub struct BioInPlace<'a> {
+    bio:     *mut c::bio,
+    nr_vecs: u16,
+    opf:     u32,
+    bvecs:   BioAlloc,
+    _a:      PhantomData<fn(&'a ()) -> &'a ()>,
+}
 
 impl BioInPlace<'static> {
     /// A Bio<B> in a struct no bio owner made - a data update's, the tools'
@@ -69,14 +77,14 @@ impl BioInPlace<'static> {
     /// # Safety
     /// What it's built into doesn't outlive 'a.
     pub unsafe fn borrowing<'a>(self) -> BioInPlace<'a> {
-        BioInPlace(self.0, PhantomData)
+        let Self { bio, nr_vecs, opf, bvecs, .. } = self;
+        BioInPlace { bio, nr_vecs, opf, bvecs, _a: PhantomData }
     }
 }
 
 impl<'a> BioInPlace<'a> {
-    /// A Bio<B> of what bio_init() made: its bvecs empty, and B what owns
-    /// none yet.
-    pub fn init<E, B: BioOwns + Default>(self) -> impl PinInit<Bio<B>, E> {
+    /// A Bio<B>, its bvecs empty, and B what owns none yet.
+    pub fn init<E: From<BchError>, B: BioOwns + Default>(self) -> impl PinInit<Bio<B>, E> {
         self.init_from(|_| Ok(B::default()))
     }
 
@@ -87,7 +95,7 @@ impl<'a> BioInPlace<'a> {
     /// clone's made for no device and bio_set_dev() associates the blkg, and
     /// the crypt context and integrity payload a source has only once
     /// submitted.
-    pub fn clone_of<E: 'a>(self, src: BioRange<'a>) -> impl PinInit<Bio, E> + 'a {
+    pub fn clone_of<E: From<BchError> + 'a>(self, src: BioRange<'a>) -> impl PinInit<Bio, E> + 'a {
         self.init_from(move |b| {
             let owner = src.bio().vecs_owner();
             b.vecs_at = VecsAt::Borrowed(NonNull::from(owner));
@@ -104,18 +112,30 @@ impl<'a> BioInPlace<'a> {
         })
     }
 
-    /// A Bio<B> of what bio_init() made, and what it owns made by @owns from
-    /// the bio: its bvecs filled - room for them made already - or, failing,
-    /// nothing in them.
-    pub fn init_from<E, B: BioOwns>(self, owns: impl FnOnce(&mut Bio) -> Result<B, E>) -> impl PinInit<Bio<B>, E> {
-        let bio = self.0;
-        // SAFETY: the bio's there - its slot, checked - but what it owns
+    /// A Bio<B>, and what it owns made by @owns from the bio: its bvecs
+    /// filled - room for them made already - or, failing, nothing in them.
+    /// Fails as bio_init() does, or @owns: the bio dropped, if it was made.
+    pub fn init_from<E, B>(self, owns: impl FnOnce(&mut Bio) -> Result<B, E>) -> impl PinInit<Bio<B>, E>
+    where
+        E: From<BchError>,
+        B: BioOwns,
+    {
+        let Self { bio, nr_vecs, opf, bvecs, .. } = self;
+        // SAFETY: its slot, checked, made there but what it owns
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Bio<B>| {
                 assert_eq!(slot.cast::<c::bio>(), bio, "BioInPlace: another bio's slot");
-                let owns = owns(&mut *slot.cast::<Bio>())?;
-                (&raw mut (*slot).owns).write(owns);
-                Ok(())
+                bio_init(slot.cast(), nr_vecs, opf, bvecs)?;
+                match owns(&mut *slot.cast::<Bio>()) {
+                    Ok(owns) => {
+                        (&raw mut (*slot).owns).write(owns);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        core::ptr::drop_in_place(slot.cast::<Bio>());
+                        Err(e)
+                    }
+                }
             })
         }
     }
@@ -263,12 +283,10 @@ pub struct BioAlloc(Bvecs);
 enum Bvecs {
     Pool(&'static Mempool),
     Kmalloc,
-    None,
 }
 
 impl BioAlloc {
     pub(super) const KMALLOC: Self = BioAlloc(Bvecs::Kmalloc);
-    pub(super) const NONE: Self = BioAlloc(Bvecs::None);
 
     /// @pool's, a pool that isn't a static's: a set's.
     ///
@@ -284,7 +302,6 @@ unsafe impl Allocator for BioAlloc {
         match self.0 {
             Bvecs::Pool(p) => p.allocate(layout),
             Bvecs::Kmalloc => Kmalloc.allocate(layout),
-            Bvecs::None    => Err(AllocError),
         }
     }
 
@@ -292,7 +309,6 @@ unsafe impl Allocator for BioAlloc {
         match self.0 {
             Bvecs::Pool(pool) => unsafe { pool.deallocate(p, layout) },
             Bvecs::Kmalloc    => unsafe { Kmalloc.deallocate(p, layout) },
-            Bvecs::None       => unreachable!("freeing what a bio with no BioAlloc never had"),
         }
     }
 }
@@ -585,9 +601,7 @@ where
 {
     unsafe {
         ::pin_init::pin_init_from_closure(move |t: *mut T| {
-            let bio = bio_of(t);
-            bio_init(bio.cast(), nr_vecs, opf, bvecs)?;
-            init_at(init(BioInPlace(bio, PhantomData)), t).inspect_err(|_| core::ptr::drop_in_place(bio.cast::<Bio>()))
+            init_at(init(BioInPlace { bio: bio_of(t), nr_vecs, opf, bvecs, _a: PhantomData }), t)
         })
     }
 }

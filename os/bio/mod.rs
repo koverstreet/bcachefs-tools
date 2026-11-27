@@ -189,16 +189,14 @@ pub struct Bio<B: BioOwns = Data> {
     owns:    B,
 }
 
-/// Its bvecs emptied as they're freed: a bio is dropped again, by bio_in(),
-/// when what it's in fails to init. What it owns drops last: a mapped buffer
-/// outlives the bio.
+/// What it owns gives back what its bvecs hold, then the bio's uninit, then
+/// the bvecs and what owns them drop, last: a mapped buffer outlives the bio.
 #[pinned_drop]
 impl<B: BioOwns> PinnedDrop for Bio<B> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.get_mut();
         this.owns.release(&mut this.vecs);
         unsafe { crate::os::bio::sys::uninit(&mut this.bio) };
-        drop(core::mem::replace(&mut this.vecs, BioVecs::<B>::new_in(BioAlloc::NONE)));
     }
 }
 
