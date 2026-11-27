@@ -28,6 +28,7 @@ use crate::util::ffi::c_char;
 use crate::os::kernel::loff;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::os::file::{Any, FileData, FileOps};
+use crate::posix::mode::umode_t;
 use crate::os::folio::FsMapping;
 use crate::os::inode_ops::InodeOps;
 use crate::os::super_block::{IsInode, SuperBlock, SuperOps};
@@ -86,8 +87,8 @@ impl<S, St> VfsInode<S, St> {
         kgid() -> c::kgid_t                 = READ_ONCE(i_gid);
         set_uid(u32)                        = i_uid_write;
         set_gid(u32)                        = i_gid_write;
-        mode() -> c::umode_t                = READ_ONCE(i_mode);
-        set_mode(c::umode_t)                = WRITE_ONCE(i_mode);
+        i_mode() -> c::umode_t              = READ_ONCE(i_mode);
+        set_i_mode(c::umode_t)              = WRITE_ONCE(i_mode);
         generation() -> u32                 = READ_ONCE(i_generation);
         /// Changed under ei_quota_lock: hold it for a stable value.
         blocks() -> u64                     = READ_ONCE(i_blocks);
@@ -127,12 +128,20 @@ impl<S, St> VfsInode<S, St> {
 
     // ── Mode and flags ───────────────────────────────────────────────────
 
+    pub fn mode(&self) -> umode_t {
+        umode_t(self.i_mode())
+    }
+
+    pub fn set_mode(&self, mode: umode_t) {
+        self.set_i_mode(mode.0)
+    }
+
     pub fn is_dir(&self) -> bool {
-        self.mode() as u32 & c::S_IFMT == c::S_IFDIR
+        self.mode().is_dir()
     }
 
     pub fn is_reg(&self) -> bool {
-        self.mode() as u32 & c::S_IFMT == c::S_IFREG
+        self.mode().is_reg()
     }
 
     /// Set when it's made, and never changed.
@@ -390,7 +399,7 @@ impl<S, St> VfsInode<S, St> {
     /// A device, fifo or socket's ops, from its mode and rdev:
     /// init_special_inode().
     pub fn init_special(&mut self) {
-        unsafe { c::init_special_inode(self.as_ptr(), self.mode(), self.rdev()) }
+        unsafe { c::init_special_inode(self.as_ptr(), self.i_mode(), self.rdev()) }
     }
 
     /// Its page cache in lowmem: inode_nohighmem(), as a symlink's is.

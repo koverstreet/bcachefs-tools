@@ -175,6 +175,7 @@ pub mod posix {
     pub mod logged_ops;
     pub mod logged_ops_format;
     pub mod lostfound;
+    pub mod mode;
     pub mod namei;
     pub mod quota;
     pub mod quota_format;

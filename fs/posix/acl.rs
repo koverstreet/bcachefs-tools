@@ -170,6 +170,7 @@ pub use vfs::*;
 mod vfs {
     use super::*;
     use crate::posix::inode::InodeUnpacked;
+    use crate::posix::mode::umode_t;
     use crate::posix::xattr_format::Xattr;
     use crate::snapshots::subvolume::SubvolInum;
     use crate::bch_err;
@@ -279,7 +280,7 @@ mod vfs {
     ) -> Result<(), BchError> {
         let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
 
-        if ty == AclType::Default && inode.bi_mode as u32 & c::S_IFMT != c::S_IFDIR {
+        if ty == AclType::Default && !inode.bi_mode.is_dir() {
             return if acl.is_none() { Ok(()) } else { t.fs().throw(Errcode::EACCES_default_acl_not_dir) };
         }
 
@@ -344,7 +345,7 @@ mod vfs {
         t:     &TransAttempt<'_, '_>,
         inum:  SubvolInum,
         inode: &InodeUnpacked,
-        mode:  c::umode_t,
+        mode:  umode_t,
     ) -> Result<Option<PosixAcl>, BchError> {
         // None, or one with no entries: nothing to change.
         let mut iter = BtreeIter::uninit(t.trans());

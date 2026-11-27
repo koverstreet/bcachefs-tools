@@ -19,7 +19,6 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::inode_format::InodeFlags;
-use crate::posix::inode::InodeUnpacked;
 use crate::posix::check::SnapshotsSeen;
 use crate::posix::dirent::{Dirent, DirentTarget};
 use crate::errcode::{Errcode, BchError};
@@ -79,10 +78,6 @@ fn inc_link(
     }
 }
 
-fn is_dir(u: &InodeUnpacked) -> bool {
-    u.bi_mode as u32 & c::S_IFMT == c::S_IFDIR
-}
-
 fn iter_flags() -> BtreeIterFlags {
     BtreeIterFlags::INTENT | BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS
 }
@@ -105,7 +100,7 @@ fn check_nlinks_find_hardlinks(
 
         // Backpointer and directory structure checks are sufficient for
         // directories, since they can't have hardlinks:
-        if is_dir(&u) {
+        if u.is_dir() {
             return Ok(ControlFlow::Continue(()));
         }
 
@@ -167,7 +162,7 @@ fn check_nlinks_update_inode(
 
     let mut u = inode::unpack(t.fs(), k);
 
-    if is_dir(&u) || u.bi_nlink == 0 {
+    if u.is_dir() || u.bi_nlink == 0 {
         return Ok(());
     }
 

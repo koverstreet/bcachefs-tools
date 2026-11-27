@@ -12,9 +12,9 @@ use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIt
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys,
     journal_key, JournalKeys};
-use crate::c;
 use crate::journal::init::JournalStartInfo;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume};
 use crate::snapshots::subvolume::SubvolInum;
@@ -1115,7 +1115,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     snapshots_read(fs)?;
     fs.presplit_shard_boundaries();
 
-    let mut root_inode = inode::init(fs, 0, 0, (c::S_IFDIR | 0o755) as c::umode_t, 0, None);
+    let mut root_inode = inode::init(fs, 0, 0, S_IFDIR | umode_t(0o755), 0, None);
     root_inode.bi_inum = BCACHEFS_ROOT_INO.into();
     root_inode.bi_subvol = BCACHEFS_ROOT_SUBVOL;
     let mut packed_inode = inode::pack(&root_inode);
@@ -1131,7 +1131,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     let mut new_subvol = Subvolume::default();
     bch_err_msg!(fs, trans_commit_do(fs, None, CommitFlags::empty(), |t| {
         namei::create_trans(t, SubvolInum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
-                            Some(OsStr::from_bytes(b"lost+found")), 0, 0, (c::S_IFDIR | 0o700) as c::umode_t, 0,
+                            Some(OsStr::from_bytes(b"lost+found")), 0, 0, S_IFDIR | umode_t(0o700), 0,
                             None, None, SubvolInum::default(), 0)
     }), "creating lost+found")?;
 

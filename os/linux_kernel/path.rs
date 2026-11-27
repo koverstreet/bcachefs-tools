@@ -26,6 +26,7 @@ use crate::os::dentry::Dentry;
 use crate::os::file::Any;
 use crate::os::ops::from_raw;
 use crate::os::super_block::IsInode;
+use crate::posix::mode::umode_t;
 
 fn user_ptr(addr: u64) -> *const c_char {
     addr as usize as *const c_char
@@ -102,8 +103,8 @@ impl Creating {
     }
 
     /// Whether the LSMs allow a directory of @mode here: security_path_mkdir().
-    pub fn may_mkdir(&self, mode: c::umode_t) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { c::security_path_mkdir(&self.path, self.dentry, mode) })
+    pub fn may_mkdir(&self, mode: umode_t) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::security_path_mkdir(&self.path, self.dentry, mode.0) })
     }
 
     /// The directory made here, told to fsnotify: fsnotify_mkdir().

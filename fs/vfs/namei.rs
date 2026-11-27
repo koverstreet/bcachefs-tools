@@ -18,6 +18,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, C
                          TransAttempt};
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::mode::{umode_t, S_IFCHR, S_IFDIR, S_IFLNK, S_IFREG, S_IRWXUGO, WHITEOUT_MODE};
 use crate::posix::inode_opts::InodeOptChange;
 use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_TMPFILE, BCH_CREATE_SUBVOL};
 use crate::posix::quota_format::{QuotaCounter, QuotaType};
@@ -51,7 +52,7 @@ impl InodeInfo {
     /// cache - linked, unless @flags has BCH_CREATE_TMPFILE; a subvolume's
     /// root, a snapshot of @snapshot_src's subvolume, with BCH_CREATE_SUBVOL
     /// and BCH_CREATE_SNAPSHOT. The reference is ours, not yet the dentry's.
-    pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mut mode: c::umode_t,
+    pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mut mode: umode_t,
                          rdev: c::dev_t, snapshot_src: SubvolInum, flags: u32)
         -> Result<InodeRef, BchError>
     {
@@ -309,10 +310,10 @@ impl InodeOps for DirOps {
         dentry.splice_alias(inode)
     }
 
-    fn create(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
+    fn create(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: umode_t,
               #[cfg(not(linux_ge = "7.3"))] _excl: bool) -> Result<(), BchError>
     {
-        Self::mknod(idmap, dir, dentry, mode | c::S_IFREG as c::umode_t, 0)
+        Self::mknod(idmap, dir, dentry, mode | S_IFREG, 0)
     }
 
     fn link(old: Dentry<'_>, dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError> {
@@ -336,7 +337,7 @@ impl InodeOps for DirOps {
     fn symlink(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, target: &CStr)
         -> Result<(), BchError>
     {
-        let inode = dir.create(idmap, dentry, (c::S_IFLNK | c::S_IRWXUGO) as c::umode_t, 0,
+        let inode = dir.create(idmap, dentry, S_IFLNK | S_IRWXUGO, 0,
                                Default::default(), BCH_CREATE_TMPFILE)?;
         inode.vfs().page_symlink(target)?;
         inode.vfs().write_and_wait()?;
@@ -345,17 +346,17 @@ impl InodeOps for DirOps {
         Ok(())
     }
 
-    fn mkdir(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t)
+    fn mkdir(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: umode_t)
         -> Result<(), BchError>
     {
-        Self::mknod(idmap, dir, dentry, mode | c::S_IFDIR as c::umode_t, 0)
+        Self::mknod(idmap, dir, dentry, mode | S_IFDIR, 0)
     }
 
     fn rmdir(dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError> {
         dir.unlink(dentry, false)
     }
 
-    fn mknod(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
+    fn mknod(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: umode_t,
              rdev: c::dev_t) -> Result<(), BchError>
     {
         let inode = dir.create(idmap, dentry, mode, rdev, Default::default(), 0)?;
@@ -435,7 +436,7 @@ impl InodeOps for DirOps {
                     let gid = src_dir.vfs().gid_of(current_fsgid());
                     namei::create_trans(t, src_dir.inum(), &mut src_dir_u, w, &mut new_subvol,
                                         Some(src_dentry.name()), uid, gid,
-                                        (c::S_IFCHR | c::WHITEOUT_MODE) as c::umode_t, 0,
+                                        S_IFCHR | WHITEOUT_MODE, 0,
                                         None, None, SubvolInum::default(), 0)?;
                     if !src_dir.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT) {
                         quota::acct(fs, quota::qid(w), QuotaCounter::Q_INO.0 as usize, 1,
@@ -474,7 +475,7 @@ impl InodeOps for DirOps {
         ret
     }
 
-    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: OpeningTmpfile<'_, InodeInfo>, mode: c::umode_t)
+    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: OpeningTmpfile<'_, InodeInfo>, mode: umode_t)
         -> Result<(), BchError>
     {
         let inode = dir.create(idmap, file.dentry(), mode, 0, Default::default(), BCH_CREATE_TMPFILE)?;

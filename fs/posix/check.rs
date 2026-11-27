@@ -9,6 +9,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::posix::{inode::InodeUnpacked, inode, dirent::{Dirent, DirentTarget}};
+use crate::posix::mode::{umode_t, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK};
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::Fs;
@@ -435,13 +436,13 @@ impl InodeWalker {
                 // A file's i_size has to cover its data, or the extents are
                 // past the end and go next: as a directory, it had none
                 let (ty, size) = if btree == Btree::dirents {
-                    (c::S_IFDIR, 0)
+                    (S_IFDIR, 0)
                 } else {
-                    (c::S_IFREG, extents_end(t, k.k.p.inode, k.k.p.snapshot)?)
+                    (S_IFREG, extents_end(t, k.k.p.inode, k.k.p.snapshot)?)
                 };
 
                 let inode = &mut self.inodes_mut()[l].inode;
-                inode.bi_mode = (inode.bi_mode & !(c::S_IFMT as c::umode_t)) | ty as c::umode_t;
+                inode.bi_mode = (inode.bi_mode & !S_IFMT) | ty;
                 inode.bi_size = inode.bi_size.max(size);
                 self.changed_inode_type = true;
                 l
@@ -591,11 +592,10 @@ fn extents_end(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64
 }
 
 /// The inode mode for dirent type @d_type, if it's a file type.
-fn d_type_mode(d_type: u8) -> Option<u32> {
-    let d_type = d_type as u32;
-    [c::DT_REG, c::DT_DIR, c::DT_LNK, c::DT_CHR, c::DT_BLK, c::DT_FIFO, c::DT_SOCK]
-        .contains(&d_type)
-        .then_some(d_type << 12)
+fn d_type_mode(d_type: u8) -> Option<umode_t> {
+    [S_IFREG, S_IFDIR, S_IFLNK, S_IFCHR, S_IFBLK, S_IFIFO, S_IFSOCK]
+        .into_iter()
+        .find(|m| m.d_type() == d_type)
 }
 
 /// Recreate missing inode @inum:@snapshot from the keys found in @btree -
@@ -613,13 +613,13 @@ pub fn reconstruct_inode(
 
     let (mode, size) = match btree {
         // may race with repair deleting the extents that triggered us
-        Btree::extents => (c::S_IFREG, extents_end(t, inum, snapshot)?),
-        Btree::dirents => (c::S_IFDIR, 0),
-        Btree::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(c::S_IFREG), 0),
+        Btree::extents => (S_IFREG, extents_end(t, inum, snapshot)?),
+        Btree::dirents => (S_IFDIR, 0),
+        Btree::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(S_IFREG), 0),
         _ => unreachable!("reconstruct_inode() for btree {}", { btree.0 }),
     };
 
-    let mut new = inode::init(fs, 0, 0, (mode | 0o600) as c::umode_t, 0, None);
+    let mut new = inode::init(fs, 0, 0, mode | umode_t(0o600), 0, None);
     new.bi_size     = size;
     new.bi_inum     = inum;
     new.bi_snapshot = snapshot;
@@ -782,11 +782,10 @@ pub fn reconstruct_subvol(
 }
 
 /// Whether an inode of mode @mode can own keys in @btree.
-fn btree_matches_i_mode(btree: Btree, mode: c::umode_t) -> bool {
-    let fmt = mode as u32 & c::S_IFMT;
+fn btree_matches_i_mode(btree: Btree, mode: umode_t) -> bool {
     match btree {
-        Btree::extents => fmt == c::S_IFREG || fmt == c::S_IFLNK,
-        Btree::dirents => fmt == c::S_IFDIR,
+        Btree::extents => mode.is_reg() || mode.is_lnk(),
+        Btree::dirents => mode.is_dir(),
         Btree::xattrs  => true,
         _ => unreachable!("check_key_has_inode() on btree {}", { btree.0 }),
     }

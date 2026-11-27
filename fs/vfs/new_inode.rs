@@ -12,6 +12,7 @@
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::mode::{S_IFDIR, S_IFLNK, S_IFREG};
 use crate::snapshots::{format::Subvolume, subvolume::SubvolInum};
 use crate::vfs::inode::{InodeQuota, InodeReserved, InodeReservedRange, InodeInfoFlag};
 use crate::errcode::{ret_to_result_void, BchError};
@@ -93,16 +94,16 @@ impl NewInode {
             self.ei_flags.set(InodeInfoFlag::EI_INODE_SNAPSHOT, true);
         }
 
-        match self.v.mode() as u32 & c::S_IFMT {
-            c::S_IFREG => {
+        match self.v.mode().file_type() {
+            S_IFREG => {
                 self.v.set_ops(&super::inode_ops::FILE_INODE_OPS);
                 self.v.set_fop(&super::file::FILE_OPS);
             }
-            c::S_IFDIR => {
+            S_IFDIR => {
                 self.v.set_ops(&super::inode_ops::DIR_INODE_OPS);
                 self.v.set_fop(&super::dir::DIR_FILE_OPS);
             }
-            c::S_IFLNK => {
+            S_IFLNK => {
                 self.v.nohighmem();
                 self.v.set_ops(&super::inode_ops::SYMLINK_INODE_OPS);
             }

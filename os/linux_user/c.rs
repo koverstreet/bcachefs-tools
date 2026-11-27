@@ -15,7 +15,6 @@ pub use super::sched::{get_task_struct, put_task_struct, task_struct, wake_up_pr
                        TASK_COMM_LEN, TASK_FREEZABLE, TASK_IDLE, TASK_INTERRUPTIBLE, TASK_KILLABLE,
                        TASK_NOLOAD, TASK_RUNNING, TASK_UNINTERRUPTIBLE, TASK_WAKEKILL};
 pub use super::workqueue::{delayed_work, work_struct, workqueue_struct};
-pub use linux_raw_sys::general::{S_IFDIR, S_IFLNK, S_IFMT, S_IFREG, S_ISGID};
 use core::ffi::c_void;
 use crate::util::ffi::{c_long, c_ulong};
 use core::sync::atomic::{fence, AtomicIsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
@@ -24,7 +23,6 @@ use super::blkdev::BlockDevice;
 
 pub use linux_raw_sys::errno::*;
 
-pub type umode_t = u16;
 pub type gfp_t   = u32;
 pub type uid_t   = u32;
 pub type gid_t   = u32;

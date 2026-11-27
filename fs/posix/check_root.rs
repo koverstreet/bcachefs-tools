@@ -16,8 +16,8 @@ use crate::btree::bkey::{pos, POS_MIN};
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
-use crate::c;
 use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
+use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, Subvolume, SubvolumeState};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
@@ -70,7 +70,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
         }
     };
 
-    let root_dir_mode = (c::S_IFDIR | 0o755) as c::umode_t;
+    let root_dir_mode = S_IFDIR | umode_t(0o755);
 
     match inode::find_by_inum_snapshot(t, BCACHEFS_ROOT_INO as u64, snapshot,
                                        BtreeIterFlags::empty()).found()? {

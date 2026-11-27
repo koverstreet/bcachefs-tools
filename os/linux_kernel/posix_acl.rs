@@ -9,6 +9,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::os::ops::{err_class_ptr, from_raw, into_raw};
 use crate::os::vfs_inode::VfsInode;
+use crate::posix::mode::umode_t;
 use crate::util::alloc::current_gfp;
 
 #[path = "../posix_acl.rs"]
@@ -88,10 +89,10 @@ impl PosixAcl {
 
     /// A copy with its permissions changed to match file mode @mode:
     /// __posix_acl_chmod(), allocating with the current scope's flags.
-    pub(crate) fn chmod(&self, mode: c::umode_t) -> Result<PosixAcl, BchError> {
+    pub(crate) fn chmod(&self, mode: umode_t) -> Result<PosixAcl, BchError> {
         // __posix_acl_chmod() consumes the reference it's given, failing too
         let mut acl = self.clone().into_raw();
-        let ret = ret_to_result_void(unsafe { c::__posix_acl_chmod(&mut acl, current_gfp(), mode) });
+        let ret = ret_to_result_void(unsafe { c::__posix_acl_chmod(&mut acl, current_gfp(), mode.0) });
         let acl = NonNull::new(acl).map(PosixAcl);
         ret?;
         Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
@@ -100,11 +101,11 @@ impl PosixAcl {
     /// A new inode's in @dir, with @mode as they make it: its default
     /// ACL, inherited, and its access ACL - posix_acl_create(). None for
     /// either it doesn't get.
-    pub fn create<S>(dir: &VfsInode<S>, mode: &mut c::umode_t)
+    pub fn create<S>(dir: &VfsInode<S>, mode: &mut umode_t)
         -> Result<(Option<PosixAcl>, Option<PosixAcl>), BchError>
     {
         let (mut default_acl, mut acl) = (core::ptr::null_mut(), core::ptr::null_mut());
-        ret_to_result_void(unsafe { c::posix_acl_create(dir.as_ptr(), mode, &mut default_acl, &mut acl) })?;
+        ret_to_result_void(unsafe { c::posix_acl_create(dir.as_ptr(), &mut mode.0, &mut default_acl, &mut acl) })?;
         Ok((NonNull::new(default_acl).map(|p| unsafe { PosixAcl::from_raw(p) }),
             NonNull::new(acl).map(|p| unsafe { PosixAcl::from_raw(p) })))
     }

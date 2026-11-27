@@ -19,6 +19,7 @@ use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::os::ops::from_raw;
 use crate::os::posix_acl::PosixAcl;
 use crate::os::vfs_inode::VfsInode;
+use crate::posix::mode::umode_t;
 
 /// The VFS's idmap pointer: const from 7.4.
 #[cfg(linux_ge = "7.4")]
@@ -107,10 +108,10 @@ impl<'f> MntIdmap<'f> {
     /// The mode @inode takes with @acl as its access ACL, into @mode: the
     /// ACL's permissions, and setgid as setattr_copy() keeps it - and @acl
     /// None if the mode says all it would.
-    pub fn acl_update_mode<S>(self, inode: &VfsInode<S>, mode: &mut c::umode_t,
+    pub fn acl_update_mode<S>(self, inode: &VfsInode<S>, mode: &mut umode_t,
                                   acl: &mut Option<ManuallyDrop<PosixAcl>>) -> Result<(), BchError> {
         let mut raw = acl.as_deref().map_or(core::ptr::null_mut(), PosixAcl::as_raw);
-        ret_to_result(unsafe { c::posix_acl_update_mode(self.0, inode.as_ptr(), mode, &mut raw) })?;
+        ret_to_result(unsafe { c::posix_acl_update_mode(self.0, inode.as_ptr(), &mut mode.0, &mut raw) })?;
         if raw.is_null() {
             *acl = None;
         }

@@ -45,6 +45,7 @@ use crate::posix::inode_format::{BLOCKDEV_INODE_MAX, Inode, InodeAllocCursor, In
     InodeOptId, InodeV2, InodeV3, INODEv3_FIELDS_START_INITIAL, InodeOptId_arms, InodeFlags,
     BCH_INODE_FIELDS_v3};
 use crate::posix::logged_ops_format::LoggedOpsInum;
+use crate::posix::mode::{umode_t, S_ISGID};
 use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::{Fs, FsFlag};
@@ -129,7 +130,7 @@ BCH_INODE_FIELDS_v3!(__bch_inode_unpacked_0 [
     pub bi_version: u64,
     #[members]
     pub bi_flags: InodeUnpackedBiFlags,
-    pub bi_mode: u16,
+    pub bi_mode: umode_t,
 ]);
 
 #[bitfield(u32)]
@@ -268,7 +269,7 @@ fn try_unpack(k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>)
             u.bi_sectors     = v.bi_sectors.get();
             u.bi_size        = v.bi_size.get();
             u.bi_version     = v.bi_version.get();
-            u.bi_mode        = v.mode();
+            u.bi_mode        = umode_t(v.mode());
 
             unpack_fields(&mut u, true, fields_at(V3_FIELDS_OFFSET), v.nr_fields() as usize, varint_field)
         }
@@ -278,7 +279,7 @@ fn try_unpack(k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>)
             u.bi_hash_seed   = v.bi_hash_seed;
             u.set_flags(v.flags());
             u.set_str_hash(v.str_hash());
-            u.bi_mode        = v.bi_mode.get();
+            u.bi_mode        = umode_t(v.bi_mode.get());
 
             unpack_fields(&mut u, false, fields_at(offset_of!(InodeV2, repr.fields)),
                           v.nr_fields() as usize, varint_field)
@@ -288,7 +289,7 @@ fn try_unpack(k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>)
             u.bi_hash_seed   = v.bi_hash_seed;
             u.set_flags(v.flags());
             u.set_str_hash(v.str_hash());
-            u.bi_mode        = v.bi_mode.get();
+            u.bi_mode        = umode_t(v.bi_mode.get());
 
             let in_ = fields_at(offset_of!(Inode, repr.fields));
             let nr_fields = v.nr_fields() as usize;
@@ -397,7 +398,7 @@ pub fn pack(inode: &InodeUnpacked) -> DstRoom<BkeyI, [u64; INODE_ROOM_U64S]> {
     v.bi_sectors     = inode.bi_sectors.into();
     v.bi_size        = inode.bi_size.into();
     v.bi_version     = inode.bi_version.into();
-    v.set_mode(inode.bi_mode);
+    v.set_mode(inode.bi_mode.0);
     v.set_fields_start((V3_FIELDS_OFFSET / 8) as u8);
 
     let fields = &mut plain_bytes_mut(out.elems_mut())[FIELDS_AT..];
@@ -459,12 +460,12 @@ bkey_family!(
 /// What every inode version has, read and written without unpacking it, in
 /// whichever form it's held: any BkeyV armed to Inodes.
 pub trait BkeyVInode: BkeyV<V = Inodes> {
-    fn mode(&self) -> u32 {
-        match self.as_sc().typed() {
-            InodesTyped::inode(i)    => i.v().bi_mode.get() as u32,
-            InodesTyped::inode_v2(i) => i.v().bi_mode.get() as u32,
-            InodesTyped::inode_v3(i) => i.v().mode() as u32,
-        }
+    fn mode(&self) -> umode_t {
+        umode_t(match self.as_sc().typed() {
+            InodesTyped::inode(i)    => i.v().bi_mode.get(),
+            InodesTyped::inode_v2(i) => i.v().bi_mode.get(),
+            InodesTyped::inode_v3(i) => i.v().mode(),
+        })
     }
 
     /// As bkey_inode_flags().
@@ -861,9 +862,9 @@ impl BkeyOps for InodeGeneration {
 fn fields_to_text(out: &mut Printbuf, inode: &InodeUnpacked) {
     out.newline();
 
-    let d_type = (inode.bi_mode as u32 >> 12) & 15;
-    let d_type_name = if d_type < BCH_DT_MAX {
-        dirent::d_type_str(d_type as u8)
+    let d_type = inode.bi_mode.d_type();
+    let d_type_name = if (d_type as u32) < BCH_DT_MAX {
+        dirent::d_type_str(d_type)
     } else {
         "unknown"
     };
@@ -1644,7 +1645,7 @@ pub fn init_late(
     now:    u64,
     uid:    c::uid_t,
     gid:    c::gid_t,
-    mode:   c::umode_t,
+    mode:   umode_t,
     rdev:   c::dev_t,
     parent: Option<&InodeUnpacked>,
 ) {
@@ -1658,10 +1659,10 @@ pub fn init_late(
     inode.bi_otime = now;
 
     if let Some(parent) = parent {
-        if parent.bi_mode as u32 & c::S_ISGID != 0 {
+        if parent.bi_mode & S_ISGID != umode_t(0) {
             inode.bi_gid = parent.bi_gid;
             if inode.is_dir() {
-                inode.bi_mode |= c::S_ISGID as c::umode_t;
+                inode.bi_mode |= S_ISGID;
             }
         }
 
@@ -1687,7 +1688,7 @@ pub fn init(
     fs:     &Fs,
     uid:    c::uid_t,
     gid:    c::gid_t,
-    mode:   c::umode_t,
+    mode:   umode_t,
     rdev:   c::dev_t,
     parent: Option<&InodeUnpacked>,
 ) -> InodeUnpacked {
@@ -1814,7 +1815,7 @@ impl InodeUnpacked {
     }
 
     pub fn is_dir(&self) -> bool {
-        self.bi_mode as u32 & c::S_IFMT == c::S_IFDIR
+        self.bi_mode.is_dir()
     }
 
     /// Whether it's a subvolume's root: deleting it is subvolume deletion's
@@ -1828,7 +1829,7 @@ impl InodeUnpacked {
         if self.bi_subvol != 0 {
             DT_SUBVOL as u8
         } else {
-            ((self.bi_mode >> 12) & 15) as u8
+            self.bi_mode.d_type()
         }
     }
 
@@ -1954,7 +1955,7 @@ mod tests {
             bi_inum:      4096,
             bi_hash_seed: 0x0123_4567_89ab_cdef.into(),
             bi_size:      12345,
-            bi_mode:      0o100644,
+            bi_mode:      umode_t(0o100644),
             bi_atime:     0x1234_5678_9abc,
             bi_ctime:     7,
             bi_uid:       1000,

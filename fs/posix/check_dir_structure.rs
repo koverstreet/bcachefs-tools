@@ -349,7 +349,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
     iter.for_each_reverse_commit(&trans, POS_MIN, None,
         CommitFlags::NO_ENOSPC,
         |t, _, k| {
-            let Some(k) = k.arm::<Inodes>().filter(|k| k.mode() & c::S_IFMT == c::S_IFDIR) else {
+            let Some(k) = k.arm::<Inodes>().filter(|k| k.mode().is_dir()) else {
                 return Ok(());
             };
 

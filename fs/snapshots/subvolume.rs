@@ -31,6 +31,7 @@ use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::posix::{inode::InodeUnpacked, inode_format::BCACHEFS_ROOT_INO, inode};
+use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState, SnapshotTree,
     Subvolume, SubvolumeState};
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
@@ -580,7 +581,7 @@ fn check_subvol<'a, 't>(
                 let mut inode = InodeUnpacked::default();
                 inode::init_early(fs, &mut inode);
                 inode::init_late(fs, &mut inode, fs.current_time(), 0, 0,
-                                 (c::S_IFDIR | 0o700) as c::umode_t, 0, None);
+                                 S_IFDIR | umode_t(0o700), 0, None);
                 inode.bi_inum          = root.inum;
                 inode.bi_snapshot      = s.v().snapshot();
                 inode.bi_subvol        = id as u32;

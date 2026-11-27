@@ -378,7 +378,7 @@ fn int_type(ty: &syn::Type) -> Option<IntType> {
         ["isize"]                               => int(None,    "Native", true),
         [.., "c_char"]                          => int(Some(1), "Native", true),
         [.., "c_short"]                         => int(Some(2), "Native", true),
-        [.., "c_ushort"]                        => int(Some(2), "Native", false),
+        [.., "c_ushort"] | [.., "umode_t"]      => int(Some(2), "Native", false),
         [.., "c_int"]                           => int(Some(4), "Native", true),
         [.., "c_uint"]                          => int(Some(4), "Native", false),
         [.., "c_long"]                          => int(None,    "Native", true),

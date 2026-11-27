@@ -66,6 +66,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::posix::dirent::RenameMode;
 use bcachefs_kernel::posix::inode::InodeUnpacked;
+use bcachefs_kernel::posix::mode::{umode_t, S_IFDIR, S_IFLNK, S_IRWXUGO};
 use bcachefs_kernel::posix::inode_opts::InodeOptChange;
 use bcachefs_kernel::posix::xattr_format::Xattr;
 use bcachefs_kernel::snapshots::{format::Subvolume, subvolume::SubvolInum, subvolume};
@@ -136,8 +137,6 @@ const TTL: Duration = Duration::MAX;
 
 const BCACHEFS_ROOT_SUBVOL: u64 = 1;
 const BCACHEFS_ROOT_INO: u64 = 4096;
-const S_IFDIR: u32 = 0o040000;
-const S_IFLNK: u32 = 0o120000;
 const DT_FIFO: u32 = 1;
 const DT_CHR:  u32 = 2;
 const DT_DIR:  u32 = 4;
@@ -317,7 +316,7 @@ fn fuse_create_inode(
     req:   &Request,
     dir:   SubvolInum,
     name:  &OsStr,
-    mode:  u16,
+    mode:  umode_t,
     rdev:  u64,
 ) -> Result<InodeUnpacked, BchError> {
     let mut dir_u: InodeUnpacked = Default::default();
@@ -459,7 +458,7 @@ fn fuse_rename(
 fn fuse_setattr(
     fs:         &Fs,
     inum:       SubvolInum,
-    mode:       Option<u16>,
+    mode:       Option<umode_t>,
     uid:        Option<u32>,
     gid:        Option<u32>,
     size:       Option<u64>,
@@ -638,7 +637,7 @@ impl AtimeOpts {
     /// atime_needs_update() and relatime_need_update(): with relatime, only
     /// when atime isn't already after the last change, or is a day old.
     fn needs_update(&self, fs: &Fs, bi: &InodeUnpacked, now: u64) -> bool {
-        let is_dir = rustix::fs::FileType::from_raw_mode(bi.bi_mode.into()) == rustix::fs::FileType::Directory;
+        let is_dir = bi.bi_mode.is_dir();
         if is_dir && self.nodiratime {
             return false;
         }
@@ -938,8 +937,8 @@ impl BcachefsFs {
             mtime: ts_to_systime(ts_m),
             ctime: ts_to_systime(ts_c),
             crtime: UNIX_EPOCH,
-            kind: mode_to_filetype(bi.bi_mode as u32),
-            perm: (bi.bi_mode & 0o7777),
+            kind: mode_to_filetype(bi.bi_mode.0 as u32),
+            perm: bi.bi_mode.0 & 0o7777,
             nlink,
             uid: bi.bi_uid,
             gid: bi.bi_gid,
@@ -1156,7 +1155,7 @@ impl Filesystem for BcachefsFs {
         let bi = match fuse_setattr(
             fs,
             inum,
-            mode.map(|mode| mode as u16),
+            mode.map(|mode| umode_t(mode as u16)),
             uid,
             gid,
             size,
@@ -1217,7 +1216,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_mknod(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(fs, req, dir, name, mode as u16, rdev as u64) {
+        let new_inode = match fuse_create_inode(fs, req, dir, name, umode_t(mode as u16), rdev as u64) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1237,7 +1236,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyEntry,
     ) {
         eprintln!("fuse_mkdir(dir={}, name={:?})", parent.0, name);
-        self.mknod(req, parent, name, mode | S_IFDIR, umask, 0, reply);
+        self.mknod(req, parent, name, mode | S_IFDIR.0 as u32, umask, 0, reply);
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
@@ -1275,7 +1274,7 @@ impl Filesystem for BcachefsFs {
 
         // Create the symlink inode
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(fs, req, dir, name, (S_IFLNK | 0o777) as u16, 0) {
+        let new_inode = match fuse_create_inode(fs, req, dir, name, S_IFLNK | S_IRWXUGO, 0) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1776,7 +1775,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_create(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(fs, req, dir, name, mode as u16, 0) {
+        let new_inode = match fuse_create_inode(fs, req, dir, name, umode_t(mode as u16), 0) {
             Ok(inode) => inode,
             Err(e)    => {
                 eprintln!("  create -> err {}", e);

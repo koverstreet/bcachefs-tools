@@ -4,6 +4,7 @@
 //! field Some where ia_valid has its ATTR_* bit.
 
 use crate::c;
+use crate::posix::mode::umode_t;
 
 /// <linux/fs.h>'s ATTR_*: an iattr's ia_valid, and update_after_write()'s
 /// @fields.
@@ -56,8 +57,11 @@ impl Iattr {
         self.has(ATTR_GID).then(|| unsafe { *self.0.__bindgen_anon_2.ia_vfsgid.as_ref() })
     }
 
+    pub fn mode(&self) -> Option<umode_t> {
+        self.has(ATTR_MODE).then_some(umode_t(self.0.ia_mode))
+    }
+
     fields! {
-        mode:  c::umode_t    = ATTR_MODE,  ia_mode;
         atime: c::timespec64 = ATTR_ATIME, ia_atime;
         mtime: c::timespec64 = ATTR_MTIME, ia_mtime;
         ctime: c::timespec64 = ATTR_CTIME, ia_ctime;

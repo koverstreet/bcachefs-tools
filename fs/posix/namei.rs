@@ -37,6 +37,7 @@ use crate::data::reconcile::format::ExtentReconcile;
 use crate::posix::{dirent_format, inode, str_hash};
 use crate::posix::dirent_format::DT_SUBVOL;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::mode::umode_t;
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume, SubvolumeState};
 use crate::snapshots::subvolume::SubvolInum;
@@ -74,15 +75,6 @@ pub(crate) fn parent_inum(inum: SubvolInum, inode: &InodeUnpacked) -> SubvolInum
     }
 }
 
-fn is_dir(mode: c::umode_t) -> bool {
-    mode as u32 & c::S_IFMT == c::S_IFDIR
-}
-
-/// The dirent type for an inode of @mode: as mode_to_type().
-fn mode_to_type(mode: c::umode_t) -> u8 {
-    ((mode as u32 >> 12) & 15) as u8
-}
-
 /// Whether @dir's new inodes go below 2^32: its own inodes_32bit, else the
 /// filesystem's. Inode options are stored +1, 0 for unset.
 fn inodes_32bit(fs: &Fs, dir: &InodeUnpacked) -> bool {
@@ -115,7 +107,7 @@ pub fn create_trans(
     name:             Option<&OsStr>,
     uid:              c::uid_t,
     gid:              c::gid_t,
-    mode:             c::umode_t,
+    mode:             umode_t,
     rdev:             c::dev_t,
     default_acl:      Option<&PosixAcl>,
     acl:              Option<&PosixAcl>,
@@ -126,7 +118,7 @@ pub fn create_trans(
     let mut dir_iter = BtreeIter::uninit(t.trans());
     let mut inode_iter = BtreeIter::uninit(t.trans());
     let now = fs.current_time();
-    let mut dir_type = mode_to_type(mode);
+    let mut dir_type = mode.d_type();
 
     *new_subvol = subvolume::get(t, dir.subvol as u32, true)?;
     if new_subvol.ro() ||
@@ -247,13 +239,13 @@ pub fn create_trans(
         new_inode.bi_dir_offset = dir_offset;
     }
 
-    if is_dir(mode) {
+    if mode.is_dir() {
         let subvol = if new_inode.bi_subvol != 0 { new_inode.bi_subvol as u64 } else { dir.subvol };
         let inum = SubvolInum { subvol, inum: new_inode.bi_inum };
         maybe_propagate_has_case_insensitive(t, inum, new_inode)?;
     }
 
-    if is_dir(mode) && new_inode.bi_subvol == 0 {
+    if mode.is_dir() && new_inode.bi_subvol == 0 {
         new_inode.bi_depth = dir_u.bi_depth.wrapping_add(1);
     }
 
@@ -299,7 +291,7 @@ pub fn link_trans(
     dir_u.bi_mtime = now;
     dir_u.bi_ctime = now;
 
-    dirent::create(t, dir, dir_u, mode_to_type(inode_u.bi_mode), name, inum.inum,
+    dirent::create(t, dir, dir_u, inode_u.bi_mode.d_type(), name, inum.inum,
                    &mut dir_offset, str_hash::SetFlags::MUST_CREATE,
                    UpdateTriggerFlags::empty())?;
 

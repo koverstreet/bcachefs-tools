@@ -111,12 +111,15 @@ fn plain_by_bounds(item: &syn::DeriveInput, fields: &syn::Fields) -> Result<Toke
 /// #[derive(NoUninit)], on a struct: each field NoUninit, and no padding
 /// between them, as Plain's checks - a compile error if not.
 pub(crate) fn derive_no_uninit(input: TokenStream) -> Result<TokenStream, String> {
-    let def = parse_cstruct(&input)?;
-    if let StructKind::Union = def.kind {
-        return Err("a union: a shorter arm, written, leaves bytes uninitialized".into());
+    let item: syn::DeriveInput = syn::parse2(input).map_err(|e| e.to_string())?;
+    let name = &item.ident;
+    let syn::Data::Struct(s) = &item.data else {
+        return Err(format!("{name}: not a struct - a union's shorter arm, written, leaves bytes uninitialized"));
+    };
+    if !item.generics.params.is_empty() {
+        return Err(format!("{name}: generic - NoUninit is derived for one concrete type"));
     }
-    let name = &def.ident;
-    let tys: Vec<&syn::Type> = def.fields.iter().map(|f| &f.ty).collect();
+    let tys: Vec<&syn::Type> = s.fields.iter().map(|f| &f.ty).collect();
     let padding = no_padding(name, &tys, "NoUninit");
     Ok(quote! {
         unsafe impl crate::util::vstructs::NoUninit for #name {}

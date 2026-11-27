@@ -166,8 +166,8 @@ pub fn current_fsgid() -> c::kgid_t {
 }
 
 /// The mode bits this task's new files are made without.
-pub fn current_umask() -> c::umode_t {
-    unsafe { c::current_umask() as c::umode_t }
+pub fn current_umask() -> crate::posix::mode::umode_t {
+    crate::posix::mode::umode_t(unsafe { c::current_umask() } as u16)
 }
 
 /// Whether this syscall is a 32-bit task's, on a 64-bit kernel.

@@ -27,6 +27,7 @@ use crate::os::{inode_ops::InodeAttrs, posix_acl::{AclType, PosixAcl}};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::mode::{S_IFDIR, S_IFREG, S_ISGID};
 use crate::posix::inode_format::InodeOptId;
 use crate::posix::quota_format::QuotaType;
 use crate::errcode::{Errcode, ret_to_c, BchError};
@@ -77,9 +78,9 @@ impl FileattrSet {
         -> Result<(), BchError>
     {
         let fs = t.fs();
-        let file_type = bi.bi_mode as u32 & c::S_IFMT;
+        let file_type = bi.bi_mode.file_type();
         let others_may = F::nodump | F::noatime;
-        if file_type != c::S_IFREG && file_type != c::S_IFDIR && !others_may.contains(self.flags) {
+        if file_type != S_IFREG && file_type != S_IFDIR && !others_may.contains(self.flags) {
             return fs.throw(Errcode::EINVAL_setattr_bad_file_type);
         }
 
@@ -106,7 +107,7 @@ impl InodeAttrs for InodeInfo {
 
         stat.dev     = self.sb().dev();
         stat.ino     = self.inum().inum;
-        stat.mode    = v.mode();
+        stat.mode    = v.mode().0;
         stat.nlink   = v.nlink();
         (stat.uid, stat.gid) = idmap.owner(v);
         stat.rdev    = v.rdev();
@@ -269,7 +270,7 @@ impl InodeInfo {
             // have, or may act as if it were
             let gid = kgid.unwrap_or_else(|| v.kgid());
             if !idmap.in_group_or_capable(v, gid) {
-                mode &= !(c::S_ISGID as c::umode_t);
+                mode &= !S_ISGID;
             }
             bi.bi_mode = mode;
         }

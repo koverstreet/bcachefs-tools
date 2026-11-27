@@ -34,6 +34,7 @@ use crate::bcachefs_ioctl::{IoctlPreadRaw, IoctlSubvolume, IoctlSubvolumeV2,
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, BCHFS_IOC_UNPOISON, FS_IOC_GOINGDOWN};
 use crate::data::{extents::ReadFlags, read::ReadErrReport};
 use crate::posix::dirent_format::BCH_NAME_MAX;
+use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::posix::namei::{BCH_CREATE_SNAPSHOT, BCH_CREATE_SNAPSHOT_RO, BCH_CREATE_SUBVOL};
 use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::{dirent, str_hash, namei};
@@ -235,7 +236,7 @@ fn subvolume_create(fs: &Fs, file: &File, a: IoctlSubvolume, err: ErrMsg)
 /// BCH_IOCTL_SUBVOLUME_CREATE: a subvolume at @a.dst_ptr - with
 /// BCH_SUBVOL_SNAPSHOT_CREATE a snapshot, of the subvolume @a.src_ptr is in,
 /// or else the one the new directory's in.
-fn create_subvolume(fs: &Fs, file: &File, mut a: IoctlSubvolume, err: &mut Printbuf)
+fn create_subvolume(fs: &Fs, file: &File, a: IoctlSubvolume, err: &mut Printbuf)
     -> Result<(), BchError>
 {
     use Errcode as E;
@@ -291,10 +292,11 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: IoctlSubvolume, err: &mut Print
     let idmap = MntIdmap::of(file);
     idmap.permission(dir.vfs(), c::MAY_WRITE | c::MAY_EXEC)?;
 
+    let mut mode = umode_t(a.mode);
     if sb.flags() & c::SB_POSIXACL == 0 {
-        a.mode &= !current_umask();
+        mode &= !current_umask();
     }
-    dst.may_mkdir(a.mode)?;
+    dst.may_mkdir(mode)?;
 
     if a.flags & SNAPSHOT != 0 && a.src_ptr == 0 {
         snapshot_src.subvol = dir.inum().subvol;
@@ -306,7 +308,7 @@ fn create_subvolume(fs: &Fs, file: &File, mut a: IoctlSubvolume, err: &mut Print
             let umount = sb.umount().read();
             sb.sync_inodes(&umount);
         }
-        dir.create(idmap, dentry, a.mode | c::S_IFDIR as u16, 0, snapshot_src, create_flags)?
+        dir.create(idmap, dentry, mode | S_IFDIR, 0, snapshot_src, create_flags)?
     };
 
     dentry.set_casefold_ops(inode.vfs());
