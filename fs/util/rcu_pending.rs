@@ -20,7 +20,6 @@ use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 use crate::c;
 use crate::c::rcu_head;
-use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
@@ -37,16 +36,48 @@ const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
 /// from before its free may still be in it.
 ///
 /// # Safety
-/// Those readers are fine with what they find: the T, or what init() made of
-/// fresh memory, until a grace period after its free.
+/// Those readers are fine with what they find, until a grace period after its
+/// free: the T, or another made there since.
 pub unsafe trait RcuRealloc: HasRcuHead + Sized {
-    /// Whether this one, freed, can be reused yet: if true, it's claimed.
-    /// Called under the CPU's lock: mustn't sleep.
-    fn try_claim(&self) -> bool;
+    /// Whether this one, freed - and not dropped till its grace period's over
+    /// - can be reused yet: if true, it's claimed. Called under the CPU's
+    /// lock: mustn't sleep. One dropped at its free is memory, any alloc()'s.
+    fn try_claim(&self) -> bool {
+        true
+    }
+}
 
-    /// A T made of memory fresh from the allocator, as a freed one is: alloc()
-    /// claims it.
-    fn init() -> impl PinInit<Self, BchError>;
+/// What alloc() gives: a T freed and claimed, still made - readers from before
+/// its free may be in it - or memory for one.
+pub enum Allocated<'p, 'f, T: RcuRealloc, A: Alloc> {
+    Made(NonNull<T>),
+    Uninit(Uninit<'p, 'f, T, A>),
+}
+
+/// Memory for a T, from an RcuPending: back to its allocator if it's dropped
+/// with no T made in it.
+pub struct Uninit<'p, 'f, T: RcuRealloc, A: Alloc> {
+    pending: &'p RcuPending<'f, T, A>,
+    p:       NonNull<T>,
+}
+
+impl<T: RcuRealloc, A: Alloc> Uninit<'_, '_, T, A> {
+    /// The T @init makes there: failing, the memory's given back.
+    pub fn init<E>(self, init: impl PinInit<T, E>) -> Result<NonNull<T>, E> {
+        unsafe { init_at(init, self.p.as_ptr()) }?;
+        Ok(self.into_raw())
+    }
+
+    /// The memory, for what writes a T there itself.
+    fn into_raw(self) -> NonNull<T> {
+        core::mem::ManuallyDrop::new(self).p
+    }
+}
+
+impl<T: RcuRealloc, A: Alloc> Drop for Uninit<'_, '_, T, A> {
+    fn drop(&mut self) {
+        unsafe { self.pending.backing().deallocate(self.p.cast(), Layout::new::<T>()) }
+    }
 }
 
 /// An item, given up: its rcu_head, what the lists thread through.
@@ -532,10 +563,13 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
         }
     }
 
-    /// The first of @p's items T::try_claim() claims, dequeued: most recent
-    /// radix-tree entries first, then oldstate lists.
+    /// The first of @p's items claimed, dequeued: most recent radix-tree
+    /// entries first, then oldstate lists. One dropped at its free is memory:
+    /// any is claimed; one still made is, if T::try_claim() claims it.
     fn claim(&self, p: &Pcpu<'f, T, A>) -> Option<NonNull<T>> {
-        let mut claimed = |raw: Raw| unsafe { from_raw::<T>(raw).as_ref() }.try_claim();
+        let mut claimed = |raw: Raw| {
+            <T as RcuFreeing>::drops_at_free() || unsafe { from_raw::<T>(raw).as_ref() }.try_claim()
+        };
         let mut s = p.lock.lock();
 
         let raw = match s.objs.iter_mut().find_map(|o| o.remove_where(&mut claimed)) {
@@ -546,33 +580,32 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
         Some(unsafe { from_raw(raw) })
     }
 
-    /// A T: one freed and claimed from this CPU, else fresh from A, made by
-    /// its init(), else one claimed from any CPU.
-    pub fn alloc(&self) -> Result<NonNull<T>, AllocError> {
-        self.alloc_from(|a| a.allocate_zeroed(Layout::new::<T>()))
+    /// A T, or memory for one: one freed and claimed from this CPU, else fresh
+    /// from A, else one claimed from any CPU.
+    pub fn alloc(&self) -> Result<Allocated<'_, 'f, T, A>, AllocError> {
+        self.alloc_from(|a| a.allocate(Layout::new::<T>()))
     }
 
     /// alloc(), its fresh memory @fresh's.
     fn alloc_from(&self, fresh: impl FnOnce(&A) -> Result<NonNull<[u8]>, AllocError>)
-        -> Result<NonNull<T>, AllocError>
+        -> Result<Allocated<'_, 'f, T, A>, AllocError>
     {
+        let claimed = |p: NonNull<T>| match <T as RcuFreeing>::drops_at_free() {
+            true  => Allocated::Uninit(Uninit { pending: self, p }),
+            false => Allocated::Made(p),
+        };
+
         if let Some(p) = self.claim(self.pcpu().raw_this_cpu()) {
-            return Ok(p);
+            return Ok(claimed(p));
         }
-
         if let Ok(p) = fresh(self.backing()) {
-            let p = p.cast::<T>();
-            if unsafe { init_at(T::init(), p.as_ptr()) }.is_ok() {
-                assert!(unsafe { p.as_ref() }.try_claim(), "a fresh T, its claim refused");
-                return Ok(p);
-            }
-            unsafe { self.backing().deallocate(p.cast(), Layout::new::<T>()) };
+            return Ok(Allocated::Uninit(Uninit { pending: self, p: p.cast() }));
         }
-
-        self.pcpu().each_cpu().find_map(|p| self.claim(p)).ok_or(AllocError)
+        self.pcpu().each_cpu().find_map(|p| self.claim(p)).map(claimed).ok_or(AllocError)
     }
 
-    /// The Allocator's alloc(): @layout, if it's within T's.
+    /// The Allocator's alloc(): @layout, if it's within T's - memory, as T
+    /// drops at its free, which the Allocator's users do.
     fn allocate_from(&self, layout: Layout, fresh: impl FnOnce(&A) -> Result<NonNull<[u8]>, AllocError>)
         -> Result<NonNull<[u8]>, AllocError>
     {
@@ -582,7 +615,10 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
         if layout.size() > t.size() || layout.align() > t.align() {
             return Err(AllocError);
         }
-        Ok(NonNull::slice_from_raw_parts(self.alloc_from(fresh)?.cast(), t.size()))
+        let Allocated::Uninit(u) = self.alloc_from(fresh)? else {
+            unreachable!("a T dropped at its free, claimed made")
+        };
+        Ok(NonNull::slice_from_raw_parts(u.into_raw().cast(), t.size()))
     }
 
     /// @p freed: dropped now, if T is DropAnytime, else once its grace period
@@ -710,7 +746,7 @@ impl<T: RcuRealloc, A: Alloc> Drop for RcuPending<'_, T, A> {
 /// its grace period.
 unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.allocate_from(layout, |a| a.allocate_zeroed(Layout::new::<T>()))
+        self.allocate_from(layout, |a| a.allocate(Layout::new::<T>()))
     }
 
     unsafe fn deallocate(&self, p: NonNull<u8>, _: Layout) {
@@ -725,7 +761,7 @@ unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {}
 /// not zeroed: zeroed here if it's asked for.
 unsafe impl<T: RcuRealloc, A: AllocGfp> AllocGfp for RcuPending<'_, T, A> {
     fn allocate_gfp(&self, layout: Layout, gfp: Flags) -> Result<NonNull<[u8]>, AllocError> {
-        let p = self.allocate_from(layout, |a| a.allocate_zeroed_gfp(Layout::new::<T>(), gfp))?;
+        let p = self.allocate_from(layout, |a| a.allocate_gfp(Layout::new::<T>(), gfp))?;
         if gfp.contains(flags::ZERO) {
             unsafe { p.cast::<u8>().write_bytes(0, p.len()) };
         }

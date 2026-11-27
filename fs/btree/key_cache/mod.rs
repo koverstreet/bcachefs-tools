@@ -38,7 +38,7 @@ use crate::os::slab::KmemCache;
 use crate::util::place::{Contained, PlacedDrop};
 use crate::util::projections::TearSafe;
 use crate::util::rcu::{read_lock, RcuHead, ReadGuard, SrcuReadGuard};
-use crate::util::rcu_pending::{RcuPending, RcuRealloc};
+use crate::util::rcu_pending::{Allocated, RcuPending, RcuRealloc};
 use crate::os::shrinker::{Shrink, Shrinker};
 use crate::os::workqueue::{Queue, ReffedWork};
 use crate::util::{Printbuf, ToText};
@@ -180,14 +180,20 @@ unsafe impl<const PCPU: bool> RcuRealloc for Cached<PCPU> {
             .map(|ck| ck.into_parts().1.into_raw())
             .is_some()
     }
+}
 
-    fn init() -> impl PinInit<Self, BchError> {
+impl<const PCPU: bool> Cached<PCPU> {
+    /// One made of fresh memory, and claimed, as a freed one is.
+    fn new() -> impl PinInit<Self, BchError> {
         let flags = if PCPU {
             SixLockInitFlags::pcpu
         } else {
             SixLockInitFlags::empty()
         };
-        pin_init!(Self { ck <- BkeyCached::init(flags) }? BchError)
+        pin_init!(Self { ck <- BkeyCached::init(flags) }? BchError).pin_chain(|ck| {
+            assert!(ck.try_claim(), "a fresh entry, its claim refused");
+            Ok(())
+        })
     }
 }
 
@@ -452,7 +458,10 @@ impl<'a, const PCPU: bool> NewEntry<'a, PCPU> {
         let enomem = || BchError::from(Errcode::ENOMEM_btree_key_cache_create);
 
         t.allocate_dropping_locks_in(paths, || {
-            let ck = pending.alloc().map_err(|_| enomem())?;
+            let ck = match pending.alloc().map_err(|_| enomem())? {
+                Allocated::Made(ck) => ck,
+                Allocated::Uninit(m) => m.init(Cached::new())?,
+            };
             let mut ck = NewEntry { pending, ck: Some(unsafe { claimed(ck.cast()) }) };
             let k = key_buf(key_u64s).ok_or_else(enomem)?;
             ck.ck.as_mut().expect("a new entry").contents_mut().k = Some(k);
