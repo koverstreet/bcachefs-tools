@@ -532,14 +532,12 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
     let fs = t.fs();
     let trans = t.trans();
     let roots = &fs.btree.cache.roots;
-    let err = roots.error(btree.0);
-
-    if err == 0 {
+    let Some(err) = BchError::new(roots.error(btree.0)) else {
         return Ok(());
-    }
+    };
 
     let mut msg = LogMsg::new(fs);
-    prt!(&mut *msg, "btree root {btree} unreadable: {}\n", BchError::from_raw(err).msg());
+    prt!(&mut *msg, "btree root {btree} unreadable: {}\n", err.msg());
 
     let mut fake_root = |level| {
         roots.lock().get_mut(btree.0).expect("a btree below btree_id_nr_alive()").alive = 0;

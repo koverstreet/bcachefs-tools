@@ -367,13 +367,12 @@ mod tests {
             // A flattened errno, which is what the mount(2) fallback gives us:
             // the same EINVAL a typo'd option produces.
             BchError::from(c::EINVAL),
-            BchError::from_raw(0),
             // A code from a kernel module newer than this binary - the normal
             // state of affairs for a filesystem that ships DKMS-only. The
             // errcode parent-chain walk BUG_ON()s rather than bounds-checking,
             // so what's being asserted here is as much "doesn't abort" as
             // "doesn't match".
-            BchError::from_raw(Errcode::MAX.0 as i32 + 1),
+            BchError::new(Errcode::MAX.0 as i32 + 1).unwrap(),
         ] {
             assert_eq!(Situation::of(&e), None, "{e:?}");
         }

@@ -33,8 +33,8 @@ impl Chrdev {
         let major = unsafe {
             c::__register_chrdev(0, 0, 256, self.name.as_ptr().cast(), &FileVTable::<P>::OPS)
         };
-        if major < 0 {
-            return Err(BchError::from_raw(major));
+        if let Some(e) = BchError::from_ret(major.into()) {
+            return Err(e);
         }
         self.major.store(major as u32, Relaxed);
         Ok(())

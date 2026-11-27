@@ -83,7 +83,7 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
 
     let fsck_fd = ioctl_w::<BCH_IOCTL_FSCK_ONLINE>(fs.ioctl_fd(), &fsck)
         .map_err(|e| anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}",
-                             BchError::from_raw(e.raw_os_error().unwrap_or(0))))?;
+                             BchError::from(e)))?;
 
     let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
     Ok(splice_fd_to_stdinout(fd))
@@ -312,7 +312,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
                 return run_userspace_fsck(devices, fs_opts),
             Err(e) =>
                 return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}",
-                                   BchError::from_raw(e.raw_os_error().unwrap_or(0)))),
+                                   BchError::from(e))),
         };
 
         let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
@@ -338,10 +338,12 @@ fn run_userspace_fsck(devices: &[String], fs_opts: Opts) -> Result<()> {
 
     // shutdown_with_errors reports the errors fsck_errcode() already counted:
     // not a shutdown that failed
-    let ret2 = fs.exit();
-    if ret2 != 0 && !BchError::from_raw(ret2).matches(Errcode::shutdown_with_errors) {
-        eprintln!("error shutting down filesystem: {}", BchError::from_raw(ret2));
-        process::exit(ret | 8);
+    match fs.exit() {
+        Err(e) if !e.matches(Errcode::shutdown_with_errors) => {
+            eprintln!("error shutting down filesystem: {e}");
+            process::exit(ret | 8);
+        }
+        _ => {}
     }
 
     process::exit(ret)

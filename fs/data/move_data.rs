@@ -53,7 +53,7 @@ use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
 use crate::data::reconcile::trigger::{PerSnapshotIoOpts, SetNeedsReconcileCtx};
 use crate::opts::InodeOpts;
 use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::{Errcode as err, ret_to_c, BchError};
+use crate::errcode::{Errcode as err, BchError};
 use crate::data::ec::repair::{scrub_stripe_block, stripe_block_to_scrub};
 use crate::data::moving::{key_sectors, BucketMoves, MoveStats, Moving, MovingCtxt, MoveBucketKey};
 use crate::data::moving_update;
@@ -525,7 +525,7 @@ impl Moving<'_> {
         });
 
         fs.event_inc_trace(events::evacuate_bucket, |out| {
-            write!(out, "bucket: {bucket} gen: {generation} ret {}\n", BchError::from_raw(ret_to_c(ret)));
+            write!(out, "bucket: {bucket} gen: {generation} ret {}\n", ret.err().map_or("(No error)", |e| e.msg()));
             write!(out, "{sectors}/{} sectors\n", { ca.mi.get().bucket_size });
         });
         ret

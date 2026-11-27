@@ -385,7 +385,7 @@ pub fn read_file(path: &CStr, buf: &mut [u8]) -> Result<usize, BchError> {
         let mut pos = 0;
         let r = c::kernel_read(file, buf.as_mut_ptr().cast(), buf.len(), &mut pos);
         c::fput(file);
-        if r < 0 { Err(BchError::from_raw(r as i32)) } else { Ok(r as usize) }
+        BchError::from_ret(r as i64).map_or(Ok(r as usize), Err)
     }
     #[cfg(not(kernel))]
     {

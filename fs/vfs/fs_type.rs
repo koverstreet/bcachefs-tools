@@ -377,7 +377,7 @@ impl FsType for Bcachefs {
                 if let Err(e) = ret {
                     fc.errorfc(format_args!("option {}: {}", key_str,
                                             if err.as_str().is_empty() { e.msg() } else { err.as_str() }));
-                    return Err(BchError::from(e.errno()));
+                    return Err(BchError::from(e.errno() as u32));
                 }
                 Ok(0)
             }

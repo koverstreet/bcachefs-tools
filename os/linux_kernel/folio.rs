@@ -624,8 +624,8 @@ impl<A: AddressSpaceOps> Mapping<A> {
         assert!(!folio.in_cache, "a folio added to the page cache twice");
         let gfp = crate::util::alloc::current_gfp_context_raw(gfp);
         let ret = unsafe { c::filemap_add_folio(self.as_ptr(), folio.as_ptr(), index as _, gfp) };
-        if ret < 0 {
-            return Err(BchError::from_raw(ret));
+        if let Some(e) = BchError::from_ret(ret.into()) {
+            return Err(e);
         }
         folio.in_cache = true;
         Ok(())

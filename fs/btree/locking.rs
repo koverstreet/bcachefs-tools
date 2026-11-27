@@ -611,7 +611,7 @@ impl BtreeTrans<'_> {
 
                 prt!(out, " total locked {}.{}.{}", total.n[0], total.n[1], total.n[2]);
             }
-            Ok(None) => prt!(out, "{}", BchError::from_raw(0).msg()),
+            Ok(None) => prt!(out, "(No error)"),
             Err(e)   => prt!(out, "{}", e.msg()),
         }
 

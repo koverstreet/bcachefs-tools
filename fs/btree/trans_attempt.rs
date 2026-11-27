@@ -636,8 +636,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                     t.verify_not_restarted();
 
                     if trans.restart_count.get() != orig_restart_count {
-                        return Err(BchError::from_raw(
-                            Errcode::transaction_restart_nested.0 as i32));
+                        return Err(Errcode::transaction_restart_nested.into());
                     }
                     return Ok(v);
                 }

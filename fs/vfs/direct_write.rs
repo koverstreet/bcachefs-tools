@@ -160,10 +160,7 @@ fn dio_write_copy_iov<P: UserPage>(dio: &mut Dio<P>) -> Result<(), ()> {
 
 /// What the dio wrote, or its error, what it held given back.
 fn dio_write_done<P: UserPage>(d: &mut Dio<P>) -> Result<usize, BchError> {
-    let ret = match d.op.error {
-        0 => Ok((d.written << 9) as usize),
-        e => Err(BchError::from_raw(e.into())),
-    };
+    let ret = BchError::new(d.op.error.into()).map_or(Ok((d.written << 9) as usize), Err);
     drop(d.write_ref.take());
 
     /* inode->i_dio_count is our ref on inode and thus bch_fs */

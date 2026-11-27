@@ -501,13 +501,7 @@ fn image_create_inner(
         return Err(e);
     }
 
-    let ret = fs.exit();
-    if ret != 0 {
-        bail!(
-            "error shutting down new filesystem: {}",
-            bcachefs_kernel::errcode::BchError::from_raw(ret).msg()
-        );
-    }
+    fs.exit().map_err(|e| anyhow!("error shutting down new filesystem: {}", e.msg()))?;
 
     Ok(())
 }
@@ -580,13 +574,8 @@ fn image_update_inner(
 
     let block_size = fs.opts().block_size.get() as u32;
     let btree_node_size = fs.opts().btree_node_size.get();
-    let ret = crate::commands::format_util::format_for_device_add(
-        &mut dev_opts, block_size, btree_node_size,
-    );
-    if ret != 0 {
-        bail!("formatting metadata device: {}",
-            bcachefs_kernel::errcode::BchError::from_raw(ret).msg());
-    }
+    crate::commands::format_util::format_for_device_add(&mut dev_opts, block_size, btree_node_size)
+        .map_err(|e| anyhow!("formatting metadata device: {e}"))?;
 
     FsExt::dev_add(&*fs, &metadata_path)
         .map_err(|e| anyhow!("error adding metadata device: {}", e))?;
@@ -639,12 +628,7 @@ fn image_update_inner(
     let _ = std::fs::remove_file(&metadata_path);
 
     result?;
-    if exit_ret != 0 {
-        bail!(
-            "error shutting down filesystem: {}",
-            bcachefs_kernel::errcode::BchError::from_raw(exit_ret).msg()
-        );
-    }
+    exit_ret.map_err(|e| anyhow!("error shutting down filesystem: {}", e.msg()))?;
 
     Ok(())
 }

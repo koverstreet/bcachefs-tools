@@ -174,15 +174,15 @@ unsafe fn start_removing(dirfd: i32, name: *const c_char, path: *mut c::path) ->
     unsafe {
         let mut victim = MaybeUninit::<c::path>::uninit();
         let ret = c::user_path_at(dirfd, name, 0, victim.as_mut_ptr());
-        if ret != 0 {
-            return crate::errcode::err_ptr(BchError::from_raw(-ret));
+        if let Some(e) = BchError::new(ret) {
+            return crate::errcode::err_ptr(e);
         }
         let victim = victim.assume_init();
 
         let ret = c::mnt_want_write(victim.mnt);
-        if ret != 0 {
+        if let Some(e) = BchError::new(ret) {
             c::path_put(&victim);
-            return crate::errcode::err_ptr(BchError::from_raw(-ret));
+            return crate::errcode::err_ptr(e);
         }
 
         let parent = c::dget_parent(victim.dentry);
@@ -219,11 +219,11 @@ unsafe fn start_removing(dirfd: i32, name: *const c_char, path: *mut c::path) ->
             c::mnt_drop_write((*path).mnt);
             ret = -(c::ENOENT as i32);
         }
-        if ret != 0 {
+        if let Some(e) = BchError::new(ret) {
             c::inode_unlock(dir);
             c::dput(victim);
             c::path_put(path);
-            return crate::errcode::err_ptr(BchError::from_raw(-ret));
+            return crate::errcode::err_ptr(e);
         }
         victim
     }

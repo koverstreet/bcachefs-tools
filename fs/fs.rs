@@ -27,7 +27,7 @@ use crate::util::clock::IoClock;
 use crate::vfs::FsVfs;
 #[cfg(kernel)]
 use crate::vfs::fdm::FdmHash;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::alloc::foreground::{allocator_foreground_init, FsAllocator};
 use crate::alloc::replicas::{can_write_with_devs, WriteCheck};
 use crate::btree::{init::btree_init, journal_overlay::{journal_keys_put_initial, JournalKeys}};
@@ -1093,8 +1093,8 @@ impl OpenFs {
     }
 
     /// Drop discards the error
-    pub fn exit(mut self) -> i32 {
-        ret_to_c(exit(self.0.take().expect("an OpenFs, exited")))
+    pub fn exit(mut self) -> Result<(), BchError> {
+        exit(self.0.take().expect("an OpenFs, exited"))
     }
 }
 

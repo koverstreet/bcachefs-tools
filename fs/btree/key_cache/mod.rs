@@ -733,6 +733,6 @@ pub fn btree_key_cache_module_exit(_q: &Quiesced<'_>) {
 pub fn btree_key_cache_module_init() -> Result<(), BchError> {
     #[cfg(kernel)]
     KEY_CACHE.create(c"bkey_cached", c::SLAB_RECLAIM_ACCOUNT | c::SLAB_ACCOUNT)
-        .map_err(|_| BchError::from_raw(-(c::ENOMEM as i32)))?;
+        .map_err(|_| BchError::from(c::ENOMEM))?;
     Ok(())
 }

@@ -80,10 +80,7 @@ impl Fold for BlockErrs {
     }
 
     fn result(acc: &Self::Acc) -> Self {
-        BlockErrs(core::array::from_fn(|i| match acc[i].load(Ordering::Relaxed) {
-            0 => None,
-            e => Some(BchError::from_raw(e)),
-        }))
+        BlockErrs(core::array::from_fn(|i| BchError::new(acc[i].load(Ordering::Relaxed))))
     }
 }
 

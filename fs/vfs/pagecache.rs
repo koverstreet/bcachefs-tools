@@ -179,7 +179,7 @@ impl Mapping {
         if fs.is_empty() {
             ret?;
             if fgp_flags & c::FGP_CREAT != 0 {
-                return Err(BchError::from_raw(c::ENOMEM as i32));
+                return Err(BchError::from(c::ENOMEM));
             }
         }
         Ok(ContigFolios { folios: fs, pos: start, end: end.min(pos) })

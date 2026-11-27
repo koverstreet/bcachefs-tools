@@ -1311,9 +1311,8 @@ impl Journal {
             return fs.throw(Errcode::journal_blocked);
         }
 
-        let cur_entry_error = self.lock.cur_entry_error.get();
-        if cur_entry_error != 0 {
-            return Err(BchError::from_raw(cur_entry_error));
+        if let Some(e) = BchError::new(self.lock.cur_entry_error.get()) {
+            return Err(e);
         }
 
         self.error()?;
@@ -2358,7 +2357,7 @@ impl Journal {
         prt!(out, "blocked:\t{}\n",                     self.lock.blocked.get());
         prt!(out, "flush_wait:\t{}\n",                  u32::from(self.flush_waiting()));
         prt!(out, "current entry sectors:\t{}\n",       g.cur_entry_sectors);
-        prt!(out, "current entry error:\t{}\n",         BchError::from_raw(self.lock.cur_entry_error.get()).msg());
+        prt!(out, "current entry error:\t{}\n",         BchError::new(self.lock.cur_entry_error.get()).map_or("(No error)", |e| e.msg()));
         prt!(out, "current entry:\t");
 
         match s.cur_entry_offset() {

@@ -52,11 +52,6 @@ fn mode_to_type(mode: u32) -> u8 {
     ((mode >> 12) & 15) as u8
 }
 
-/// Convert a rustix error into a BchError.
-fn rustix_err(e: rustix::io::Errno) -> BchError {
-    BchError::from(e.raw_os_error())
-}
-
 /// Convert a rustix FileType to a DT_* constant.
 fn file_type_to_dtype(ft: FileType) -> u8 {
     match ft {
@@ -424,7 +419,7 @@ fn copy_data(
         let padded = (len as u64).next_multiple_of(block_size) as usize;
 
         let mut buf = io_buf(padded, Flags::empty())?;
-        rustix::io::pread(src_fd, &mut buf[..len], pos).map_err(rustix_err)?;
+        rustix::io::pread(src_fd, &mut buf[..len], pos)?;
 
         write_data(fs, dst_inode, pos, &buf)?;
         pos += len as u64;
@@ -499,8 +494,7 @@ fn copy_link(
     io_misc::fpunch(fs, dst_inum, 0, u64::MAX, &mut i_sectors_delta)?;
     dst.bi_sectors = (dst.bi_sectors as i64 + i_sectors_delta) as u64;
 
-    let target = rustix::fs::readlinkat(rustix::fs::CWD, src, Vec::new())
-        .map_err(rustix_err)?;
+    let target = rustix::fs::readlinkat(rustix::fs::CWD, src, Vec::new())?;
     let target_bytes = target.as_bytes();
     let link_len = target_bytes.len() as u64;
 
@@ -526,7 +520,7 @@ fn link_file_data(
     for extent in fm {
         let extent = extent.map_err(|_| BchError::from(Errcode::EIO_copy_fs_fiemap_check))?;
         if extent.fe_flags.contains(fiemap::FiemapExtentFlags::UNKNOWN) {
-            rustix::fs::fsync(src_fd).map_err(rustix_err)?;
+            rustix::fs::fsync(src_fd)?;
             break;
         }
     }
@@ -704,7 +698,7 @@ fn copy_sync_file_range(
 
         let mut src_buf = io_buf(b, Flags::empty())?;
         let read_len = std::cmp::min(b, (src_size - start) as usize);
-        rustix::io::pread(src_fd, &mut src_buf[..read_len], start).map_err(rustix_err)?;
+        rustix::io::pread(src_fd, &mut src_buf[..read_len], start)?;
 
         let mut dst_buf = io_buf(b, Flags::empty())?;
         fs.read(dst_inum, start, dst, &mut dst_buf)?;
@@ -888,12 +882,12 @@ fn copy_dir(
 ) -> Result<(), BchError> {
     // Dir::read_from borrows the fd (creating an internal dup for iteration),
     // so src_fd remains available for fstatat/openat/fchdir below.
-    let mut dir = rustix::fs::Dir::read_from(&src_fd).map_err(rustix_err)?;
+    let mut dir = rustix::fs::Dir::read_from(&src_fd)?;
 
     let mut dirents = Vec::new();
 
     while let Some(entry) = dir.read() {
-        let entry = entry.map_err(rustix_err)?;
+        let entry = entry?;
 
         let name = entry.file_name();
 
@@ -928,7 +922,7 @@ fn copy_dir(
     let oflags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOATIME;
 
     for d in &dirents {
-        rustix::process::fchdir(&src_fd).map_err(rustix_err)?;
+        rustix::process::fchdir(&src_fd)?;
 
         let name_str = d.name.to_str().unwrap_or("?");
         if name_str == "." || name_str == ".." || name_str == "lost+found" {
@@ -985,15 +979,13 @@ fn copy_dir(
 
         match mode_to_type(d.stat.st_mode) {
             DT_DIR => {
-                let fd = rustix::fs::openat(&src_fd, &d.name, oflags, rustix::fs::Mode::empty())
-                    .map_err(rustix_err)?;
+                let fd = rustix::fs::openat(&src_fd, &d.name, oflags, rustix::fs::Mode::empty())?;
                 copy_dir(fs, s, &mut inode, fd, &child_path)?;
             }
             DT_REG => {
                 inode.bi_size = d.stat.st_size as u64;
 
-                let fd = rustix::fs::openat(&src_fd, &d.name, oflags, rustix::fs::Mode::empty())
-                    .map_err(rustix_err)?;
+                let fd = rustix::fs::openat(&src_fd, &d.name, oflags, rustix::fs::Mode::empty())?;
 
                 if s.migrate_type == MigrateType::Migrate {
                     link_file_data(fs, s, &mut inode, fd.as_fd(), &child_path, d.stat.st_size as u64)?;
@@ -1061,19 +1053,19 @@ pub fn copy_fs(
     src_fd: BorrowedFd<'_>,
     src_path: &CStr,
 ) -> Result<(), BchError> {
-    let stat = rustix::fs::fstat(src_fd).map_err(rustix_err)?;
+    let stat = rustix::fs::fstat(src_fd)?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
         eprintln!("{} is not a directory", src_path.to_string_lossy());
         return Err(BchError::from(Errcode::ENOTDIR_copy_fs_src));
     }
 
     if s.migrate_type == MigrateType::Migrate {
-        rustix::fs::syncfs(src_fd).map_err(rustix_err)?;
+        rustix::fs::syncfs(src_fd)?;
     }
 
     let mut root_inode = inode::find_by_inum(fs, root_subvol_inum())?;
 
-    rustix::process::fchdir(src_fd).map_err(rustix_err)?;
+    rustix::process::fchdir(src_fd)?;
 
     // Xattrs first: setting each reads the inode back, over the times.
     let dot = CString::new(".").unwrap();
@@ -1081,7 +1073,7 @@ pub fn copy_fs(
 
     copy_times(fs, &mut root_inode, &stat);
 
-    let dup_fd = rustix::io::dup(src_fd).map_err(rustix_err)?;
+    let dup_fd = rustix::io::dup(src_fd)?;
     copy_dir(fs, s, &mut root_inode, dup_fd, src_path)?;
 
     if s.migrate_type == MigrateType::Migrate {

@@ -136,7 +136,7 @@ impl BcachefsHandle {
         };
 
         let stat = rustix::fs::fstat(&path_fd)
-            .map_err(|e| BchError::from(e.raw_os_error()))?;
+            .map_err(BchError::from)?;
         let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
 
         if file_type == rustix::fs::FileType::RegularFile {
@@ -219,7 +219,7 @@ impl BcachefsHandle {
                 sysfs.as_str(),
                 rustix::fs::OFlags::RDONLY,
                 rustix::fs::Mode::empty(),
-            ).map_err(|e| BchError::from(e.raw_os_error()))?
+            ).map_err(BchError::from)?
         } else {
             // Fallback: use UUID
             let uuid_str = Uuid::from_bytes(uuid).to_string();
@@ -228,7 +228,7 @@ impl BcachefsHandle {
                 sysfs.as_str(),
                 rustix::fs::OFlags::RDONLY,
                 rustix::fs::Mode::empty(),
-            ).map_err(|e| BchError::from(e.raw_os_error()))?
+            ).map_err(BchError::from)?
         };
 
         Ok(BcachefsHandle {
@@ -246,7 +246,7 @@ impl BcachefsHandle {
             sysfs_path.as_str(),
             rustix::fs::OFlags::RDONLY,
             rustix::fs::Mode::empty(),
-        ).map_err(|e| BchError::from(e.raw_os_error()))?;
+        ).map_err(BchError::from)?;
 
         let minor = sysfs::read_sysfs_fd_str(sysfs_fd.as_fd(), "minor")?;
 
@@ -255,7 +255,7 @@ impl BcachefsHandle {
             ctl_path.as_str(),
             rustix::fs::OFlags::RDWR,
             rustix::fs::Mode::empty(),
-        ).map_err(|e| BchError::from(e.raw_os_error()))?;
+        ).map_err(BchError::from)?;
 
         Ok(BcachefsHandle {
             ioctl_fd,

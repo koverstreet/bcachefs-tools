@@ -96,7 +96,7 @@ impl<const PINNED: bool> UserPage for UserFolio<PINNED> {
                 if bio.nr_vecs() != start {
                     break;
                 }
-                return Err(if got < 0 { BchError::from_raw(got as i32) } else { Errcode::EFAULT_extract_pages.into() });
+                return Err(BchError::from_ret(got as i64).unwrap_or(Errcode::EFAULT_extract_pages.into()));
             }
 
             let (mut left, mut i) = (got as usize, 0);

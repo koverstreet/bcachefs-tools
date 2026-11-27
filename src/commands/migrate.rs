@@ -478,9 +478,7 @@ fn migrate_fs(
     drop(fs_file);
 
     copy_ret.map_err(|e| anyhow!("Error copying filesystem: {}", e))?;
-    if exit_ret != 0 {
-        bail!("Error closing filesystem (ret={})", exit_ret);
-    }
+    exit_ret.map_err(|e| anyhow!("Error closing filesystem: {e}"))?;
 
     // Run fsck on the new filesystem
     println!("Migrate complete, running fsck:");

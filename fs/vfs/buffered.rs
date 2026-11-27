@@ -359,7 +359,7 @@ pub(crate) fn read_single_folio(folio: &FolioLocked, mapping: Mapping, extend: b
     assert!(!folio.uptodate() && !folio.dirty(), "reading a folio uptodate or dirty");
 
     if folio.create_private().is_none() {
-        return Err(BchError::from_raw(c::ENOMEM as i32));
+        return Err(BchError::from(c::ENOMEM));
     }
 
     let inode = mapping.inode();

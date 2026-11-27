@@ -1181,9 +1181,9 @@ impl<'r, 'f> alloc_request<'r, 'f> {
                 }
             }
             write!(out, " free {} copygc_progress {}", e.free_buckets, u8::from(b.copygc_can_make_progress()));
-            match e.err {
-                0   => write!(out, " -> ok\n"),
-                err => write!(out, " -> {}\n", BchError::from_raw(-i32::from(err))),
+            match BchError::new(e.err.into()) {
+                None      => write!(out, " -> ok\n"),
+                Some(err) => write!(out, " -> {err}\n"),
             };
         }
     }
@@ -1596,11 +1596,7 @@ impl OpenBuckets {
     /// cancelled with its error: the writes to it failed.
     pub fn write_errors(&self, fs: &Fs, failed: &IoFailures) {
         for f in failed.devs() {
-            let err = if f.errcode != 0 {
-                BchError::from_raw(f.errcode.into())
-            } else {
-                Errcode::data_write_io.into()
-            };
+            let err = BchError::new(f.errcode.into()).unwrap_or(Errcode::data_write_io.into());
             self.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
                 .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
         }

@@ -413,15 +413,14 @@ pub fn format_for_device_add(
     dev: &mut DevOpts,
     block_size: u32,
     btree_node_size: u32,
-) -> i32 {
+) -> anyhow::Result<()> {
     let mut fs_opts = Opts::default();
     fs_opts.set_block_size(block_size as u16);
     fs_opts.set_btree_node_size(btree_node_size);
 
     let fmt_opts = format_opts_default();
-    format(&[], fs_opts, fmt_opts, std::slice::from_mut(dev));
-
-    0
+    format(&[], fs_opts, fmt_opts, std::slice::from_mut(dev))
+        .map(drop).ok_or_else(|| anyhow::anyhow!("superblock layout failed"))
 }
 
 /// The newest version the running kernel mounts: ours, if there's no module.

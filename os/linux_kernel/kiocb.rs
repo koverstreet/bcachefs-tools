@@ -73,14 +73,14 @@ impl<'a, D> Kiocb<'a, D> {
     /// moved to the end for O_APPEND. How much that is: 0, nothing to write.
     pub fn write_checks(&mut self, iter: &mut IovIter<'_>) -> Result<usize, BchError> {
         let ret = unsafe { c::generic_write_checks(self.0, iter.as_ptr()) };
-        if ret < 0 { Err(BchError::from_raw(ret as i32)) } else { Ok(ret as usize) }
+        BchError::from_ret(ret as i64).map_or(Ok(ret as usize), Err)
     }
 
     /// The @written bytes just written synced, for O_SYNC and O_DSYNC:
     /// generic_write_sync() - @written, or the error syncing them.
     pub fn write_sync(&mut self, written: usize) -> Result<usize, BchError> {
         let ret = unsafe { c::generic_write_sync(self.0, written as isize) };
-        if ret < 0 { Err(BchError::from_raw(ret as i32)) } else { Ok(ret as usize) }
+        BchError::from_ret(ret as i64).map_or(Ok(ret as usize), Err)
     }
 
     /// What's owed it, once the call's taken it on: an async kiocb's

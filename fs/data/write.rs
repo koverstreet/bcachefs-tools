@@ -1719,7 +1719,7 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
     }
     out.newline();
 
-    prt!(out, "ret\t{}\n", BchError::from_raw(op.error.into()));
+    prt!(out, "ret\t{}\n", BchError::new(op.error.into()).map_or("(No error)", |e| e.msg()));
 }
 
 #[cold]

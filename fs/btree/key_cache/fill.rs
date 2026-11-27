@@ -109,7 +109,7 @@ impl BtreeTrans<'_> {
                 Ok(Ok(())) => Ok(true),
                 /* raced with another fill? */
                 Ok(Err(_)) => Ok(false),
-                Err(_)     => Err(BchError::from_raw(-(c::ENOMEM as i32))),
+                Err(_)     => Err(BchError::from(c::ENOMEM)),
             }
         })();
 

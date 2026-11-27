@@ -260,7 +260,7 @@ impl Fs {
          * walk again to find the rest.
          */
         keys.reserve(bc.nr_dirty.load(Relaxed) as usize + 64)
-            .map_err(|_| BchError::from_raw(-(c::ENOMEM as i32)))?;
+            .map_err(|_| BchError::from(c::ENOMEM))?;
 
         loop {
             let mut full = false;

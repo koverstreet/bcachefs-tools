@@ -146,13 +146,8 @@ fn device_add_format(
         anyhow!("error opening {}: {}", dev_path, std::io::Error::from_raw_os_error(e))
     })?;
 
-    let ret = crate::commands::format_util::format_for_device_add(
-        &mut dev_opts, block_size, btree_node_size,
-    );
-    if ret != 0 {
-        return Err(anyhow!("error formatting {}: {}",
-            dev_path, std::io::Error::from_raw_os_error(-ret)));
-    }
+    crate::commands::format_util::format_for_device_add(&mut dev_opts, block_size, btree_node_size)
+        .map_err(|e| anyhow!("error formatting {dev_path}: {e}"))?;
 
     Ok(dev_opts)
 }

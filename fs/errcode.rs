@@ -22,6 +22,7 @@
 
 use crate::c;
 use core::{fmt, iter};
+use core::num::NonZeroU16;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::{bch_enum, xmacro};
@@ -910,6 +911,7 @@ pub mod status {
 }
 
 pub fn blk_status_to_bch_err(err: u8) -> Errcode {
+    debug_assert!(err != 0, "a block status of 0 is success, not an error");
     // The block layer's statuses, and the one that's ours.
     mod sts {
         pub(super) use crate::c::*;
@@ -918,7 +920,6 @@ pub fn blk_status_to_bch_err(err: u8) -> Errcode {
     macro_rules! statuses {
         ($(($n:ident, $nr:tt)),* $(,)?) => { ::paste::paste! {
             match err {
-                0 => Errcode(0),
                 $(sts::[<BLK_STS_ $n>] => Errcode::[<BLK_STS_ $n>],)*
                 _ => Errcode::BLK_STS_UNKNOWN,
             }
@@ -970,35 +971,50 @@ fn errname(err: u32) -> Option<&'static str> {
 }
 
 /// A bcachefs error code or errno, positive: errnos below Errcode::START (2048),
-/// bcachefs's own above. Unlike Errcode, a raw errno never makes an invalid
-/// discriminant.
+/// bcachefs's own above, all below MAX_ERRNO (4096). Unlike Errcode, a raw errno
+/// never makes an invalid discriminant.
+///
+/// Never 0: success isn't an error, and Option<BchError> - the same two bytes -
+/// is an error that may not have happened.
 ///
 /// Positive always: C's -errcode is negative only at the boundary. Taken in,
 /// either sign is the same error, so ==, raw() and ret_to_c() can't see C's
 /// sign - a negative one kept would go back to C as success.
+#[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct BchError(i32);
+pub struct BchError(NonZeroU16);
 
 // The bcachefs codes extend the errnos, so every errno is a BchError - as the
-// bindings spell them (u32) or as libc does (i32), positive either way.
+// bindings spell them, u32. An int that may be 0 or negative goes through new().
 
 impl From<Errcode> for BchError {
-    fn from(code: Errcode) -> Self { Self(code.0 as i32) }
+    fn from(code: Errcode) -> Self {
+        Self::new(code.0 as i32).expect("an errcode, not 0")
+    }
 }
 
 impl From<u32> for BchError {
-    fn from(errno: u32) -> Self { Self(errno as i32) }
-}
-
-impl From<i32> for BchError {
-    fn from(errno: i32) -> Self { Self::from_raw(errno) }
+    fn from(errno: u32) -> Self {
+        Self::new(errno as i32).expect("an errno, not 0")
+    }
 }
 
 impl BchError {
-    /// An error code of either sign: C's -errcode, or an errno.
-    pub fn from_raw(code: i32) -> Self { Self(code.unsigned_abs() as i32) }
+    /// An error code of either sign - C's -errcode, or an errno - and None for
+    /// 0, success.
+    pub fn new(code: i32) -> Option<Self> {
+        let code = code.unsigned_abs();
+        debug_assert!(code < 4096, "error code {code} past MAX_ERRNO");
+        NonZeroU16::new(code as u16).map(Self)
+    }
 
-    pub fn raw(&self) -> i32 { self.0 }
+    /// A C return's error: a -errcode, one of the top MAX_ERRNO (4095) negative
+    /// numbers - as an ERR_PTR() is of addresses. None for anything else.
+    pub fn from_ret(ret: i64) -> Option<Self> {
+        (-4096 < ret && ret < 0).then(|| Self(NonZeroU16::new(-ret as u16).unwrap()))
+    }
+
+    pub fn raw(&self) -> i32 { self.0.get().into() }
 
     /// The plain errno this is a case of, negated: for the VFS or userspace.
     pub fn class(&self) -> i32 {
@@ -1006,23 +1022,20 @@ impl BchError {
     }
 
     pub fn msg(&self) -> &'static str {
-        let name = match self.0.unsigned_abs() {
-            0              => Some("(No error)"),
-            e if e < START => errname(e),
-            e              => errcode(e).map(|(name, _)| name),
-        };
+        let e = u32::from(self.0.get());
+        let name = if e < START { errname(e) } else { errcode(e).map(|(name, _)| name) };
         name.unwrap_or("(Invalid error)")
     }
 
     fn chain(&self) -> impl Iterator<Item = u32> {
-        iter::successors(Some(self.0.unsigned_abs()), |&e| {
+        iter::successors(Some(u32::from(self.0.get())), |&e| {
             errcode(e).map(|(_, parent)| parent).filter(|&p| p != 0)
         })
     }
 
     pub fn matches(&self, class: impl Into<BchError>) -> bool {
-        let class = class.into().0.unsigned_abs();
-        self.0 != 0 && self.chain().any(|e| e == class)
+        let class = u32::from(class.into().0.get());
+        self.chain().any(|e| e == class)
     }
 
     /// Whether this is a transaction restart: the attempt is over, and the loop
@@ -1074,9 +1087,17 @@ impl core::error::Error for BchError {}
 #[cfg(feature = "std")]
 impl From<std::io::Error> for BchError {
     fn from(e: std::io::Error) -> BchError {
-        const EIO: i32 = 5;
+        const EIO: u32 = 5;
 
-        BchError::from_raw(e.raw_os_error().unwrap_or(EIO))
+        e.raw_os_error().and_then(BchError::new).unwrap_or(EIO.into())
+    }
+}
+
+/// A failed syscall, rustix's: an errno, never 0.
+#[cfg(feature = "std")]
+impl From<rustix::io::Errno> for BchError {
+    fn from(e: rustix::io::Errno) -> BchError {
+        BchError::from(e.raw_os_error() as u32)
     }
 }
 
@@ -1100,7 +1121,7 @@ impl From<crate::util::alloc::AllocError> for BchError {
 #[cfg(kernel)]
 impl From<kernel::error::Error> for BchError {
     fn from(e: kernel::error::Error) -> BchError {
-        BchError(-e.to_errno())
+        BchError::new(e.to_errno()).expect("a kernel error, not 0")
     }
 }
 
@@ -1120,10 +1141,7 @@ impl FirstErr {
     }
 
     pub fn get(&self) -> Option<BchError> {
-        match self.0.load(Ordering::Relaxed) {
-            0 => None,
-            e => Some(BchError(e)),
-        }
+        BchError::new(self.0.load(Ordering::Relaxed))
     }
 
     pub fn result(&self) -> Result<(), BchError> {
@@ -1138,11 +1156,7 @@ impl Default for FirstErr {
 }
 
 pub fn ret_to_result(ret: i32) -> Result<i32, BchError> {
-    if ret < 0 && ret > -4096 {
-        Err(BchError(-ret))
-    } else {
-        Ok(ret)
-    }
+    BchError::from_ret(ret.into()).map_or(Ok(ret), Err)
 }
 
 pub fn ret_to_result_void(ret: i32) -> Result<(), BchError> {
@@ -1151,11 +1165,7 @@ pub fn ret_to_result_void(ret: i32) -> Result<(), BchError> {
 
 /// ret_to_result(), of a loff_t: a position, or a -errcode.
 pub fn loff_to_result(ret: i64) -> Result<u64, BchError> {
-    if ret < 0 && ret > -4096 {
-        Err(BchError(-ret as i32))
-    } else {
-        Ok(ret as u64)
-    }
+    BchError::from_ret(ret).map_or(Ok(ret as u64), Err)
 }
 
 /// The other way: a result as C's int, 0 or -errcode - for Rust that C calls.
@@ -1175,12 +1185,7 @@ pub fn ret_to_class<E: Into<BchError>>(ret: Result<(), E>) -> i32 {
 /// error, or it. An ERR_PTR() is a -errno as a pointer - one of the top
 /// MAX_ERRNO (4095) addresses.
 pub fn errptr_to_result<T>(p: NonNull<T>) -> Result<NonNull<T>, BchError> {
-    let addr = p.as_ptr() as usize;
-    if addr > usize::MAX - 4095 {
-        Err(BchError(-(addr as i32)))
-    } else {
-        Ok(p)
-    }
+    BchError::from_ret(p.as_ptr() as isize as i64).map_or(Ok(p), Err)
 }
 
 /// One that may be NULL too, as IS_ERR_OR_NULL() tests: None for NULL.

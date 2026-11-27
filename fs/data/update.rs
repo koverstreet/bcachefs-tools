@@ -710,7 +710,7 @@ impl DataUpdate {
             }
 
             match t.allocate_dropping_locks(|| {
-                fs.update_table.make_room().map_err(|_| BchError::from_raw(-(c::ENOMEM as i32)))
+                fs.update_table.make_room().map_err(|_| BchError::from(c::ENOMEM))
             }) {
                 Err(e) if !e.matches(c::ENOMEM) => return Err(e),
                 _ => {}

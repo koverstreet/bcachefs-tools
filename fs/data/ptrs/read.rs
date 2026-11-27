@@ -84,7 +84,7 @@ impl<const N: usize> IoFailures<N> {
 
     /// @dev's io error, if it has one.
     pub fn dev_err(&self, dev: u32) -> Option<BchError> {
-        self.dev(dev).filter(|f| f.errcode != 0).map(|f| BchError::from_raw(-i32::from(f.errcode)))
+        self.dev(dev).and_then(|f| BchError::new(f.errcode.into()))
     }
 
     pub fn set_errcode(&mut self, dev: u32, err: i32) {
@@ -125,8 +125,8 @@ impl<const N: usize> IoFailures<N> {
             if f.ec_errcode != 0 {
                 errors |= ReadErr::EC_RECONSTRUCT;
             }
-            if f.errcode != 0 {
-                errors |= if BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::decompress) {
+            if let Some(e) = BchError::new(f.errcode.into()) {
+                errors |= if e.matches(Errcode::decompress) {
                     ReadErr::DECOMPRESSION
                 } else {
                     ReadErr::IO
@@ -139,7 +139,7 @@ impl<const N: usize> IoFailures<N> {
     /// Count, by status, each failure that came back from the block layer.
     pub fn count_blk_errors(&self, fs: &Fs) {
         let count = |code: i16| {
-            if code != 0 && BchError::from_raw(-i32::from(code)).matches(Errcode::blockdev_io_error) {
+            if BchError::new(code.into()).is_some_and(|e| e.matches(Errcode::blockdev_io_error)) {
                 fs.sb_error_count(blk_sts_sb_err(code.into()));
             }
         };
@@ -155,7 +155,7 @@ impl<const N: usize> IoFailures<N> {
     pub fn all_dev_removed(&self) -> bool {
         self.devs().iter().all(|f| {
             f.csum_nr == 0 && f.ec_errcode == 0 &&
-                BchError::from_raw(-i32::from(f.errcode)).matches(Errcode::BLK_STS_REMOVED)
+                BchError::new(f.errcode.into()).is_some_and(|e| e.matches(Errcode::BLK_STS_REMOVED))
         })
     }
 
@@ -169,7 +169,7 @@ impl<const N: usize> IoFailures<N> {
                 out.make_room(1024);
                 dev_to_text(&mut out, fs, f.dev);
 
-                let err_str = |code: i16| BchError::from_raw(-i32::from(code)).msg();
+                let err_str = |code: i16| BchError::new(code.into()).map_or("(No error)", |e| e.msg());
                 if f.csum_nr == 0 && f.ec_errcode == 0 && f.errcode == 0 {
                     write!(out, " no error - confused");
                 }

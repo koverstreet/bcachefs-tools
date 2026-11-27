@@ -240,11 +240,7 @@ impl BtreeTrans<'_> {
                  * Returning 0 here would spin: our caller loops until
                  * the root is locked or we return an error
                  */
-                return Err(if err != 0 {
-                    BchError::from_raw(err)
-                } else {
-                    fs.err(Errcode::btree_root_error_unset)
-                });
+                return Err(BchError::new(err).unwrap_or_else(|| fs.err(Errcode::btree_root_error_unset)));
             };
             let b = unsafe { b.as_ref() };
 
@@ -600,7 +596,7 @@ impl BtreeTrans<'_> {
 
                     match ret {
                         Err(e) if e.matches(Errcode::transaction_restart) ||
-                                  e.matches(c::ENOMEM as i32) => continue 'retry_all,
+                                  e.matches(c::ENOMEM) => continue 'retry_all,
                         Err(e) => break 'retry_all Err(e),
                         Ok(()) => {}
                     }

@@ -1114,8 +1114,8 @@ impl Fs {
         let exit_ret = self.reconcile.thread_exit_ret.load(Relaxed);
         let task = self.reconcile.thread.task();
 
-        if exit_ret != 0 {
-            write!(out, "Reconcile thread exited: {}\n", BchError::from_raw(exit_ret));
+        if let Some(e) = BchError::new(exit_ret) {
+            write!(out, "Reconcile thread exited: {e}\n");
         } else if let Some(task) = task {
             write!(out, "Reconcile thread backtrace:\n");
             out.indent_add(2);

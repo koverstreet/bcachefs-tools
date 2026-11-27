@@ -629,10 +629,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
                 .map_err(|e| anyhow!("error copying from {}: {}", src, e))?;
         }
 
-        crate::util::stderr_unless_error(|| match fs.exit() {
-            0 => Ok(()),
-            ret => Err(bcachefs_kernel::errcode::BchError::from_raw(ret)),
-        }).map_err(|e| anyhow!("error shutting down {}: {}", dev_paths[0].display(), e))?;
+        crate::util::stderr_unless_error(|| fs.exit()).map_err(|e| anyhow!("error shutting down {}: {}", dev_paths[0].display(), e))?;
     }
 
     Ok(())

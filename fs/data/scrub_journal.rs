@@ -498,8 +498,8 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     let nr_ptrs = trimmed.as_sc().arm::<Ptrs>().map_or(0, |k| k.ptrs(fs).count());
     let all_ptrs = (1u32 << nr_ptrs) - 1;
 
-    if r.read_err != 0 && bad_devs == all_ptrs {
-        let err = crate::data::read::data_read_sb_err(BchError::from_raw(r.read_err));
+    if let Some(e) = BchError::new(r.read_err).filter(|_| bad_devs == all_ptrs) {
+        let err = crate::data::read::data_read_sb_err(e);
         damage::record_key(t, btree, stashed.k.p, err)?;
         return t.commit(None, CommitFlags::NO_ENOSPC).map(|()| Outcome::Lost);
     }

@@ -371,5 +371,5 @@ pub(super) fn writepages(mapping: Mapping, wbc: Wbc) -> i32 {
 
     drop(tmp);
 
-    if ret < 0 { BchError::from_raw(ret).class() } else { ret }
+    BchError::from_ret(ret.into()).map_or(ret, |e| e.class())
 }

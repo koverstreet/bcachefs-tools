@@ -1020,7 +1020,7 @@ pub mod ioctl {
             let _ = stdio.write(false, buf.as_bytes());
         }
 
-        fs.exit();
+        let _ = fs.exit();
         ret
     }
 
