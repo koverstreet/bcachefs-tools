@@ -297,6 +297,7 @@ pub enum SbErrorId {
     #[flags(AUTOFIX)] inode_i_sectors_underflow = 312,
     #[flags(AUTOFIX)] inode_has_case_insensitive_not_set = 316,
     #[flags(AUTOFIX)] inode_parent_has_case_insensitive_not_set = 317,
+    #[flags(AUTOFIX)] inode_rdev_user_encoding = 445,
     #[flags(AUTOFIX)] vfs_inode_i_blocks_underflow = 311,
     #[flags(AUTOFIX)] vfs_inode_i_blocks_not_zero_at_truncate = 313,
     vfs_bad_inode_rm = 320,

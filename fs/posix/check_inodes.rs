@@ -13,6 +13,8 @@ use crate::btree::iter::{
 };
 use crate::posix::inode_format::InodeFlags;
 use crate::posix::inode::InodeUnpacked;
+use crate::posix::dev::dev_t;
+use crate::posix::mode::{S_IFBLK, S_IFCHR};
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState};
 use crate::snapshots::subvolume::SubvolInum;
 use crate::posix::{check, inode, inode_opts, namei, str_hash};
@@ -226,6 +228,18 @@ fn check_unlinked_dir(
     Ok(true)
 }
 
+/// The device a device inode names, if its bi_dev is in userspace's encoding:
+/// copy_fs and fusemount wrote st_rdev and FUSE's rdev as they came, before
+/// they converted. Of those, a number with a major below 4096 and a minor
+/// below 256 is major 0 as ours - which no device node is - so it's known by
+/// that; one with a bigger minor can't be told from a real number.
+fn rdev_in_user_encoding(u: &InodeUnpacked) -> Option<dev_t> {
+    let ty = u.bi_mode.file_type();
+    let rdev = u.rdev();
+    ((ty == S_IFCHR || ty == S_IFBLK) && rdev != dev_t::NONE && rdev.major() == 0)
+        .then(|| dev_t::from_user(rdev.to_disk() as u64))
+}
+
 fn write_if_changed(
     t:       &TransAttempt<'_, '_>,
     u:       &mut InodeUnpacked,
@@ -295,6 +309,14 @@ fn check_inode<'t>(
     if fsck_err_on!(t, u.is_dir() && u.bi_size != 0, id::inode_dir_has_nonzero_i_size,
                     "directory with nonzero i_size\n{u}")? {
         u.bi_size = 0;
+        changed = true;
+    }
+
+    if let Some(rdev) = rdev_in_user_encoding(&u) &&
+       fsck_err!(t, id::inode_rdev_user_encoding,
+                 "device inode's number {} is in userspace's encoding: should be {rdev}\n{u}",
+                 u.rdev())? {
+        u.bi_dev = rdev.to_disk();
         changed = true;
     }
 
