@@ -784,30 +784,18 @@ fn past_deleted(t: &TransAttempt<'_, '_>, s: &Snapshot, role: Role)
     Ok(None)   /* damaged chain, cycle? don't guess */
 }
 
-/// What to do about a broken edge, decided by edge_repair().
-enum EdgeRepair {
-    /// Undelete this node: it's deleted, but still owns data.
-    Undelete(u32),
-    /// Aim our pointer at this node instead - 0 to clear it.
-    Retarget(u32),
-    /// The target's pointer slot that should name us, empty or stale: aim it
-    /// at us.
-    Complete(u32),
-    /// Recreate the missing node our pointer names, here.
-    Recreate(Place),
-    /// Re-home us, our place lost: under this node, into its empty child
-    /// slot - 0, as a tree's root.
-    Rehome(u32),
-}
-
 /// Check the edge between node @n, as @role, and @other_id, which its
-/// pointer names: a repair, if it needs one and fsck says to make it.
-fn edge_repair(
-    t:        &TransAttempt<'_, '_>,
-    n:        &CowKey<'_, '_, '_, '_, Snapshot>,
+/// pointer names, and repair it if fsck says to: committed, and restarted.
+///
+/// @n's repairs are queued before the edge's: those may edit @n's key too - an
+/// undelete relinks through the parent - and of two updates of a key, the
+/// later's the one committed.
+fn check_edge<'a, 't>(
+    t:        &TransAttempt<'a, 't>,
+    n:        &mut CowKey<'_, '_, 'a, 't, Snapshot>,
     role:     Role,
     other_id: u32,
-) -> Result<Option<EdgeRepair>, BchError> {
+) -> Result<(), BchError> {
     let fs = t.fs();
     let id = n.id();
     let ptr = role.ptr_name();
@@ -827,23 +815,29 @@ fn edge_repair(
         // strand the keys: undelete it, and leave our edge to its own visit.
         let acct = fs.snapshots.accounting(other_id);
         if !acct.is_empty() {
-            let fix = fsck_err!(t, snapshot_deleted_but_has_data,
-                                "snapshot {id} {ptr} pointer {other_id} is deleted but has {} keys, \
-                                 {} sectors accounted - undeleting rather than splicing past it:{}",
-                                acct.keys(), acct.sectors(), EdgeNodes::new(fs, n, Some(o), None))?;
-            return Ok(fix.then_some(EdgeRepair::Undelete(other_id)));
+            if !fsck_err!(t, snapshot_deleted_but_has_data,
+                          "snapshot {id} {ptr} pointer {other_id} is deleted but has {} keys, \
+                           {} sectors accounted - undeleting rather than splicing past it:{}",
+                          acct.keys(), acct.sectors(), EdgeNodes::new(fs, n, Some(o), None))? {
+                return Ok(());
+            }
+            edit_node(t, other_id, |u| undelete_owns_data(t, u))?;
+            return edge_repair_commit(t);
         }
 
-        let Some(repl) = past_deleted(t, &o.v, role)? else { return Ok(None) };
-        let fix = fsck_err!(t, snapshot_deleted_but_linked,
-                            "snapshot {id} {ptr} pointer {other_id} is a deleted node - {} {repl}{}",
-                            if repl != 0 { "re-linking past it to" } else { "clearing, dead in that direction:" },
-                            EdgeNodes::new(fs, n, Some(o), None))?;
-        return Ok(fix.then_some(EdgeRepair::Retarget(repl)));
+        let Some(repl) = past_deleted(t, &o.v, role)? else { return Ok(()) };
+        if !fsck_err!(t, snapshot_deleted_but_linked,
+                      "snapshot {id} {ptr} pointer {other_id} is a deleted node - {} {repl}{}",
+                      if repl != 0 { "re-linking past it to" } else { "clearing, dead in that direction:" },
+                      EdgeNodes::new(fs, n, Some(o), None))? {
+            return Ok(());
+        }
+        set_ptr(n.v_mut(t)?, role, other_id, repl);
+        return edge_repair_commit(t);
     }
 
     if other.as_ref().is_some_and(|o| points_at(&o.v, role.other(), id)) {
-        return Ok(None);
+        return Ok(());
     }
 
     // Our pointer completes the edge if the target's slot toward us is empty
@@ -855,7 +849,8 @@ fn edge_repair(
                              "snapshot {id} {ptr} pointer {other_id} is not reciprocated, but is corroborated by\n\
                               tree and depth and the target's position ({old}) is unattested - completing the edge{}",
                              EdgeNodes::new(fs, n, Some(o), None))? {
-                    return Ok(Some(EdgeRepair::Complete(old)));
+                    edit_node(t, other_id, |u| Ok(set_ptr(u.v_mut(), role.other(), old, id)))?;
+                    return edge_repair_commit(t);
                 }
             } else if role == Role::Parent && old != 0 &&
                       other_id < id && o.v.tree == n.v().tree &&
@@ -868,7 +863,8 @@ fn edge_repair(
                              "snapshot {id} child pointer {other_id} is not reciprocated: its parent pointer names\n\
                               {old}, which has no place for it - completing the edge{}",
                              EdgeNodes::new(fs, n, Some(o), None))? {
-                    return Ok(Some(EdgeRepair::Complete(old)));
+                    edit_node(t, other_id, |u| Ok(set_ptr(u.v_mut(), role.other(), old, id)))?;
+                    return edge_repair_commit(t);
                 }
             }
         }
@@ -883,7 +879,8 @@ fn edge_repair(
                           edge, corroborated by tree and depth - repairing{}",
                          if other.is_some() { "does not reciprocate" } else { "does not exist" },
                          EdgeNodes::new(fs, n, other.as_ref(), Some(&r)))? {
-                return Ok(Some(EdgeRepair::Retarget(repl)));
+                set_ptr(n.v_mut(t)?, role, other_id, repl);
+                return edge_repair_commit(t);
             }
         }
     }
@@ -900,7 +897,8 @@ fn edge_repair(
                          "snapshot {id} {ptr} pointer {other_id} does not exist, but the nodes around it place it -\n\
                           recreating it: {place:?}{}",
                          EdgeNodes::new(fs, n, None, None))? {
-                return Ok(Some(EdgeRepair::Recreate(place)));
+                recreate(t, other_id, place)?;
+                return edge_repair_commit(t);
             }
         }
     }
@@ -913,11 +911,14 @@ fn edge_repair(
         let sibling = if c0 == other_id { c1 } else { c0 };
 
         if has_accounting(fs, other_id) {
-            let fix = fsck_err!(t, snapshot_child_missing_but_accounted,
-                                "snapshot {id} child pointer {other_id} does not exist, but keys are\n\
-                                 accounted to {other_id} - recreating it as a leaf so they stay reachable{}",
-                                EdgeNodes::new(fs, n, None, None))?;
-            return Ok(fix.then_some(EdgeRepair::Recreate(Place { parent: id, children: [0, 0], tree: n.v().tree() })));
+            if !fsck_err!(t, snapshot_child_missing_but_accounted,
+                          "snapshot {id} child pointer {other_id} does not exist, but keys are\n\
+                           accounted to {other_id} - recreating it as a leaf so they stay reachable{}",
+                          EdgeNodes::new(fs, n, None, None))? {
+                return Ok(());
+            }
+            recreate(t, other_id, Place { parent: id, children: [0, 0], tree: n.v().tree() })?;
+            return edge_repair_commit(t);
         }
 
         if sibling != 0 &&
@@ -925,7 +926,8 @@ fn edge_repair(
                      "snapshot {id} child pointer {other_id} does not exist: nothing claims {id} as\n\
                       parent and nothing is accounted to it - clearing{}",
                      EdgeNodes::new(fs, n, None, None))? {
-            return Ok(Some(EdgeRepair::Retarget(0)));
+            set_ptr(n.v_mut(t)?, role, other_id, 0);
+            return edge_repair_commit(t);
         }
     }
 
@@ -945,7 +947,11 @@ fn edge_repair(
                          prt!(out, "its tree has no room for it: making it a tree root, its ancestry lost")
                      }),
                      EdgeNodes::new(fs, n, other.as_ref(), None))? {
-            return Ok(Some(EdgeRepair::Rehome(home)));
+            set_ptr(n.v_mut(t)?, role, other_id, home);
+            if home != 0 {
+                edit_node(t, home, |u| Ok(set_ptr(u.v_mut(), Role::Parent, 0, id)))?;
+            }
+            return edge_repair_commit(t);
         }
     }
 
@@ -967,43 +973,6 @@ fn edge_repair(
         (_, Role::Child)   => Errcode::EINVAL_snapshot_parent_missing_child_ptr,
         (_, Role::Parent)  => Errcode::EINVAL_snapshot_child_bad_parent,
     }))
-}
-
-/// Check, and repair, the edge between node @n, as @role, and @other_id,
-/// which its pointer names.
-fn check_edge<'a, 't>(
-    t:        &TransAttempt<'a, 't>,
-    n:        &mut CowKey<'_, '_, 'a, 't, Snapshot>,
-    role:     Role,
-    other_id: u32,
-) -> Result<(), BchError> {
-    let Some(repair) = edge_repair(t, n, role, other_id)? else { return Ok(()) };
-    let id = n.id();
-
-    if let EdgeRepair::Retarget(new) = repair {
-        set_ptr(n.v_mut(t)?, role, other_id, new);
-        return edge_repair_commit(t);
-    }
-
-    // @n's repairs are queued before the edge's: that may edit @n's key too -
-    // an undelete relinks through the parent - and of two updates of a key,
-    // the later's the one committed
-    match repair {
-        EdgeRepair::Undelete(id) =>
-            edit_node(t, id, |u| undelete_owns_data(t, u))?,
-        EdgeRepair::Complete(old) =>
-            edit_node(t, other_id, |u| Ok(set_ptr(u.v_mut(), role.other(), old, id)))?,
-        EdgeRepair::Recreate(place) =>
-            recreate(t, other_id, place)?,
-        EdgeRepair::Rehome(home) => {
-            set_ptr(n.v_mut(t)?, role, other_id, home);
-            if home != 0 {
-                edit_node(t, home, |u| Ok(set_ptr(u.v_mut(), Role::Parent, 0, id)))?;
-            }
-        }
-        EdgeRepair::Retarget(_) => unreachable!("repaired above"),
-    }
-    edge_repair_commit(t)
 }
 
 /// Whether @id's tree pointer, @tree, names a tree that exists and whose
