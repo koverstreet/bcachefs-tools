@@ -489,8 +489,7 @@ pub fn debug_module_exit(m: &ModuleExit) {
     DEBUG_ROOT.exit(m)
 }
 
-pub fn debug_module_init() -> i32 {
+pub fn debug_module_init() {
     DEBUG_ROOT.init(c"bcachefs");
     DEBUG_ROOT.file::<Tasks>(c"tasks", &TASKS);
-    0
 }

@@ -15,7 +15,7 @@ use crate::posix::inode::InodeUnpacked;
 use crate::posix::mode::{S_IFDIR, S_IFLNK, S_IFREG};
 use crate::snapshots::{format::Subvolume, subvolume::SubvolInum};
 use crate::vfs::inode::{InodeQuota, InodeReserved, InodeReservedRange, InodeInfoFlag};
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::locking::{MemallocFlags, TwoStateLock};
 use crate::new_lock;
@@ -136,7 +136,7 @@ pub fn vfs_init(m: &ThisModule) -> Result<(), BchError> {
     super::direct_write::pools_init(m)?;
     super::writeback::pools_init(m)?;
     super::buffered::pools_init(m)?;
-    ret_to_result_void(super::fs_type::fs_type_register())
+    super::fs_type::fs_type_register()
 }
 
 /// Past the grace period free() waits: the last inode's back in the cache.

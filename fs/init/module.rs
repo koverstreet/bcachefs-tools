@@ -4,7 +4,7 @@
 //! filesystem's directory is. What runs them - the kernel's entry points, or
 //! userspace's constructor - is the port's module.rs.
 
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::os::{kobject::{fs_kobj, StaticKobject}, module::{ModuleExit, ThisModule}};
 #[cfg(kernel)]
 use crate::format::MetadataVersion;
@@ -86,7 +86,7 @@ crate::init_fn! {
         #[cfg(kernel)]
         crate::vfs::new_inode::vfs_init(m)?;
         #[cfg(CONFIG_DEBUG_FS)]
-        ret_to_result_void(crate::debug::debug::debug_module_init())?;
+        crate::debug::debug::debug_module_init();
         Ok(())
     }
 }

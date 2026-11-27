@@ -510,8 +510,8 @@ fn hex2bin(dst: &mut [u8], hex: &[u8]) -> bool {
 
 static BCACHEFS_TYPE: FsTypeTable<Bcachefs> = FsTypeTable::new();
 
-pub fn fs_type_register() -> i32 {
-    BCACHEFS_TYPE.register().map_or_else(|e| e.to_errno(), |()| 0)
+pub fn fs_type_register() -> Result<(), BchError> {
+    Ok(BCACHEFS_TYPE.register()?)
 }
 
 pub fn fs_type_unregister() {
