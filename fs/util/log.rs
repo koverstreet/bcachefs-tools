@@ -43,295 +43,6 @@ impl LogLevel {
     }
 }
 
-/// @msg at printk level @level, after the filesystem's name if @prefix, and
-/// a newline if @newline, in one printk: Log::info_start() and cont()'s, a line
-/// a KERN_CONT finishes.
-fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
-    // KERN_CONT, anything not a digit, is at the previous level
-    if loglevel(fs, level.is_ascii_digit().then(|| level - b'0')).is_none() {
-        return;
-    }
-
-    let mut buf = Printbuf::new();
-    buf.write_bytes(&[0x01, level]);
-
-    #[cfg(kernel)]
-    if prefix {
-        write!(buf, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
-    }
-    #[cfg(not(kernel))]
-    let _ = prefix;
-    msg.to_text(&mut buf);
-    if newline {
-        buf.newline();
-    }
-
-    #[cfg(kernel)]
-    if let Some(stdio) = fs.stdio.get(false) {
-        let _ = stdio.print(&buf.as_bytes()[2..]);
-        return;
-    }
-    crate::os::printk::printk(buf.as_c_str())
-}
-
-/// The level a message at @level - None, the previous message's - prints at,
-/// if the filesystem's loglevel lets it through. A level given is the one
-/// what follows continues at.
-fn loglevel(fs: &Fs, level: Option<u8>) -> Option<u32> {
-    let level = match level {
-        Some(l) => {
-            fs.prev_loglevel.store(l.into(), Ordering::Relaxed);
-            u32::from(l)
-        }
-        None => fs.prev_loglevel.load(Ordering::Relaxed),
-    };
-    let max = match fs.loglevel.load(Ordering::Relaxed) {
-        0 if fs.opts().verbose() => 7,
-        0 => 6,
-        l => l,
-    };
-    (level <= max).then_some(level)
-}
-
-/// Print @msg at @level as it stands, one line at a time with no prefix.
-pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
-    print_bytes(fs, Some(level.num()), msg.as_bytes())
-}
-
-// ── A message printed whole ─────────────────────────────────────────────
-//
-// A message is printed at a loglevel - or, given none, the previous one's: a
-// continuation - if the filesystem's loglevel lets it through, and goes to
-// the filesystem's stdio redirect if it has one: a fsck through the ioctl, or
-// a mount that asked for one. Otherwise it's printk()ed a chunk at a time,
-// whole lines up to printk's limit, with the console held across them if it's
-// free, so a long message isn't interleaved with another's.
-
-/// The most printk() takes at once.
-const PRINTK_LIMIT: usize = 1024;
-
-// ── The stdio redirect ──────────────────────────────────────────────────
-//
-// A redirect - an fsck's, or the mount's status fd - is attached to the
-// filesystem while someone's listening: attach(), for as long as its guard
-// lives. A use of it - a printer's write, or a prompt waiting for its answer -
-// is a ref on it, which may outlive the guard: the redirect lives as long as
-// its last ref, and a write to it once it's done gets EPIPE.
-
-/// Which of the filesystem's messages an attached redirect gets.
-#[cfg(kernel)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Only {
-    /// Everything: an offline fsck's own filesystem.
-    All,
-    /// What this task prints: online fsck, on a filesystem others use.
-    Task,
-    /*
-     * What's for the user - questions, hard errors: the mount's status fd.
-     * A boot splash wants those, not a running commentary of IO errors.
-     */
-    User,
-}
-
-#[cfg(kernel)]
-pub struct Attached {
-    redirect: Arc<StdioRedirect>,
-    only:     Only,
-    /// The attaching task's address, for Only::Task.
-    task:     usize,
-}
-
-#[cfg(kernel)]
-#[pin_data]
-#[derive(MaybeZeroable, Init)]
-pub struct StdioAttach {
-    #[pin]
-    #[init(crate::new_lock!(None, "&c->stdio"))]
-    attached: Locked<SpinLockIrq, Option<Attached>>,
-    /*
-     * Someone is polling BCH_IOCTL_RECOVERY_STATUS on the redirect, so
-     * they're drawing progress themselves and progress indicators keep off
-     * the console entirely. Set by the first such ioctl, cleared as the
-     * redirect detaches - a mount that asks for a status fd but never polls
-     * still gets its progress in dmesg.
-     */
-    pub progress_reader: AtomicBool,
-}
-
-/// The redirect attached for as long as it lives.
-#[cfg(kernel)]
-pub struct AttachGuard<'a>(&'a StdioAttach);
-
-#[cfg(kernel)]
-impl StdioAttach {
-    /// @redirect, to get the messages @only says until the guard drops.
-    pub fn attach(&self, redirect: &Arc<StdioRedirect>, only: Only) -> AttachGuard<'_> {
-        let task = crate::os::sched::current().addr();
-        let old = self.attached.lock().replace(Attached { redirect: redirect.clone(), only, task });
-        assert!(old.is_none(), "a stdio redirect attached over another");
-        AttachGuard(self)
-    }
-
-    /// The redirect, if it's to get this message - @user: one for whoever's
-    /// running fsck - from this task.
-    pub fn get(&self, user: bool) -> Option<Arc<StdioRedirect>> {
-        let attached = self.attached.lock();
-        let a = attached.as_ref()?;
-        if (!user && a.only == Only::User) ||
-           (a.only == Only::Task && a.task != crate::os::sched::current().addr()) {
-            return None;
-        }
-        Some(a.redirect.clone())
-    }
-}
-
-#[cfg(kernel)]
-impl Drop for AttachGuard<'_> {
-    fn drop(&mut self) {
-        self.0.attached.lock().take();
-        self.0.progress_reader.store(false, Ordering::Relaxed);
-    }
-}
-
-/// @s at printk level @level - None, the previous message's - if the
-/// filesystem's loglevel lets it through. Indent left after the last newline
-/// isn't printed.
-fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
-    let trimmed = s.len() - s.iter().rev().take_while(|&&b| b == b' ').count();
-    let len = if trimmed == 0 || s[trimmed - 1] == b'\n' { trimmed } else { s.len() };
-    if len == 0 {
-        return;
-    }
-
-    let Some(level) = loglevel(fs, level) else { return };
-
-    #[cfg(kernel)]
-    if let Some(stdio) = fs.stdio.get(false) {
-        let _ = stdio.print(&s[..len]);
-        return;
-    }
-
-    #[cfg(kernel)]
-    let prefix: &[u8] = if level < 8 { &[0x01, b'0' + level as u8] } else { &[0x01] };
-    #[cfg(not(kernel))]
-    let prefix: &[u8] = { let _ = level; &[] };
-    print_lines(prefix, s)
-}
-
-/// @s for the person running the fsck - their redirect, if they have one,
-/// else the log at err.
-pub fn print_user(fs: &Fs, s: &[u8]) {
-    #[cfg(kernel)]
-    if let Some(stdio) = fs.stdio.get(true) {
-        let _ = stdio.print(s);
-        return;
-    }
-    print_bytes(fs, Some(LogLevel::ERR.num()), s)
-}
-
-/// The next chunk of @lines for printk(): whole lines, as many as fit in
-/// @limit bytes - the first, if it alone doesn't - and at the end, up to the
-/// last line that isn't blank. Its length; None if only blank lines are left.
-fn lines_under(lines: &[u8], limit: usize) -> Option<usize> {
-    let (mut start, mut nonblank) = (0, None);
-    loop {
-        let end = lines[start..].iter().position(|&b| b == b'\n').map_or(lines.len(), |i| start + i);
-        if lines[start..end].iter().any(|&b| b != b' ') {
-            nonblank = Some(end);
-        }
-        if end == lines.len() {
-            return nonblank;
-        }
-        if start != 0 && end > limit {
-            return Some(start - 1);
-        }
-        start = end + 1;
-    }
-}
-
-/// @lines to printk(), each chunk after @prefix.
-fn print_lines(prefix: &[u8], lines: &[u8]) {
-    // SAFETY: released below, if taken
-    #[cfg(kernel)]
-    let locked = unsafe { c::console_trylock() } != 0;
-
-    let mut rest = lines;
-    while let Some(n) = lines_under(rest, PRINTK_LIMIT) {
-        crate::os::printk::printk_line(prefix, &rest[..n]);
-
-        if n == rest.len() {
-            break;
-        }
-        rest = &rest[n + 1..];
-    }
-
-    #[cfg(kernel)]
-    if locked {
-        unsafe { c::console_unlock() };
-    }
-}
-
-/// A message built up in pieces and printed when dropped - C's
-/// CLASS(bch_log_msg). Continuation lines are indented under the first and
-/// raw `\t`/`\r` columns aligned; it goes out whole, through
-/// print_bytes(), unless suppressed - ratelimited, or by count_fsck_err(), when
-/// it's a repeat. Log::msg() starts one; Log::at() is one written whole.
-pub struct LogMsg<'a> {
-    log:   Log<'a>,
-    level: LogLevel,
-    msg:   Printbuf,
-}
-
-impl<'a> LogMsg<'a> {
-    /// For a message whose level depends on how things turned out.
-    pub fn set_level(&mut self, level: LogLevel) {
-        self.level = level;
-    }
-
-    pub fn with_level(mut self, level: LogLevel) -> Self { self.level = level; self }
-    pub fn notice(mut self) -> Self  { self.level = LogLevel::NOTICE; self }
-    pub fn info(mut self) -> Self    { self.level = LogLevel::INFO; self }
-    pub fn verbose(mut self) -> Self { self.level = LogLevel::DEBUG; self }
-}
-
-impl core::ops::Deref for LogMsg<'_> {
-    type Target = Printbuf;
-    fn deref(&self) -> &Printbuf { &self.msg }
-}
-
-impl core::ops::DerefMut for LogMsg<'_> {
-    fn deref_mut(&mut self) -> &mut Printbuf { &mut self.msg }
-}
-
-impl Drop for LogMsg<'_> {
-    fn drop(&mut self) {
-        if self.msg.is_suppressed() {
-            return;
-        }
-
-        self.msg.tabstop_align();
-        self.log.print(self.level, self.msg.as_bytes());
-    }
-}
-
-impl Fs {
-    /// Whether to drop a message from @func, by @rs: only with the
-    /// ratelimit_errors option.
-    pub fn ratelimit_suppress(&self, rs: &Ratelimit, at: &dyn core::fmt::Display) -> bool {
-        self.opts.ratelimit_errors.get() != 0 && !rs.allow(at)
-    }
-}
-
-/// @log, ratelimited by a state of this call site's own, as C's
-/// bch_err_ratelimited() has: `ratelimit!(fs.log()).err(message!(...))`.
-#[macro_export]
-macro_rules! ratelimit {
-    ($log:expr) => {{
-        static RATELIMIT: $crate::util::ratelimit::Ratelimit = $crate::util::ratelimit::Ratelimit::new();
-        $log.ratelimited(&RATELIMIT)
-    }};
-}
-
 /// Where a message goes: the filesystem's log, or a device's - after its name
 /// - maybe ratelimited. @msg is anything ToText; message!() makes one from a
 /// format string.
@@ -483,6 +194,295 @@ impl<'a> Log<'a> {
             }
         }
         result
+    }
+}
+
+/// @log, ratelimited by a state of this call site's own, as C's
+/// bch_err_ratelimited() has: `ratelimit!(fs.log()).err(message!(...))`.
+#[macro_export]
+macro_rules! ratelimit {
+    ($log:expr) => {{
+        static RATELIMIT: $crate::util::ratelimit::Ratelimit = $crate::util::ratelimit::Ratelimit::new();
+        $log.ratelimited(&RATELIMIT)
+    }};
+}
+
+impl Fs {
+    /// Whether to drop a message from @func, by @rs: only with the
+    /// ratelimit_errors option.
+    pub fn ratelimit_suppress(&self, rs: &Ratelimit, at: &dyn core::fmt::Display) -> bool {
+        self.opts.ratelimit_errors.get() != 0 && !rs.allow(at)
+    }
+}
+
+/// A message built up in pieces and printed when dropped - C's
+/// CLASS(bch_log_msg). Continuation lines are indented under the first and
+/// raw `\t`/`\r` columns aligned; it goes out whole, through
+/// print_bytes(), unless suppressed - ratelimited, or by count_fsck_err(), when
+/// it's a repeat. Log::msg() starts one; Log::at() is one written whole.
+pub struct LogMsg<'a> {
+    log:   Log<'a>,
+    level: LogLevel,
+    msg:   Printbuf,
+}
+
+impl<'a> LogMsg<'a> {
+    /// For a message whose level depends on how things turned out.
+    pub fn set_level(&mut self, level: LogLevel) {
+        self.level = level;
+    }
+
+    pub fn with_level(mut self, level: LogLevel) -> Self { self.level = level; self }
+    pub fn notice(mut self) -> Self  { self.level = LogLevel::NOTICE; self }
+    pub fn info(mut self) -> Self    { self.level = LogLevel::INFO; self }
+    pub fn verbose(mut self) -> Self { self.level = LogLevel::DEBUG; self }
+}
+
+impl core::ops::Deref for LogMsg<'_> {
+    type Target = Printbuf;
+    fn deref(&self) -> &Printbuf { &self.msg }
+}
+
+impl core::ops::DerefMut for LogMsg<'_> {
+    fn deref_mut(&mut self) -> &mut Printbuf { &mut self.msg }
+}
+
+impl Drop for LogMsg<'_> {
+    fn drop(&mut self) {
+        if self.msg.is_suppressed() {
+            return;
+        }
+
+        self.msg.tabstop_align();
+        self.log.print(self.level, self.msg.as_bytes());
+    }
+}
+
+// ── A message printed whole ─────────────────────────────────────────────
+//
+// A message is printed at a loglevel - or, given none, the previous one's: a
+// continuation - if the filesystem's loglevel lets it through, and goes to
+// the filesystem's stdio redirect if it has one: a fsck through the ioctl, or
+// a mount that asked for one. Otherwise it's printk()ed a chunk at a time,
+// whole lines up to printk's limit, with the console held across them if it's
+// free, so a long message isn't interleaved with another's.
+
+/// The level a message at @level - None, the previous message's - prints at,
+/// if the filesystem's loglevel lets it through. A level given is the one
+/// what follows continues at.
+fn loglevel(fs: &Fs, level: Option<u8>) -> Option<u32> {
+    let level = match level {
+        Some(l) => {
+            fs.prev_loglevel.store(l.into(), Ordering::Relaxed);
+            u32::from(l)
+        }
+        None => fs.prev_loglevel.load(Ordering::Relaxed),
+    };
+    let max = match fs.loglevel.load(Ordering::Relaxed) {
+        0 if fs.opts().verbose() => 7,
+        0 => 6,
+        l => l,
+    };
+    (level <= max).then_some(level)
+}
+
+/// @s at printk level @level - None, the previous message's - if the
+/// filesystem's loglevel lets it through. Indent left after the last newline
+/// isn't printed.
+fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
+    let trimmed = s.len() - s.iter().rev().take_while(|&&b| b == b' ').count();
+    let len = if trimmed == 0 || s[trimmed - 1] == b'\n' { trimmed } else { s.len() };
+    if len == 0 {
+        return;
+    }
+
+    let Some(level) = loglevel(fs, level) else { return };
+
+    #[cfg(kernel)]
+    if let Some(stdio) = fs.stdio.get(false) {
+        let _ = stdio.print(&s[..len]);
+        return;
+    }
+
+    #[cfg(kernel)]
+    let prefix: &[u8] = if level < 8 { &[0x01, b'0' + level as u8] } else { &[0x01] };
+    #[cfg(not(kernel))]
+    let prefix: &[u8] = { let _ = level; &[] };
+    print_lines(prefix, s)
+}
+
+/// @s for the person running the fsck - their redirect, if they have one,
+/// else the log at err.
+pub fn print_user(fs: &Fs, s: &[u8]) {
+    #[cfg(kernel)]
+    if let Some(stdio) = fs.stdio.get(true) {
+        let _ = stdio.print(s);
+        return;
+    }
+    print_bytes(fs, Some(LogLevel::ERR.num()), s)
+}
+
+/// Print @msg at @level as it stands, one line at a time with no prefix.
+pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
+    print_bytes(fs, Some(level.num()), msg.as_bytes())
+}
+
+/// @msg at printk level @level, after the filesystem's name if @prefix, and
+/// a newline if @newline, in one printk: Log::info_start() and cont()'s, a line
+/// a KERN_CONT finishes.
+fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
+    // KERN_CONT, anything not a digit, is at the previous level
+    if loglevel(fs, level.is_ascii_digit().then(|| level - b'0')).is_none() {
+        return;
+    }
+
+    let mut buf = Printbuf::new();
+    buf.write_bytes(&[0x01, level]);
+
+    #[cfg(kernel)]
+    if prefix {
+        write!(buf, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
+    }
+    #[cfg(not(kernel))]
+    let _ = prefix;
+    msg.to_text(&mut buf);
+    if newline {
+        buf.newline();
+    }
+
+    #[cfg(kernel)]
+    if let Some(stdio) = fs.stdio.get(false) {
+        let _ = stdio.print(&buf.as_bytes()[2..]);
+        return;
+    }
+    crate::os::printk::printk(buf.as_c_str())
+}
+
+/// The most printk() takes at once.
+const PRINTK_LIMIT: usize = 1024;
+
+/// The next chunk of @lines for printk(): whole lines, as many as fit in
+/// @limit bytes - the first, if it alone doesn't - and at the end, up to the
+/// last line that isn't blank. Its length; None if only blank lines are left.
+fn lines_under(lines: &[u8], limit: usize) -> Option<usize> {
+    let (mut start, mut nonblank) = (0, None);
+    loop {
+        let end = lines[start..].iter().position(|&b| b == b'\n').map_or(lines.len(), |i| start + i);
+        if lines[start..end].iter().any(|&b| b != b' ') {
+            nonblank = Some(end);
+        }
+        if end == lines.len() {
+            return nonblank;
+        }
+        if start != 0 && end > limit {
+            return Some(start - 1);
+        }
+        start = end + 1;
+    }
+}
+
+/// @lines to printk(), each chunk after @prefix.
+fn print_lines(prefix: &[u8], lines: &[u8]) {
+    // SAFETY: released below, if taken
+    #[cfg(kernel)]
+    let locked = unsafe { c::console_trylock() } != 0;
+
+    let mut rest = lines;
+    while let Some(n) = lines_under(rest, PRINTK_LIMIT) {
+        crate::os::printk::printk_line(prefix, &rest[..n]);
+
+        if n == rest.len() {
+            break;
+        }
+        rest = &rest[n + 1..];
+    }
+
+    #[cfg(kernel)]
+    if locked {
+        unsafe { c::console_unlock() };
+    }
+}
+
+// ── The stdio redirect ──────────────────────────────────────────────────
+//
+// A redirect - an fsck's, or the mount's status fd - is attached to the
+// filesystem while someone's listening: attach(), for as long as its guard
+// lives. A use of it - a printer's write, or a prompt waiting for its answer -
+// is a ref on it, which may outlive the guard: the redirect lives as long as
+// its last ref, and a write to it once it's done gets EPIPE.
+
+/// Which of the filesystem's messages an attached redirect gets.
+#[cfg(kernel)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Only {
+    /// Everything: an offline fsck's own filesystem.
+    All,
+    /// What this task prints: online fsck, on a filesystem others use.
+    Task,
+    /*
+     * What's for the user - questions, hard errors: the mount's status fd.
+     * A boot splash wants those, not a running commentary of IO errors.
+     */
+    User,
+}
+
+#[cfg(kernel)]
+pub struct Attached {
+    redirect: Arc<StdioRedirect>,
+    only:     Only,
+    /// The attaching task's address, for Only::Task.
+    task:     usize,
+}
+
+#[cfg(kernel)]
+#[pin_data]
+#[derive(MaybeZeroable, Init)]
+pub struct StdioAttach {
+    #[pin]
+    #[init(crate::new_lock!(None, "&c->stdio"))]
+    attached: Locked<SpinLockIrq, Option<Attached>>,
+    /*
+     * Someone is polling BCH_IOCTL_RECOVERY_STATUS on the redirect, so
+     * they're drawing progress themselves and progress indicators keep off
+     * the console entirely. Set by the first such ioctl, cleared as the
+     * redirect detaches - a mount that asks for a status fd but never polls
+     * still gets its progress in dmesg.
+     */
+    pub progress_reader: AtomicBool,
+}
+
+/// The redirect attached for as long as it lives.
+#[cfg(kernel)]
+pub struct AttachGuard<'a>(&'a StdioAttach);
+
+#[cfg(kernel)]
+impl StdioAttach {
+    /// @redirect, to get the messages @only says until the guard drops.
+    pub fn attach(&self, redirect: &Arc<StdioRedirect>, only: Only) -> AttachGuard<'_> {
+        let task = crate::os::sched::current().addr();
+        let old = self.attached.lock().replace(Attached { redirect: redirect.clone(), only, task });
+        assert!(old.is_none(), "a stdio redirect attached over another");
+        AttachGuard(self)
+    }
+
+    /// The redirect, if it's to get this message - @user: one for whoever's
+    /// running fsck - from this task.
+    pub fn get(&self, user: bool) -> Option<Arc<StdioRedirect>> {
+        let attached = self.attached.lock();
+        let a = attached.as_ref()?;
+        if (!user && a.only == Only::User) ||
+           (a.only == Only::Task && a.task != crate::os::sched::current().addr()) {
+            return None;
+        }
+        Some(a.redirect.clone())
+    }
+}
+
+#[cfg(kernel)]
+impl Drop for AttachGuard<'_> {
+    fn drop(&mut self) {
+        self.0.attached.lock().take();
+        self.0.progress_reader.store(false, Ordering::Relaxed);
     }
 }
 
