@@ -853,7 +853,7 @@ fn merge_btree_node_one<'t>(t: &TransAttempt<'_, 't>, progress: &Progress<'_>, i
 }
 
 fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
-    let progress = Progress::recovery_masks(fs, c"bch2_merge_btree_nodes", !0, !0);
+    let progress = Progress::recovery_masks(fs, c"merge_btree_nodes", !0, !0);
 
     let trans = btree_trans!(fs);
 

@@ -132,7 +132,7 @@ fn check_backpointer_has_valid_bucket(t: &TransAttempt<'_, '_>, k: BkeySC<'_>,
 }
 
 fn check_btree_backpointers(fs: &Fs) -> Result<(), BchError> {
-    let progress = Progress::recovery(fs, c"bch2_check_btree_backpointers", &[Btree::backpointers], &[]);
+    let progress = Progress::recovery(fs, c"check_btree_backpointers", &[Btree::backpointers], &[]);
     let mut last_flushed = WbMaybeFlush::new();
 
     let trans = crate::btree_trans!(fs);
@@ -613,7 +613,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
                                  RecoveryPass::check_extents_to_backpointers, flags);
 
     static RATELIMIT: Ratelimit = Ratelimit::new();
-    if !fs.ratelimit_suppress(&RATELIMIT, c"bch2_check_bucket_backpointer_mismatch") {
+    if !fs.ratelimit_suppress(&RATELIMIT, c"check_one_bucket_backpointer_mismatch") {
         print_str(fs, LogLevel::ERR, &mut buf);
     }
     Ok(())

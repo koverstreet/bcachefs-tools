@@ -279,7 +279,7 @@ fn check_unreachable_inode(
 
 fn check_unreachable_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_unreachable_inodes",
+    let progress = Progress::recovery(fs, c"check_unreachable_inodes",
                                       &[Btree::inodes], &[]);
     let mut seen = SubvolRootSeen::default();
 

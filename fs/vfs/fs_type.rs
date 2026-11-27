@@ -241,7 +241,7 @@ impl Bcachefs {
             #[cfg(CONFIG_UNICODE)]
             sb.set_encoding(|fs| fs.cf_encoding.as_ref());
 
-            let root = InodeInfo::get_warn(fs, SubvolInum::ROOT, c"bch2_fs_get_tree")
+            let root = InodeInfo::get_warn(fs, SubvolInum::ROOT, c"new_super")
                 .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
 
             Ok(sb.fill(root)

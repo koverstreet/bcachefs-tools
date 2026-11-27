@@ -758,7 +758,7 @@ impl Fs {
     fn replicas_kill(&self, r: &mut ReplicasCpu, sb: &mut SbLockGuard<'_>, i: usize) {
         r.remove(i);
         if let Err(e) = r.write_sb(self, sb) {
-            warn(self, format_args!("bch2_cpu_replicas_to_sb_replicas() error: {e}"));
+            warn(self, format_args!("replicas write_sb() error: {e}"));
         }
     }
 

@@ -99,7 +99,7 @@ fn check_xattr<'t>(
 
 fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_xattrs", &[Btree::xattrs], &[]);
+    let progress = Progress::recovery(fs, c"check_xattrs", &[Btree::xattrs], &[]);
     let mut st = CheckXattrs {
         s:         SnapshotsSeen::new(),
         inode:     InodeWalker::new(),

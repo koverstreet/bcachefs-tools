@@ -1281,7 +1281,7 @@ fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Optio
 
         /* Extra info on errors from the allocator: */
         if update.is_none() {
-            write_op_error(op, None, op.pos.offset, format_args!("__bch2_write(): {e}"));
+            write_op_error(op, None, op.pos.offset, format_args!("write next_extent(): {e}"));
         }
         Next::Stop
     };

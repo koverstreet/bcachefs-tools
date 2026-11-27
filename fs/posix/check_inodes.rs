@@ -286,7 +286,7 @@ fn check_inode<'t>(
 
     // ENOENT: a disconnected inode, which a later pass fixes
     bch_err_msg!(fs, namei::check_inode_has_case_insensitive(t, &mut u, &mut changed)
-                 .found(), "bch2_check_inode_has_case_insensitive()")?;
+                 .found(), "check_inode_has_case_insensitive()")?;
 
     // Before the backpointer check: the dirent is looked up through
     // bi_parent_subvol, and a bogus one makes a good backpointer look broken.
@@ -399,7 +399,7 @@ fn check_inode<'t>(
 
 fn check_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_inodes", &[Btree::inodes], &[]);
+    let progress = Progress::recovery(fs, c"check_inodes", &[Btree::inodes], &[]);
     let mut st = CheckInodes {
         snapshot_root: Default::default(),
     };

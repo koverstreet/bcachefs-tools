@@ -2055,7 +2055,7 @@ impl Journal {
             pin_init::stack_pin_init!(let _timer = Timer::new(timed_out, total_wait));
             if wait.wait_sync(Sleep::UNINTERRUPTIBLE) & FLUSHED == 0 {
                 let mut msg = LogMsg::new(fs);
-                prt!(&mut *msg, "bch2_journal_flush_seq stuck? Waited {}s for seq {seq}\n", total_wait / HZ);
+                prt!(&mut *msg, "journal flush_seq() stuck? Waited {}s for seq {seq}\n", total_wait / HZ);
                 self.to_text(&mut msg);
             }
         }

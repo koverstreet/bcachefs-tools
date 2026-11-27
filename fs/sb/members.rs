@@ -863,7 +863,7 @@ impl Fs {
     /// node's key, and each root's.
     fn btree_bitmap_gc(&self) -> Result<(), BchError> {
         let progress = &self.recovery.progress;
-        progress.init_mask(self, c"bch2_btree_bitmap_gc", 0, !0);
+        progress.init_mask(self, c"btree_bitmap_gc", 0, !0);
 
         {
             let sb = self.sb_lock();

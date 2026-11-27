@@ -1292,7 +1292,7 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
             btrees.push(btree)?;
         }
     }
-    let progress = Progress::recovery(fs, c"bch2_reconstruct_snapshots", &btrees, &[]);
+    let progress = Progress::recovery(fs, c"reconstruct_snapshots", &btrees, &[]);
 
     let mut r = TreeReconstruct {
         btree:   Btree::extents,

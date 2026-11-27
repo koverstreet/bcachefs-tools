@@ -168,7 +168,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
 fn check_subvolume_structure(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_subvolume_structure",
+    let progress = Progress::recovery(fs, c"check_subvolume_structure",
                                       &[Btree::subvolumes], &[]);
 
     let mut iter = BtreeIter::new(&trans, Btree::subvolumes, POS_MIN,

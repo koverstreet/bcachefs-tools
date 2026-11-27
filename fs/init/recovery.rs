@@ -1055,7 +1055,7 @@ pub fn fs_recovery(fs: &Fs) -> Result<(), BchError> {
 
     if let Err(e) = ret {
         let mut msg = LogMsg::new(fs);
-        prt!(&mut msg, "unexpected error in bch2_fs_recovery(): {}\n", e.msg());
+        prt!(&mut msg, "unexpected error in fs_recovery(): {}\n", e.msg());
         fs.emergency_read_only(&mut msg);
     }
     ret

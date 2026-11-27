@@ -674,7 +674,7 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
     }
 
     if keys.reserve().is_err() {
-        bch_err!(fs, "bch2_journal_key_insert_take: error allocating new key array (size {})",
+        bch_err!(fs, "journal_overlay::insert_take: error allocating new key array (size {})",
                  keys.size.max(8) * 2);
         return fs.throw(e::ENOMEM_journal_key_insert);
     }

@@ -631,7 +631,7 @@ pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum)
 /// The inode @inum, in its own transaction: as bch2_inode_find_by_inum().
 pub fn find_by_inum(fs: &Fs, inum: SubvolInum) -> Result<InodeUnpacked, BchError> {
     let trans = crate::btree_trans!(fs);
-    lockrestart_do(&trans, |t| find_by_inum_trans(t, inum, c"bch2_inode_find_by_inum"))
+    lockrestart_do(&trans, |t| find_by_inum_trans(t, inum, c"find_by_inum"))
 }
 
 /// The oldest version of @inum that a key in @snapshot sees - the version
@@ -1603,7 +1603,7 @@ crate::recovery_pass!(delete_dead_inodes => delete_dead_inodes);
 /// Delete the inode_generation keys in the inodes btree, a recovery pass: as
 /// bch2_kill_i_generation_keys().
 fn kill_i_generation_keys(fs: &Fs) -> Result<(), BchError> {
-    let progress = Progress::recovery(fs, c"bch2_kill_i_generation_keys",
+    let progress = Progress::recovery(fs, c"kill_i_generation_keys",
                                       &[Btree::inodes], &[]);
     let trans = crate::btree_trans!(fs);
 

@@ -2380,7 +2380,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     eprintln!("fusemount: starting filesystem");
     if let Err(e) = fs.start() {
-        eprintln!("fusemount: bch2_fs_start failed: {}", e);
+        eprintln!("fusemount: starting the filesystem failed: {}", e);
         if fuse_fd.is_some() {
             fuse_unclaim(&cli.mountpoint);
         }

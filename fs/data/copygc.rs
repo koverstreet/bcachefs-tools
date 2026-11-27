@@ -635,7 +635,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         match self.trans().write_buffer_tryflush() {
             Err(e) if e.matches(c::EROFS) => return Err(e),
             Err(e) => {
-                fs_fatal_error!(fs, "{}: from bch2_btree_write_buffer_tryflush()", e.msg());
+                fs_fatal_error!(fs, "{}: from write_buffer_tryflush()", e.msg());
                 return Err(e);
             }
             Ok(()) => {}
@@ -698,7 +698,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             r => r,
         };
         let ret = match ret {
-            Err(e) if !e.matches(c::EROFS) => bch_err_msg!(fs, Err(e), "from bch2_move_data()"),
+            Err(e) if !e.matches(c::EROFS) => bch_err_msg!(fs, Err(e), "from pick_and_evacuate()"),
             r => r,
         };
 

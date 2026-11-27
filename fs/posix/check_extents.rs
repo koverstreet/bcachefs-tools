@@ -424,7 +424,7 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
     damage::record_lost_extents(fs);
 
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_extents", &[Btree::extents], &[]);
+    let progress = Progress::recovery(fs, c"check_extents", &[Btree::extents], &[]);
     let mut st = CheckExtents {
         res:         DiskReservation::new(fs),
         s:           SnapshotsSeen::new(),
@@ -451,7 +451,7 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
 fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {
     let res = DiskReservation::new(fs);
     let trans = crate::btree_trans!(fs);
-    let progress = Progress::recovery(fs, c"bch2_check_indirect_extents",
+    let progress = Progress::recovery(fs, c"check_indirect_extents",
                                       &[Btree::reflink], &[]);
 
     let mut iter = BtreeIter::new(&trans, Btree::reflink, POS_MIN,

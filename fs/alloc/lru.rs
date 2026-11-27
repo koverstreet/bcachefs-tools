@@ -378,7 +378,7 @@ fn check_lrus(fs: &Fs) -> Result<(), BchError> {
     let trans = &crate::btree_trans!(fs);
     let pins = fs.btree_cache_pins();
     let mut last_flushed = WbMaybeFlush::new();
-    let progress = Progress::recovery(fs, c"bch2_check_lrus", &[Btree::lru], &[]);
+    let progress = Progress::recovery(fs, c"check_lrus", &[Btree::lru], &[]);
     let mut next = POS_MIN;
 
     loop {

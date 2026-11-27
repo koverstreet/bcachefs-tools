@@ -952,7 +952,7 @@ pub fn remap_range(
     let ret2 = lockrestart_do(&trans, |t| {
         let mut inode_iter = BtreeIter::uninit(t.trans());
         let mut inode_u = inode::__peek(t, &mut inode_iter, dst_inum, BtreeIterFlags::INTENT,
-                                        Some(c"bch2_remap_range"))?;
+                                        Some(c"remap_range"))?;
 
         if inode_u.bi_size < new_i_size {
             inode_u.bi_size = new_i_size;

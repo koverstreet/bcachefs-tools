@@ -92,7 +92,7 @@ pub type SbLockGuard<'a> =
 impl SbLockGuard<'_> {
     pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut Member {
         self.member_mut(dev_idx)
-            .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
+            .expect("a member, whole: members_v2_init() grew them at open")
     }
 
     /// The superblock, and @F of each of the filesystem's devices, at once.

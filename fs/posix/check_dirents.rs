@@ -536,7 +536,7 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
     let mut did_second_pass = false;
 
     loop {
-        let progress = Progress::recovery(fs, c"bch2_check_dirents", &[Btree::dirents], &[]);
+        let progress = Progress::recovery(fs, c"check_dirents", &[Btree::dirents], &[]);
         let mut iter = BtreeIter::new(&trans, Btree::dirents,
                                       pos(BCACHEFS_ROOT_INO as u64, 0),
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);

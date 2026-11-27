@@ -121,7 +121,7 @@ fn dump_nodes(fs: &Fs, what: &str, nodes: &[FoundBtreeNode]) -> bool {
     }
 
     let mut buf = Printbuf::new();
-    prt!(&mut buf, "bch2_scan_for_btree_nodes: {what}:\n");
+    prt!(&mut buf, "scan_for_btree_nodes: {what}:\n");
     {
         let mut out = buf.indent(2);
         for n in nodes {
@@ -366,7 +366,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     let mut nodes = scan.lock();
 
     if nodes.is_empty() {
-        bch_err!(fs, "bch2_scan_for_btree_nodes: no btree nodes found");
+        bch_err!(fs, "scan_for_btree_nodes: no btree nodes found");
         return fs.throw(Errcode::EINVAL_node_scan_no_nodes);
     }
 
@@ -477,7 +477,7 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
     run_scan(fs, out)?;
 
     if fs.opts.verbose.get() != 0 {
-        bch_info!(fs, "bch2_get_scanned_nodes(): recovery btree={btree} level={level} {node_min} - {node_max}");
+        bch_info!(fs, "get_scanned_nodes(): recovery btree={btree} level={level} {node_min} - {node_max}");
     }
 
     let nodes = fs.btree.node_scan.lock();

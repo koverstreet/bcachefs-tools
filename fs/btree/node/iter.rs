@@ -591,7 +591,7 @@ impl KeyIter {
             }
 
             print_lines(&LogLevel::ERR.prefix(), buf.as_bytes());
-            panic!("__bch2_btree_node_iter_next_check");
+            panic!("btree node iter __next_check");
         }
     }
 

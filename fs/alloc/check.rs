@@ -712,7 +712,7 @@ fn check_alloc_to_lru_ref<'t>(
 
 fn check_alloc_to_lru_refs(fs: &Fs) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new();
-    let progress = Progress::recovery(fs, c"bch2_check_alloc_to_lru_refs", &[Btree::alloc], &[]);
+    let progress = Progress::recovery(fs, c"check_alloc_to_lru_refs", &[Btree::alloc], &[]);
 
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, Btree::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
@@ -774,7 +774,7 @@ pub(crate) fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_en
     let mut last_updated = local_clock();
     while bkey_lt(iter.pos(), end) {
         if local_clock() > last_updated + 10 * u64::from(c::NSEC_PER_SEC) {
-            bch_info!(fs, "{}: bch2_dev_freespace_init: currently at {}/{}",
+            bch_info!(fs, "{}: dev_freespace_init: currently at {}/{}",
                       ca, { iter.pos().offset }, ca.mi.get().nbuckets);
             last_updated = local_clock();
         }

@@ -315,7 +315,7 @@ async fn nocow_write_pass<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32, at
     };
     // its transaction gone first: the error's message has one of its own
     let more = ret.unwrap_or_else(|e| {
-        write_op_error(op, None, op.pos.offset, format_args!("bch2_nocow_write(): btree lookup error: {e}"));
+        write_op_error(op, None, op.pos.offset, format_args!("nocow_write_pass(): btree lookup error: {e}"));
         op.set_error(e);
         op.set(w::submitted);
         false

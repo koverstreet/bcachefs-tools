@@ -433,6 +433,6 @@ pub(crate) fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchE
         fs.ec_flush_outstanding();
     }
 
-    prt!(d.err, "bch2_dev_remove_stripes(): stripes still open after {MAX_ITER} iterations\n");
+    prt!(d.err, "dev_remove_stripes(): stripes still open after {MAX_ITER} iterations\n");
     fs.throw(Errcode::remove_stripes_did_not_terminate)
 }

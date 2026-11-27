@@ -1269,10 +1269,10 @@ impl StateLockWrite<'_> {
             fs.journal_flush_outstanding_pins();
 
             fs.journal.flush_device_pins(ca.dev_idx.into())
-                .inspect_err(|e| prt!(err, "bch2_journal_flush_device_pins() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "journal.flush_device_pins() error: {}\n", e.msg()))?;
 
             fs.journal_flush()
-                .inspect_err(|e| prt!(err, "bch2_journal_flush() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "journal_flush() error: {}\n", e.msg()))?;
 
             /*
              * Disallow reads before we remove alloc info, otherwise we'll get
@@ -1281,17 +1281,17 @@ impl StateLockWrite<'_> {
             self.dev_offline(ca);
 
             crate::bch_err_msg_dev!(ca, dev_remove_alloc(fs, ca), "removing dev alloc info")
-                .inspect_err(|e| prt!(err, "bch2_dev_remove_alloc() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "dev_remove_alloc() error: {}\n", e.msg()))?;
 
             /*
              * dev_remove_alloc issued btree deletes that need to be durable before
              * we drop the sb member entry:
              */
             fs.journal_flush()
-                .inspect_err(|e| prt!(err, "bch2_journal_flush() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "journal_flush() error: {}\n", e.msg()))?;
 
             fs.replicas_gc_accounted()
-                .inspect_err(|e| prt!(err, "bch2_replicas_gc2() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "replicas_gc_accounted() error: {}\n", e.msg()))?;
             /*
              * flushing the journal should be sufficient, but it's the write buffer
              * flush that kills superblock replicas entries after they've gone to 0
@@ -1616,7 +1616,7 @@ impl Fs {
          * in bucket_alloc_blocked forever - taking the journal with it.
          */
         self.dev_add_initialize(ca)
-            .inspect_err(|e| prt!(err, "bch2_dev_add_initialize() error: {}\n", e.msg()))?;
+            .inspect_err(|e| prt!(err, "dev_add_initialize() error: {}\n", e.msg()))?;
 
         /*
          * Then reconcile: we didn't know where this device's superblocks were
@@ -1625,7 +1625,7 @@ impl Fs {
          * accumulates - so this is a no-op when the resume above just did it.
          */
         self.trans_mark_dev_sb(ca, UpdateTriggerFlags::TRANSACTIONAL)
-            .inspect_err(|e| prt!(err, "bch2_trans_mark_dev_sb() error: {}\n", e.msg()))?;
+            .inspect_err(|e| prt!(err, "trans_mark_dev_sb() error: {}\n", e.msg()))?;
 
         let mi = ca.mi.get();
 
@@ -1643,12 +1643,12 @@ impl Fs {
 
         if !mi.freespace_initialized {
             dev_freespace_init(self, ca, 0, mi.nbuckets)
-                .inspect_err(|e| prt!(err, "bch2_dev_freespace_init() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "dev_freespace_init() error: {}\n", e.msg()))?;
         }
 
         if ca.journal.nr() == 0 {
             crate::journal::buckets::dev_journal_alloc(&ca, false)
-                .inspect_err(|e| prt!(err, "bch2_dev_journal_alloc() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "dev_journal_alloc() error: {}\n", e.msg()))?;
         }
 
         {
@@ -1723,7 +1723,7 @@ impl Fs {
         }
 
         ca.buckets_resize(&state, nbuckets)
-            .inspect_err(|e| prt!(err, "bch2_dev_buckets_resize() error: {}\n", e.msg()))?;
+            .inspect_err(|e| prt!(err, "buckets_resize() error: {}\n", e.msg()))?;
 
         /*
          * The new range comes into the alloc btree as holes - free buckets - and
@@ -1748,11 +1748,11 @@ impl Fs {
         }
 
         self.trans_mark_dev_sb(ca, UpdateTriggerFlags::TRANSACTIONAL)
-            .inspect_err(|e| prt!(err, "bch2_trans_mark_dev_sb() error: {}\n", e.msg()))?;
+            .inspect_err(|e| prt!(err, "trans_mark_dev_sb() error: {}\n", e.msg()))?;
 
         if freespace_initialized {
             ca.resize_alloc(old_nbuckets, nbuckets)
-                .inspect_err(|e| prt!(err, "__bch2_dev_resize_alloc() error: {}\n", e.msg()))?;
+                .inspect_err(|e| prt!(err, "resize_alloc() error: {}\n", e.msg()))?;
 
             self.write_super(&mut self.sb_lock());
         }

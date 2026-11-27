@@ -947,7 +947,7 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
     // no version decisions to persist) get here - see the check in the
     // command loop.
     fs.write_super_ret(&mut sb)
-        .map_err(|e| anyhow!("bch2_write_super failed: {e}"))?;
+        .map_err(|e| anyhow!("write_super_ret() failed: {e}"))?;
     Ok(String::new())
 }
 
