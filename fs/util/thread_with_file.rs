@@ -3,51 +3,31 @@
 //! A kthread whose handle is a file descriptor: userspace talks to it by
 //! reading and writing the fd, and closing the fd stops it.
 //!
-//! Two layers. ThreadWithFile<T> is a kthread running on a T, behind a file
-//! whose ops are T's own (file.rs) - the data job's progress file.
-//! Stdio<T> makes the file a stream: a StdioRedirect between file and
-//! thread, for fsck - and for mounting's status fd, a stdio file with no
-//! thread, the mounting task printing to it itself.
+//! ThreadWithFile<T> is a kthread running on a T, behind a file whose ops are
+//! T's (file.rs). Stdio<T> makes the file a stream, a StdioRedirect: fsck's,
+//! and the mount's status fd - a stdio file with no thread, which the
+//! mounting task prints to itself, holding the Stdio while it may.
 //!
-//! Lifetimes. The file owns everything, in Inner: the thread first, so it
-//! drops first. release() closes the redirect, which wakes a thread blocked
-//! on it, stops the thread - kthread_stop() waits for it to exit - and only
-//! then drops what it ran on. What the thread's function owns, a filesystem
-//! it opened or a ref, it drops when it returns; if the file couldn't be
-//! made, the function is dropped unrun. A file with no thread has nothing
-//! for release() to wait on, so whoever prints to it holds the Stdio for as
-//! long as they may.
+//! The thread drops first: release() closes the redirect, waking a thread
+//! blocked on it, then stops the thread - kthread_stop() waits for it - so a
+//! close returns once the thread's gone. The fd is installed last, the thread
+//! already woken: from then userspace may close it.
 //!
-//! Startup: the thread's made stopped, the fd reserved and the file built,
-//! the thread woken, and only then the fd installed - from which moment
-//! userspace may close it, so nothing's touched after.
-//!
-//! The redirect, keeping C's semantics:
-//!
-//!  - Two buffers, input and output. Userspace writes input and the thread
-//!    reads it; the thread writes output and userspace reads it. The
-//!    thread is input's only reader: a line it's seen stays till it takes it.
-//!  - done: the thread's finished, or the file's closing. It closes both
-//!    ways: reads drain what's left, then get EOF; writes get EPIPE. What
-//!    the thread returned is what close(2) returns.
-//!  - The soft limit, STDIO_REDIRECT_BUFSIZE: input may always grow to hold
-//!    one more line - a write goes past it while there's no whole line in
-//!    the buffer - and the thread's own messages go in whole or not at all.
-//!  - Under the lock, a spinlock: each buffer is a Fifo<u8>, grown there -
-//!    the lock's NORECLAIM scope - or reserved before the lock where it
-//!    mustn't fail. Copies
-//!    to and from userspace are made there too, copy_*_user_nofault() after
-//!    faulting in: what doesn't copy stays where it was, and a copy is only
-//!    of what was faulted in - past that, it could fail every time.
-//!  - The published length: each buffer's, set by its guard, BufGuard, as
-//!    the lock's released, whatever was done to it. Waits and poll() read it
-//!    without the lock.
-//!  - Waits and wakes: every change to a buffer - data in, room made, done -
-//!    wakes its EventCount, and its PollQueue for poll(). A wait's condition
-//!    reads the published length; readline's looks for a whole line under
-//!    the lock instead, so one wait carries the whole timeout. A condition
-//!    runs in the sleep's task state, which a spinlock keeps and an rtlock
-//!    saves. readline sleeps TASK_IDLE: someone typing is no hung task.
+//! The redirect, as C's:
+//!  - The thread is input's only reader: a line it's seen stays till it takes
+//!    it. Input may grow past STDIO_REDIRECT_BUFSIZE while it holds no whole
+//!    line; the thread's messages go in whole or not at all.
+//!  - done - the thread's finished, or the file's closing - closes both ways:
+//!    reads drain what's left, then EOF; writes get EPIPE. What the thread
+//!    returned is what close(2) returns.
+//!  - A buffer grows under its spinlock, and is copied to and from userspace
+//!    there, copy_*_user_nofault() after faulting in - a copy only of what was
+//!    faulted in, or it could fail every time.
+//!  - Waits and poll() read the length BufGuard publishes, without the lock;
+//!    readline's wait looks under it, so one wait carries the whole timeout.
+//!    A condition runs in the sleep's task state, which a spinlock keeps and
+//!    an rtlock saves. readline sleeps TASK_IDLE: someone typing is no hung
+//!    task.
 
 use crate::c;
 use crate::data_structures::fifo::FifoRead;
