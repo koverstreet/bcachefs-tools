@@ -471,11 +471,10 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
     /// Queue @p, to be processed once its grace period has elapsed.
     ///
     /// Attempt to enqueue items onto a radix tree; if memory allocation fails,
-    /// fall back to a linked list. Will do GFP_KERNEL memory allocations, and
-    /// process expired items.
-    fn enqueue(&self, p: NonNull<T>) {
+    /// fall back to a linked list. If @may_sleep, will do GFP_KERNEL memory
+    /// allocations, and process expired items.
+    fn enqueue(&self, p: NonNull<T>, mut may_sleep: bool) {
         let raw = into_raw(p);
-        let mut may_sleep = true;
         let mut node = NewNode::none();
 
         /* We could technically be scheduled before taking the lock and end up
@@ -631,7 +630,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
         if <T as RcuFreeing>::drops_at_free() {
             unsafe { ptr::drop_in_place(p.as_ptr()) };
         }
-        self.enqueue(p)
+        self.enqueue(p, true)
     }
 
     /// How many items are queued, not yet processed or claimed.
@@ -751,7 +750,8 @@ unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
 
     unsafe fn deallocate(&self, p: NonNull<u8>, _: Layout) {
         <T as RcuFreeing>::assert_drops_at_free();
-        self.enqueue(p.cast())
+        // a free, from any context - an endio's - so it doesn't sleep
+        self.enqueue(p.cast(), false)
     }
 }
 
