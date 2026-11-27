@@ -24,7 +24,7 @@
 //! prompting, because failing a mount over a convenience would be absurd.
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -143,10 +143,13 @@ impl UnlockSocket<'_> {
     }
 }
 
-impl Watch for UnlockSocket<'_> {
-    fn raw_fd(&self) -> RawFd {
-        self.listener.as_raw_fd()
+impl AsFd for UnlockSocket<'_> {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.listener.as_fd()
     }
+}
+
+impl Watch for UnlockSocket<'_> {
 
     fn settled(&mut self) -> bool {
         // Non-blocking, so a spurious wakeup costs us an EAGAIN and nothing

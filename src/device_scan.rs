@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::{OsString, OsStr},
     fs,
-    os::fd::{AsFd, AsRawFd},
+    os::fd::{AsFd, BorrowedFd},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     thread::sleep,
@@ -728,11 +728,13 @@ impl DeviceWatch {
 	}
 }
 
-impl bcachefs_kernel::util::prompt::Watch for DeviceWatch {
-	fn raw_fd(&self) -> std::os::fd::RawFd {
-		self.socket.as_fd().as_raw_fd()
+impl AsFd for DeviceWatch {
+	fn as_fd(&self) -> BorrowedFd<'_> {
+		self.socket.as_fd()
 	}
+}
 
+impl bcachefs_kernel::util::prompt::Watch for DeviceWatch {
 	/// A device arriving never *answers* "mount without it?" - it withdraws the
 	/// question.
 	fn settled(&mut self) -> bool {

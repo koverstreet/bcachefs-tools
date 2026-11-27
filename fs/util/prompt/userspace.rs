@@ -14,7 +14,7 @@
 //! through the agents with their keyring caching.
 
 use std::io::{self, stdin, BufRead, IsTerminal, Read};
-use std::os::fd::{AsFd, BorrowedFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -94,8 +94,7 @@ struct Ask<'a> {
 /// disk in, has answered - and so has someone who supplies the passphrase over
 /// a socket while the terminal prompt is up. Either way the question is over,
 /// and what settled it is the watch's to say.
-pub trait Watch {
-    fn raw_fd(&self) -> RawFd;
+pub trait Watch: AsFd {
     /// Readiness alone is not an answer - any block device arriving wakes a
     /// device watch, and most of them are somebody else's - so this decides
     /// whether *this* wakeup settled anything.
@@ -265,9 +264,7 @@ fn wait(
     loop {
         let deadline = timeout.map(|t| t.checked_sub(start.elapsed()).unwrap_or_default());
 
-        // SAFETY: the watch outlives this call, so its descriptor does too.
-        let watched = watch.as_ref()
-            .map(|w| unsafe { BorrowedFd::borrow_raw(w.raw_fd()) });
+        let watched = watch.as_ref().map(|w| w.as_fd());
 
         let mut fds = match watched.as_ref() {
             Some(w) => vec![PollFd::new(&fd, PollFlags::IN), PollFd::new(w, PollFlags::IN)],
