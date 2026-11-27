@@ -67,7 +67,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::{damage, passes};
 use crate::locking::{Locked, RwSem};
-use crate::{new_lock, bch_err, bch_err_msg, bch_notice, bch_verbose, fs_inconsistent, fsck_err, prt,
+use crate::{new_lock, message, fs_inconsistent, fsck_err, prt,
     trans_inconsistent};
 use crate::snapshots::{check_snapshots, snapshot};
 use crate::util::{alloc::Vec, log::{self, LogLevel, LogMsg}, Printbuf};
@@ -346,7 +346,7 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
         ret = r;
     }
 
-    bch_err!(fs, "{}", msg.as_str());
+    fs.log().err(message!("{}", msg.as_str()));
 
     rewind_is_fine(ret)?;
     fs.throw(Errcode::EINVAL_snapshot_delete_with_data)
@@ -668,7 +668,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, Sna
     prt!(&mut msg, "{}\n", u.to_text(fs));
 
     if u.v().children()[1] != 0 {
-        bch_err!(fs, "cannot undelete a node with two children");
+        fs.log().err(message!("cannot undelete a node with two children"));
         return fs.throw(Errcode::fsck_repair_unimplemented);
     }
 
@@ -728,7 +728,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, Sna
         Ok((parent_id, child.v().tree))
     })?;
     let Some((parent_id, tree)) = child else {
-        bch_err!(fs, "cannot undelete: child no longer exists");
+        fs.log().err(message!("cannot undelete: child no longer exists"));
         return fs.throw(Errcode::fsck_repair_unimplemented);
     };
 
@@ -1009,14 +1009,15 @@ fn delete_dead_snapshot_keys_v2(trans: &TransGuard<'_>, run: &Run<'_>) -> Result
         let ret = passes::run_explicit(fs, &mut msg, RecoveryPass::check_allocations,
                                        RunRecoveryPassFlags::empty());
 
-        bch_err!(fs, "{}", msg.as_str());
+        fs.log().err(message!("{}", msg.as_str()));
 
         rewind_is_fine(ret)?;
         return fs.throw(Errcode::EINVAL_snapshot_delete_with_data);
     }
 
     if snapshot_delete_bail_before_inodes.get() {
-        bch_notice!(fs, "delete_dead_snapshot_keys_v2: cancelling before inode deletion (module param)");
+        fs.log().notice(message!(
+            "delete_dead_snapshot_keys_v2: cancelling before inode deletion (module param)"));
         return fs.throw(Errcode::snapshot_delete_cancelled);
     }
 
@@ -1100,7 +1101,8 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &Snapsho
 fn add_nodup(fs: &Fs, list: &mut Vec<u32>, id: u32) -> Result<(), BchError> {
     if !list.contains(&id) {
         list.push(id).inspect_err(|_| {
-            bch_err!(fs, "error reallocating snapshot_id_list (size {})", list.capacity());
+            fs.log().err(message!(
+                "error reallocating snapshot_id_list (size {})", list.capacity()));
         })?;
     }
     Ok(())
@@ -1323,7 +1325,7 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     prt!(&mut buf, "{data}");
     trans.commit_do(None, CommitFlags::empty(), |t| t.log_msg(&mut buf))?;
 
-    bch_verbose!(fs, "{data}");
+    fs.log().verbose(message!("{data}"));
 
     if fs.request_incompat_feature(
             MetadataVersion::snapshot_deletion_v2).is_ok() {
@@ -1491,7 +1493,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
         for i in delete.iter() {
             let ret = trans.commit_do(None, CommitFlags::empty(), |t| node_delete(t, i.id));
             if !ret.is_err_and(|e| e.matches(c::EROFS)) {
-                let _ = bch_err_msg!(fs, ret, "deleting snapshot {}", i.id);
+                let _ = fs.log().err_msg(ret, message!("deleting snapshot {}", i.id));
             }
             ret?;
         }

@@ -23,7 +23,7 @@ use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, Subvolume, Subvol
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
-use crate::{bch_err_msg, mustfix_fsck_err, mustfix_fsck_err_on};
+use crate::{message, mustfix_fsck_err, mustfix_fsck_err_on};
 use core::ops::ControlFlow;
 use crate::format::Btree;
 
@@ -80,8 +80,8 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
                 root_inode.bi_inum     = inum;
                 root_inode.bi_snapshot = snapshot;
 
-                return bch_err_msg!(fs, inode::fsck_write(t, &mut root_inode),
-                                    "writing root inode");
+                return fs.log().err_msg(inode::fsck_write(t, &mut root_inode),
+                                        message!("writing root inode"));
             }
         }
         Some(mut root_inode) => {
@@ -92,8 +92,8 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
                 // every dirent in the root directory - and wipes bi_subvol:
                 root_inode.bi_mode = root_dir_mode;
 
-                return bch_err_msg!(fs, inode::fsck_write(t, &mut root_inode),
-                                    "writing root inode");
+                return fs.log().err_msg(inode::fsck_write(t, &mut root_inode),
+                                        message!("writing root inode"));
             }
         }
     }

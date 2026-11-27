@@ -38,7 +38,7 @@ use crate::data::reflink;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::os::kernel::{MAX_FILE_SIZE, WRITE};
-use crate::{bch_err_fn, bch_err_ratelimited};
+use crate::{message, ratelimit};
 use crate::format::{Bpos, Btree, MetadataVersion, SbFeature, Deleted};
 
 // ── fallocate ────────────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: SubvolInum, iter: &m
                 crate::init::error::inum_offset_err_msg(t, &mut buf, inum.subvol as u32, pos)
             });
             write!(buf, "fallocate error: {e}");
-            bch_err_ratelimited!(fs, "{}", buf.as_str());
+            ratelimit!(fs.log()).err(message!("{}", buf.as_str()));
         }
         _ => {}
     }
@@ -264,7 +264,7 @@ fn __resume_truncate(
     })();
 
     if warn_errors {
-        bch_err_fn!(fs, ret)
+        fs.log().err_fn(ret)
     } else {
         ret
     }
@@ -530,7 +530,7 @@ fn __resume_finsert(
     })();
 
     if warn_errors {
-        bch_err_fn!(fs, ret)
+        fs.log().err_fn(ret)
     } else {
         ret
     }

@@ -42,7 +42,7 @@ use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::os::kthread::Kthread;
 use crate::util::Printbuf;
-use crate::{bch_err, SPOS_MAX};
+use crate::{message, SPOS_MAX};
 use core::ops::Range;
 use crate::format::{Bpos, Btree, Backpointer, BTREE_MAX_DEPTH, Cookie};
 
@@ -83,7 +83,7 @@ impl ReconcileScan {
     /// know, reported, is an fs scan - see the top of the file.
     fn at_cookie(fs: &Fs, cookie: u64) -> Self {
         Self::from_cookie(cookie).unwrap_or_else(|| {
-            bch_err!(fs, "unknown reconcile scan cookie {cookie}");
+            fs.log().err(message!("unknown reconcile scan cookie {cookie}"));
             Self::fs
         })
     }

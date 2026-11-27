@@ -32,7 +32,7 @@ use crate::util::par::{self, Backend};
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_dev_ratelimited, bch_info, bch_info_dev, prt};
+use crate::{message, ratelimit, prt};
 
 pub(crate) type NodeScan = Locked<Mutex, Vec<FoundBtreeNode>>;
 
@@ -171,7 +171,7 @@ struct DevScan<'f> {
 impl<'f> DevScan<'f> {
     fn new(fs: &'f Fs, ca: &'f DevIoRef<DevReadRefKind>) -> Result<Self, BchError> {
         let Some(buf) = NodeBuf::alloc(fs) else {
-            bch_err!(fs, "read_btree_nodes_worker: error allocating buf");
+            fs.log().err(message!("read_btree_nodes_worker: error allocating buf"));
             return fs.throw(Errcode::ENOMEM_node_scan_buf);
         };
 
@@ -180,7 +180,7 @@ impl<'f> DevScan<'f> {
             .try_into().expect("bvecs for a btree node");
         let Ok(bio) = BioBox::<Bio>::new::<BchError, _>(nr_vecs, c::req_op_REQ_OP_READ, |b| b.init())
         else {
-            bch_err!(fs, "read_btree_nodes_worker: error allocating bio");
+            fs.log().err(message!("read_btree_nodes_worker: error allocating bio"));
             return fs.throw(Errcode::ENOMEM_node_scan_bio);
         };
 
@@ -204,7 +204,8 @@ impl<'f> DevScan<'f> {
         let (fs, ca) = (self.fs, self.ca);
 
         if let Err(e) = self.read(offset, fs.opts.block_size.get().into()) {
-            bch_err_dev_ratelimited!(ca, "IO error in try_read_btree_node() at {}: {}", offset, e);
+            ratelimit!(ca.log()).err(message!(
+                "IO error in try_read_btree_node() at {}: {}", offset, e));
             return Ok(());
         }
 
@@ -250,8 +251,9 @@ impl<'f> DevScan<'f> {
         };
 
         if let Err(e) = self.read(offset, fs.opts.btree_node_size.get() as usize) {
-            bch_err_dev_ratelimited!(ca, "IO error in try_read_btree_node() at {} reading the whole node: {}",
-                                     offset, e);
+            ratelimit!(ca.log()).err(message!(
+                "IO error in try_read_btree_node() at {} reading the whole node: {}",
+                offset, e));
         }
 
         let b = self.buf.node();
@@ -274,7 +276,7 @@ impl<'f> DevScan<'f> {
 
         let mut nodes = fs.btree.node_scan.lock();
         if bn.keys.big_endian() != cfg!(target_endian = "big") {
-            bch_err!(fs, "try_read_btree_node() can't handle endian conversion");
+            fs.log().err(message!("try_read_btree_node() can't handle endian conversion"));
             return fs.throw(Errcode::EINVAL_node_scan_endian);
         }
         nodes.push(n)?;
@@ -303,7 +305,8 @@ impl<'f> DevScan<'f> {
             }
 
             if time_after(jiffies(), last_print + HZ * 30) {
-                bch_info_dev!(ca, "read_btree_nodes_worker: {:2}% done", (scanned + 1) * 100 / buckets_to_scan);
+                ca.log().info(message!(
+                    "read_btree_nodes_worker: {:2}% done", (scanned + 1) * 100 / buckets_to_scan));
                 last_print = jiffies();
             }
         }
@@ -321,7 +324,7 @@ fn read_btree_nodes(fs: &Fs) -> Result<(), BchError> {
             let job_ca = ca.clone();
 
             sc.spawn(format_args!("read_btree_nodes/{name}"), move || DevScan::new(fs, &job_ca)?.run())
-                .inspect_err(|e| bch_err!(fs, "starting kthread: {e}"))?;
+                .inspect_err(|e| fs.log().err(message!("starting kthread: {e}")))?;
             prt!(&mut msg, " {name}");
         }
         Ok(())
@@ -366,7 +369,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     let mut nodes = scan.lock();
 
     if nodes.is_empty() {
-        bch_err!(fs, "scan_for_btree_nodes: no btree nodes found");
+        fs.log().err(message!("scan_for_btree_nodes: no btree nodes found"));
         return fs.throw(Errcode::EINVAL_node_scan_no_nodes);
     }
 
@@ -424,7 +427,7 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     assert!(nodes.windows(2).all(|w| !w[0].overlaps(&w[1])));
 
     if !dump_nodes(fs, "nodes found after overwrites", &nodes) {
-        bch_info!(fs, "btree node scan found {} nodes after overwrites", nodes.len());
+        fs.log().info(message!("btree node scan found {} nodes after overwrites", nodes.len()));
     }
 
     Eytzinger0::<usize>::sort_by(&mut nodes, |l, r| l.pos().cmp(&r.pos()));
@@ -477,7 +480,8 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
     run_scan(fs, out)?;
 
     if fs.opts.verbose.get() != 0 {
-        bch_info!(fs, "get_scanned_nodes(): recovery btree={btree} level={level} {node_min} - {node_max}");
+        fs.log().info(message!(
+            "get_scanned_nodes(): recovery btree={btree} level={level} {node_min} - {node_max}"));
     }
 
     let nodes = fs.btree.node_scan.lock();

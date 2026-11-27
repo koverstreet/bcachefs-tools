@@ -54,7 +54,7 @@ use crate::locking::MemallocFlags;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
-use crate::{bch_err_ratelimited, here_str, prt};
+use crate::{message, ratelimit, here_str, prt};
 use crate::debug::trace::events;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
@@ -520,8 +520,9 @@ impl DataUpdate {
                 Err(e) if e.matches(Errcode::operation_blocked) => continue,
                 Err(e) => {
                     if should_print_err(&e) {
-                        bch_err_ratelimited!(fs, "{}: error allocating for an unwritten extent: {e}",
-                                             here_str!());
+                        ratelimit!(fs.log()).err(message!(
+                            "{}: error allocating for an unwritten extent: {e}",
+                            here_str!()));
                     }
                     return Err(e);
                 }
@@ -786,8 +787,9 @@ impl DataUpdate {
                                        |t| crate::init::damage::record_key(t, btree, pos, err));
             if let Err(e) = r {
                 if should_print_err(&e) {
-                    bch_err_ratelimited!(fs, "{}: error recording a data update's read error: {e}",
-                                         here_str!());
+                    ratelimit!(fs.log()).err(message!(
+                        "{}: error recording a data update's read error: {e}",
+                        here_str!()));
                 }
             }
         }

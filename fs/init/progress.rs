@@ -282,7 +282,7 @@ impl ProgressIndicator {
     fn print(&self, fs: &Fs) {
         let s = self.state.read();
         if let Some(msg) = s.msg {
-            crate::bch_info!(fs, "{} {}", msg.to_str().unwrap_or("(progress)"), s);
+            fs.log().info(crate::message!("{} {}", msg.to_str().unwrap_or("(progress)"), s));
         }
     }
 

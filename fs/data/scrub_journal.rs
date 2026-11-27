@@ -32,7 +32,7 @@ use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef, Scope};
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, Spawn, TaskSlot, WaitSync};
-use crate::{bch_err, bch_err_ratelimited, bch_info, new_lock, prt};
+use crate::{message, ratelimit, new_lock, prt};
 use pin_init::{stack_pin_init, PinInit};
 use crate::format::Btree;
 
@@ -55,7 +55,8 @@ pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, re
     let r = Repair { key: BtreeKeyBuf::new(btree, level, k), bad_devs, read_err };
     let repair = fs.scrub_journal_repairs.lock().push(r).is_ok();
     if !repair {
-        bch_err!(fs, "journal scrub: no memory to queue a repair, not repairing:\n{}", k.to_text(fs));
+        fs.log().err(message!(
+            "journal scrub: no memory to queue a repair, not repairing:\n{}", k.to_text(fs)));
     }
 
     /* uncorrected: every replica failed, so only a rewind fixes it */
@@ -316,7 +317,8 @@ fn scrub_range(m: &Moving<'_>, jk: &JournalKeys, start: u64, end: u64) -> Option
     bad.add(nodes.wait_sync(Sleep::IDLE));
 
     if let Err(e) = move_ret {
-        bch_err!(fs, "journal scrub: move error {e} in flush range seq {}-{end}", start + 1);
+        fs.log().err(message!(
+            "journal scrub: move error {e} in flush range seq {}-{end}", start + 1));
     }
 
     (bad.lost || bad.repair || bad.nodes != 0).then_some(bad)
@@ -372,12 +374,12 @@ pub fn scrub(fs: &Fs) -> Result<u64, BchError> {
     fs.event_inc_trace(events::journal_scrub, |out| prt!(out, "{} flush entries in the window", flushes.len()));
 
     if flushes.is_empty() {
-        bch_info!(fs, "journal scrub: no journal flushes found");
+        fs.log().info(message!("journal scrub: no journal flushes found"));
         return Ok(0);
     }
 
     /* a range is the entries between two flushes */
-    bch_info!(fs, "journal scrub: checking {} flush ranges", flushes.len() - 1);
+    fs.log().info(message!("journal scrub: checking {} flush ranges", flushes.len() - 1));
 
     let mut found = Bad::default();
     let stats = MoveStats::default();
@@ -533,8 +535,9 @@ pub fn do_repairs(fs: &Fs) {
     stats.reset();
 
     let Ok(ctxt) = MovingCtxt::new(fs, &stats, WritePointSpecifier::RECONCILE, true) else {
-        bch_err!(fs, "journal scrub: no memory for a moving context, not repairing {} extents/btree nodes",
-                 repairs.len());
+        fs.log().err(message!(
+            "journal scrub: no memory for a moving context, not repairing {} extents/btree nodes",
+            repairs.len()));
         return;
     };
 
@@ -554,11 +557,13 @@ pub fn do_repairs(fs: &Fs) {
             Ok(Outcome::Lost)      => lost += 1,
             Err(e) => {
                 failed += 1;
-                bch_err_ratelimited!(fs, "journal scrub: error {} repairing:\n{}", e.msg(), k.to_text(fs));
+                ratelimit!(fs.log()).err(message!(
+                    "journal scrub: error {} repairing:\n{}", e.msg(), k.to_text(fs)));
             }
         }
     }
 
-    bch_info!(fs, "journal scrub: repairing {repaired} extents/btree nodes from good replicas; \
-                   {rewound} lost to the rewind, {lost} with no good replica, {failed} failed");
+    fs.log().info(message!(
+        "journal scrub: repairing {repaired} extents/btree nodes from good replicas; \
+         {rewound} lost to the rewind, {lost} with no good replica, {failed} failed"));
 }

@@ -46,7 +46,7 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::snapshots::{delete, snapshot, subvolume};
 use crate::util::{alloc::Vec, Join, Printbuf, ToText};
-use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
+use crate::{message, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use crate::format::{Bpos, Btree, MetadataVersion, BTREE_MAX_DEPTH};
 
@@ -112,8 +112,9 @@ fn rebuild_subvol(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         Some((_, inum)) => inum,
         None => match snapshot::tree_lookup(t, fs.snapshots.tree(id))?.master_subvol.get() {
             0 => {
-                bch_err!(fs, "snapshot {id} has no subvolume, no root inode, and its tree no master: \
-                              can't rebuild a subvolume for it");
+                fs.log().err(message!(
+                    "snapshot {id} has no subvolume, no root inode, and its tree no master: \
+                     can't rebuild a subvolume for it"));
                 return Err(fs.err(Errcode::fsck_repair_unimplemented));
             }
             master => subvolume::get(t, master, false)?.inode.get(),
@@ -221,7 +222,7 @@ fn check_snapshot_tree<'t>(
         return Ok(());
     }
 
-    let Some(subvol) = bch_err_fn!(fs, tree_master_subvol(t, root_id))? else {
+    let Some(subvol) = fs.log().err_fn(tree_master_subvol(t, root_id))? else {
         return Ok(());   /* nothing to be done here */
     };
 
@@ -815,16 +816,16 @@ fn edge_repair(
 
     // One stomped field leaves the other side's pointer for the repairs above, so
     // this is multiple corruptions or a destroyed node: report and stop.
-    bch_err!(fs, "snapshot topology damage is beyond single-corruption repair:\n\
-                  node {id}'s {ptr} pointer names {other_id}, which {}\n\
-                  no other node passes the parent/child consistency checks for this edge{}\n\
-                  not repairing: run fsck; if damage is extensive, reconstruct_snapshots rebuilds topology from key evidence",
-             if other.is_some() {
-                 "exists but does not point back, and tree/depth do not identify them as parent and child"
-             } else {
-                 "does not exist"
-             },
-             EdgeNodes::new(fs, n, other.as_ref(), None));
+    fs.log().err(message!("snapshot topology damage is beyond single-corruption repair:\n\
+                           node {id}'s {ptr} pointer names {other_id}, which {}\n\
+                           no other node passes the parent/child consistency checks for this edge{}\n\
+                           not repairing: run fsck; if damage is extensive, reconstruct_snapshots rebuilds topology from key evidence",
+                          if other.is_some() {
+                              "exists but does not point back, and tree/depth do not identify them as parent and child"
+                          } else {
+                              "does not exist"
+                          },
+                          EdgeNodes::new(fs, n, other.as_ref(), None)));
 
     Err(fs.err(match (&other, role) {
         (None, _)          => Errcode::EINVAL_snapshot_edge_to_missing_node,
@@ -1272,7 +1273,7 @@ fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(
                     snapshot_node_missing,
                     "snapshot node {id} from tree {} missing, recreate?", Join(" ", tree.iter()))? {
         if tree.len() > 1 {
-            bch_err!(fs, "cannot reconstruct snapshot trees with multiple nodes");
+            fs.log().err(message!("cannot reconstruct snapshot trees with multiple nodes"));
             return Err(fs.err(Errcode::fsck_repair_unimplemented));
         }
 

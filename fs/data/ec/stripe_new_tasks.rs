@@ -32,7 +32,7 @@ use crate::util::alloc::KBox;
 use crate::util::rcu::read_lock;
 use crate::util::task::{waiter, Resume};
 use crate::util::vstructs::Validated;
-use crate::{bch_err, btree_trans, fs_inconsistent, prt};
+use crate::{message, btree_trans, fs_inconsistent, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::SeqCst;
@@ -239,7 +239,8 @@ async fn zip_block(fs: &Fs, s: &StripeNew, w: &mut Working, i: usize, at: Resume
         };
         errs.record(parity);
         if parity.failed_mask(PRE) != 0 {
-            bch_err!(fs, "error creating stripe: error zeroing the rest of a data bucket");
+            fs.log().err(message!(
+                "error creating stripe: error zeroing the rest of a data bucket"));
             s.err.set_first(fs.err(Errcode::ec_block_write));
         }
     }
@@ -383,7 +384,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
 {
     if let Some(e) = s.err.load() {
         if !e.matches(c::EROFS) {
-            bch_err!(fs, "error creating stripe: error writing data buckets");
+            fs.log().err(message!("error creating stripe: error writing data buckets"));
         }
         return Err(e);
     }
@@ -446,7 +447,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     errs.record(buf);
 
     if buf.failed_mask(PRE) != 0 {
-        bch_err!(fs, "error creating stripe: error writing redundancy buckets");
+        fs.log().err(message!("error creating stripe: error writing redundancy buckets"));
         return fs.throw(Errcode::ec_block_write);
     }
 

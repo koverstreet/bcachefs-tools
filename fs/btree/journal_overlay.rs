@@ -57,7 +57,7 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::util::place::Placed;
 use crate::util::rcu::{self, ReadGuard, RcuArray};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
-use crate::{bch_err, field, prt, new_lock, published};
+use crate::{message, field, prt, new_lock, published};
 use core::cmp::Ordering;
 use core::mem::{size_of, ManuallyDrop};
 use core::pin::Pin;
@@ -674,8 +674,9 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
     }
 
     if keys.reserve().is_err() {
-        bch_err!(fs, "journal_overlay::insert_take: error allocating new key array (size {})",
-                 keys.size.max(8) * 2);
+        fs.log().err(message!(
+            "journal_overlay::insert_take: error allocating new key array (size {})",
+            keys.size.max(8) * 2));
         return fs.throw(e::ENOMEM_journal_key_insert);
     }
     keys.insert(idx, n);
@@ -960,7 +961,8 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         let seq_rewound = journal_seq_is_rewound(rewind_ranges, seq);
 
         if seq_rewound && !j.has_overwrites() {
-            bch_err!(fs, "cannot rewind journal seq {seq}: no overwrite entries (journal_transaction_names was off)");
+            fs.log().err(message!(
+                "cannot rewind journal seq {seq}: no overwrite entries (journal_transaction_names was off)"));
             return fs.throw(e::journal_rewind_no_overwrites);
         }
 
@@ -998,8 +1000,9 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                     nr_extra_sorts += 1;
 
                     if keys.len() * 8 > keys.size * 7 {
-                        bch_err!(fs, "Too many journal keys for slowpath; have {} compacted, buf size {}, \
-                                      processed {nr_read} keys at seq {seq}", keys.len(), keys.size);
+                        fs.log().err(message!(
+                            "Too many journal keys for slowpath; have {} compacted, buf size {}, \
+                             processed {nr_read} keys at seq {seq}", keys.len(), keys.size));
                         return fs.throw(e::ENOMEM_journal_keys_sort);
                     }
                 }

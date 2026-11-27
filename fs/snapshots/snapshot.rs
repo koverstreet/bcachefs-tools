@@ -297,7 +297,7 @@ use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::BkeyValid
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MAX, POS_MIN,
                          BkeyOps, BkeyValidateFrom};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::{prt, bch_err, bkey_fsck_err_on};
+use crate::{prt, message, bkey_fsck_err_on};
 use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -1391,7 +1391,7 @@ fn node_create_children(
     let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, parent as u64), BtreeIterFlags::INTENT);
     let n_parent = match iter.peek_slot_typed::<Snapshot>(t) {
         Err(e) if e.matches(c::ENOENT) => {
-            bch_err!(fs, "snapshot {parent} not found");
+            fs.log().err(message!("snapshot {parent} not found"));
             return Err(e);
         }
         k => t.bkey_make_mut_noupdate(k?)?,
@@ -1399,7 +1399,8 @@ fn node_create_children(
 
     t.edit_update(&iter, n_parent, UpdateTriggerFlags::empty(), |n_parent| {
         if n_parent.v().children() != [0, 0] {
-            bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
+            fs.log().err(message!(
+                "Trying to add child snapshot nodes to parent that already has children"));
             return fs.throw(Errcode::EINVAL_snapshot_parent_already_has_children);
         }
 

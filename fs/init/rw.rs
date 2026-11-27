@@ -32,7 +32,7 @@ use crate::util::rcu::read_lock;
 use crate::util::refcount::{OnRelease, WaitableRef};
 use crate::util::sleep::Sleep;
 use crate::util::Printbuf;
-use crate::{bch_err, bch_info, bch_verbose, prt, warn_on};
+use crate::{message, prt, warn_on};
 
 static READ_ONLY_EVENTS: EventCount = EventCount::new();
 
@@ -48,8 +48,8 @@ impl Fs {
         self.btree_write_buffer_stop();
         self.ec_flush();
 
-        bch_verbose!(self, "flushing journal and stopping allocators, journal seq {}",
-                     self.journal_cur_seq());
+        self.log().verbose(message!("flushing journal and stopping allocators, journal seq {}",
+                                    self.journal_cur_seq()));
 
         while clean_passes < 2 {
             clean_passes += 1;
@@ -84,8 +84,9 @@ impl Fs {
             crate::journal::buckets::drop_retired_going_ro(self);
         }
 
-        bch_verbose!(self, "flushing journal and stopping allocators complete, journal seq {}",
-                     self.journal_cur_seq());
+        self.log().verbose(message!(
+            "flushing journal and stopping allocators complete, journal seq {}",
+            self.journal_cur_seq()));
 
         if self.journal.flags.get(JournalFlag::replay_done) && !self.flags.get(Flag::emergency_ro) {
             self.flags.set(Flag::clean_shutdown, true);
@@ -93,9 +94,9 @@ impl Fs {
 
         self.journal.stop();
 
-        bch_info!(self, "{}clean shutdown complete, journal seq {}",
-                  if self.flags.get(Flag::clean_shutdown) { "" } else { "un" },
-                  self.journal.lock.seq_ondisk.get());
+        self.log().info(message!("{}clean shutdown complete, journal seq {}",
+                                 if self.flags.get(Flag::clean_shutdown) { "" } else { "un" },
+                                 self.journal.lock.seq_ondisk.get()));
 
         /*
          * After stopping journal:
@@ -153,7 +154,7 @@ impl StateLockWrite<'_> {
 
         assert!(!fs.writes.is_released());
 
-        bch_verbose!(fs, "going read-only");
+        fs.log().verbose(message!("going read-only"));
 
         /*
          * Block new foreground-end write operations from starting - any new
@@ -191,7 +192,7 @@ impl StateLockWrite<'_> {
 
         let writes_disabled = writes_stopped();
         if writes_disabled {
-            bch_verbose!(fs, "finished waiting for writes to stop");
+            fs.log().verbose(message!("finished waiting for writes to stop"));
         }
 
         fs.stop_rw();
@@ -199,7 +200,7 @@ impl StateLockWrite<'_> {
         let Ok(()) = READ_ONLY_EVENTS.wait_until(Sleep::UNINTERRUPTIBLE, || writes_stopped().then_some(()));
 
         if !writes_disabled {
-            bch_verbose!(fs, "finished waiting for writes to stop");
+            fs.log().verbose(message!("finished waiting for writes to stop"));
         }
 
         fs.flags.set(Flag::going_ro, false);
@@ -225,7 +226,7 @@ impl StateLockWrite<'_> {
             /* Make sure error counts/counters are persisted */
             fs.write_super(&mut fs.sb_lock());
 
-            bch_verbose!(fs, "done going read-only, filesystem not clean");
+            fs.log().verbose(message!("done going read-only, filesystem not clean"));
         }
     }
 
@@ -260,17 +261,17 @@ impl StateLockWrite<'_> {
         assert!(fs.flags.get(Flag::may_upgrade_downgrade));
 
         if fs.flags.get(Flag::initial_gc_unfixed) {
-            bch_err!(fs, "cannot go rw, unfixed btree errors");
+            fs.log().err(message!("cannot go rw, unfixed btree errors"));
             return fs.throw(Errcode::erofs_unfixed_errors);
         }
 
         if fs.feature(SbFeature::small_image) {
-            bch_err!(fs, "cannot go rw, filesystem is an unresized image file");
+            fs.log().err(message!("cannot go rw, filesystem is an unresized image file"));
             return fs.throw(Errcode::erofs_filesystem_full);
         }
 
         if fs.feature(SbFeature::no_default_sb) {
-            bch_err!(fs, "cannot go rw, run bcachefs migrate-superblock first");
+            fs.log().err(message!("cannot go rw, run bcachefs migrate-superblock first"));
             return fs.throw(Errcode::erofs_sb_not_migrated);
         }
 
@@ -278,7 +279,7 @@ impl StateLockWrite<'_> {
             return Ok(());
         }
 
-        bch_info!(fs, "going read-write");
+        fs.log().info(message!("going read-write"));
 
         self.init_rw()?;
         {

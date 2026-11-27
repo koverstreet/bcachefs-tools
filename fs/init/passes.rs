@@ -167,7 +167,7 @@ use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::place::Contained;
 use crate::os::workqueue::Queue;
-use crate::{bch_err, bch_info, here, message, prt};
+use crate::{here, message, prt};
 use core::mem::size_of;
 
 pub use crate::init::passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
@@ -357,7 +357,7 @@ fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a
     let stable = pass.stable().0 as usize;
     let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<RecoveryPassEntry>();
     if fs.sb_resize(sb).field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32).is_none() {
-        bch_err!(fs, "error creating recovery_passes sb section");
+        fs.log().err(message!("error creating recovery_passes sb section"));
         return None;
     }
     Some(&mut sb.field_mut::<Section>().expect("recovery_passes: just made").start[stable])
@@ -708,8 +708,8 @@ pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags
             r.rewound_to = rewound_to;
             drop(r);
             if changed {
-                bch_info!(fs, "recovery: rewinding to {} ({}), currently running {} ({})",
-                          pass.name(), pass as u32, current.name(), current as u32);
+                fs.log().info(message!("recovery: rewinding to {} ({}), currently running {} ({})",
+                                       pass.name(), pass as u32, current.name(), current as u32));
             }
             return fs.throw(Errcode::restart_recovery);
         }
@@ -823,8 +823,8 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
             };
             drop(r);
 
-            bch_err!(fs, "{}(): error {} - failure {}, not retried automatically for {}s",
-                     pass.name(), e, nr, runtime as u64 * u64::from(backoff));
+            fs.log().err(message!("{}(): error {} - failure {}, not retried automatically for {}s",
+                                  pass.name(), e, nr, runtime as u64 * u64::from(backoff)));
         }
         return ret;
     }

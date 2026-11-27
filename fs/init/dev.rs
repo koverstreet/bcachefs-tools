@@ -250,7 +250,7 @@ use crate::os::percpu::{Counters, PerCpu};
 use crate::util::printbuf::{DateTime, Msg};
 use crate::util::rcu::{read_lock, RcuHead};
 use crate::util::{Nsecs, Printbuf, ToText};
-use crate::{bch_err_fn, prt};
+use crate::prt;
 use core::ffi::CStr;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
@@ -1238,7 +1238,7 @@ impl StateLockWrite<'_> {
                 dev_data_drop_by_backpointers(fs, ca, DevDrop { dev, flags, err: &mut *err })?;
             } else {
                 dev_data_drop(fs, DevDrop { dev, flags, err: &mut *err })?;
-                crate::bch_err_fn!(fs, dev_remove_stripes(fs, DevDrop { dev, flags, err: &mut *err }))?;
+                fs.log().err_fn(dev_remove_stripes(fs, DevDrop { dev, flags, err: &mut *err }))?;
             }
 
             fs.btree_interior_updates_flush();
@@ -1279,7 +1279,7 @@ impl StateLockWrite<'_> {
              */
             self.dev_offline(ca);
 
-            crate::bch_err_msg_dev!(ca, dev_remove_alloc(fs, ca), "removing dev alloc info")
+            ca.log().err_msg(dev_remove_alloc(fs, ca), crate::message!("removing dev alloc info"))
                 .inspect_err(|e| prt!(err, "dev_remove_alloc() error: {}\n", e.msg()))?;
 
             /*
@@ -1458,7 +1458,7 @@ impl Fs {
         let started = self.flags.get(FsFlag::started);
         let s = ReconcileScan::pending;
 
-        bch_err_fn!(self, (|| -> Result<(), BchError> {
+        self.log().err_fn((|| -> Result<(), BchError> {
             let state = self.state_lock_write();
 
             let identity = crate::sb::members::identity(sb.bdev());
@@ -2011,8 +2011,9 @@ impl Fs {
             let old_nbuckets = mi.nbuckets;
             let new_nbuckets = ca.disk_sectors() / u64::from(mi.bucket_size);
 
-            crate::bch_info_dev!(&ca, "resizing to size {}", new_nbuckets * u64::from(mi.bucket_size));
-            crate::bch_err_fn_dev!(&ca, ca.buckets_resize(state, new_nbuckets))?;
+            ca.log().info(crate::message!(
+                "resizing to size {}", new_nbuckets * u64::from(mi.bucket_size)));
+            ca.log().err_fn(ca.buckets_resize(state, new_nbuckets))?;
 
             {
                 let mut sb = self.sb_lock();

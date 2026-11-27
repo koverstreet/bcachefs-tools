@@ -31,7 +31,7 @@ use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::BitArray;
 use crate::debug::trace::events;
 use crate::util::{alloc::kbox_pin_init, rcu::{read_lock, ReadGuard}, Printbuf};
-use crate::{bch_err, new_lock, prt};
+use crate::{message, new_lock, prt};
 use cstruct_macros::{bch_enum, MaybeZeroable};
 use pin_init::{pin_data, pin_init};
 
@@ -501,7 +501,7 @@ fn alloc_for_head(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, max_data_blo
     let nr_data = nr_data.min(nr_domains - h.redundancy);
 
     let failed = || {
-        bch_err!(fs, "failed to allocate new stripe");
+        fs.log().err(message!("failed to allocate new stripe"));
         fs.err(Errcode::ENOMEM_ec_new_stripe_alloc)
     };
     // its room in new_stripes, for when it's handed on

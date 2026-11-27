@@ -25,7 +25,7 @@ use crate::util::alloc::Vec;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, Validated,
                             ValidatedEntriesMut};
 use crate::util::{Printbuf, ToText};
-use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
+use crate::{message, fsck_err, mustfix_fsck_err_on, prt};
 use crate::format::{Btree, MetadataVersion, SbFeatures, Sb, SbFieldClean, FsUsageType,
     Jset, JsetEntry, JsetEntryClock, JsetEntryUsage, JsetEntryRef, JsetEntryType, SbCompats,
     SbFieldType};
@@ -221,7 +221,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
 
     let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.lock.entry_u64s_reserved.get() as usize;
     let Some(f) = sb.field_resize::<Section>(u64s as u32) else {
-        bch_err!(fs, "error resizing superblock while setting filesystem clean");
+        fs.log().err(message!("error resizing superblock while setting filesystem clean"));
         return;
     };
 
@@ -234,7 +234,8 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
         .expect("the clean section, u64s past its header");
     let mut w = EntryWriter::new(entries);
     if super_entries_add_common(fs, &mut w).and_then(|()| btree_roots_to_journal_entries(fs, &mut w, 0)).is_err() {
-        bch_err!(fs, "error setting filesystem clean: its entries overran entry_u64s_reserved");
+        fs.log().err(message!(
+            "error setting filesystem clean: its entries overran entry_u64s_reserved"));
         return;
     }
     let written = w.len();
@@ -243,7 +244,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     // this should be in the write path, and we should be validating every
     // superblock section:
     if validate_late(fs, version, big_endian, f, true).is_err() {
-        bch_err!(fs, "error writing marking filesystem clean: validate error");
+        fs.log().err(message!("error writing marking filesystem clean: validate error"));
         return;
     }
     sb.sb_mut().set_clean(true);

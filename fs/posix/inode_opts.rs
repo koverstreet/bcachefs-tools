@@ -321,7 +321,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>, 
         Mode::Reflink
     } else if k.k.is_user_data() || k.k.key_type() == BkeyType::reflink_p {
         if unlikely(k.k.p.snapshot == 0) {
-            crate::bch_err!(fs, "user data key with snapshot == 0\n{}", k.to_text(fs));
+            fs.log().err(crate::message!("user data key with snapshot == 0\n{}", k.to_text(fs)));
             crate::warn_on!(true);
             return Ok(get_fs(fs, false));
         }

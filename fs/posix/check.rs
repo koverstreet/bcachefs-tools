@@ -17,7 +17,7 @@ use crate::fs::Fs;
 use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::capacity::DiskReservation;
 use crate::util::{alloc::Vec, Printbuf};
-use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
+use crate::{message, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, Whiteout};
 
@@ -358,7 +358,7 @@ impl InodeWalker {
         let inode_pos = spos(k.k.p.inode, 0, k.k.p.snapshot);
         let nr_keys = count_inode_keys(t, inode_pos, btree, Some(&mut buf))?;
         if nr_keys == 0 {
-            bch_err!(fs, "check_key_has_inode: error finding live keys in inode");
+            fs.log().err(message!("check_key_has_inode: error finding live keys in inode"));
             return Err(fs.err(Errcode::shutdown_with_errors_unfixed));
         }
 
@@ -655,7 +655,8 @@ pub fn reconstruct_subvol_root(
     let fs = t.fs();
 
     if !fs.snapshots.is_leaf(snapshot)? {
-        bch_err!(fs, "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node");
+        fs.log().err(message!(
+            "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node"));
         return Err(fs.err(Errcode::fsck_repair_unimplemented));
     }
 
@@ -676,7 +677,7 @@ pub fn reconstruct_subvol_root(
         }))?;
 
     root.ok_or_else(|| {
-        bch_err!(fs, "no root inode found for subvol {subvol}, can't reconstruct");
+        fs.log().err(message!("no root inode found for subvol {subvol}, can't reconstruct"));
         fs.err(Errcode::fsck_repair_unimplemented)
     })
 }
@@ -719,7 +720,7 @@ pub fn repoint_subvol(
     let fs_path_parent = root_fs_path_parent(t, snapshot, root)?;
     let master = snapshot::tree_lookup(t, fs.snapshots.tree(snapshot))?.master_subvol.get();
 
-    bch_err_msg!(fs,
+    fs.log().err_msg(
         t.bkey_get_mut::<Subvolume, _>(Btree::subvolumes, pos(0, subvol as u64),
                                         BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(), |s| {
             let v = s.v_mut();
@@ -729,7 +730,7 @@ pub fn repoint_subvol(
             v.set_snap(master != 0 && master != subvol);
             Ok(())
         }),
-        "getting subvolume {subvol}")
+        message!("getting subvolume {subvol}"))
 }
 
 /// Recreate missing subvolume key @subvol, at leaf @snapshot with root inode
@@ -744,11 +745,11 @@ pub fn reconstruct_subvol(
 ) -> Result<(), BchError> {
     let fs = t.fs();
 
-    bch_info!(fs, "reconstructing subvol {subvol} with root inode {root}");
+    fs.log().info(message!("reconstructing subvol {subvol} with root inode {root}"));
 
     let fs_path_parent = root_fs_path_parent(t, snapshot, root)?;
 
-    let tree = bch_err_msg!(fs,
+    let tree = fs.log().err_msg(
         t.bkey_get_mut::<Snapshot, _>(Btree::snapshots, pos(0, snapshot as u64),
                                        BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |s| {
             let s = s.v_mut();
@@ -756,9 +757,9 @@ pub fn reconstruct_subvol(
             s.set_state(SnapshotState::live);
             Ok(s.tree())
         }),
-        "getting snapshot {snapshot}")?;
+        message!("getting snapshot {snapshot}"))?;
 
-    let had_master = bch_err_msg!(fs,
+    let had_master = fs.log().err_msg(
         t.bkey_get_mut::<SnapshotTree, _>(Btree::snapshot_trees, pos(0, tree as u64),
                                            BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |st| {
             let st = st.v_mut();
@@ -768,7 +769,7 @@ pub fn reconstruct_subvol(
             }
             Ok(had_master)
         }),
-        "getting snapshot tree {tree}")?;
+        message!("getting snapshot tree {tree}"))?;
 
     let mut k = t.bkey_alloc_typed::<Subvolume>()?;
     k.k_mut().p = pos(0, subvol as u64);
@@ -1038,7 +1039,7 @@ pub mod ioctl {
         let fs_ref = fs.require(fs.ro_ref.tryget(), Errcode::erofs_fsck_online_no_ro_ref)?;
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
-        crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
+        fs.log().err_fn(thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
     fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &StdioRedirect) -> i32 {

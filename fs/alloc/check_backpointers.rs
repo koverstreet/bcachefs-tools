@@ -613,7 +613,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
                                  RecoveryPass::check_extents_to_backpointers, flags);
 
     static RATELIMIT: Ratelimit = Ratelimit::new();
-    if !fs.ratelimit_suppress(&RATELIMIT, c"check_one_bucket_backpointer_mismatch") {
+    if !fs.ratelimit_suppress(&RATELIMIT, &"check_one_bucket_backpointer_mismatch") {
         print_str(fs, LogLevel::ERR, &mut buf);
     }
     Ok(())
@@ -887,8 +887,8 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
         return Ok(());
     }
 
-    crate::bch_info!(fs, "scanning for missing backpointers in {}/{nr_buckets} buckets, \
-                          {nr_empty} buckets with no backpointers", nr_mismatches.wrapping_sub(nr_empty));
+    fs.log().info(crate::message!("scanning for missing backpointers in {}/{nr_buckets} buckets, \
+                                   {nr_empty} buckets with no backpointers", nr_mismatches.wrapping_sub(nr_empty)));
 
     let ret = (|| {
         let mut start = POS_MIN;
@@ -896,13 +896,14 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
             let end = pin_backpointer_nodes_with_missing(fs, &trans, &pins, start)?;
 
             if start == POS_MIN && end != SPOS_MAX {
-                crate::bch_info!(fs, "bch2_check_extents_to_backpointers(): alloc info does not fit in ram, \
-                                      running in multiple passes with {} nodes per pass",
-                                 pins.budget() / u64::from(fs.opts.btree_node_size.get()));
+                fs.log().info(crate::message!(
+                    "bch2_check_extents_to_backpointers(): alloc info does not fit in ram, \
+                     running in multiple passes with {} nodes per pass",
+                    pins.budget() / u64::from(fs.opts.btree_node_size.get())));
             }
 
             if start != POS_MIN || end != SPOS_MAX {
-                crate::bch_verbose!(fs, "check_extents_to_backpointers(): {start}-{end}");
+                fs.log().verbose(crate::message!("check_extents_to_backpointers(): {start}-{end}"));
             }
 
             s.bp_range = start..=end;
@@ -988,13 +989,14 @@ fn check_backpointers_to_extents(fs: &Fs) -> Result<(), BchError> {
         let end = pins.pin(&trans, leaves, !0, start..=Bbpos::MAX)?;
 
         if start == Bbpos::MIN && end != Bbpos::MAX {
-            crate::bch_verbose!(fs, "bch2_check_backpointers_to_extents(): extents do not fit in ram, \
-                                     running in multiple passes with {} nodes per pass",
-                                pins.budget() / u64::from(fs.opts.btree_node_size.get()));
+            fs.log().verbose(crate::message!(
+                "bch2_check_backpointers_to_extents(): extents do not fit in ram, \
+                 running in multiple passes with {} nodes per pass",
+                pins.budget() / u64::from(fs.opts.btree_node_size.get())));
         }
 
         if start != Bbpos::MIN || end != Bbpos::MAX {
-            crate::bch_verbose!(fs, "check_backpointers_to_extents(): {start}-{end}");
+            fs.log().verbose(crate::message!("check_backpointers_to_extents(): {start}-{end}"));
         }
 
         check_backpointers_to_extents_pass(fs, &trans, start..=end)?;

@@ -393,7 +393,8 @@ impl Fs {
         let mut stream = keystream(self.chacha20_key()?, nonce);
         for chunk in r {
             if chunk.len() % CHACHA_BLOCK_SIZE != 0 {
-                crate::bch_err_ratelimited!(self, "bio not aligned for encryption");
+                crate::ratelimit!(self.log()).err(crate::message!(
+                    "bio not aligned for encryption"));
                 return self.throw(Errcode::EIO_encrypt_unaligned);
             }
             chunk.with_mapped(|p, len| stream.apply_keystream(unsafe { core::slice::from_raw_parts_mut(p, len) }));
@@ -449,10 +450,11 @@ impl Fs {
         let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
         if differ && fs.opts().no_data_io.get() == 0 {
             static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
-            if !fs.ratelimit_suppress(&RATELIMIT, crate::here!()) {
-                crate::bch_warn!(fs, "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
-                                      expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
-                                 crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());
+            if !fs.ratelimit_suppress(&RATELIMIT, &crate::here_str!()) {
+                fs.log().warn(crate::message!(
+                    "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
+                     expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
+                    crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get()));
                 crate::warn_on!(true);
             }
             return fs.throw(Errcode::recompute_checksum);
@@ -665,12 +667,12 @@ fn decrypt_sb_key(fs: &Fs, sb: &Sb, crypt: &SbFieldCrypt, user_key: Option<&Key>
          */
         let user_key = match user_key {
             Some(k) => k.clone(),
-            None => request_key(sb).inspect_err(|e| crate::bch_err!(fs, "error requesting encryption key: {e}"))?,
+            None => request_key(sb).inspect_err(|e| fs.log().err(crate::message!("error requesting encryption key: {e}")))?,
         };
 
         sb_key.chacha20(&user_key, sb.nonce());
         if sb_key.is_encrypted() {
-            crate::bch_err!(fs, "incorrect encryption key");
+            fs.log().err(crate::message!("incorrect encryption key"));
             return fs.throw(Errcode::EINVAL_incorrect_encryption_key);
         }
     }
@@ -730,7 +732,7 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     let mut sb_key = EncryptedKey::new_unencrypted(key.clone());
     if keyed {
         let user_key = request_key(sb.sb())
-            .inspect_err(|e| crate::bch_err!(fs, "error requesting encryption key: {e}"))?;
+            .inspect_err(|e| fs.log().err(crate::message!("error requesting encryption key: {e}")))?;
         sb_key.chacha20(&user_key, sb.sb().nonce());
     }
 

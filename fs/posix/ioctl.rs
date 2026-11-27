@@ -8,7 +8,7 @@
 use core::mem::{offset_of, size_of};
 use core::ops::{ControlFlow, Range};
 use crate::alloc::{accounting, capacity::DiskReservation, disk_groups_format};
-use crate::{bch_warn, btree_trans};
+use crate::{message, btree_trans};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
@@ -48,7 +48,7 @@ pub fn get_label(fs: &Fs, user: UserArg<[u8; c::FSLABEL_MAX as usize]>) -> Resul
     let mut len = label.iter().position(|&b| b == 0).unwrap_or(LABEL_SIZE);
     if len == LABEL_SIZE {
         len -= 1;
-        bch_warn!(fs, "label is too long, return the first {len} bytes");
+        fs.log().warn(message!("label is too long, return the first {len} bytes"));
     }
     user.bytes_at(0, len).writer().write_slice(&label[..len])?;
     Ok(())

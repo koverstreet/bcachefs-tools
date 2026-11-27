@@ -660,7 +660,8 @@ impl<'t> InteriorUpdate<'t> {
                !e.matches(c::EROFS) &&
                e != BchError::from(Errcode::journal_reclaim_would_deadlock) &&
                e != BchError::from(Errcode::journal_shutdown) {
-                crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
+                crate::ratelimit!(fs.log()).err(crate::message!(
+                    "{}: error {}", crate::here_str!(), e.msg()));
             }
             return Err(e);
         }

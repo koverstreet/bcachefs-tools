@@ -47,7 +47,7 @@ use crate::os::{kernel::{likely, prefetch, unlikely}, sched};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{plain_bytes, EntryWalk, Validated};
-use crate::{bch_err, fs_fatal_error, fs_inconsistent, prt};
+use crate::{message, fs_fatal_error, fs_inconsistent, prt};
 
 const JSET_ENTRY_LOG_U64S: usize = 4;
 
@@ -234,7 +234,8 @@ impl BtreeTrans<'_> {
                     self.unlock_from(paths, crate::ret_ip!());
 
                     let Some(new_k) = key_buf(new_u64s) else {
-                        bch_err!(fs, "error allocating memory for key cache key, btree {btree} u64s {new_u64s}");
+                        fs.log().err(message!(
+                            "error allocating memory for key cache key, btree {btree} u64s {new_u64s}"));
                         return fs.throw(Errcode::ENOMEM_btree_key_cache_insert);
                     };
 

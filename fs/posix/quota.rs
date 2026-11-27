@@ -240,7 +240,7 @@ mod vfs {
     use crate::os::kernel::ktime_get_real_seconds;
     use crate::os::quota::{Kqid as _, QuotactlOps, QuotactlVTable};
     use crate::types::CStatic;
-    use crate::{bch_err_fn, bch_info, fs_inconsistent};
+    use crate::{message, fs_inconsistent};
     use crate::posix::inode;
     use crate::snapshots::snapshot;
     use crate::vfs::super_block::SuperBlock;
@@ -718,7 +718,7 @@ mod vfs {
             sb_quota_read(fs, &sb);
         }
 
-        bch_err_fn!(fs, read_keys(fs))
+        fs.log().err_fn(read_keys(fs))
     }
 
     fn read_keys(fs: &Fs) -> Result<(), BchError> {
@@ -777,7 +777,7 @@ mod vfs {
 
         let mut sb = fs.sb_lock();
         if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
-            return bch_err_fn!(fs, fs.throw(Errcode::ENOSPC_sb_quota));
+            return fs.log().err_fn(fs.throw(Errcode::ENOSPC_sb_quota));
         }
 
         set_sb_quotas(&mut sb, uflags, true);
@@ -851,7 +851,7 @@ mod vfs {
     /// A type's time and warning limits, in the superblock.
     fn set_info(fs: &Fs, rdonly: bool, ty: i32, info: &c::qc_info) -> Result<(), BchError> {
         if false {
-            bch_info!(fs, "setting:\n{}", QcInfo(info));
+            fs.log().info(message!("setting:\n{}", QcInfo(info)));
         }
 
         if rdonly {
@@ -875,7 +875,7 @@ mod vfs {
         let mut sb = fs.sb_lock();
         let mut disk_sb = fs.sb_resize(&mut sb);
         let Some(sb_quota) = sb_get_or_create_quota(&mut disk_sb) else {
-            return bch_err_fn!(fs, fs.throw(Errcode::ENOSPC_sb_quota));
+            return fs.log().err_fn(fs.throw(Errcode::ENOSPC_sb_quota));
         };
 
         let q = &mut sb_quota.q[ty];
@@ -973,7 +973,7 @@ mod vfs {
 
     fn set_quota(fs: &Fs, rdonly: bool, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError> {
         if false {
-            bch_info!(fs, "setting:\n{}", QcDqblk(qdq));
+            fs.log().info(message!("setting:\n{}", QcDqblk(qdq)));
         }
 
         if rdonly {

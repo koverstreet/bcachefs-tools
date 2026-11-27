@@ -242,10 +242,10 @@ impl Bcachefs {
             sb.set_encoding(|fs| fs.cf_encoding.as_ref());
 
             let root = InodeInfo::get_warn(fs, SubvolInum::ROOT, c"new_super")
-                .inspect_err(|e| crate::bch_err!(fs, "mounting: error getting root inode: {}", e.msg()))?;
+                .inspect_err(|e| fs.log().err(crate::message!("mounting: error getting root inode: {}", e.msg())))?;
 
             Ok(sb.fill(root)
-                .inspect_err(|_| crate::bch_err!(fs, "error mounting: error allocating root dentry"))?)
+                .inspect_err(|_| fs.log().err(crate::message!("error mounting: error allocating root dentry")))?)
         })();
 
         if let Err(e) = filled {
@@ -458,7 +458,7 @@ impl FsType for Bcachefs {
                     set_ro(1);
                     // bch_err() says which filesystem, errorfc() reaches the
                     // caller; the throw discards the errcode
-                    crate::bch_err!(fs, "error going read-write: {}", e.msg());
+                    fs.log().err(crate::message!("error going read-write: {}", e.msg()));
                     fc.errorfc(format_args!("error going read-write: {}", e.msg()));
                     return fs.throw(Errcode::EINVAL_reconfigure_read_write);
                 }

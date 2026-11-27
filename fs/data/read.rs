@@ -80,7 +80,7 @@ use crate::btree::bkey::{pos, prelude::*, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          LoopFlow, TransAttempt, UpdateTriggerFlags};
-use crate::{bch_err, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
+use crate::{message, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
 use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch, InlineDataRef},
                   promote::{promote_alloc, Promoted, PromoteTask}, update::read_err_benign};
 use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut};
@@ -988,7 +988,8 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan) {
     let mut new = ExtentCrcUnpacked::default();
     if fs.rechecksum_bio(rbio.bio().range(), p.version, crc, None, Some(&mut new), crc.offset.into(), crc.live_size,
                          crc.csum_type.get()).is_err() {
-        bch_err!(fs, "error verifying existing checksum while narrowing checksum (memory corruption?)");
+        fs.log().err(message!(
+            "error verifying existing checksum while narrowing checksum (memory corruption?)"));
         return;
     }
 

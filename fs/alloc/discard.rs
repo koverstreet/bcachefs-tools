@@ -79,7 +79,7 @@ use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::{HumanReadable, Printbuf};
-use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt, new_lock};
+use crate::{message, fsck_err, has_bio, prt, new_lock};
 use core::pin::Pin;
 use core::sync::atomic::Ordering;
 use pin_init::{pin_data, pin_init, stack_pin_init};
@@ -751,7 +751,7 @@ fn do_discards(fs: &Fs) {
             fs.discards_to_text(out);
         });
         if !e.matches(c::EROFS) {
-            let _ = bch_err_fn!(fs, ret);
+            let _ = fs.log().err_fn(ret);
         }
     }
 }
@@ -944,9 +944,9 @@ fn invalidate_one_bucket(t: &TransAttempt<'_, '_>, ca: &Dev, lru_k: BkeySC<'_>,
     assert_eq!({ a.dirty_sectors }, 0, "a read lru entry for a bucket with dirty data");
 
     if a.cached_sectors == 0 {
-        let _ = bch_err_msg!(fs, t.ignore_restarts(|trans| {
+        let _ = fs.log().err_msg(t.ignore_restarts(|trans| {
             check_one_bucket_backpointer_mismatch(trans, ca, bucket.offset, true, last_flushed.borrow())
-        }), "checking backpointers of bucket {}:{}", { bucket.inode }, { bucket.offset });
+        }), message!("checking backpointers of bucket {}:{}", { bucket.inode }, { bucket.offset }));
         return Ok(());
     }
 
@@ -993,7 +993,7 @@ pub(crate) fn do_invalidates_work(ca: &Dev) {
         }
         Ok(())
     })();
-    let _ = bch_err_msg!(fs, ret, "invalidating buckets on {}", ca);
+    let _ = fs.log().err_msg(ret, message!("invalidating buckets on {}", ca));
 }
 
 impl Dev {

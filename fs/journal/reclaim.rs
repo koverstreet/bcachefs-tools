@@ -32,7 +32,7 @@ use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, Sleep, SleepError};
 use crate::util::{Nsecs, Printbuf};
-use crate::{bch_err, bch_err_msg, prt, published};
+use crate::{message, prt, published};
 use crate::util::projections::Volatile;
 use cstruct_macros::{bch_enum, MaybeZeroable};
 
@@ -344,7 +344,7 @@ impl Journal {
                     prt!(&mut buf, " {ca}");
                 }
 
-                bch_err!(fs, "{buf}");
+                fs.log().err(message!("{buf}"));
             }
 
             g.cur_entry_sectors = 0;
@@ -645,7 +645,7 @@ impl Journal {
         let fs_ref = unsafe { BackRef::new(fs) };
         let ret = self.reclaim_thread.start(format_args!("bch-reclaim/{}", fs.name().to_str().unwrap_or("?")),
                                             move |me| reclaim_thread(&fs_ref.journal, me));
-        bch_err_msg!(fs, ret, "creating journal reclaim thread")
+        fs.log().err_msg(ret, message!("creating journal reclaim thread"))
     }
 
     pub fn reclaim_kick(&self) {

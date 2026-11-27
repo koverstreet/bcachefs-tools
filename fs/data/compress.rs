@@ -47,7 +47,7 @@ use crate::c;
 use crate::data::extents::ExtentCrcUnpacked;
 use crate::format::{CompressionOpt as opts, Bpos, CompressionType, SbFeatures, CompressionOpt_arms};
 use crate::errcode::{Errcode as e, BchError, ZSTD_ERRS};
-use crate::{bch_err, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
+use crate::{message, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
@@ -324,7 +324,8 @@ pub(crate) fn buf_uncompress<'a>(fs: &Fs, dst: Out<'a>, src: VolatileSlice<'_>, 
             match dctx.decompress(dst, src.sub(4..4 + real_src_len)) {
                 Err(code) => return fs.throw(zstd_errcode(code)),
                 Ok(d) if d.len() != dst_len => {
-                    bch_err!(fs, "zstd decompress error: expected {dst_len} bytes, got {}", d.len());
+                    fs.log().err(message!(
+                        "zstd decompress error: expected {dst_len} bytes, got {}", d.len()));
                     return fs.throw(e::decompress_zstd_size_mismatch);
                 }
                 Ok(d) => d,

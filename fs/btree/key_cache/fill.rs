@@ -50,7 +50,8 @@ impl BtreeTrans<'_> {
                 match bc.bkey_cached_reuse(&srcu) {
                     Some(got) => got,
                     None => {
-                        crate::bch_err_ratelimited!(fs, "error allocating memory for key cache item, btree {btree}");
+                        crate::ratelimit!(fs.log()).err(crate::message!(
+                            "error allocating memory for key cache item, btree {btree}"));
                         return fs.throw(Errcode::ENOMEM_btree_key_cache_create);
                     }
                 }
@@ -77,8 +78,9 @@ impl BtreeTrans<'_> {
                 }) {
                     Ok(new_k) => new_k,
                     Err(e) if e.matches(c::ENOMEM) => {
-                        crate::bch_err_ratelimited!(fs, "error allocating memory for key cache key, btree {} u64s {}",
-                                                    btree, key_u64s);
+                        crate::ratelimit!(fs.log()).err(crate::message!(
+                            "error allocating memory for key cache key, btree {} u64s {}",
+                            btree, key_u64s));
                         return fs.throw(Errcode::ENOMEM_btree_key_cache_fill);
                     }
                     Err(e) => return Err(e),

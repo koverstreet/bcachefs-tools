@@ -42,7 +42,7 @@ use crate::init::registry::register;
 use crate::posix::inode::shard_cpu_init;
 use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Locked, LockedBy, Mutex, MutexNoio, Noio, PercpuRwsemNoio, RwSem, Shared, SharedGuard};
-use crate::{bch_verbose, prt};
+use crate::{message, prt};
 use crate::sb::counters::{counters_init, FsCounters};
 use crate::sb::io::{read_super, sb_to_fs, Holder, SbCpu, SbWriteFlags};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevKobjRef, DevPieces, SbMembersMut};
@@ -996,10 +996,10 @@ impl Fs {
          * xfstests... */
         #[cfg(CONFIG_UNICODE)]
         if self.cf_encoding.as_ref().is_some() {
-            crate::bch_info!(self, "Using encoding defined by superblock: utf8-{}.{}.{}",
+            self.log().info(crate::message!("Using encoding defined by superblock: utf8-{}.{}.{}",
                       DEFAULT_UTF8_ENCODING >> 16,
                       (DEFAULT_UTF8_ENCODING >> 8) & 0xff,
-                      DEFAULT_UTF8_ENCODING & 0xff);
+                      DEFAULT_UTF8_ENCODING & 0xff));
         }
 
         if self.sb_lock().sb().initialized() {
@@ -1181,7 +1181,7 @@ impl Fs {
             self.counters_recent.cancel_sync();
 
             if self.flags.get(Flag::started) {
-                bch_verbose!(self, "shutting down");
+                self.log().verbose(message!("shutting down"));
             }
 
             self.state_lock_write().read_only();
@@ -1245,7 +1245,7 @@ fn exit(fs: FsRef) -> Result<(), BchError> {
     // their drops are a grace period on, and need what the filesystem frees
     crate::util::maybe_rcu_alloc::barrier();
 
-    bch_verbose!(&*fs, "shutdown complete");
+    fs.log().verbose(message!("shutdown complete"));
 
     drop(fs);
     ret

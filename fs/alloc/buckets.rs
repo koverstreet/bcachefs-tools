@@ -33,7 +33,7 @@ use crate::types::bits_to_longs;
 use crate::os::{kernel::unlikely, percpu::{Counters, PerCpu}};
 use crate::util::{log::LogMsg, rcu::{read_lock, RcuArrayWriter, ReadGuard}, Printbuf, ToText};
 use crate::data_structures::bitmap::AtomicBitmap;
-use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
+use crate::{btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::convert::Infallible;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -595,7 +595,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &ExtentPtrDeco
 
     if flags.contains(UpdateTriggerFlags::GC) {
         let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
-            bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
+            fs.log().err(message!("error allocating memory for gc_stripes, idx {idx}"));
             return fs.throw(Errcode::ENOMEM_mark_stripe_ptr);
         };
 
@@ -955,7 +955,7 @@ impl Fs {
     /// alloc btree - or gc's copy, with gc.
     pub fn trans_mark_dev_sb(&self, ca: &Dev, flags: UpdateTriggerFlags) -> Result<(), BchError> {
         let trans = btree_trans!(self);
-        bch_err_fn!(self, trans_mark_dev_sb_in(&trans, ca, flags))
+        self.log().err_fn(trans_mark_dev_sb_in(&trans, ca, flags))
     }
 
     /// trans_mark_dev_sb() of every online device - each initialized first,

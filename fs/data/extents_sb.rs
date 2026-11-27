@@ -77,7 +77,7 @@ impl SbFieldOps for SbFieldExtentTypeU64s<Validated> {
         let mut sb = fs.sb_resize(sb);
         let e = sb.field_get_minsize::<SbFieldExtentTypeU64s>(u64s as u32);
         let Some(e) = e else {
-            crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
+            fs.log().err(crate::message!("error allocating superblock space for extent_type_u64s"));
             return fs.throw(Errcode::ENOSPC_sb_extent_type_u64s);
         };
 

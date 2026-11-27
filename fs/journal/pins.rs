@@ -33,7 +33,7 @@ use crate::util::alloc::{init_at, AllocError, Vec};
 use crate::util::place::{up, FieldPath};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
-use crate::{bch_err, new_lock, prt, warn_once};
+use crate::{message, new_lock, prt, warn_once};
 use core::cell::Cell;
 use cstruct_macros::{bch_enum, MaybeZeroable};
 
@@ -970,8 +970,9 @@ pub(crate) fn start(j: &Journal, last_seq: u64, cur_seq: u64) -> Result<(), BchE
         new_entries(size as usize)
     };
     let entries = entries.map_err(|_| {
-        bch_err!(fs, "error allocating journal pin fifo: {} dirty journal entries ({}-{}), {} bytes",
-                 cur_seq - last_seq, last_seq, cur_seq, (size as usize).saturating_mul(size_of::<PinList>()));
+        fs.log().err(message!(
+            "error allocating journal pin fifo: {} dirty journal entries ({}-{}), {} bytes",
+            cur_seq - last_seq, last_seq, cur_seq, (size as usize).saturating_mul(size_of::<PinList>())));
         fs.err(Errcode::ENOMEM_journal_pin_fifo)
     })?;
 

@@ -36,7 +36,7 @@ use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use crate::btree::bkey::ValidateFlags;
 use crate::format::{SbFeatures, Sb, SbFieldType};
 use crate::locking::Guard as _;
-use crate::{sb_err_on, bch_verbose};
+use crate::{sb_err_on, message};
 use crate::journal::seq_blacklist_format::{SbFieldJournalSeqBlacklist,
     JournalSeqBlacklistEntry};
 use crate::util::{vstructs::{Unvalidated, Validated}, rcu::RcuArray, Printbuf};
@@ -240,7 +240,7 @@ pub(crate) fn blacklist_entries_gc(fs: &Fs, guard: &mut SbLockGuard<'_>) -> bool
         return false;
     }
 
-    bch_verbose!(fs, "nr blacklist entries was {nr}, now {new_nr}");
+    fs.log().verbose(message!("nr blacklist entries was {nr}, now {new_nr}"));
 
     if new_nr == 0 {
         sb.field_delete(SbFieldType::journal_seq_blacklist);

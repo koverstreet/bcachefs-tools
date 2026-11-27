@@ -733,8 +733,9 @@ impl Fs {
         let minor = version.minor() as usize;
         let requested = &self.incompat_versions_requested;
         if !requested.test(minor) && !requested.test_and_set(minor) {
-            crate::bch_notice!(self, "requested incompat feature {} currently not enabled, allowed up to {}\n  set version_upgrade=incompatible to enable",
-                               version, self.sb.version_incompat_allowed.get());
+            self.log().notice(crate::message!(
+                "requested incompat feature {} currently not enabled, allowed up to {}\n  set version_upgrade=incompatible to enable",
+                version, self.sb.version_incompat_allowed.get()));
         }
 
         self.throw(Errcode::may_not_use_incompat_feature)
@@ -760,7 +761,8 @@ impl Fs {
             return;
         }
 
-        crate::bch_notice!(self, "Now allowing incompatible features up to {v}, previously allowed up to {allowed}\n");
+        self.log().notice(crate::message!(
+            "Now allowing incompatible features up to {v}, previously allowed up to {allowed}\n"));
 
         let s = sb.sb_mut();
         s.features.update(|f| f | SbFeatures::ALL);
@@ -2307,7 +2309,8 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>
         if fs.opts().will_not_start.get() == 0 {
             return Ok(());
         }
-        crate::bch_err!(fs, "filesystem has never been started, not writing superblock: mount it once first");
+        fs.log().err(crate::message!(
+            "filesystem has never been started, not writing superblock: mount it once first"));
         return fs.throw(Errcode::erofs_sb_never_started);
     }
 
@@ -2513,7 +2516,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
     // prints.
     if !fatal {
         static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
-        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT, c"write_super_locked"));
+        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT, &"write_super_locked"));
     }
 
     prt!(msg, "Error writing superblock, wrote to {nr_wrote}/{nr_members} devices:\n");
@@ -2862,7 +2865,7 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &Sb) -> Result<(), BchEr
     let _ = make::<SbFieldErrorsV2>(&mut disk_sb);
     let _ = make::<SbFieldDowngrade>(&mut disk_sb);
     if make::<SbFieldExtentTypeU64s>(&mut disk_sb).is_err() {
-        crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
+        fs.log().err(crate::message!("error allocating superblock space for extent_type_u64s"));
         return fs.throw(Errcode::ENOSPC_sb_extent_type_u64s);
     }
     // nothing to read back after the first write: init reads every section

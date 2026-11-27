@@ -66,7 +66,7 @@ use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, Head, Unvali
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::os::percpu::Counters as _;
 use crate::util::printbuf::Join;
-use crate::{bch_err_fn, bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
+use crate::{bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
 use core::mem::size_of;
 use core::ops::Range;
 use zerocopy::{FromBytes, IntoBytes};
@@ -449,7 +449,7 @@ impl Fs {
 pub fn dev_usage_init(ca: &Dev, gc: bool) -> Result<(), BchError> {
     let fs = ca.fs();
     let trans = btree_trans!(fs);
-    bch_err_fn!(fs, trans.lockrestart_do(|t| {
+    fs.log().err_fn(trans.lockrestart_do(|t| {
         /*
          * Set, not add: subtract whatever's currently accounted so the
          * free count lands at exactly nbuckets. This makes

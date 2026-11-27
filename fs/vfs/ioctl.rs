@@ -61,7 +61,7 @@ use crate::os::idmap::MntIdmap;
 use crate::os::mount::WriteAccess;
 use crate::os::path::{Creating, Removing, UserPath};
 use crate::os::super_block::IsInode;
-use crate::{bch_err, btree_trans, prt};
+use crate::{message, btree_trans, prt};
 use core::mem::{offset_of, MaybeUninit};
 use pin_init::stack_try_pin_init;
 use kernel::uaccess::UserPtr;
@@ -231,7 +231,7 @@ fn subvolume_create(fs: &Fs, file: &File, a: IoctlSubvolume, err: ErrMsg)
 {
     let mut msg = Printbuf::new();
     let ret = create_subvolume(fs, file, a, &mut msg);
-    err.report(&mut msg, ret, |ret, msg| crate::bch_err_msg!(fs, ret, "{}", msg))
+    err.report(&mut msg, ret, |ret, msg| fs.log().err_msg(ret, crate::message!("{}", msg)))
 }
 
 /// BCH_IOCTL_SUBVOLUME_CREATE: a subvolume at @a.dst_ptr - with
@@ -404,7 +404,7 @@ fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(
     let mut label = [0u8; LABEL_SIZE];
     user.bytes_at(0, LABEL_SIZE).reader().read_slice(&mut label)?;
     let Some(len) = label.iter().position(|&b| b == 0) else {
-        bch_err!(fs, "unable to set label with more than {} bytes", LABEL_SIZE - 1);
+        fs.log().err(message!("unable to set label with more than {} bytes", LABEL_SIZE - 1));
         return fs.throw(Errcode::EINVAL_setlabel_too_long);
     };
 

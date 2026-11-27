@@ -247,7 +247,7 @@ impl NodeRead<'_> {
              * clear it if it did any work (scheduling recovery passes,
              * marking superblock
              */
-            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, crate::here!()));
+            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_hard, &crate::here_str!()));
 
             b.flags.set_read_error(true);
             let _ = btree_lost_data(fs, &mut msg, btree);
@@ -255,7 +255,7 @@ impl NodeRead<'_> {
             prt!(&mut msg, "error {}\n", err.msg());
         } else if !self.failed.is_empty() {
             /* Separate ratelimit states for soft vs. hard errors */
-            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, crate::here!()));
+            msg.set_suppressed(fs.ratelimit_suppress(&fs.btree.read_errors_soft, &crate::here_str!()));
 
             let dev = self.pick.ptr.dev().into();
             let used = self.failed.dev(dev).is_some();

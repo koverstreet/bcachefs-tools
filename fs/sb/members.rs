@@ -167,7 +167,8 @@ fn sb_member_find_slot(fs: &Fs, sb: &Sb) -> Result<u32, BchError> {
         return Ok(dev);
     }
     if nr_deleted != 0 {
-        crate::bch_err!(fs, "unable to allocate new member, but have {nr_deleted} deleted: run fsck");
+        fs.log().err(crate::message!(
+            "unable to allocate new member, but have {nr_deleted} deleted: run fsck"));
     }
     Err(Errcode::ENOSPC_sb_members.into())
 }
@@ -912,8 +913,8 @@ impl Fs {
             self.write_super(&mut sb);
         }
 
-        crate::bch_info!(self, "mi_btree_bitmap sectors {} -> {}",
-                         HumanReadable(old << 9), HumanReadable(new << 9));
+        self.log().info(crate::message!("mi_btree_bitmap sectors {} -> {}",
+                                        HumanReadable(old << 9), HumanReadable(new << 9)));
         Ok(())
     }
 }

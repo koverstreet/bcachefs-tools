@@ -72,7 +72,7 @@ use crate::util::refcount::{RefGuard, TryRefcount};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::alloc::{accounting, accounting_mem};
 use crate::btree::iter::{btree_iter_params_valid, BtreeIter, BtreeIterFlags};
-use crate::{btree_trans, bch_err, bch_err_dev, bch_err_msg, bch_err_msg_dev, prt};
+use crate::{btree_trans, message, prt};
 use core::mem::{offset_of, size_of};
 use core::ops::ControlFlow;
 use crate::util::Printbuf;
@@ -559,7 +559,7 @@ fn disk_add(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<()
 
     let mut err = Printbuf::new();
     let ret = fs.dev_add(path.as_cstr(), &mut err);
-    msg.report(&mut err, ret, |ret, err| bch_err_msg!(fs, ret, "{}", err))
+    msg.report(&mut err, ret, |ret, err| fs.log().err_msg(ret, message!("{}", err)))
 }
 
 fn disk_remove(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result<(), BchError> {
@@ -573,7 +573,7 @@ fn disk_remove(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result
     let ret = fs.dev_remove(ca, flags.force(), &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
-            bch_err!(fs, "{}", err);
+            fs.log().err(message!("{}", err));
         }
         ret
     })
@@ -590,7 +590,7 @@ fn disk_online(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Result
     let ret = fs.dev_bring_online(path.as_cstr(), &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
-            bch_err!(fs, "{}", err);
+            fs.log().err(message!("{}", err));
         }
         ret
     })
@@ -607,7 +607,7 @@ fn disk_offline(fs: &Fs, a: IoctlDisk, msg: ErrMsg, bad_flags: Errcode) -> Resul
     let ret = fs.dev_offline(&ca, flags.force(), &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
-            bch_err_dev!(&ca, "{}", err);
+            ca.log().err(message!("{}", err));
         }
         ret
     })
@@ -626,7 +626,7 @@ fn disk_set_state(fs: &Fs, a: IoctlDiskSetState, msg: ErrMsg, bad_args: Errcode)
 
     let mut err = Printbuf::new();
     let ret = fs.dev_set_state(&ca, new_state, flags.force(), Some(&mut err));
-    msg.report(&mut err, ret, |ret, _| bch_err_msg_dev!(&ca, ret, "setting device state"))
+    msg.report(&mut err, ret, |ret, _| ca.log().err_msg(ret, message!("setting device state")))
 }
 
 fn disk_resize(fs: &Fs, a: IoctlDiskResize, msg: ErrMsg, bad_flags: Errcode)
@@ -642,7 +642,7 @@ fn disk_resize(fs: &Fs, a: IoctlDiskResize, msg: ErrMsg, bad_flags: Errcode)
     let ret = fs.dev_resize(&ca, a.nbuckets, &mut err);
     msg.report(&mut err, ret, |ret, err| {
         if ret.is_err() {
-            bch_err_dev!(&ca, "{}", err);
+            ca.log().err(message!("{}", err));
         }
         ret
     })

@@ -48,7 +48,7 @@ use crate::posix::inode_opts::get_io_opts;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::debug::trace::{events, TraceEvent};
 use crate::util::{log::LogMsg, Printbuf};
-use crate::{bch_err_fn, log_msg_ratelimited};
+use crate::log_msg_ratelimited;
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::sync::atomic::{fence, Ordering};
@@ -496,7 +496,7 @@ fn park_update(u: &DataUpdate, why: ParkReason<'_>) -> Result<bool, BchError> {
     let old = BkeySC::from(u.index.k.as_ref());
     let mut parked = false;
 
-    bch_err_fn!(fs, for_each_old_slot(&trans, &u.index, None, |t, iter, k| {
+    fs.log().err_fn(for_each_old_slot(&trans, &u.index, None, |t, iter, k| {
         if !extents_match(fs, k, old) {
             return Ok(());
         }

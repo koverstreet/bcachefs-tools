@@ -28,7 +28,7 @@ use crate::format::{Bpos, Btree, BkeyFormat, BTREE_MAX_DEPTH, btree_node, KEY_FO
 use crate::fs::Fs;
 use crate::init::{error::{count_fsck_err, BkeyValidate}, progress::Progress};
 use crate::locking::MemallocFlags;
-use crate::{bch_info, btree_trans, prt};
+use crate::{message, btree_trans, prt};
 use crate::sb::errors::SbErrorId;
 use crate::util::Printbuf;
 use crate::util::backtrace::prt_task_backtrace;
@@ -866,7 +866,7 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
         }
 
         if merge_count != 0 {
-            bch_info!(fs, "merge_btree_nodes: {merge_count} merges in {btree} btree");
+            fs.log().info(message!("merge_btree_nodes: {merge_count} merges in {btree} btree"));
         }
     }
 

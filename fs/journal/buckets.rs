@@ -30,7 +30,7 @@ use crate::journal::journal::{JournalGuard, Journal, JournalLockAt};
 use crate::locking::{Guard as _, LockedBy, Locked, Mutex};
 use crate::util::{alloc::Vec, projections::Volatile, Printbuf, late::Late};
 use crate::os::{kernel::totalram_bytes, bio::BioSet, workqueue::ReffedWork};
-use crate::{bch_err, bch_err_dev, bch_err_fn, bch_err_fn_dev, bch_err_msg, btree_trans, prt,
+use crate::{message, btree_trans, prt,
     new_lock};
 use crate::data::dev_bio::DevBio;
 use crate::journal::reclaim::{discard_work, JournalSpaceFrom};
@@ -513,7 +513,7 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: Watermark)
             let b = ob.id().bucket();
             let marked = trans_mark_metadata_bucket(&trans, ca, b, DataType::journal,
                                                     ca.mi.get().bucket_size.into(), UpdateTriggerFlags::TRANSACTIONAL);
-            bch_err_msg!(fs, marked, "marking new journal buckets")?;
+            fs.log().err_msg(marked, message!("marking new journal buckets"))?;
 
             let Ok(()) = obs.push_within_capacity(ob) else { unreachable!() };
             let Ok(()) = bu.push_within_capacity(b) else { unreachable!() };
@@ -590,7 +590,7 @@ pub fn set_nr_journal_buckets(fs: &Fs, ca: &Dev, nr: u32) -> Result<(), BchError
         return fs.throw(Errcode::device_has_been_removed);
     }
 
-    bch_err_fn!(fs, set_nr_loop(fs, ca, nr, false))
+    fs.log().err_fn(set_nr_loop(fs, ca, nr, false))
 }
 
 pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
@@ -601,7 +601,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
     }
 
     if fs.feature(SbFeature::small_image) {
-        bch_err!(fs, "cannot allocate journal, filesystem is an unresized image file");
+        fs.log().err(message!("cannot allocate journal, filesystem is an unresized image file"));
         return fs.throw(Errcode::erofs_filesystem_full);
     }
 
@@ -612,7 +612,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
     let ram = (totalram_bytes() as u64 / 4 / ca.bucket_bytes()) as u32;
     let nr = nr.max(JOURNAL_BUCKETS_MIN).min(ram);
 
-    bch_err_fn_dev!(ca, set_nr_loop(fs, ca, nr, new_fs))
+    ca.log().err_fn(set_nr_loop(fs, ca, nr, new_fs))
 }
 
 crate::recovery_pass!(fs_journal_alloc => |fs: &Fs| fs.online_members()
@@ -646,7 +646,7 @@ pub fn retire(fs: &Fs, ca: &Dev, bucket: u64) -> Result<(), BchError> {
         }
         ring.retired.push(bucket).map_err(enomem(fs))?;
         Ok(None)
-    }).inspect_err(|e| bch_err_dev!(ca, "error retiring journal bucket {}: {}", bucket, e))?;
+    }).inspect_err(|e| ca.log().err(message!("error retiring journal bucket {}: {}", bucket, e)))?;
 
     space_available(fs);
     Ok(())
@@ -661,7 +661,7 @@ pub(crate) fn drop_retired(j: &Journal) {
     let fs = j.fs();
     for ca in fs.members() {
         while splice(fs, &mut fs.sb_lock(), &ca, 1, &[], |ring| Ok(ring.retired_awaiting_discard()))
-            .inspect_err(|e| bch_err_dev!(&ca, "error dropping retired journal bucket: {}", e))
+            .inspect_err(|e| ca.log().err(message!("error dropping retired journal bucket: {}", e)))
             .unwrap_or(false) {}
     }
 
@@ -678,7 +678,7 @@ pub(crate) fn drop_retired(j: &Journal) {
 pub(crate) fn drop_retired_going_ro(fs: &Fs) {
     for ca in fs.members() {
         while splice(fs, &mut fs.sb_lock(), &ca, 1, &[], |ring| Ok(ring.retired_unneeded()))
-            .inspect_err(|e| bch_err_dev!(&ca, "error dropping retired journal bucket: {}", e))
+            .inspect_err(|e| ca.log().err(message!("error dropping retired journal bucket: {}", e)))
             .unwrap_or(false) {}
     }
 }

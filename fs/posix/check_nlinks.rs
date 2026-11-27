@@ -23,7 +23,7 @@ use crate::posix::check::SnapshotsSeen;
 use crate::posix::dirent::{Dirent, DirentTarget};
 use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
-use crate::{fsck_err_on, bch_err, bch_err_fn};
+use crate::{fsck_err_on, message};
 use crate::posix::inode;
 use crate::util::alloc::Vec;
 use core::cmp::max;
@@ -42,7 +42,8 @@ fn add_nlink(fs: &Fs, t: &mut Vec<Nlink>, inum: u64, snapshot: u32) -> Result<()
         let new_size = max(128, t.capacity() * 2);
 
         if t.reserve(new_size - t.len()).is_err() {
-            bch_err!(fs, "fsck: error allocating memory for nlink_table, size {}", new_size);
+            fs.log().err(message!(
+                "fsck: error allocating memory for nlink_table, size {}", new_size));
             return fs.throw(Errcode::ENOMEM_fsck_add_nlink);
         }
     }
@@ -118,7 +119,7 @@ fn check_nlinks_find_hardlinks(
         Ok(ControlFlow::Continue(()))
     });
 
-    bch_err_fn!(fs, ret)
+    fs.log().err_fn(ret)
 }
 
 fn check_nlinks_walk_dirents(
@@ -146,7 +147,7 @@ fn check_nlinks_walk_dirents(
         Ok(())
     });
 
-    bch_err_fn!(fs, ret)
+    fs.log().err_fn(ret)
 }
 
 fn check_nlinks_update_inode(
@@ -204,7 +205,7 @@ fn check_nlinks_update_hardlinks(
         |t, _, k| check_nlinks_update_inode(t, k, links, &mut idx));
 
     if let Err(e) = ret {
-        bch_err!(fs, "error in fsck walking inodes: {}", e.msg());
+        fs.log().err(message!("error in fsck walking inodes: {}", e.msg()));
         return Err(e);
     }
 

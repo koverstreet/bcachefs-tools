@@ -44,7 +44,7 @@ use crate::fs::Fs;
 use crate::init::{damage, progress::Progress};
 use crate::snapshots::snapshot;
 use crate::util::{alloc::Vec, Printbuf};
-use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
+use crate::{message, ratelimit, fsck_err_on, inode_fsck_err, prt};
 use crate::posix::namei;
 use crate::format::{Bpos, Btree, BkeyType, Bkey};
 
@@ -130,8 +130,9 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
         let count2 = count_inode_sectors(t, inum, i.inode.bi_snapshot)?;
 
         if !recalculate_sums && i.count != count2 {
-            bch_err_ratelimited!(fs, "fsck counted i_sectors wrong: got {} should be {}\n{}",
-                                 i.count, count2, buf);
+            ratelimit!(fs.log()).err(message!(
+                "fsck counted i_sectors wrong: got {} should be {}\n{}",
+                i.count, count2, buf));
         }
         i.count = count2;
 
@@ -158,7 +159,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
 /// - and goes on to the rest.
 fn check_i_sectors(t: &TransAttempt<'_, '_>, w: &mut InodeWalker) -> Result<(), BchError> {
     let fs = t.fs();
-    bch_err_fn!(fs, check_i_sectors_notnested(t, w))
+    fs.log().err_fn(check_i_sectors_notnested(t, w))
 }
 
 /// Overwrite @old, a copy of the extent at @iter, with @new where they
@@ -211,7 +212,8 @@ fn overlapping_extents_found(
     }
 
     let Some(k1) = k1.filter(|k1| k1.k.p == pos1) else {
-        bch_err!(fs, "overlapping_extents_found: error finding first overlapping extent when repairing, got{buf}\nwanted\n  {pos1}\n{pos2}");
+        fs.log().err(message!(
+            "overlapping_extents_found: error finding first overlapping extent when repairing, got{buf}\nwanted\n  {pos1}\n{pos2}"));
         return Err(fs.err(Errcode::internal_fsck_err));
     };
 
@@ -231,7 +233,8 @@ fn overlapping_extents_found(
     }
 
     let Some(k2) = k2.filter(|k2| k2.k.p == pos2.p && k2.k.size == pos2.size) else {
-        bch_err!(fs, "overlapping_extents_found: error finding second overlapping extent when repairing{buf}");
+        fs.log().err(message!(
+            "overlapping_extents_found: error finding second overlapping extent when repairing{buf}"));
         return Err(fs.err(Errcode::internal_fsck_err));
     };
 
@@ -316,7 +319,8 @@ fn check_extent_overbig(fs: &Fs, k: BkeySC<'_>) {
 
     for crc in p.crcs(fs) {
         if ptrs::crc_is_encoded(&crc) && crc.uncompressed_size > max_sectors {
-            bch_err!(fs, "overbig encoded extent, please report this:\n  {}", k.to_text(fs));
+            fs.log().err(message!(
+                "overbig encoded extent, please report this:\n  {}", k.to_text(fs)));
         }
     }
 }

@@ -22,7 +22,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::fs::Fs;
 use crate::debug::trace::{events, TraceEvent};
 use crate::sb::errors::FsckFlags;
-use crate::{bch_err, fs_inconsistent, fsck_err_flags, prt};
+use crate::{message, fs_inconsistent, fsck_err_flags, prt};
 use core::mem::size_of;
 use core::ops::RangeInclusive;
 use crate::format::{Bpos, Btree, BkeyType, Backpointer};
@@ -287,8 +287,8 @@ pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, 
 {
     let fs = trans.fs();
     let carried = carried_blocks(old_block_map, old, new).or_else(|why| {
-        bch_err!(fs, "stripe update: block map {old_block_map:?}: {why}\nold: {}\nnew: {}",
-                 old.untyped().to_text(fs), new.untyped().to_text(fs));
+        fs.log().err(message!("stripe update: block map {old_block_map:?}: {why}\nold: {}\nnew: {}",
+                              old.untyped().to_text(fs), new.untyped().to_text(fs)));
         fs.throw(Errcode::erasure_coding_stripe_update_err)
     })?;
 
@@ -326,7 +326,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
     });
 
     let Some(new) = get(new_idx)? else {
-        bch_err!(fs, "logged op stripe update: new stripe {new_idx} missing");
+        fs.log().err(message!("logged op stripe update: new stripe {new_idx} missing"));
         return Ok(());
     };
 

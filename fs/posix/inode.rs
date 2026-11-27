@@ -52,8 +52,8 @@ use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::{Fs, FsFlag};
 use crate::posix::dirent::{self, DirentTarget};
 use crate::posix::namei;
-use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent, bch_verbose_ratelimited,
-    fs_inconsistent, fsck_err, fsck_err_on, bch_err_fn, bch_err_msg, bkey_fsck_err_on, prt};
+use crate::{message, ratelimit, trans_inconsistent, 
+    fs_inconsistent, fsck_err, fsck_err_on, bkey_fsck_err_on, prt};
 use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
 use crate::util::{varint, Printbuf, ToText};
 use core::mem::{offset_of, align_of, size_of};
@@ -536,8 +536,8 @@ fn __peek_snapshot<'a>(
     let ret = peek_slot(t, iter);
 
     match warn {
-        Some(warn) => bch_err_msg!(t.fs(), ret, "{}: looking up inum {}:{}:",
-                                   warn.to_str().unwrap_or("?"), inum.subvol, inum.inum),
+        Some(warn) => t.fs().log().err_msg(ret, message!("{}: looking up inum {}:{}:",
+                                                         warn.to_str().unwrap_or("?"), inum.subvol, inum.inum)),
         None       => ret,
     }
 }
@@ -732,7 +732,7 @@ pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
-    bch_err_fn!(fs, trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| fsck_write(t, inode)))
+    fs.log().err_fn(trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| fsck_write(t, inode)))
 }
 
 /// Write @inode, in its own commit, through the key cache, at snapshot
@@ -1423,7 +1423,7 @@ pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
             inode.to_text(&mut buf);
         }
 
-        ret = bch_err_msg!(fs, ret, "{}", buf);
+        ret = fs.log().err_msg(ret, message!("{}", buf));
         crate::init::error::sb_error_count(fs, id::vfs_bad_inode_rm);
     }
     ret?;
@@ -1482,7 +1482,8 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
     // Content left behind: whiteout the inode key instead of deleting it, so
     // the ancestor's version doesn't resurface here and the deletion
     // scan/fsck can still find this position:
-    let ret = bch_err_msg!(fs, ret, "deleting content of inode {inum}:{snapshot}, leaving whiteout");
+    let ret = fs.log().err_msg(ret, message!(
+        "deleting content of inode {inum}:{snapshot}, leaving whiteout"));
 
     trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
         let whiteout = t.bkey_alloc_init::<Whiteout>(0,
@@ -1571,7 +1572,8 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
 
         let Some((p, delete)) = next else { return Ok(()) };
         if delete {
-            bch_verbose_ratelimited!(fs, "deleting unlinked inode {}:{}", { p.offset }, { p.snapshot });
+            ratelimit!(fs.log()).verbose(message!(
+                "deleting unlinked inode {}:{}", { p.offset }, { p.snapshot }));
             match rm_snapshot(&trans, p.offset, p.snapshot) {
                 Err(e) if e.is_restart() => continue,
                 r => r?,
@@ -1703,7 +1705,7 @@ pub fn set_casefold(
     let fs = t.fs();
 
     if let Err(e) = fs.casefold_enabled() {
-        bch_err_ratelimited!(fs, "Cannot enable casefolding: {e}");
+        ratelimit!(fs.log()).err(message!("Cannot enable casefolding: {e}"));
         return Err(e);
     }
 
@@ -1733,8 +1735,9 @@ pub fn reconcile_opts_get(fs: &Fs, inode: &InodeUnpacked) -> ExtentReconcile {
     let opts = crate::posix::inode_opts::get_inode(fs, inode);
 
     for (name, v) in ExtentReconcile::too_big(&opts) {
-        bch_warn!(fs, "inode {}: io option {name} = {v} doesn't fit in bch_extent_reconcile, truncated",
-                  inode.bi_inum);
+        fs.log().warn(message!(
+            "inode {}: io option {name} = {v} doesn't fit in bch_extent_reconcile, truncated",
+            inode.bi_inum));
     }
     ExtentReconcile::from_io_opts(&opts)
 }

@@ -703,7 +703,7 @@ impl ToText for ReplicasCpu {
 /// C's WARN(), with what it says logged.
 fn warn(fs: &Fs, msg: fmt::Arguments<'_>) {
     crate::warn_on!(true);
-    crate::bch_err!(fs, "{msg}");
+    fs.log().err(crate::message!("{msg}"));
 }
 
 /// An entry as one being searched for must be: devices, sorted, and

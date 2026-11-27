@@ -83,7 +83,7 @@ use crate::fs::{Fs, FsFlag};
 use crate::data::reconcile::trigger::PerSnapshotIoOpts;
 use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
-use crate::{prt, bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
+use crate::{prt, message, log_msg_ratelimited, warn_once, SPOS_MAX};
 use crate::util::alloc::Vec;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::Cuckoo;
@@ -674,7 +674,7 @@ fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
         for &dev in devs.iter() {
             sc.spawn(format_args!("bch-reconcile/{name}:{dev}"), move || {
                 if let Err(e) = phys_dev(fs, phase, dev) {
-                    bch_err!(fs, "reconcile phys thread for device {dev}: {e}");
+                    fs.log().err(message!("reconcile phys thread for device {dev}: {e}"));
                 }
                 Ok(())
             })?;
@@ -868,7 +868,7 @@ impl<'f> Reconciler<'f, '_> {
 
         if let Err(e) = &ret {
             if !e.matches(c::EROFS) {
-                bch_err!(fs, "do_reconcile(): error {e}");
+                fs.log().err(message!("do_reconcile(): error {e}"));
             }
         }
         ret
@@ -1043,7 +1043,7 @@ impl Fs {
                 }
                 fs.reconcile.thread_exit_ret.store(Some(e));
             }
-        }).inspect_err(|e| bch_err!(self, "error creating reconcile thread: {e}"))
+        }).inspect_err(|e| self.log().err(message!("error creating reconcile thread: {e}")))
     }
 
     /// Stop the thread, and wait for it to.

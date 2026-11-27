@@ -19,7 +19,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
 use crate::os::{bio::BioSet, kernel::jiffies};
-use crate::{bch_err, fsck_err_on, warn_on};
+use crate::{message, fsck_err_on, warn_on};
 use cstruct_macros::MaybeZeroable;
 
 /*
@@ -107,7 +107,8 @@ impl Journal {
 
         let cur_seq = fs.journal_cur_seq();
         if replay_done && last_empty_seq != cur_seq {
-            bch_err!(fs, "journal shutdown error: cur seq {cur_seq} but last empty seq {last_empty_seq}");
+            fs.log().err(message!(
+                "journal shutdown error: cur seq {cur_seq} but last empty seq {last_empty_seq}"));
             warn_on!(true);
         }
 
@@ -120,7 +121,8 @@ impl Journal {
          * reclaim.rs's dev_space_available()).
          */
         if replay_done && dirty_entry_bytes != 0 {
-            bch_err!(fs, "journal shutdown error: {dirty_entry_bytes} dirty entry bytes remaining after flushing all pins");
+            fs.log().err(message!(
+                "journal shutdown error: {dirty_entry_bytes} dirty entry bytes remaining after flushing all pins"));
             warn_on!(true);
         }
 
@@ -136,7 +138,7 @@ impl Journal {
         let cur_seq = info.cur_seq.max(fs.journal_seq_blacklist.last_blacklisted() + 1);
 
         if cur_seq >= JOURNAL_SEQ_MAX {
-            bch_err!(fs, "cannot start: journal seq overflow");
+            fs.log().err(message!("cannot start: journal seq overflow"));
             return fs.throw(Errcode::EINVAL_journal_seq_overflow);
         }
 

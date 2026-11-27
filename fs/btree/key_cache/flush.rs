@@ -294,7 +294,7 @@ impl Fs {
                 });
                 if let Err(e) = ret {
                     if !e.matches(Errcode::journal_reclaim_would_deadlock) && self.journal.error().is_ok() {
-                        return crate::bch_err_fn!(self, Err(e));
+                        return self.log().err_fn(Err(e));
                     }
                 }
             }

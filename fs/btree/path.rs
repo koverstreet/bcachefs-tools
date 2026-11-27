@@ -943,7 +943,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn path_overflow(&self, paths: &mut Paths<'_>) {
         self.dump_paths_updates(paths);
-        crate::bch_err!(self.fs(), "trans path overflow");
+        self.fs().log().err(crate::message!("trans path overflow"));
     }
 
     fn path_clone(&self, paths: &mut Paths<'_>, src: PathIdx, intent: bool, ip: usize) -> PathIdx {

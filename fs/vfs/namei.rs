@@ -293,7 +293,7 @@ impl InodeOps for DirOps {
     fn lookup(dir: &InodeInfo, dentry: Dentry<'_>, _flags: u32) -> *mut c::dentry {
         let fs = dir.fs();
 
-        let Ok(hash) = crate::bch_err_fn!(fs, str_hash::hash_info_init(fs, &dir.inode())) else {
+        let Ok(hash) = fs.log().err_fn(str_hash::hash_info_init(fs, &dir.inode())) else {
             return dentry.splice_alias(None);
         };
         let inode = dir.lookup(&hash, dentry.name()).ok();

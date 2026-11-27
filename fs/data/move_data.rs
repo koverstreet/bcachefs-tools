@@ -65,7 +65,7 @@ use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::os::kernel::current_id;
 use crate::util::Printbuf;
-use crate::{bch_err_msg, warn_once};
+use crate::{message, warn_once};
 use core::ops::Range;
 use crate::format::{Bpos, Btree, DataType, BkeyType, Backpointer, CsumType};
 
@@ -437,7 +437,7 @@ impl Moving<'_> {
 
         match trans.write_buffer_tryflush() {
             Err(e) if e.matches(c::EROFS) => return Err(e),
-            r => bch_err_msg!(fs, r, "flushing btree write buffer")?,
+            r => fs.log().err_msg(r, message!("flushing btree write buffer"))?,
         }
 
         bp_iter.for_each_max(trans, bp_end, |t, _, k| {

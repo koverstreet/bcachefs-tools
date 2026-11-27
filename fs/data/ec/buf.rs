@@ -32,7 +32,7 @@ use crate::util::log::{LogLevel, LogMsg};
 use crate::util::ratelimit::Ratelimit;
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
-use crate::{here, prt};
+use crate::prt;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::CStr;
 use core::pin::Pin;
@@ -668,6 +668,6 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeB
         Ok(()) if damage_matters => write!(msg, "successful reconstruct\n"),
         Ok(())               => {}
     }
-    msg.set_suppressed(fs.ratelimit_suppress(ratelimit, here!()));
+    msg.set_suppressed(fs.ratelimit_suppress(ratelimit, &crate::here_str!()));
     ret
 }

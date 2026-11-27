@@ -35,7 +35,7 @@ use crate::util::{alloc::Vec, log::LogMsg, os_str::{OsStr, OsStrExt}, Printbuf};
 use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::posix::{inode, logged_ops, namei, quota};
 use crate::posix::namei::CreateFlags;
-use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose, btree_trans, fs_fatal_error, fsck_err_on,
+use crate::{btree_trans, fs_fatal_error, fsck_err_on,
             message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
 use crate::bcachefs_ioctl::ProgressUnit as Units;
 use core::cmp::Ordering;
@@ -340,13 +340,15 @@ fn journal_replay_key_no_node(t: &TransAttempt<'_, '_>, jk: &JournalKeys, idx: u
     let scanned = passes::bit(Pass::scan_for_btree_nodes) |
                   passes::bit(Pass::check_topology);
     if fs.recovery.runner.passes_complete.get() & scanned == 0 {
-        bch_err!(fs, "have key in journal replay for btree depth that does not exist, confused\n{}", buf);
+        fs.log().err(message!(
+            "have key in journal replay for btree depth that does not exist, confused\n{}", buf));
         return fs.throw(Errcode::EINVAL_journal_replay_key_bad_btree_depth);
     }
 
     if !k.allocated() {
-        bch_notice!(fs, "dropping key in journal replay for depth that does not exist because we're recovering from scan\n{}",
-                    buf);
+        fs.log().notice(message!(
+            "dropping key in journal replay for depth that does not exist because we're recovering from scan\n{}",
+            buf));
         jk.mark_overwritten(idx);
         return Ok(());
     }
@@ -483,7 +485,8 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
             flags = flags.flags(CommitFlags::NO_JOURNAL_RES).watermark(Watermark::reclaim);
         }
         if let Err(e) = trans.commit_do(None, flags, |t| journal_replay_key(t, jk, idx)) {
-            return bch_err_msg!(fs, Err(e), "while replaying key at btree={} level={}:", k.btree_id(), k.level());
+            return fs.log().err_msg(Err(e), message!(
+                "while replaying key at btree={} level={}:", k.btree_id(), k.level()));
         }
 
         assert!(k.btree_id() == Btree::accounting || k.is_overwritten(),
@@ -645,7 +648,8 @@ fn set_may_go_rw(fs: &Fs) -> Result<(), BchError> {
 
     if passes::go_rw_in_recovery(fs) {
         if fs.feature(SbFeature::no_alloc_info) {
-            bch_info!(fs, "mounting a filesystem with no alloc info read-write; will recreate");
+            fs.log().info(message!(
+                "mounting a filesystem with no alloc info read-write; will recreate"));
             reconstruct_alloc(fs);
         }
 
@@ -662,12 +666,13 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     let mut clean = if fs.sb.clean.get() != 0 {
         let c = fs.read_superblock_clean()?;
 
-        bch_info!(fs, "recovering from clean shutdown, journal seq {}", c.journal_seq.get());
+        fs.log().info(message!(
+            "recovering from clean shutdown, journal seq {}", c.journal_seq.get()));
 
         journal_sb::sb_journal_sort(fs)?;
         Some(c)
     } else {
-        bch_info!(fs, "recovering from unclean shutdown");
+        fs.log().info(message!("recovering from unclean shutdown"));
         None
     };
 
@@ -680,7 +685,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     let mut use_clean = !read_journal;
 
     if read_journal {
-        bch_verbose!(fs, "starting journal read");
+        fs.log().verbose(message!("starting journal read"));
         journal_start = journal_read(fs)?;
 
         /*
@@ -747,7 +752,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
     if use_clean {
         let Some(c) = clean.as_deref() else {
-            bch_err!(fs, "no superblock clean section found");
+            fs.log().err(message!("no superblock clean section found"));
             return fs.throw(Errcode::fsck_repair_impossible);
         };
 
@@ -765,22 +770,23 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     }
 
     if fs.feature(SbFeature::small_image) {
-        bch_info!(fs, "filesystem is an unresized image file, mounting ro");
+        fs.log().info(message!("filesystem is an unresized image file, mounting ro"));
         fs.opts_writer(&mut fs.sb_lock()).read_only.set(1);
     }
 
     if fs.feature(SbFeature::no_default_sb) {
-        bch_info!(fs, "filesystem does not have default superblock layout, mounting ro");
+        fs.log().info(message!("filesystem does not have default superblock layout, mounting ro"));
         fs.opts_writer(&mut fs.sb_lock()).read_only.set(1);
     }
 
     if fs.opts.read_only.get() == 0 && fs.feature(SbFeature::no_alloc_info) {
-        bch_info!(fs, "mounting a filesystem with no alloc info read-write; will recreate");
+        fs.log().info(message!(
+            "mounting a filesystem with no alloc info read-write; will recreate"));
 
         reconstruct_alloc(fs);
     } else if fs.opts.dangerously_reconstruct_alloc.get() != 0 {
         let _ = fs.journal_log_msg(message!("dropping alloc info"));
-        bch_info!(fs, "dropping and reconstructing all alloc info");
+        fs.log().info(message!("dropping and reconstructing all alloc info"));
 
         reconstruct_alloc(fs);
     }
@@ -943,7 +949,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
        !fs.flags.get(Flag::error) {
         error::flush_fsck_errs(fs, true);
 
-        bch_info!(fs, "Fixed errors, running fsck a second time to verify fs is clean");
+        fs.log().info(message!("Fixed errors, running fsck a second time to verify fs is clean"));
 
         let saved_fixed        = fs.flags.swap(Flag::errors_fixed, false);
         let saved_fixed_silent = fs.flags.swap(Flag::errors_fixed_silent, false);
@@ -953,7 +959,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
         if fs.flags.get(Flag::errors_fixed) ||
            fs.flags.get(Flag::errors_fixed_silent) ||
            fs.flags.get(Flag::errors_not_fixed) {
-            bch_err!(fs, "Second fsck run was not clean");
+            fs.log().err(message!("Second fsck run was not clean"));
             fs.flags.set(Flag::errors_not_fixed, true);
         }
 
@@ -962,9 +968,9 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     }
 
     if quota::enabled_qtypes(fs) != 0 {
-        bch_verbose!(fs, "reading quotas");
+        fs.log().verbose(message!("reading quotas"));
         quota::fs_quota_read(fs)?;
-        bch_verbose!(fs, "quotas done");
+        fs.log().verbose(message!("quotas done"));
     }
 
     {
@@ -1063,7 +1069,7 @@ pub fn fs_recovery(fs: &Fs) -> Result<(), BchError> {
 }
 
 pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
-    bch_notice!(fs, "initializing new filesystem");
+    fs.log().notice(message!("initializing new filesystem"));
     fs.flags.set(Flag::new_fs, true);
 
     {
@@ -1102,8 +1108,9 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
      * Write out the superblock and journal buckets, now that we can do
      * btree updates
      */
-    bch_verbose!(fs, "marking superblocks");
-    bch_err_msg!(fs, fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL), "marking superblocks")?;
+    fs.log().verbose(message!("marking superblocks"));
+    fs.log().err_msg(fs.trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL), message!(
+        "marking superblocks"))?;
 
     /*
      * journal_res_get() will crash if called before this has
@@ -1123,19 +1130,19 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     let mut packed_inode = inode::pack(&root_inode);
     packed_inode.k.p.snapshot = u32::MAX;
 
-    bch_err_msg!(fs, fs.btree_insert(Btree::inodes, &*packed_inode, None,
+    fs.log().err_msg(fs.btree_insert(Btree::inodes, &*packed_inode, None,
                                      CommitFlags::empty(), BtreeIterFlags::empty()),
-                 "creating root directory")?;
+                     message!("creating root directory"))?;
 
     let mut lostfound_inode = InodeUnpacked::default();
     inode::init_early(fs, &mut lostfound_inode);
 
     let mut new_subvol = Subvolume::default();
-    bch_err_msg!(fs, fs.trans_commit_do(None, CommitFlags::empty(), |t| {
+    fs.log().err_msg(fs.trans_commit_do(None, CommitFlags::empty(), |t| {
         namei::create_trans(t, SubvolInum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
                             Some(OsStr::from_bytes(b"lost+found")), 0, 0, S_IFDIR | umode_t(0o700), dev_t::NONE,
                             None, None, SubvolInum::default(), CreateFlags::empty())
-    }), "creating lost+found")?;
+    }), message!("creating lost+found"))?;
 
     passes::set_pass_done(fs, passes::LAST);
 
@@ -1146,12 +1153,12 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
         quota::fs_quota_read(fs)?;
     }
 
-    bch_err_msg!(fs, fs.journal_flush(), "writing first journal entry")?;
+    fs.log().err_msg(fs.journal_flush(), message!("writing first journal entry"))?;
 
     /* Don't allow rewind into initialization entries */
     let init_seq = fs.journal_cur_seq() + 1;
     fs.journal_advance_rewind_seq(init_seq);
-    bch_info!(fs, "fs initialized, journal seq {} rewind_seq {}", init_seq - 1, init_seq);
+    fs.log().info(message!("fs initialized, journal seq {} rewind_seq {}", init_seq - 1, init_seq));
 
     {
         let mut w = fs.sb_write();

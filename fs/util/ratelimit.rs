@@ -8,7 +8,6 @@
 
 use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::{log_no_fs, LogLevel};
-use core::ffi::CStr;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 
 const INTERVAL: usize = 5 * HZ;
@@ -58,7 +57,7 @@ impl Ratelimit {
 
     /// Whether an event from @func may go ahead. The first to after events
     /// were suppressed logs how many.
-    pub fn allow(&self, func: &CStr) -> bool {
+    pub fn allow(&self, func: &dyn core::fmt::Display) -> bool {
         let ret = 'nolock: {
             /*
              * If we contend on this state's lock then just check if
@@ -96,7 +95,7 @@ impl Ratelimit {
 
                 if m != 0 {
                     log_no_fs(LogLevel::WARN,
-                              crate::message!("{}: {m} callbacks suppressed", func.to_str().unwrap_or("?")));
+                              crate::message!("{func}: {m} callbacks suppressed"));
                 }
             }
 

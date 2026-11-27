@@ -39,7 +39,7 @@ use crate::snapshots::subvolume;
 use crate::posix::dirent::{self, Dirent};
 use crate::posix::inode::{Inodes, InodeUnpacked};
 use crate::util::{alloc::Vec, Printbuf, log::LogMsg};
-use crate::{bch_err_fn, bch_err_msg, bch_warn, here, inode_fsck_err, prt};
+use crate::{message, here, inode_fsck_err, prt};
 use crate::format::Btree;
 
 /// @k: a dirent, from a dirent lookup.
@@ -54,7 +54,7 @@ fn dirent_points_to_inode(
         return Ok(());
     }
 
-    bch_warn!(fs, "{}", namei::dirent_inode_mismatch(fs, k, inode));
+    fs.log().warn(message!("{}", namei::dirent_inode_mismatch(fs, k, inode)));
     fs.throw(Errcode::ENOENT_dirent_doesnt_match_inode)
 }
 
@@ -88,12 +88,12 @@ fn reattach_subvol(t: &TransAttempt<'_, '_>, root: SubvolInum) -> Result<(), Bch
 
     let ret = remove_backpointer(t, &mut inode);
     if !matches!(&ret, Err(e) if e.matches(c::ENOENT)) {
-        bch_err_msg!(fs, ret, "removing dirent")?;
+        fs.log().err_msg(ret, message!("removing dirent"))?;
     }
     ret?;
 
-    bch_err_msg!(fs, lostfound::reattach_inode(t, &mut inode),
-                 "reattaching inode {}", inode.bi_inum)
+    fs.log().err_msg(lostfound::reattach_inode(t, &mut inode),
+                     message!("reattaching inode {}", inode.bi_inum))
 }
 
 fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
@@ -217,7 +217,7 @@ fn bi_depth_renumber(
     // A nested attempt that restarted returns transaction_restart_nested, so the
     // outer one retries too
     for &inum in path.iter().rev() {
-        bch_err_fn!(fs, t.nested(|t| bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)))?;
+        fs.log().err_fn(t.nested(|t| bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)))?;
         new_bi_depth += 1;
     }
 
@@ -278,11 +278,11 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Res
 
         inode_iter.set_pos(spos(0, inode.bi_dir, snapshot));
         // Should have been caught in dirents pass
-        let parent_inode = bch_err_msg!(fs, match inode_iter.peek_slot(t) {
+        let parent_inode = fs.log().err_msg(match inode_iter.peek_slot(t) {
             Ok(k) => k.and_then(|k| k.arm::<Inodes>()).map(|k| inode::unpack(fs, k))
                 .ok_or(Errcode::ENOENT_inode.into()),
             Err(e) => Err(e),
-        }, "error looking up parent directory")?;
+        }, message!("error looking up parent directory"))?;
 
         min_bi_depth = parent_inode.bi_depth;
 
@@ -316,13 +316,13 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Res
 
             if inode_fsck_err!(t, spos(0, inode.bi_inum, inode.bi_snapshot), dir_loop,
                                "{}", buf)? {
-                bch_err_msg!(fs, remove_backpointer(t, &mut inode), "removing dirent")?;
+                fs.log().err_msg(remove_backpointer(t, &mut inode), message!("removing dirent"))?;
 
                 // Done with this path: it was a loop, there are no depths
                 // along it to renumber - and on error or restart, nothing more
                 // may run in this transaction.
-                return bch_err_msg!(fs, lostfound::reattach_inode(t, &mut inode),
-                                    "reattaching inode {}", inode.bi_inum);
+                return fs.log().err_msg(lostfound::reattach_inode(t, &mut inode),
+                                        message!("reattaching inode {}", inode.bi_inum));
             }
 
             break;

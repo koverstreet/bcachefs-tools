@@ -42,7 +42,7 @@ use crate::fs::{Fs, WriteRef};
 use crate::init::{error::id, passes, progress::Progress};
 use crate::sb::{errors::FsckFlags, members::DevRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::{bch_err, bch_info, bch_verbose, fsck_err, fsck_err_flags, fsck_err_on};
+use crate::{message, fsck_err, fsck_err_flags, fsck_err_on};
 use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature, Set};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
@@ -529,7 +529,7 @@ fn delete_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
         let pos = Bbpos { btree: iter.btree(), pos: iter.pos() };
         // No write ref - the filesystem is going read-only - and it is left for fsck
         let _ = fs.spawn_write(async move |fs: &WriteRef| {
-            let _ = crate::bch_err_fn!(&**fs, recheck_freespace_key(fs, pos));
+            let _ = fs.log().err_fn(recheck_freespace_key(fs, pos));
         });
         return fs.err(Errcode::bucket_not_allocatable);
     }
@@ -637,7 +637,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
             let done = trans.lockrestart_do(|t| {
                 let Some(k) = iter.peek(t)?.map(|k| *k.k) else { return Ok(true) };
                 repair_freespace_key(t, &iter, FreespaceCheck::Fsck)
-                    .inspect_err(|e| if !e.is_restart() { bch_err!(fs, "while checking {k}") })
+                    .inspect_err(|e| if !e.is_restart() { fs.log().err(message!("while checking {k}")) })
                     .map(|()| false)
             })?;
             if done {
@@ -769,8 +769,8 @@ pub(crate) fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_en
     let mut last_updated = local_clock();
     while bkey_lt(iter.pos(), end) {
         if local_clock() > last_updated + 10 * u64::from(c::NSEC_PER_SEC) {
-            bch_info!(fs, "{}: dev_freespace_init: currently at {}/{}",
-                      ca, { iter.pos().offset }, ca.mi.get().nbuckets);
+            fs.log().info(message!("{}: dev_freespace_init: currently at {}/{}",
+                                   ca, { iter.pos().offset }, ca.mi.get().nbuckets));
             last_updated = local_clock();
         }
 
@@ -795,7 +795,7 @@ pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
         }
 
         if !doing_init {
-            bch_info!(fs, "initializing freespace");
+            fs.log().info(message!("initializing freespace"));
             doing_init = true;
         }
 
@@ -804,7 +804,7 @@ pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
 
     if doing_init {
         fs.write_super(&mut fs.sb_lock());
-        bch_verbose!(fs, "done initializing freespace");
+        fs.log().verbose(message!("done initializing freespace"));
     }
     Ok(())
 }

@@ -173,7 +173,7 @@ mod vfs {
     use crate::posix::mode::umode_t;
     use crate::posix::xattr_format::Xattr;
     use crate::snapshots::subvolume::SubvolInum;
-    use crate::bch_err;
+    use crate::message;
     use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
@@ -196,7 +196,7 @@ mod vfs {
         /// then.
         fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<Self>, BchError> {
             let entries = entries(value).map_err(|err| {
-                bch_err!(t.fs(), "invalid acl: {err}");
+                t.fs().log().err(message!("invalid acl: {err}"));
                 t.fs().err(Errcode::EINVAL_acl_from_disk)
             })?;
             let nr = entries.clone().count();

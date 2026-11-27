@@ -23,7 +23,7 @@ use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
 use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
-use crate::{bch_err, inode_fsck_err};
+use crate::{message, inode_fsck_err};
 use crate::posix::dirent::Dirent;
 use crate::posix::{inode, namei};
 use core::ops::ControlFlow;
@@ -214,9 +214,9 @@ fn reattach_via_descendant_dirent<'a, 't>(
             t.update(&iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         }
         DstSlot::Taken => {
-            bch_err!(t.fs(),
-                     "not propagating dirent for inode {}:{}: destination {pos} now occupied",
-                     inode.bi_inum, inode.bi_snapshot);
+            t.fs().log().err(message!(
+                                      "not propagating dirent for inode {}:{}: destination {pos} now occupied",
+                                      inode.bi_inum, inode.bi_snapshot));
             return Ok(());
         }
     }

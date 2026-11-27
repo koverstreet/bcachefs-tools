@@ -51,7 +51,7 @@ use crate::os::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::util::Printbuf;
-use crate::{bch_err, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode_fsck_err, prt};
+use crate::{message, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode_fsck_err, prt};
 use crate::posix::inode;
 use core::mem::size_of;
 use core::ops::Range;
@@ -273,7 +273,7 @@ fn gc_write_reflink_key(
     };
 
     let Some(r) = r.filter(|r| r.offset.load(Relaxed) == k.k.p.offset && r.size.load(Relaxed) == k.k.size) else {
-        bch_err!(fs, "unexpected inconsistency walking reflink table at gc finish");
+        fs.log().err(message!("unexpected inconsistency walking reflink table at gc finish"));
         return fs.throw(Errcode::EINVAL_reflink_gc_table_mismatch);
     };
 

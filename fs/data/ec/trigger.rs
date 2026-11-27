@@ -37,7 +37,7 @@ use crate::data::reconcile::trigger::data_to_rb_work_pos;
 use crate::errcode::{Errcode, BchError};
 use crate::util::{alloc::AllocError, log::LogMsg, vstructs::plain_bytes};
 use crate::os::kernel::{cold_path, unlikely};
-use crate::{bch_err, fs_inconsistent, fsck_err_on, prt};
+use crate::{message, fs_inconsistent, fsck_err_on, prt};
 use crate::alloc::accounting;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ops::ControlFlow;
@@ -485,7 +485,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), B
     let m = if gc {
         let new = new.expect("gc marks keys going in");
         let Ok(m) = fs.ec.gc_stripe_alloc(idx) else {
-            bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
+            fs.log().err(message!("error allocating memory for gc_stripes, idx {idx}"));
             return fs.throw(Errcode::ENOMEM_mark_stripe);
         };
 

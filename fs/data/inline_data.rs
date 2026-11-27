@@ -26,7 +26,7 @@ use crate::util::task::spawn;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Unvalidated};
 use crate::os::workqueue::Queue;
 use crate::util::Printbuf;
-use crate::{bch_err_ratelimited, bkey_fsck_err_on, btree_trans, prt};
+use crate::{message, ratelimit, bkey_fsck_err_on, btree_trans, prt};
 
 /// The data itself, inline in the value, direct or indirect,
 /// BkeyTypeFlags::inline_data: a key armed to it is a BkeySC<'_, Inline>,
@@ -191,7 +191,8 @@ pub(crate) fn poison(fs: &Fs, btree: Btree, k: BkeySC<'_>, read_pos: Bpos, recor
 
     if let Err(e) = spawn(write, |w| (Queue::system_dfl(), w.tasks()),
                           async move |w: &WriteRef| poison_task(w, key, read_pos, record).await) {
-        bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}", e.msg());
+        ratelimit!(fs.log()).err(message!(
+            "poisoning inline data that failed its checksum: {}", e.msg()));
     }
 }
 
@@ -223,7 +224,8 @@ async fn poison_task(fs: &Fs, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
     });
 
     if let Some(e) = ret.err().filter(|e| !e.matches(c::EROFS)) {
-        bch_err_ratelimited!(fs, "poisoning inline data that failed its checksum: {}\n  {}",
-                             e.msg(), key.key().to_text(fs));
+        ratelimit!(fs.log()).err(message!(
+            "poisoning inline data that failed its checksum: {}\n  {}",
+            e.msg(), key.key().to_text(fs)));
     }
 }

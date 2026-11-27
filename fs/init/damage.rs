@@ -41,7 +41,7 @@ use crate::posix::inode;
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId, SbErrorEntryCpu};
 use crate::util::{DateTime, Printbuf, alloc::Vec, vstructs::{Unvalidated, Validated}};
 use crate::os::kernel::ktime_get_real_seconds;
-use crate::{bch_err, bch_err_ratelimited, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
+use crate::{message, ratelimit, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
 use crate::sb::errors_format::SbFieldErrorEntryV2 as Entry;
 use core::cmp::Ordering;
 use core::mem::size_of;
@@ -305,8 +305,8 @@ pub fn note_lost_extents(fs: &Fs, btree: Btree, k: BkeySC<'_>) {
     let (start, end) = (p.v().min_key, k.k.p);
 
     if fs.lost_extents_ranges.lock().push(start..end).is_err() {
-        bch_err!(fs, "couldn't record lost extents {}:{}-{}:{}",
-                 { start.inode }, { start.offset }, { end.inode }, { end.offset });
+        fs.log().err(message!("couldn't record lost extents {}:{}-{}:{}",
+                              { start.inode }, { start.offset }, { end.inode }, { end.offset }));
     }
 }
 
@@ -342,15 +342,16 @@ pub fn record_lost_extents(fs: &Fs) {
         // one range we can't attribute mustn't take the others down
         if let Err(e) = ret {
             failed += 1;
-            bch_err_ratelimited!(fs, "error attributing lost extents {}:{}-{}:{}: {}",
-                                 { r.start.inode }, { r.start.offset }, { r.end.inode }, { r.end.offset }, e);
+            ratelimit!(fs.log()).err(message!("error attributing lost extents {}:{}-{}:{}: {}",
+                                              { r.start.inode }, { r.start.offset }, { r.end.inode }, { r.end.offset }, e));
         }
     }
 
     // the ratelimit hides how much was lost, and these fail together when
     // they fail at all - one cause, every range: say the count
     if failed != 0 {
-        bch_err!(fs, "couldn't attribute {failed} of {} lost extents ranges", ranges.len());
+        fs.log().err(message!(
+            "couldn't attribute {failed} of {} lost extents ranges", ranges.len()));
     }
 }
 

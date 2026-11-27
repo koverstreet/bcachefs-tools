@@ -41,7 +41,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::util::{alloc::KBox, rcu::read_lock, vstructs::Validated};
-use crate::{bch_err, here, log_msg_ratelimited, prt};
+use crate::{message, here, log_msg_ratelimited, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use crate::format::{BkeyType, Bpos, Btree, ErrorKeyReason, Backpointer, CsumType};
@@ -116,7 +116,8 @@ pub fn record_lost_blocks(trans: &BtreeTrans<'_>, s: BkeySC<'_, Stripe<Validated
 
         // a block we can't attribute doesn't stop the others
         if let Err(e) = ret {
-            bch_err!(fs, "error recording damage for stripe {} block {block}: {e}", { s.k.p.offset });
+            fs.log().err(message!(
+                "error recording damage for stripe {} block {block}: {e}", { s.k.p.offset }));
         }
     }
 }

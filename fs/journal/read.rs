@@ -25,7 +25,7 @@ use crate::util::par::{self, Backend};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized,
                             Unvalidated};
 use crate::os::workqueue::Queue;
-use crate::{bch_err, bch_err_dev, bch_info, bch_info_dev, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
+use crate::{message, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
 use core::ops::Range;
 use pin_init::stack_pin_init;
 use super::validate::{self, JsetCheck};
@@ -129,8 +129,9 @@ pub fn replay_devs(fs: &Fs, i: &JournalReplay) -> DevsList {
         if !devs.has(p.dev) && u32::from(devs.nr) >= REPLICAS_MAX {
             let mut buf = Printbuf::new();
             journal_ptrs_to_text(&mut buf, fs, i);
-            bch_err!(fs, "journal seq {} found on more than {} devices, not tracking its replicas:\n{}",
-                     i.j.seq.get(), REPLICAS_MAX, buf);
+            fs.log().err(message!(
+                "journal seq {} found on more than {} devices, not tracking its replicas:\n{}",
+                i.j.seq.get(), REPLICAS_MAX, buf));
             return DevsList::default();
         }
         devs.add(p.dev);
@@ -391,9 +392,10 @@ impl ReadState<'_> {
         }
 
         if seq.wrapping_sub(fs.journal_entries_base_seq.get()) > u64::from(u32::MAX) {
-            bch_err!(fs, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n\
-                          base {} last_seq currently {}, but have seq {}",
-                     fs.journal_entries_base_seq.get(), self.last_seq, seq);
+            fs.log().err(message!(
+                "journal entry sequence numbers span too large a range: cannot replay, contact developers\n\
+                 base {} last_seq currently {}, but have seq {}",
+                fs.journal_entries_base_seq.get(), self.last_seq, seq));
             return fs.throw(Errcode::ENOMEM_journal_entry_add);
         }
 
@@ -434,7 +436,8 @@ impl ReadState<'_> {
          */
         if let Some(dup) = slot.as_mut() {
             if seq != dup.seq() {
-                bch_err!(fs, "seq {} != dup {} base {}", seq, dup.seq(), fs.journal_entries_base_seq.get());
+                fs.log().err(message!(
+                    "seq {} != dup {} base {}", seq, dup.seq(), fs.journal_entries_base_seq.get()));
                 crate::warn_on!(true);
             }
 
@@ -781,7 +784,8 @@ impl<'a> DevReader<'a> {
         ca.account_io_completion(MemberErrorType::read, submit_time, ret.is_ok());
 
         let Ok(buf) = ret else {
-            crate::bch_err_dev_ratelimited!(ca, "journal read error: sector {}", offset);
+            crate::ratelimit!(ca.log()).err(crate::message!(
+                "journal read error: sector {}", offset));
             /*
              * We don't error out of the recovery process
              * here, since the relevant journal entry may be
@@ -942,7 +946,7 @@ impl<'a> DevReader<'a> {
         }
 
         if self.fs.opts.verbose.get() != 0 {
-            bch_info_dev!(self.ca, "journal read: {}/{} buckets read", nr_read, nr);
+            self.ca.log().info(message!("journal read: {}/{} buckets read", nr_read, nr));
         }
         Ok(())
     }
@@ -1005,8 +1009,8 @@ fn read_devices(fs: &Fs, read: &ReadLock<'_>, devs: Vec<DevIoRef<DevReadRefKind>
                 };
 
                 match &ret {
-                    Ok(())  => if fs.opts.verbose.get() != 0 { bch_info_dev!(ca, "journal read done") },
-                    Err(e)  => bch_err_dev!(ca, "journal read error {}", e),
+                    Ok(())  => if fs.opts.verbose.get() != 0 { ca.log().info(message!("journal read done")) },
+                    Err(e)  => ca.log().err(message!("journal read error {}", e)),
                 }
                 ret
             })?;
@@ -1170,7 +1174,7 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
 
     for range in rewind_ranges.iter() {
         let Some(p) = entries.get(fs, range.to) else {
-            bch_err!(fs, "journal rewind: flush entry at seq {} not found", range.to);
+            fs.log().err(message!("journal rewind: flush entry at seq {} not found", range.to));
             return fs.throw(Errcode::EINVAL_journal_rewind_before_discard);
         };
 
@@ -1181,7 +1185,8 @@ pub fn journal_reread_for_rewind(fs: &Fs) -> Result<(), BchError> {
         return Ok(());
     }
 
-    bch_info!(fs, "journal rewind: re-reading entries {}-{}", need_from, fs.journal_replay_seq_start.get());
+    fs.log().info(message!(
+        "journal rewind: re-reading entries {}-{}", need_from, fs.journal_replay_seq_start.get()));
 
     if need_from >= fs.journal_replay_seq_start.get() {
         return Ok(()); /* nothing extra needed */
@@ -1306,7 +1311,7 @@ pub fn journal_read(fs: &Fs) -> Result<JournalStartInfo, BchError> {
 
     let mut info = match newest_flush(fs, state.entries)? {
         Newest::Nothing => {
-            bch_info!(fs, "journal read done, but no entries found");
+            fs.log().info(message!("journal read done, but no entries found"));
             return Ok(JournalStartInfo::default());
         }
         Newest::NoFlush { cur_seq } => {
@@ -1330,8 +1335,9 @@ pub fn journal_read(fs: &Fs) -> Result<JournalStartInfo, BchError> {
         if rewind != 0 {
             let rewind_seq = fs.journal.lock.rewind_seq.get();
             if rewind_seq != 0 && rewind < rewind_seq {
-                bch_err!(fs, "cannot rewind to {}: discards have invalidated journal entries before {}",
-                         rewind, rewind_seq);
+                fs.log().err(message!(
+                    "cannot rewind to {}: discards have invalidated journal entries before {}",
+                    rewind, rewind_seq));
                 return fs.throw(Errcode::EINVAL_journal_rewind_before_discard);
             }
             drop_before = drop_before.min(rewind);
@@ -1351,7 +1357,7 @@ pub fn journal_read(fs: &Fs) -> Result<JournalStartInfo, BchError> {
         if fs.journal_scrub_seq.get() != 0 {
             prt!(&mut buf, " (scrubbing from {})", fs.journal_scrub_seq.get());
         }
-        bch_info!(fs, "{}", buf);
+        fs.log().info(message!("{}", buf));
     }
 
     let keep_from = match fs.journal_scrub_seq.get() { 0 => drop_before, s => s };

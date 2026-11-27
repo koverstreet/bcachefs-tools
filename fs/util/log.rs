@@ -19,6 +19,7 @@ use crate::opts::Opts;
 use crate::errcode::BchError;
 use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
 use core::ffi::CStr;
+use core::panic::Location;
 use core::sync::atomic::Ordering;
 use cstruct_macros::bch_enum;
 
@@ -59,7 +60,7 @@ impl LogLevel {
     }
 }
 
-/// Print @msg at @level: what the bch_err!() family expands to.
+/// Print @msg at @level: what a Log level comes to.
 pub fn log(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
     print(fs, level.0, true, msg, true)
 }
@@ -357,21 +358,18 @@ impl Drop for LogMsg<'_> {
 impl Fs {
     /// Whether to drop a message from @func, by @rs: only with the
     /// ratelimit_errors option.
-    pub fn ratelimit_suppress(&self, rs: &Ratelimit, func: &CStr) -> bool {
-        self.opts.ratelimit_errors.get() != 0 && !rs.allow(func)
+    pub fn ratelimit_suppress(&self, rs: &Ratelimit, at: &dyn core::fmt::Display) -> bool {
+        self.opts.ratelimit_errors.get() != 0 && !rs.allow(at)
     }
 }
 
-/// As C's bch_log_ratelimited(): what the bch_err_ratelimited!() family
-/// expands to, with ratelimit state per call site.
+/// @log, ratelimited by a state of this call site's own, as C's
+/// bch_err_ratelimited() has: `ratelimit!(fs.log()).err(message!(...))`.
 #[macro_export]
-macro_rules! bch_log_ratelimited {
-    ($fs:expr, $level:expr, $($arg:tt)*) => {{
+macro_rules! ratelimit {
+    ($log:expr) => {{
         static RATELIMIT: $crate::util::ratelimit::Ratelimit = $crate::util::ratelimit::Ratelimit::new();
-        let fs: &$crate::fs::Fs = $fs;
-        if !fs.ratelimit_suppress(&RATELIMIT, $crate::here!()) {
-            $crate::util::log::log(fs, $level, $crate::message!($($arg)*));
-        }
+        $log.ratelimited(&RATELIMIT)
     }};
 }
 
@@ -391,48 +389,9 @@ macro_rules! log_msg_ratelimited {
             [const { $crate::util::ratelimit::Ratelimit::new() }; $n];
         let fs: &$crate::fs::Fs = $fs;
         let mut msg = $crate::util::log::LogMsg::new(fs);
-        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[$idx], $crate::here!()));
+        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[$idx], &$crate::here_str!()));
         msg
     }};
-}
-
-#[macro_export]
-macro_rules! bch_err_ratelimited {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::bch_log_ratelimited!($fs, $crate::util::log::LogLevel::ERR, $($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! bch_err_dev_ratelimited {
-    ($ca:expr, $($arg:tt)*) => {{
-        static RATELIMIT: $crate::util::ratelimit::Ratelimit = $crate::util::ratelimit::Ratelimit::new();
-        let ca: &$crate::fs::Dev = $ca;
-        if !ca.fs().ratelimit_suppress(&RATELIMIT, $crate::here!()) {
-            $crate::util::log::log_dev(ca, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*));
-        }
-    }};
-}
-
-#[macro_export]
-macro_rules! bch_warn_ratelimited {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::bch_log_ratelimited!($fs, $crate::util::log::LogLevel::WARN, $($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! bch_info_ratelimited {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::bch_log_ratelimited!($fs, $crate::util::log::LogLevel::INFO, $($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! bch_verbose_ratelimited {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::bch_log_ratelimited!($fs, $crate::util::log::LogLevel::DEBUG, $($arg)*)
-    };
 }
 
 /// As C's should_print_err(): a restart isn't an error worth reporting.
@@ -440,40 +399,86 @@ pub fn should_print_err(err: &BchError) -> bool {
     !err.is_restart()
 }
 
-#[macro_export]
-macro_rules! bch_err {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*))
-    };
+/// Where a message goes: the filesystem's log, or a device's - after its name
+/// - maybe ratelimited. @msg is anything ToText; message!() makes one from a
+/// format string.
+///
+/// The levels are methods, not a LogLevel argument, because a call naming
+/// `LogLevel::ERR` needs LogLevel imported, though the signature already says
+/// which type it is: Rust doesn't resolve a name against the expected type.
+/// Rust devs, please fix this.
+#[derive(Clone, Copy)]
+pub struct Log<'a> {
+    fs:        &'a Fs,
+    dev:       Option<&'a Dev>,
+    ratelimit: Option<(&'a Ratelimit, &'static Location<'static>)>,
 }
 
-#[macro_export]
-macro_rules! bch_warn {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::WARN, $crate::message!($($arg)*))
-    };
+impl Fs {
+    pub fn log(&self) -> Log<'_> {
+        Log { fs: self, dev: None, ratelimit: None }
+    }
 }
 
-#[macro_export]
-macro_rules! bch_notice {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::NOTICE, $crate::message!($($arg)*))
-    };
+impl Dev {
+    pub fn log(&self) -> Log<'_> {
+        Log { fs: self.fs(), dev: Some(self), ratelimit: None }
+    }
 }
 
-#[macro_export]
-macro_rules! bch_info {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::INFO, $crate::message!($($arg)*))
-    };
-}
+impl<'a> Log<'a> {
+    /// Suppressed while @rs is, which names this call site when it is: a
+    /// state of the filesystem's, or one of the call site's own -
+    /// ratelimit!().
+    #[track_caller]
+    pub fn ratelimited(self, rs: &'a Ratelimit) -> Self {
+        Log { ratelimit: Some((rs, Location::caller())), ..self }
+    }
 
-/// As C's bch_verbose(): KERN_DEBUG.
-#[macro_export]
-macro_rules! bch_verbose {
-    ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::DEBUG, $crate::message!($($arg)*))
-    };
+    pub fn at(self, level: LogLevel, msg: &dyn ToText) {
+        if let Some((rs, at)) = self.ratelimit && self.fs.ratelimit_suppress(rs, at) {
+            return;
+        }
+        match self.dev {
+            Some(ca) => log_dev(ca, level, msg),
+            None     => log(self.fs, level, msg),
+        }
+    }
+
+    pub fn err(self, msg: &dyn ToText)     { self.at(LogLevel::ERR, msg) }
+    pub fn warn(self, msg: &dyn ToText)    { self.at(LogLevel::WARN, msg) }
+    pub fn notice(self, msg: &dyn ToText)  { self.at(LogLevel::NOTICE, msg) }
+    pub fn info(self, msg: &dyn ToText)    { self.at(LogLevel::INFO, msg) }
+    /// As C's bch_verbose(): KERN_DEBUG.
+    pub fn verbose(self, msg: &dyn ToText) { self.at(LogLevel::DEBUG, msg) }
+
+    /// As C's bch_err_fn(): report an error from @result, saying where -
+    /// unless it's a restart, which isn't one. @result, so it can wrap the
+    /// call: `fs.log().err_fn(f())?`.
+    #[track_caller]
+    pub fn err_fn<T, E: Copy + Into<BchError>>(self, result: Result<T, E>) -> Result<T, E> {
+        if let Err(e) = &result {
+            let e: BchError = (*e).into();
+            if should_print_err(&e) {
+                let at = Location::caller();
+                self.err(crate::message!("{}:{}: error {}", at.file(), at.line(), e.msg()));
+            }
+        }
+        result
+    }
+
+    /// err_fn(), saying what we were doing.
+    #[track_caller]
+    pub fn err_msg<T, E: Copy + Into<BchError>>(self, result: Result<T, E>, msg: &dyn ToText) -> Result<T, E> {
+        if let Err(e) = &result {
+            let e: BchError = (*e).into();
+            if should_print_err(&e) {
+                let at = Location::caller();
+                self.err(crate::message!("{}:{}: error {} {}", at.file(), at.line(), msg, e.msg()));
+            }
+        }
+        result
+    }
 }
 
 /// As C's WARN_ON(): the port's warning, at the call site. Evaluates to
@@ -521,7 +526,7 @@ macro_rules! warn_once {
             $crate::util::log::log_no_fs($crate::util::log::LogLevel::ERR, $crate::message!($($msg)*)))
     };
     ($cond:expr, $fs:expr, $($msg:tt)*) => {
-        $crate::warn_once!(@once $cond, $crate::bch_err!($fs, $($msg)*))
+        $crate::warn_once!(@once $cond, $fs.log().err($crate::message!($($msg)*)))
     };
 }
 
@@ -547,83 +552,4 @@ macro_rules! here_str {
     () => {
         ::core::concat!(::core::file!(), ":", ::core::line!())
     };
-}
-
-/// As C's bch_err_fn(): report an error from @result, saying where - unless
-/// it's a restart, which isn't one. Evaluates to @result, so it can
-/// wrap the call: `bch_err_fn!(fs, f())?`.
-#[macro_export]
-macro_rules! bch_err_fn {
-    ($fs:expr, $result:expr) => {{
-        let result = $result;
-        if let Err(e) = &result {
-            let e: $crate::errcode::BchError = (*e).into();
-            if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err!($fs, "{}: error {}", $crate::here_str!(), e.msg());
-            }
-        }
-        result
-    }};
-}
-
-/// As C's bch_err_msg(): bch_err_fn!(), saying what we were doing. Evaluates
-/// to @result, as bch_err_fn!() does.
-#[macro_export]
-macro_rules! bch_err_msg {
-    ($fs:expr, $result:expr, $($arg:tt)*) => {{
-        let result = $result;
-        if let Err(e) = &result {
-            let e: $crate::errcode::BchError = (*e).into();
-            if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err!($fs, "{}: error {} {}", $crate::here_str!(),
-                                 $crate::message!($($arg)*), e.msg());
-            }
-        }
-        result
-    }};
-}
-
-#[macro_export]
-macro_rules! bch_err_dev {
-    ($ca:expr, $($arg:tt)*) => {
-        $crate::util::log::log_dev($ca, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*))
-    };
-}
-
-#[macro_export]
-macro_rules! bch_info_dev {
-    ($ca:expr, $($arg:tt)*) => {
-        $crate::util::log::log_dev($ca, $crate::util::log::LogLevel::INFO, $crate::message!($($arg)*))
-    };
-}
-
-/// As C's bch_err_fn_dev(): bch_err_fn!(), after the device's name.
-#[macro_export]
-macro_rules! bch_err_fn_dev {
-    ($ca:expr, $result:expr) => {{
-        let result = $result;
-        if let Err(e) = &result {
-            let e: $crate::errcode::BchError = (*e).into();
-            if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err_dev!($ca, "{}: error {}", $crate::here_str!(), e.msg());
-            }
-        }
-        result
-    }};
-}
-
-/// As C's bch_err_msg_dev(): bch_err_msg!(), after the device's name.
-#[macro_export]
-macro_rules! bch_err_msg_dev {
-    ($ca:expr, $result:expr, $($arg:tt)*) => {{
-        let result = $result;
-        if let Err(e) = &result {
-            let e: $crate::errcode::BchError = (*e).into();
-            if $crate::util::log::should_print_err(&e) {
-                $crate::bch_err_dev!($ca, "{}: error {} {}", $crate::here_str!(),
-                                     $crate::message!($($arg)*), e.msg());
-            }
-        }
-        result
-    }};
 }

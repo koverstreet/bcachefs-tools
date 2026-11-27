@@ -30,7 +30,7 @@ use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::FsckFlags;
 use crate::util::{log::LogMsg, vstructs::{plain_bytes, plain_bytes_mut}, Printbuf};
-use crate::{bch_err, bch_err_fn, bch_err_msg, bch_info, btree_trans, fsck_err_flags, mustfix_fsck_err,
+use crate::{message, btree_trans, fsck_err_flags, mustfix_fsck_err,
             mustfix_fsck_err_on, prt};
 
 type Node<'n> = LockedNode<'n, BtreeNode>;
@@ -88,7 +88,8 @@ fn set_node_min(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let b = paths[idx].locked_btree_node(level).expect("a node to repair, held by its path");
 
     if fs.opts.verbose.get() != 0 {
-        bch_info!(fs, "set_node_min(): {} -> {new_min}", BkeySC::from(b.key()).to_text(fs));
+        fs.log().info(message!(
+            "set_node_min(): {} -> {new_min}", BkeySC::from(b.key()).to_text(fs)));
     }
 
     let new = btree_ptr_to_v2(b, |_, v| {
@@ -117,7 +118,8 @@ fn set_node_max(trans: &BtreeTrans<'_>, paths: &mut Paths<'_>, idx: PathIdx, lev
     let btree = Btree(b.c.btree_id.get().into());
 
     if fs.opts.verbose.get() != 0 {
-        bch_info!(fs, "set_node_max(): {} -> {new_max}", BkeySC::from(b.key()).to_text(fs));
+        fs.log().info(message!(
+            "set_node_max(): {} -> {new_max}", BkeySC::from(b.key()).to_text(fs)));
     }
 
     let new = btree_ptr_to_v2(b, |k, v| {
@@ -337,9 +339,9 @@ fn check_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &Bkey
         (cur_k, bounds(&paths, &parent))
     };
 
-    let cur = bch_err_msg!(fs, node_at(t, btree, level - 1, &cur_k,
+    let cur = fs.log().err_msg(node_at(t, btree, level - 1, &cur_k,
                                        BtreeIterFlags::INTENT | BtreeIterFlags::READ_ERRORS),
-                           "getting btree node")?;
+                               message!("getting btree node"))?;
     let prev = prev.map(|k| node_at(t, btree, level - 1, k, BtreeIterFlags::INTENT)).transpose()?;
 
     let (cur, prev) = {
@@ -351,8 +353,9 @@ fn check_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &Bkey
         }
 
         if btree_node_is_stale(fs, cur_b) {
-            bch_info!(fs, "btree node older than nodes found by scanning\n  btree={btree} level={} {}",
-                      level - 1, BkeySC::from(&*cur_k).to_text(fs));
+            fs.log().info(message!(
+                "btree node older than nodes found by scanning\n  btree={btree} level={} {}",
+                level - 1, BkeySC::from(&*cur_k).to_text(fs)));
             return Ok(Some((cur_k, Repair::DropThis)));
         }
 
@@ -432,7 +435,7 @@ fn check_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &Bke
             }
             Repair::DropThis => drop_node(trans, btree, level, &k)?,
             Repair::DropPrev => {
-                bch_info!(fs, "dropped prev node");
+                fs.log().info(message!("dropped prev node"));
                 drop_node(trans, btree, level, prev.as_deref().expect("a prev node, to drop"))?;
                 return Ok(true);
             }
@@ -457,7 +460,8 @@ fn next_child(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &BkeyI
 
     let Some(k) = child_key(t, &mut t.trans().paths(), &parent, pos)? else { return Ok(None) };
 
-    bch_err_msg!(t.fs(), node_at(t, btree, level - 1, &k, BtreeIterFlags::empty()), "getting btree node")?;
+    t.fs().log().err_msg(node_at(t, btree, level - 1, &k, BtreeIterFlags::empty()), message!(
+        "getting btree node"))?;
     Ok(Some(k))
 }
 
@@ -524,7 +528,7 @@ fn repair_topology_recurse(trans: &BtreeTrans<'_>, btree: Btree, level: usize,
         })?;
     }
 
-    bch_err_fn!(trans.fs(), ret)
+    trans.fs().log().err_fn(ret)
 }
 
 fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
@@ -675,7 +679,7 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
                     continue;
                 }
 
-                bch_err!(fs, "empty btree root {btree}");
+                fs.log().err(message!("empty btree root {btree}"));
                 let _ = root_alloc_fake_trans(&trans, btree, 0);
                 fs.btree.cache.roots.lock().get_mut(i).expect("a btree below btree_id_nr_alive()").alive = 0;
             }

@@ -28,7 +28,7 @@ use crate::data::reflink::{gc_reflink_add, gc_reflink_done, gc_reflink_free, gc_
 use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Btree, BtreeFlags, DataType, BTREE_MAX_DEPTH, Deleted};
 use crate::locking::{Locked, RwSem, SeqLock};
-use crate::{new_lock, bch_err_fn, bch_err_msg, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
+use crate::{new_lock, message, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
 use crate::fs::{Dev, Fs, FsFlag};
 use crate::init::progress::Progress;
 use crate::types::Le16;
@@ -203,7 +203,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
     }
 
     if btree == Btree::reflink && level == 0 {
-        bch_err_fn!(fs, gc_reflink_add(fs, k))?;
+        fs.log().err_fn(gc_reflink_add(fs, k))?;
     }
 
     let deleted = BkeyI::<Deleted>::at(k.k.p);
@@ -290,7 +290,7 @@ fn gc_btrees(fs: &Fs) -> Result<(), BchError> {
         gc_btree(&trans, &progress, btree, target_depth)
     });
 
-    bch_err_fn!(fs, ret)
+    fs.log().err_fn(ret)
 }
 
 fn mark_superblocks(fs: &Fs) -> Result<(), BchError> {
@@ -522,12 +522,12 @@ fn gc(fs: &Fs) -> Result<(), BchError> {
 
     fs.gc.set_pos(GcPos::of_phase(GcPhase::start));
 
-    bch_err_msg!(fs, mark_superblocks(fs), "marking superblocks")?;
+    fs.log().err_msg(mark_superblocks(fs), message!("marking superblocks"))?;
 
     gc_btrees(fs)?;
 
     gc_alloc_done(fs)?;
-    bch_err_fn!(fs, gc_accounting_done(fs))?;
+    fs.log().err_fn(gc_accounting_done(fs))?;
     gc_stripes_done(fs)?;
     gc_reflink_done(fs)
 }

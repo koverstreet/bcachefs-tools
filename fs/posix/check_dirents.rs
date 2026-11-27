@@ -38,7 +38,7 @@ use crate::fs::Fs;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_fn, bch_err_ratelimited, bch_info, fsck_err, fsck_err_on, inode_fsck_err};
+use crate::{message, ratelimit, fsck_err, fsck_err_on, inode_fsck_err};
 use core::ops::ControlFlow;
 use crate::format::{Btree, BkeyType};
 
@@ -90,8 +90,9 @@ fn check_dir_nlink(
     let count = count_subdirs(t, inum, snapshot)?;
 
     if !recalculate_sums && i.count != count {
-        bch_err_ratelimited!(fs, "fsck counted subdirectories wrong for inum {inum}:{snapshot}: got {} should be {count}",
-                             i.count);
+        ratelimit!(fs.log()).err(message!(
+            "fsck counted subdirectories wrong for inum {inum}:{snapshot}: got {} should be {count}",
+            i.count));
     }
     i.count = count;
 
@@ -132,7 +133,7 @@ fn check_subdir_count_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
     let Some(inum) = w.cur_inum() else { return Ok(()) };
     let recalculate_sums = w.recalculate_sums();
 
-    bch_err_fn!(t.fs(), w.inodes_mut().iter_mut()
+    t.fs().log().err_fn(w.inodes_mut().iter_mut()
         .try_for_each(|i| check_dir_nlink(t, inum, recalculate_sums, i)))
 }
 
@@ -210,7 +211,7 @@ fn check_dirent_parent_subvol<'t>(
     }
 
     let Some(new_parent) = new_parent else {
-        bch_err!(fs, "could not find a subvol for snapshot {d_snapshot}");
+        fs.log().err(message!("could not find a subvol for snapshot {d_snapshot}"));
         return Err(fs.err(Errcode::fsck_repair_unimplemented));
     };
 
@@ -278,7 +279,7 @@ fn check_dirent_to_subvol<'t>(
 
     let Some(mut subvol_root) = inode::find_by_inum_snapshot(t, target_inum, target_snapshot,
                                                              BtreeIterFlags::empty()).found()? else {
-        bch_err!(fs, "subvol {child} points to missing inode root {target_inum}");
+        fs.log().err(message!("subvol {child} points to missing inode root {target_inum}"));
         return Err(fs.err(Errcode::fsck_repair_unimplemented));
     };
 
@@ -559,11 +560,11 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
         }
 
         if did_second_pass {
-            bch_err!(fs, "dirents not repairing");
+            fs.log().err(message!("dirents not repairing"));
             return fs.throw(Errcode::EINVAL_dirents_not_repairing);
         }
 
-        bch_info!(fs, "check_dirents requires second pass");
+        fs.log().info(message!("check_dirents requires second pass"));
         did_second_pass = true;
         st.need_second_pass = false;
     }

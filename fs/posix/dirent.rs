@@ -766,7 +766,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
         }))
         .and_then(|found| found.ok_or_else(|| fs.err(Errcode::ENOENT_inode)));
 
-    crate::bch_err_msg!(fs, ret, "fetching inode {inum}")
+    fs.log().err_msg(ret, crate::message!("fetching inode {inum}"))
 }
 
 /// Delete the dirent at @pos, as fsck repair.

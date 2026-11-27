@@ -135,7 +135,7 @@ impl<'f> ReplicaRead<'f> {
             prt!(&mut msg, "btree node scrub: bad replica on {ca}{action}:\n");
             btree_pos_to_text(&mut msg, fs, key.btree, key.level, k);
             prt!(&mut msg, "\n{}", err.as_str());
-            crate::bch_err_ratelimited!(fs, "{}", msg.as_str());
+            crate::ratelimit!(fs.log()).err(crate::message!("{}", msg.as_str()));
         }
         good
     }
@@ -182,11 +182,12 @@ fn inline_data_bad(fs: &Fs, key: &BtreeKeyBuf) -> u64 {
                             other copy of it:\n  ");
             e.to_text(&mut msg);
             prt!(&mut msg, "\n  {}", k.to_text(fs));
-            crate::bch_err_ratelimited!(fs, "{}", msg.as_str());
+            crate::ratelimit!(fs.log()).err(crate::message!("{}", msg.as_str()));
             Ok(())
         });
     if let Err(e) = ret {
-        crate::bch_err_ratelimited!(fs, "btree node scrub: checking inline data: {}", e.msg());
+        crate::ratelimit!(fs.log()).err(crate::message!(
+            "btree node scrub: checking inline data: {}", e.msg()));
     }
     bad
 }
@@ -196,7 +197,8 @@ async fn rewrite_if_bad(fs: &Fs, key: BtreeKeyBuf, dev: u32, io: MovingIo) {
         Ok(Some(r)) => r,
         Ok(None) => return,
         Err(e) => {
-            crate::bch_err_ratelimited!(fs, "btree node scrub: reading replica on dev {dev}: {}", e.msg());
+            crate::ratelimit!(fs.log()).err(crate::message!(
+                "btree node scrub: reading replica on dev {dev}: {}", e.msg()));
             return;
         }
     };
@@ -226,7 +228,8 @@ async fn rewrite_if_bad(fs: &Fs, key: BtreeKeyBuf, dev: u32, io: MovingIo) {
     }
 
     if let Some(e) = ret.err().filter(|e| !e.matches(c::ENOENT) && !e.matches(c::EROFS)) {
-        crate::bch_err_ratelimited!(fs, "btree node scrub: error rewriting node: {}", e.msg());
+        crate::ratelimit!(fs.log()).err(crate::message!(
+            "btree node scrub: error rewriting node: {}", e.msg()));
     }
 }
 

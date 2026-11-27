@@ -77,7 +77,7 @@ use crate::util::gather::Gather;
 use crate::debug::trace::events;
 use crate::data_structures::fifo::FifoRead;
 use crate::types::Fifo;
-use crate::{prt, bch_err_msg, fs_fatal_error};
+use crate::{prt, message, fs_fatal_error};
 use crate::util::alloc::{kbox_pin_init, KBox, Vec};
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
@@ -698,7 +698,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
             r => r,
         };
         let ret = match ret {
-            Err(e) if !e.matches(c::EROFS) => bch_err_msg!(fs, Err(e), "from pick_and_evacuate()"),
+            Err(e) if !e.matches(c::EROFS) => fs.log().err_msg(Err(e), message!(
+                "from pick_and_evacuate()")),
             r => r,
         };
 
@@ -759,8 +760,8 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 
     let stats = MoveStats::default();
     stats.reset();
-    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, WritePointSpecifier::COPYGC, false),
-                            "allocating copygc's moving context")?;
+    let ctxt = fs.log().err_msg(MovingCtxt::new(fs, &stats, WritePointSpecifier::COPYGC, false),
+                                message!("allocating copygc's moving context"))?;
     let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
     let clock = &fs.io_clock[WRITE];
     let mut ret = Ok(());
@@ -839,7 +840,7 @@ impl Fs {
         let fs = unsafe { BackRef::new(self) };
         let ret = self.copygc.thread.start(format_args!("bch-copygc/{}", self.name().to_str().unwrap_or("?")),
                                            move |me| { let _ = thread(&fs, me); });
-        bch_err_msg!(self, ret, "creating copygc thread")
+        self.log().err_msg(ret, message!("creating copygc thread"))
     }
 
     pub fn copygc_stop(&self) {

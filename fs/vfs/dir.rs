@@ -231,7 +231,7 @@ impl FileOps for Dir {
             r.dst.set_pos(pos as u64);
             ret
         };
-        crate::bch_err_fn!(fs, ret)
+        fs.log().err_fn(ret)
     }
 
     fn fsync(&self, file: &File<Self>, start: i64, end: i64, datasync: i32) -> Result<(), BchError> {

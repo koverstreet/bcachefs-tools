@@ -20,7 +20,7 @@ use crate::os::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::util::projections::Volatile;
-use crate::{bch_err, btree_trans};
+use crate::{message, btree_trans};
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 
 #[repr(C)]
@@ -132,7 +132,7 @@ impl Fs {
         let ret = gc_gens(self);
         if let Err(e) = &ret {
             if !e.matches(c::EROFS) {
-                bch_err!(self, "gc_gens(): error {}", e.msg());
+                self.log().err(message!("gc_gens(): error {}", e.msg()));
             }
         }
         ret

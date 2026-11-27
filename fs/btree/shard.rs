@@ -12,7 +12,7 @@ use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::util::refcount::TryRefcount;
-use crate::{bch_err, btree_trans, prt};
+use crate::{message, btree_trans, prt};
 
 /*
  * Inode-number sharding (shard_inode_numbers_bits) splits concurrent
@@ -189,8 +189,9 @@ impl Fs {
 
             if let Err(e) = ret {
                 if !e.matches(c::ENOSPC) {
-                    bch_err!(self, "presplit_shard_boundaries: error splitting btree {btree} at its shard boundaries, \
-                                    after {split_count} splits: {}; the rest left as they are", e.msg());
+                    self.log().err(message!(
+                        "presplit_shard_boundaries: error splitting btree {btree} at its shard boundaries, \
+                         after {split_count} splits: {}; the rest left as they are", e.msg()));
                 }
             }
         }

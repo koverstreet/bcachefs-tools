@@ -45,7 +45,7 @@ use crate::util::alloc::Vec;
 use crate::util::place::Contained;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
-use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
+use crate::{message, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
@@ -520,7 +520,7 @@ fn check_subvol<'a, 't>(
         // before deleting. Free when nothing's queued.
         t.commit_lazy(None, CommitFlags::NO_ENOSPC)?;
         return Err(t.close(CommitFlags::NO_ENOSPC, |trans|
-            bch_err_msg!(fs, set_deleted(trans, id as u32), "deleting subvolume {id}")));
+            fs.log().err_msg(set_deleted(trans, id as u32), message!("deleting subvolume {id}"))));
     }
 
     // A live subvolume's snapshot must be live and point back at it. This is
@@ -801,7 +801,7 @@ pub(crate) fn delete_unlinked(snapshots: &FsSnapshots) {
 
         let trans = crate::btree_trans!(fs);
         for &id in subvols.iter() {
-            if bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
+            if fs.log().err_msg(set_deleted(&trans, id), message!("deleting subvolume {id}")).is_err() {
                 return;
             }
         }
@@ -950,7 +950,7 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
         let Some(k) = k.arm::<inode::Inodes>() else {
-            bch_err!(fs, "root inode not found");
+            fs.log().err(message!("root inode not found"));
             return fs.throw(Errcode::ENOENT_inode);
         };
 

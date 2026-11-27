@@ -143,7 +143,8 @@ async fn task(fs: &Fs, a: OpBox) {
     if let Err(e) = trans.lockrestart_do(|t| a.run(t)) {
         if !e.matches(c::ENOENT) && !e.matches(c::EROFS) &&
            !e.matches(Errcode::no_btree_node_nofill) {
-            crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());
+            crate::ratelimit!(fs.log()).err(crate::message!(
+                "{}: error {}", crate::here_str!(), e.msg()));
         }
     }
     drop(trans);

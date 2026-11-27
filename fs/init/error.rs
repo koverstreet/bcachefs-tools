@@ -352,7 +352,7 @@ fn count_locked<'a>(fs: &Fs, st: &'a mut ErrorsLocked, id: SbErrorId, msg: &[u8]
         None if st.msgs.push(FsckErrState::new(id)).is_ok() => st.msgs.len() - 1,
         None => {
             if !st.msgs_alloc_err {
-                crate::bch_err!(fs, "kmalloc err, cannot ratelimit fsck errs");
+                fs.log().err(crate::message!("kmalloc err, cannot ratelimit fsck errs"));
             }
             st.msgs_alloc_err = true;
             return (None, c);
@@ -756,7 +756,8 @@ pub(crate) fn flush_fsck_errs(fs: &Fs, print: bool) {
     let msgs = core::mem::take(&mut fs.errors.state.lock().msgs);
     for s in msgs.iter() {
         if let (true, true, Some(m)) = (print, s.ratelimited, &s.last_msg) {
-            crate::bch_err!(fs, "Saw {} errors like:\n  {}", s.nr, core::str::from_utf8(m).unwrap_or("?"));
+            fs.log().err(crate::message!(
+                "Saw {} errors like:\n  {}", s.nr, core::str::from_utf8(m).unwrap_or("?")));
         }
     }
 }
@@ -996,7 +997,7 @@ impl Fs {
 
         let ret = self.inconsistent_error(&mut out);
         if ret {
-            crate::bch_err!(self, "{}", out.as_str());
+            self.log().err(crate::message!("{}", out.as_str()));
         }
         ret
     }

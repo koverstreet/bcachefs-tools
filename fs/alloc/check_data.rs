@@ -44,7 +44,7 @@ use crate::posix::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
 use crate::util::{alloc::Flags, log::LogMsg, rcu::read_lock, Printbuf};
 use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
-use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
+use crate::{message, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use crate::data_structures::array_vec::ArrayVec;
 use bitflags::bitflags;
 use core::mem::size_of;
@@ -306,7 +306,7 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
         }
 
         if !cached && data_type == DataType::btree && bucket_type == DataType::sb {
-            bch_err!(fs, "btree and superblock in the same bucket - cannot repair");
+            fs.log().err(message!("btree and superblock in the same bucket - cannot repair"));
             return fs.throw(Errcode::fsck_repair_unimplemented);
         }
 

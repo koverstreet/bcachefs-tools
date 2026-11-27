@@ -30,7 +30,7 @@ use crate::errcode::{Errcode, BchError, Found};
 use crate::posix::{inode, inode_opts, namei, str_hash};
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf, log::{LogLevel, LogMsg}};
-use crate::{bch_err, bch_err_msg, bch_info, bch_verbose};
+use crate::message;
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, Whiteout};
 
@@ -58,8 +58,8 @@ fn lostfound_dirent(
     match d.target() {
         DirentTarget::Inode(inum) if d.d_type() as u32 == c::DT_DIR => Ok(Some(inum)),
         _ => {
-            bch_err!(fs, "lost+found in snapshot {snapshot} is not a directory:\n  {}",
-                     k.to_text(fs));
+            fs.log().err(message!("lost+found in snapshot {snapshot} is not a directory:\n  {}",
+                                  k.to_text(fs)));
             Err(fs.err(Errcode::ENOENT_not_directory))
         }
     }
@@ -152,13 +152,13 @@ fn restore_lostfound(
 
     // Normally still visible here; if the directory was deleted rather than
     // unlinked, only in the root snapshot
-    let mut lostfound = bch_err_msg!(fs,
+    let mut lostfound = fs.log().err_msg(
         match inode::find_by_inum_snapshot(t, inum, snapshot, BtreeIterFlags::empty()) {
             Err(e) if e.matches(c::ENOENT) =>
                 inode::find_by_inum_snapshot(t, inum, root_snapshot, BtreeIterFlags::empty()),
             r => r,
         },
-        "looking up lost+found inode {inum} in snapshot {snapshot} or {root_snapshot}")?;
+        message!("looking up lost+found inode {inum} in snapshot {snapshot} or {root_snapshot}"))?;
 
     let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
     write!(msg, "restoring ");
@@ -203,15 +203,17 @@ fn create_or_restore_lostfound(
     let tree_root = st.root_snapshot.get();
 
     let Ok(Some(root_snapshot)) = fs.snapshots.live_descendent(tree_root) else {
-        bch_err!(fs, "snapshot tree {tree} has no live snapshot, cannot create lost+found");
+        fs.log().err(message!(
+            "snapshot tree {tree} has no live snapshot, cannot create lost+found"));
         return Err(fs.err(Errcode::ENOENT_snapshot));
     };
 
     // One lost+found per tree works only if every branch inherits from where
     // it is
     if !snapshot::is_ancestor(t, snapshot, root_snapshot) {
-        bch_err!(fs, "lost+found for snapshot {snapshot} belongs in snapshot {root_snapshot}, \
-                      which it does not inherit from (snapshot tree {tree}, root snapshot {tree_root})");
+        fs.log().err(message!(
+            "lost+found for snapshot {snapshot} belongs in snapshot {root_snapshot}, \
+             which it does not inherit from (snapshot tree {tree}, root snapshot {tree_root})"));
         return Err(fs.err(Errcode::snapshot_lostfound_unreachable));
     }
 
@@ -236,35 +238,35 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
     let fs = t.fs();
     let tree = fs.snapshots.tree(snapshot);
 
-    let subvolid = bch_err_msg!(fs, find_snapshot_tree_subvol(t, tree),
-                                "finding subvol associated with snapshot tree {tree}")?;
-    let subvol = bch_err_msg!(fs, subvolume::get_key(t, subvolid, false),
-                              "looking up subvol {subvolid} for snapshot {snapshot}")?;
+    let subvolid = fs.log().err_msg(find_snapshot_tree_subvol(t, tree),
+                                    message!("finding subvol associated with snapshot tree {tree}"))?;
+    let subvol = fs.log().err_msg(subvolume::get_key(t, subvolid, false),
+                                  message!("looking up subvol {subvolid} for snapshot {snapshot}"))?;
 
     let root_inum = SubvolInum { subvol: subvolid as u64, inum: subvol.v.inode.get() };
 
     // The subvolume key's snapshot says whether the root inode is missing or
     // we're looking in the wrong place
-    let mut root_inode = bch_err_msg!(fs,
+    let mut root_inode = fs.log().err_msg(
         inode::find_by_inum_snapshot(t, root_inum.inum, snapshot, BtreeIterFlags::empty()),
-        "looking up root inode {} in snapshot {snapshot}, from\n  {}",
-        root_inum.inum, (&subvol).to_text(fs))?;
+        message!("looking up root inode {} in snapshot {snapshot}, from\n  {}",
+        root_inum.inum, (&subvol).to_text(fs)))?;
 
     let root_hash = str_hash::hash_info_init(fs, &root_inode)?;
 
-    let Some(inum) = bch_err_msg!(fs, lostfound_dirent(t, &root_hash, root_inum, snapshot),
-                                  "looking up lost+found")? else {
+    let Some(inum) = fs.log().err_msg(lostfound_dirent(t, &root_hash, root_inum, snapshot),
+                                      message!("looking up lost+found"))? else {
         // Commits, so this returns a restart
-        return bch_err_msg!(fs, create_or_restore_lostfound(t, tree, snapshot, root_inum,
+        return fs.log().err_msg(create_or_restore_lostfound(t, tree, snapshot, root_inum,
                                                             &mut root_inode, &root_hash),
-                            "getting lost+found for snapshot {snapshot}");
+                                message!("getting lost+found for snapshot {snapshot}"));
     };
 
     // check_dirents has already run, dangling dirents shouldn't exist here
-    bch_err_msg!(fs,
+    fs.log().err_msg(
         inode::find_by_inum_snapshot(t, inum, snapshot, BtreeIterFlags::empty()),
-        "looking up lost+found {inum}:{snapshot} in (root inode {}, snapshot root {})",
-        root_inum.inum, fs.snapshots.root(snapshot))
+        message!("looking up lost+found {inum}:{snapshot} in (root inode {}, snapshot root {})",
+        root_inum.inum, fs.snapshots.root(snapshot)))
 }
 
 /// Whether @inode is unreachable and has to be reattached: no backpointer,
@@ -329,7 +331,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     }
 
     let mut lostfound = lookup_lostfound(t, dirent_snapshot)?;
-    bch_verbose!(fs, "got lostfound inum {}", lostfound.bi_inum);
+    fs.log().verbose(message!("got lostfound inum {}", lostfound.bi_inum));
 
     // The descendant fixup below commits in chunks, so a re-drive can find our
     // dirent already there: adopt it rather than create a second. A name taken
@@ -368,8 +370,9 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     }
 
     let Some(name) = chosen else {
-        bch_err!(fs, "reattaching inode {}:{}: lost+found entries {base} through {base}.999 all taken",
-                 inode.bi_inum, inode.bi_snapshot);
+        fs.log().err(message!(
+            "reattaching inode {}:{}: lost+found entries {base} through {base}.999 all taken",
+            inode.bi_inum, inode.bi_snapshot));
         return Err(fs.err(Errcode::fsck_repair_unimplemented));
     };
 
@@ -393,11 +396,11 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
 
         let d_type = inode.d_type();
         let target = inode.dirent_target();
-        bch_err_msg!(fs,
+        fs.log().err_msg(
             dirent::create_snapshot(t, inode.bi_parent_subvol, dirent_snapshot, &lostfound,
                                     d_type, name.as_os_str(), target, &mut inode.bi_dir_offset,
                                     CREATE.0, CREATE.1),
-            "error creating dirent")?;
+            message!("error creating dirent"))?;
     }
 
     inode::fsck_write(t, inode)?;
@@ -405,9 +408,9 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     let mut path = Printbuf::new();
     namei::inum_snapshot_to_path(t, inode.bi_inum, inode.bi_snapshot, &mut path)?;
     if adopted {
-        bch_verbose!(fs, "resuming reattach at {path}");
+        fs.log().verbose(message!("resuming reattach at {path}"));
     } else {
-        bch_info!(fs, "reattached at {path}");
+        fs.log().info(message!("reattached at {path}"));
     }
 
     // Descendant versions: point those that also need reattaching at the new

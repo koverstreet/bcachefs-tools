@@ -24,7 +24,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::posix::xattr::{XattrType, self, Xattrs};
-use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
+use crate::{message, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::posix::dirent::{self, Dirent};
 use core::fmt;
 use crate::format::{Bpos, Btree, BkeyType};
@@ -249,7 +249,7 @@ fn write_if_changed(
         return Ok(());
     }
     let fs = t.fs();
-    bch_err_msg!(fs, inode::fsck_write(t, u), "in fsck updating inode")
+    fs.log().err_msg(inode::fsck_write(t, u), message!("in fsck updating inode"))
 }
 
 fn check_inode<'t>(
@@ -285,8 +285,8 @@ fn check_inode<'t>(
     let mut changed = false;
 
     // ENOENT: a disconnected inode, which a later pass fixes
-    bch_err_msg!(fs, namei::check_inode_has_case_insensitive(t, &mut u, &mut changed)
-                 .found(), "check_inode_has_case_insensitive()")?;
+    fs.log().err_msg(namei::check_inode_has_case_insensitive(t, &mut u, &mut changed)
+                     .found(), message!("check_inode_has_case_insensitive()"))?;
 
     // Before the backpointer check: the dirent is looked up through
     // bi_parent_subvol, and a bogus one makes a good backpointer look broken.
@@ -348,8 +348,8 @@ fn check_inode<'t>(
                   fsck_err!(t, inode_unlinked_and_not_open,
                             "inode unlinked and not open\n{u}")? {
             return Err(t.close(CommitFlags::NO_ENOSPC, |trans|
-                bch_err_msg!(fs, inode::rm_snapshot(trans, u.bi_inum, pos.snapshot),
-                             "in fsck deleting inode")));
+                fs.log().err_msg(inode::rm_snapshot(trans, u.bi_inum, pos.snapshot),
+                                 message!("in fsck deleting inode"))));
         }
     }
 
