@@ -297,7 +297,7 @@ use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::BkeyValid
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MAX, POS_MIN,
                          BkeyOps, BkeyValidateFrom};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::{prt, message, bkey_fsck_err_on};
+use crate::{prt, message, bkey_fsck_err_on, fs_inconsistent};
 use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -306,7 +306,7 @@ use crate::locking::{ExclusiveGuard, Mutex};
 use crate::c;
 use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree};
 use crate::snapshots::subvolume::SubvolInum;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{Errcode, BchError, Found};
 use crate::fs::{Fs, FsFlag};
 use crate::snapshots::{check_snapshots, delete, subvolume, FsSnapshots};
 use crate::util::alloc::{AllocError, Vec};
@@ -1088,6 +1088,13 @@ impl Snapshot<Validated> {
 
 /// The struct: a field an older key lacks, to set.
 impl Snapshot<Whole> {
+    /// The children in the order validate wants: the higher id first.
+    pub fn normalize_children(&mut self) {
+        if self.children()[0] < self.children()[1] {
+            self.children.swap(0, 1);
+        }
+    }
+
     /// And the legacy flags to match - SUBVOL_OBSOLETE from @subvol, so set
     /// that first.
     pub fn set_state(&mut self, state: SnapshotState) {
@@ -1514,6 +1521,53 @@ pub fn lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<Snapshot, BchError> {
 pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<Snapshot>, BchError> {
     t.bkey_get_key::<Snapshot>(Btree::snapshots, pos(0, id as u64),
                                BtreeIterFlags::empty())
+}
+
+/// Node @id's key, None if there's none: fsck can't assume a node exists, and
+/// absence as a value can't be returned as an error by mistake.
+pub(crate) fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<BkeyI<Snapshot>>, BchError> {
+    lookup_key(t, id).found()
+}
+
+/// Node @id, which has to be there: a missing one is an inconsistency.
+fn missing_node(t: &TransAttempt<'_, '_>, id: u32) -> BchError {
+    fs_inconsistent!(t.fs(), "missing snapshot {id}");
+    t.fs().err(Errcode::ENOENT_snapshot)
+}
+
+/// Node @id's key, which has to be there.
+pub(crate) fn get_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<Snapshot>, BchError> {
+    lookup_node(t, id)?.ok_or_else(|| missing_node(t, id))
+}
+
+/// Node @id's key for @edit, then queued for the commit - None if there's no
+/// node.
+pub(crate) fn edit_node_opt<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
+                                       edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
+    -> Result<Option<R>, BchError>
+{
+    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
+    let k = match iter.peek_slot_typed::<Snapshot>(t) {
+        Err(e) if e.matches(c::ENOENT) => return Ok(None),
+        k => t.bkey_make_mut_noupdate(k?)?,
+    };
+    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), edit).map(Some)
+}
+
+/// Node @id's key for @edit, which has to be there.
+pub(crate) fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
+                                   edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
+    -> Result<R, BchError>
+{
+    edit_node_opt(t, id, edit)?.ok_or_else(|| missing_node(t, id))
+}
+
+/// @id added to @ids, if it isn't there.
+pub(crate) fn add_nodup(ids: &mut Vec<u32>, id: u32) -> Result<(), BchError> {
+    if !ids.contains(&id) {
+        ids.push(id)?;
+    }
+    Ok(())
 }
 
 /// Whether @k is in a snapshot that doesn't exist - reported, and @k deleted

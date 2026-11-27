@@ -52,7 +52,7 @@
 //! outside it, with its own lock.
 
 use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, Typed, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
@@ -70,6 +70,7 @@ use crate::locking::{Locked, RwSem};
 use crate::{new_lock, message, fs_inconsistent, fsck_err, prt,
     trans_inconsistent};
 use crate::snapshots::{check_snapshots, snapshot};
+use crate::snapshots::snapshot::{add_nodup, edit_node, edit_node_opt, get_node};
 use crate::util::{alloc::Vec, log::LogMsg, Printbuf};
 use crate::data_structures::eytzinger::Eytzinger1;
 use core::fmt;
@@ -197,29 +198,6 @@ impl Fs {
 
 // ── Node state ───────────────────────────────────────────────────────────
 
-/// Node @id's key for @edit, then queued for update; missing is an
-/// inconsistency.
-fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
-                        edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
-    -> Result<R, BchError>
-{
-    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
-    let k = iter.peek_slot_typed::<Snapshot>(t)
-        .inspect_err(|e| if e.matches(c::ENOENT) {
-            fs_inconsistent!(t.fs(), "missing snapshot {id}");
-        })?;
-    let k = t.bkey_make_mut_noupdate(k)?;
-    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), edit)
-}
-
-/// Missing is an inconsistency.
-fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<Snapshot>, BchError> {
-    snapshot::lookup_key(t, id)
-        .inspect_err(|e| if e.matches(c::ENOENT) {
-            fs_inconsistent!(t.fs(), "missing snapshot {id}");
-        })
-}
-
 /// The raw field: 0 on keys that predate it, which matches no state - so a
 /// legacy node is never == deleted, and always != live. What the node
 /// actually is: state_compat().
@@ -311,7 +289,7 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
         return Ok(());
     }
 
-    let s = lookup_node(t, id)?;
+    let s = get_node(t, id)?;
 
     // Whether an interior has a single live child is what the deletion
     // recorded when it built its lists, not something to re-derive from the
@@ -419,13 +397,6 @@ fn node_set_no_keys(t: &TransAttempt<'_, '_>, id: u32, run: &Run<'_>) -> Result<
     edit_node(t, id, |s| Ok(s.v_mut().set_state(SnapshotState::no_keys)))
 }
 
-fn normalize_child_pointers(s: &mut Snapshot) {
-    let [a, b] = s.children();
-    if a < b {
-        s.children.swap(0, 1);
-    }
-}
-
 /// Every reason we decline to delete a snapshot node, decided without
 /// touching anything.
 ///
@@ -457,7 +428,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
 
     check_no_data(t, id, if delete_interior { "interior delete" } else { "leaf delete" }, run)?;
 
-    let s = lookup_node(t, id)?;
+    let s = get_node(t, id)?;
     let v = s.v();
 
     if state(v) == SnapshotState::deleted {
@@ -522,7 +493,7 @@ fn refusal_to_text(trans: &TransGuard<'_>, ret: &Result<(), BchError>, id: u32, 
 fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let fs = t.fs();
 
-    let s = lookup_node(t, id)?;
+    let s = get_node(t, id)?;
 
     if s.v().subvol() != 0 {
         t.delete(Btree::subvolumes, pos(0, s.v().subvol() as u64),
@@ -540,7 +511,7 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
             };
 
             parent.v_mut().children[i] = child_id.into();
-            normalize_child_pointers(parent.v_mut());
+            parent.v_mut().normalize_children();
             Ok(())
         })?;
     }
@@ -631,19 +602,6 @@ fn relink_target(t: &TransAttempt<'_, '_>, mut child_id: u32) -> Result<u32, Bch
     Ok(0)
 }
 
-/// Node @id's key for @edit, then queued for update - None if there's no node.
-fn edit_node_opt<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
-                            edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
-    -> Result<Option<R>, BchError>
-{
-    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, id as u64), BtreeIterFlags::INTENT);
-    let k = match iter.peek_slot_typed::<Snapshot>(t) {
-        Err(e) if e.matches(c::ENOENT) => return Ok(None),
-        k => t.bkey_make_mut_noupdate(k?)?,
-    };
-    t.edit_update(&iter, k, UpdateTriggerFlags::empty(), edit).map(Some)
-}
-
 fn cannot_undelete<T>(fs: &Fs, msg: &mut LogMsg<'_>, why: &str) -> Result<T, BchError> {
     let _ = write!(msg, "cannot undelete: {why}");
     fs.throw(Errcode::fsck_repair_unimplemented)
@@ -703,7 +661,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, Sna
                     };
 
                     parent.v_mut().children[i] = id.into();
-                    normalize_child_pointers(parent.v_mut());
+                    parent.v_mut().normalize_children();
                 }
                 Ok(())
             })?;
@@ -742,7 +700,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, Sna
 
             if let Some(i) = parent.v().children().iter().position(|&c| c == child_id) {
                 parent.v_mut().children[i] = id.into();
-                normalize_child_pointers(parent.v_mut());
+                parent.v_mut().normalize_children();
             }
             Ok(())
         })?;
@@ -1098,16 +1056,6 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &Snapsho
     }
 }
 
-fn add_nodup(fs: &Fs, list: &mut Vec<u32>, id: u32) -> Result<(), BchError> {
-    if !list.contains(&id) {
-        list.push(id).inspect_err(|_| {
-            fs.log().err(message!(
-                "error reallocating snapshot_id_list (size {})", list.capacity()));
-        })?;
-    }
-    Ok(())
-}
-
 /// Sort one node: dead (no live descendant - keys are dropped) or redundant
 /// (exactly one live child - keys migrate to live_child). Two live children:
 /// nothing to do.
@@ -1180,11 +1128,11 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
     let no_keys = state(&v) == SnapshotState::no_keys;
 
     if !no_keys {
-        add_nodup(fs, &mut coll.nodes.deleting_from_trees, fs.snapshots.tree(id))?;
+        add_nodup(&mut coll.nodes.deleting_from_trees, fs.snapshots.tree(id))?;
     }
 
     if nr_live_children == 0 {
-        add_nodup(fs, &mut coll.nodes.delete_leaves, id)?;
+        add_nodup(&mut coll.nodes.delete_leaves, id)?;
     } else {
         let n = InteriorDelete { id, live_child };
 

@@ -45,27 +45,11 @@ use crate::fs::{Fs, FsFlag};
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::snapshots::{delete, snapshot, subvolume};
+use crate::snapshots::snapshot::{add_nodup, edit_node, lookup_node};
 use crate::util::{alloc::Vec, printbuf::Msg, vstructs::Validated, Join, Printbuf, ToText};
 use crate::{message, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use crate::format::{Bpos, Btree, MetadataVersion, BTREE_MAX_DEPTH};
-
-/// Snapshot node @id's key, None if there's none: fsck can't assume a node
-/// exists, and absence as a value can't be returned as an error by mistake.
-/// The whole key: the topology checks print nodes they didn't start from.
-fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<BkeyI<Snapshot>>, BchError> {
-    snapshot::lookup_key(t, id).found()
-}
-
-/// Snapshot node @id's key, as a mutable copy for @edit, then queued for the
-/// commit.
-fn edit_node<'a, 't, R>(t: &TransAttempt<'a, 't>, id: u32,
-                        edit: impl FnOnce(&mut TransBkey<'a, 't, Snapshot>) -> Result<R, BchError>)
-    -> Result<R, BchError>
-{
-    t.bkey_get_mut(Btree::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
-                   UpdateTriggerFlags::empty(), edit)
-}
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
 /// btrees keyed by id, subvolumes and snapshot trees.
@@ -518,9 +502,7 @@ fn set_ptr(s: &mut Snapshot, role: Role, old: u32, new: u32) {
             if let Some(child) = s.children.iter_mut().find(|c| (**c).get() == old) {
                 *child = new.into();
             }
-            if s.children()[0] < s.children()[1] {
-                s.children.swap(0, 1);
-            }
+            s.normalize_children();
         }
     }
 }
@@ -664,9 +646,7 @@ fn recreate(t: &TransAttempt<'_, '_>, id: u32, place: Place) -> Result<(), BchEr
     let v = n.v_mut();
     v.parent    = place.parent.into();
     v.children  = place.children.map(Into::into);
-    if v.children()[0] < v.children()[1] {
-        v.children.swap(0, 1);
-    }
+    v.normalize_children();
     v.tree      = place.tree.into();
     v.depth     = fs.snapshots.depth(place.parent).into();
     v.btime.lo  = fs.current_time().into();
@@ -1397,13 +1377,6 @@ impl TreeReconstruct {
         self.cur_pos = pos;
         add_nodup(&mut self.cur_ids, pos.snapshot)
     }
-}
-
-fn add_nodup(ids: &mut Vec<u32>, id: u32) -> Result<(), BchError> {
-    if !ids.contains(&id) {
-        ids.push(id)?;
-    }
-    Ok(())
 }
 
 /// Recreate missing node @id, a tree to itself: with a tree key, if there
