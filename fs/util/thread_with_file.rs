@@ -25,11 +25,10 @@
 //!  - A buffer grows under its spinlock, and is copied to and from userspace
 //!    there, copy_*_user_nofault() after faulting in - a copy only of what was
 //!    faulted in, or it could fail every time.
-//!  - Waits and poll() read the length BufGuard publishes, without the lock;
-//!    readline's wait looks under it, so one wait carries the whole timeout.
-//!    A condition runs in the sleep's task state, which a spinlock keeps and
-//!    an rtlock saves. readline sleeps TASK_IDLE: someone typing is no hung
-//!    task.
+//!  - A wait's condition takes the lock - readline's finds its line there, so
+//!    one wait carries the whole timeout - in the sleep's task state, which a
+//!    spinlock keeps and an rtlock saves. readline sleeps TASK_IDLE: someone
+//!    typing is no hung task.
 
 use crate::c;
 use crate::data_structures::fifo::FifoRead;
@@ -48,9 +47,7 @@ use crate::os::kernel::{current_comm, HZ};
 use core::time::Duration;
 use crate::os::kthread::Kthread;
 use crate::os::sched::may_sleep;
-use crate::util::projections::Volatile;
 use crate::util::sleep::Sleep;
-use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -124,7 +121,7 @@ struct Buf {
 #[pin_data]
 struct StdioBuf {
     #[pin]
-    buf:  Locked<SpinLockIrq, Buf, Volatile<usize>>,
+    buf:  Locked<SpinLockIrq, Buf>,
     events: EventCount,
     #[pin]
     poll: PollQueue,
@@ -133,18 +130,18 @@ struct StdioBuf {
 impl StdioBuf {
     fn new() -> impl PinInit<Self> {
         pin_init!(StdioBuf {
-            buf  <- new_lock!(Buf::default(), ::pin_init::zeroed()),
+            buf  <- new_lock!(Buf::default()),
             events: EventCount::new(),
             poll <- PollQueue::new(),
         })
     }
 
     fn len(&self) -> usize {
-        self.buf.get()
+        self.lock().data.len()
     }
 
-    fn lock(&self) -> BufGuard<'_> {
-        BufGuard(self.buf.lock())
+    fn lock(&self) -> ExclusiveGuard<'_, SpinLockIrq, Buf> {
+        self.buf.lock()
     }
 
     fn wake(&self) {
@@ -155,29 +152,6 @@ impl StdioBuf {
     fn wait_interruptible(&self, mut cond: impl FnMut() -> bool) -> Result<(), BchError> {
         self.events.wait_until(Sleep::INTERRUPTIBLE, || cond().then_some(()))
             .map_err(|_| BchError::from(c::ERESTARTSYS))
-    }
-}
-
-struct BufGuard<'a>(ExclusiveGuard<'a, SpinLockIrq, Buf, Volatile<usize>>);
-
-impl Deref for BufGuard<'_> {
-    type Target = Buf;
-
-    fn deref(&self) -> &Buf {
-        &self.0
-    }
-}
-
-impl DerefMut for BufGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Buf {
-        &mut self.0
-    }
-}
-
-impl Drop for BufGuard<'_> {
-    fn drop(&mut self) {
-        let len = self.0.data.len();
-        self.0.published().set(len);
     }
 }
 
@@ -226,7 +200,8 @@ impl StdioRedirect {
 
     /// has_room(), for input: which may grow past the limit for a line.
     fn input_has_room(&self) -> bool {
-        self.has_room(&self.input) || self.input.lock().lines == 0
+        let b = self.input.lock();
+        b.data.len() < STDIO_REDIRECT_BUFSIZE || b.lines == 0 || self.done()
     }
 
     /// The thread's own output, or a question: @msg in whole, once output's
