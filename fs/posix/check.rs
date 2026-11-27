@@ -664,36 +664,40 @@ pub fn reconstruct_subvol_root(
         return Ok(inum);
     }
 
-    // Find the root, don't mint one: when the subvolume key is what went missing,
-    // the inode with bi_subvol == @subvol is still there, and a second root would
-    // orphan the real contents. Nor can it wait for a later pass: a subvolume key
-    // with inode == 0 is rejected (subvol_inode_bad).
-    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, 0),
-                                  BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
-    let root = iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<inode::Inodes>().map(|k| inode::unpack(fs, k)) {
-            Some(u) if u.bi_subvol == subvol => ControlFlow::Break(Some(u.bi_inum)),
-            _ => ControlFlow::Continue(()),
-        }))?;
-
-    root.ok_or_else(|| {
+    subvol_root_named(t, subvol)?.ok_or_else(|| {
         fs.log().err(message!("no root inode found for subvol {subvol}, can't reconstruct"));
         fs.err(Errcode::fsck_repair_unimplemented)
     })
+}
+
+/// The first inode, in any snapshot, that @pred accepts, as (subvolume, inum):
+/// a subvolume's root names it.
+fn find_root(t: &TransAttempt<'_, '_>, mut pred: impl FnMut(u32, &InodeUnpacked) -> bool)
+    -> Result<Option<(u32, u64)>, BchError>
+{
+    let fs = t.fs();
+    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, 0),
+                                  BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_norestart(t, |_, k| Ok(
+        match k.arm::<inode::Inodes>().map(|i| inode::unpack(fs, i)) {
+            Some(u) if pred(k.k.p.snapshot, &u) => ControlFlow::Break(Some((u.bi_subvol, u.bi_inum))),
+            _ => ControlFlow::Continue(()),
+        }))
+}
+
+/// Subvolume @subvol's root inode, wherever it is. Found, not minted: when the
+/// subvolume key is what went missing, the inode naming it is still there, and
+/// a second root would orphan the real contents. Nor can it wait for a later
+/// pass: a subvolume key with inode == 0 is rejected (subvol_inode_bad).
+pub fn subvol_root_named(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<Option<u64>, BchError> {
+    Ok(find_root(t, |_, u| u.bi_subvol == subvol)?.map(|(_, inum)| inum))
 }
 
 /// The subvolume leaf @snapshot was made for, by its root: the inode there
 /// naming a subvolume - a new subvolume or snapshot writes its root's version
 /// at its own leaf - as (subvolume, inum).
 pub fn subvol_root_at(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Option<(u32, u64)>, BchError> {
-    let fs = t.fs();
-    let mut iter = BtreeIter::new(t, Btree::inodes, pos(0, 0),
-                                  BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
-    iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<inode::Inodes>().filter(|k| k.k.p.snapshot == snapshot).map(|k| inode::unpack(fs, k)) {
-            Some(u) if u.bi_subvol != 0 => ControlFlow::Break(Some((u.bi_subvol, u.bi_inum))),
-            _ => ControlFlow::Continue(()),
-        }))
+    find_root(t, |s, u| s == snapshot && u.bi_subvol != 0)
 }
 
 /// Where root inode @root, at @snapshot, says its subvolume is mounted.

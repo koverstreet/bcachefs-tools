@@ -84,29 +84,29 @@ fn subvol_misdirected(t: &TransAttempt<'_, '_>, id: u32, subvol: u32, s: &Subvol
     Ok(subvol_claiming(t, id)?.is_none())
 }
 
-/// Rebuild the subvolume of live leaf @id, which nothing points at: as the one
-/// its root inode names, unless that id's taken, around that root - or if the
-/// leaf's version of its root is gone too, around the root its tree's
-/// subvolumes share.
-fn rebuild_subvol(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
+/// The subvolume to rebuild for live leaf @id, and the root to rebuild it
+/// around: @want, if the leaf's backref names it, around the root inode naming
+/// it; else the one the leaf's root inode names, unless that id's taken. If the
+/// root is gone too, the root its tree's master has - None if there's no master
+/// either. Decided before anything is queued.
+fn lost_subvol(t: &TransAttempt<'_, '_>, id: u32, want: Option<u32>) -> Result<Option<(u32, u64)>, BchError> {
     let fs = t.fs();
-    let own = check::subvol_root_at(t, id)?;
+    let own = match want {
+        Some(subvol) => check::subvol_root_named(t, subvol)?.map(|inum| (subvol, inum)),
+        None         => check::subvol_root_at(t, id)?,
+    };
 
     let root = match own {
         Some((_, inum)) => inum,
         None => match snapshot::tree_lookup(t, fs.snapshots.tree(id))?.master_subvol.get() {
-            0 => {
-                fs.log().err(message!(
-                    "snapshot {id} has no subvolume, no root inode, and its tree no master: \
-                     can't rebuild a subvolume for it"));
-                return Err(fs.err(Errcode::fsck_repair_unimplemented));
-            }
+            0      => return Ok(None),
             master => subvolume::get(t, master, false)?.inode.get(),
         },
     };
 
-    let subvol = match own {
-        Some((subvol, _)) if subvolume::__get_snapshot(t, subvol, false).found()?.is_none() => subvol,
+    let subvol = match (want, own) {
+        (Some(subvol), _) => subvol,
+        (None, Some((subvol, _))) if subvolume::__get_snapshot(t, subvol, false).found()?.is_none() => subvol,
         _ => {
             let mut iter = BtreeIter::uninit(t.trans());
             t.bkey_get_empty_slot(&mut iter, Btree::subvolumes, POS_MIN, pos(0, u32::MAX as u64))?;
@@ -114,7 +114,7 @@ fn rebuild_subvol(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         }
     };
 
-    check::reconstruct_subvol(t, id, subvol, root)
+    Ok(Some((subvol, root)))
 }
 
 /// A state field by name; "(invalid state)" if it isn't one.
@@ -1118,20 +1118,16 @@ fn check_to_subvol<'a, 't>(
         // backref is a leaf, which reconstruct_subvol() needs and an inode's or
         // dirent's snapshot can't promise. Not while the snapshot is deleting: that's
         // a tombstoned deletion in flight.
-        if subvol.is_none() && !snap_deleting {
-            match check::reconstruct_subvol_root(t, id, subvol_id, None) {
-                Ok(root) => {
-                    if fsck_err!(t, snapshot_subvol_backref_wrong,
-                                 "snapshot points to missing subvolume {subvol_id} - reconstructing it:\n{}",
-                                 n.to_text(fs))? {
-                        check::reconstruct_subvol(t, id, subvol_id, root)?;
-                    }
-                    return Ok(());
+        if subvol.is_none() && !snap_deleting && fs.snapshots.is_leaf(id)? {
+            if let Some((subvol, root)) = lost_subvol(t, id, Some(subvol_id))? {
+                if fsck_err!(t, snapshot_subvol_backref_wrong,
+                             "snapshot points to missing subvolume {subvol_id} - reconstructing it:\n{}",
+                             n.to_text(fs))? {
+                    check::reconstruct_subvol(t, id, subvol, root)?;
                 }
-                // couldn't find a root inode for it - fall through and report
-                Err(e) if e.matches(Errcode::fsck_repair_unimplemented) => {}
-                Err(e) => return Err(e),
+                return Ok(());
             }
+            // no root to rebuild it around - fall through and report
         }
 
         // Wrong backref, or not rebuildable: the repair belongs to the pass after
@@ -1199,7 +1195,12 @@ fn check_to_subvol<'a, 't>(
         } else if fsck_err!(t, subvol_missing,
                             "live snapshot leaf has no subvolume, and none points at it - rebuilding it:\n{}",
                             n.to_text(fs))? {
-            return rebuild_subvol(t, id);
+            let Some((subvol, root)) = lost_subvol(t, id, None)? else {
+                fs.log().err(message!("snapshot {id} has no subvolume, no root inode, and its tree no master: \
+                                       can't rebuild a subvolume for it"));
+                return Err(fs.err(Errcode::fsck_repair_unimplemented));
+            };
+            return check::reconstruct_subvol(t, id, subvol, root);
         }
     }
 
