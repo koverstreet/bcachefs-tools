@@ -4,43 +4,54 @@
 //! put; beginning again, its memory, and restarts; the filesystem's list of
 //! them, and their names.
 
-use super::iter::{CommitOpts, TransAttempt};
-use super::trans_attempt::AttemptKey;
-use crate::alloc::{capacity::DiskReservation, buckets::FsUsageBase};
-use crate::btree::bkey::{bkey_val_to_text, BkeySC, BkeyI, BKEY_U64S};
-use crate::btree::path::{trans_paths_exit, trans_paths_init, table_arrays, PathIdx, Paths,
-    BTREE_ITER_INITIAL, BtreeTransPaths, BtreePath};
-use crate::c;
-use crate::btree::FsBtree;
+use core::cell::Cell;
+use core::marker::PhantomData;
+use core::mem::offset_of;
+use core::ops::ControlFlow;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use crate::alloc::{buckets::FsUsageBase, capacity::DiskReservation};
+use crate::btree::bkey::{bkey_val_to_text, BKEY_U64S, BkeyI, BkeySC};
+use crate::btree::iter::{CommitOpts, TransAttempt};
 use crate::btree::locking::BtreeBkeyCachedCommon;
+use crate::btree::path::{table_arrays, trans_paths_exit, trans_paths_init, BTREE_ITER_INITIAL,
+    BtreePath, BtreeTransPaths, PathIdx, Paths};
+use crate::btree::trans_attempt::AttemptKey;
 use crate::btree::update::{BtreeInsertEntry, BtreeTransCommitHook, BtreeTransSubbuf};
-use crate::c::rcu_head;
+use crate::btree::FsBtree;
+use crate::c::{self, rcu_head};
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
-use crate::journal::journal::JournalFlag;
-use crate::journal::pins::JournalEntryPin;
-use crate::locking::seqmutex::Seqmutex;
-use crate::locking::six::SixLockWaiter;
-use crate::journal::flush_wait::Flush;
 use crate::data_structures::{bitmap::Bitmap, dst_room::DstRoom};
 use crate::debug::trace::events;
 use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree, JsetEntry};
 use crate::fs::{Fs, FsFlag};
+use crate::journal::flush_wait::Flush;
+use crate::journal::journal::JournalFlag;
+use crate::journal::pins::JournalEntryPin;
 use crate::journal::validate::journal_entry_to_text;
-use crate::locking::{MemallocFlags, Locked, LockedBy, Mutex};
-use crate::{prt, new_lock};
+use crate::locking::seqmutex::Seqmutex;
+use crate::locking::six::SixLockWaiter;
+use crate::locking::{Locked, LockedBy, MemallocFlags, Mutex};
+use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64, SetOnce};
+use crate::os::percpu::{Counters, CpuGuard, PerCpu};
+use crate::os::sched;
 use crate::types::{bits_to_longs, NeBytes};
-use crate::util::alloc::{AllocError, Vec, Global};
-use crate::util::mempool::Mempool;
-use core::cell::Cell;
-use core::sync::atomic::AtomicU8;
-use crate::os::percpu::PerCpu;
+use crate::util::alloc::{AllocError, Global, Vec};
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::util::backtrace::{prt_backtrace, save_backtrace};
+use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::util::ffi::Opaque;
+use crate::util::log::Log;
+use crate::util::mempool::Mempool;
 use crate::util::projections::Volatile;
-use crate::util::rcu::Srcu;
-use crate::util::time_stats::{TimeStatsArray, TimeStats};
-use crate::util::vstructs::Validated;
-use cstruct_macros::{bitfield, BitfieldMembers, Init, MaybeZeroable, placed, TypeInfo};
+use crate::util::rcu::{self, Srcu};
+use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
+use crate::util::time_stats::{TimeStats, TimeStatsArray};
+use crate::util::vstructs::{Validated, ValidatedEntries, ViewEntries};
+use crate::util::{Printbuf, ToText};
+use crate::{new_lock, prt};
+use cstruct_macros::{bitfield, placed, BitfieldMembers, Init, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
 
 pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
@@ -60,26 +71,13 @@ pub struct TransKmallocTrace {
 #[repr(C)]
 #[derive(MaybeZeroable, Default)]
 pub struct TransMem {
-    pub(crate) buf:                    crate::util::alloc::Vec<u64, Global, u32>,
+    pub(crate) buf:                    Vec<u64, Global, u32>,
     /* bytes: what the next begin grows it to, restarted for room */
     pub(crate) realloc_bytes_required: u32,
     /* a mempool element: the pool's to have back */
     pub(crate) used_mempool:           bool,
 }
 
-/*
- * Transaction context for btree operations.
- *
- * Holds iterators/paths, pending updates, locks, and a memory arena for a
- * single logical btree operation.  On lock contention or memory pressure,
- * the transaction restarts: releases all locks, resets state, and retries
- * (via lockrestart_do() or similar retry loops).
- *
- *  - mem/mem_top: bump allocator, invalidated on every restart
- *  - Paths kept sorted in lock order to prevent deadlocks
- *  - SRCU read lock protects btree node memory from being freed;
- *    released periodically to avoid stalling reclaim
- */
 #[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
 pub struct BtreeTransBits {
     lock_may_not_fail:              bool,
@@ -338,25 +336,6 @@ pub struct FsBtreeTrans {
 pub struct TransStatsJson {
     pub buf: Printbuf,
 }
-
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-use crate::util::backtrace::{prt_backtrace, save_backtrace};
-use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
-#[cfg(kernel)]
-use kernel::sync::SetOnce;
-#[cfg(not(kernel))]
-use bcachefs_shim::sync::SetOnce;
-use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
-use crate::util::log::Log;
-use crate::os::{percpu::{Counters, CpuGuard}, sched};
-use crate::util::{rcu, Printbuf, ToText};
-use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
-use crate::util::vstructs::{ValidatedEntries, ViewEntries};
-use core::marker::PhantomData;
-use core::mem::{offset_of, size_of, size_of_val};
-use core::ops::ControlFlow;
-use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// btree_trans!(fs): a transaction named for the function it's created in.
 /// Transaction stats and lock contention are reported per function, under that

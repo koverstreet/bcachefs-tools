@@ -20,7 +20,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::Bpos;
 use crate::fs::{Fs, FsFlag};
 use crate::locking::MemallocFlags;
-use crate::util::{alloc::Vec, printbuf::{Printbuf, ToText}, rcu::read_lock, siphash::SipHash13Key};
+use crate::util::{alloc::Vec, rcu::read_lock, siphash::SipHash13Key, Printbuf, ToText};
 use crate::prt;
 use crate::os::kernel::HZ;
 use core::ptr::NonNull;

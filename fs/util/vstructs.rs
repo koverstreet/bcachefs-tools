@@ -49,8 +49,9 @@
 //! #[counted] generate from the field the struct declares.
 
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
+use crate::types::{ArmOf, Determinant};
 use crate::util::thin::ThinRef;
 
 /// Every byte of every value initialized - no padding, and no variant that
@@ -1402,7 +1403,6 @@ impl<'a, E: Unsized + SelfSized + ?Sized + 'a> EntryWalk for ViewEntriesMut<'a, 
     }
 }
 
-
 /// The @T at byte @at of @rest - a field a grown type gained, from the bytes
 /// past its floor (#[grown]) - or as much of it as there is, the rest zero,
 /// as for a value written before the type had it.
@@ -1499,7 +1499,7 @@ unsafe impl<T: SizedArm> Unsized for T {
 /// # Safety
 /// @U is plain data, and @A one of its arms, plain data in bounds @at.
 pub unsafe fn from_arm<U, D, A>(arm: A, at: usize) -> U
-where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag>
+where D: Determinant<U>, A: ArmOf<U, Tag = D::Tag>
 {
     let mut u = unsafe { with_payload(arm, at) };
     D::set(&mut u, A::TAG);
@@ -1513,7 +1513,7 @@ where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag>
 /// As from_arm()'s.
 pub unsafe fn from_arm_tailed<U, D, A>(arm: A, tail: &[<A::Of<Validated> as Unsized>::Elem], at: usize)
     -> Result<U, VStructError>
-where D: crate::types::Determinant<U>, A: crate::types::ArmOf<U, Tag = D::Tag> + CountedHead
+where D: Determinant<U>, A: ArmOf<U, Tag = D::Tag> + CountedHead
 {
     assert_eq!(arm.nr(), tail.len(), "{}: its header's count, and the elements given",
                core::any::type_name::<A>());
@@ -1572,7 +1572,7 @@ pub trait ArmSized: Sized {
     type Tag;
     type Head: Plain + Copy;
     /// The tag's, over the head.
-    type Det: crate::types::Determinant<Self::Head>;
+    type Det: Determinant<Self::Head>;
 
     /// The value at the start of @b: an error if its tag isn't one of ours -
     /// how long it is, only its arm says - or @b is shorter than its arm.
@@ -1582,7 +1582,7 @@ pub trait ArmSized: Sized {
     fn arm_bytes(&self) -> &[u8];
 
     /// Its tag, as the head holds it: its variant's.
-    fn tag_raw(&self) -> <Self::Det as crate::types::Determinant<Self::Head>>::Tag;
+    fn tag_raw(&self) -> <Self::Det as Determinant<Self::Head>>::Tag;
 
     /// How long it is: its arm's size.
     fn bytes(&self) -> usize {
@@ -1601,7 +1601,7 @@ pub trait ArmSized: Sized {
         let b = self.arm_bytes();
         let (to, rest) = out.split_at_mut(b.len());
         to.copy_from_slice(b);
-        <Self::Det as crate::types::Determinant<Self::Head>>::set(
+        <Self::Det as Determinant<Self::Head>>::set(
             cast_plain_mut(to).expect("an arm starts with the head"), self.tag_raw());
         rest
     }

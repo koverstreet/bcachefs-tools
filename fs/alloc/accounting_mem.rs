@@ -1,37 +1,34 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::alloc::accounting::{self, accounting_bkey, is_mem, key_to_text,
-                        replicas_entry, Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
+use crate::alloc::accounting::{self, accounting_bkey, is_mem, key_to_text, replicas_entry,
+    Accounting, CounterSet, Counters, DiskAccountingPos, MAX_COUNTERS};
 use crate::alloc::buckets::FsUsageBase;
+use crate::alloc::capacity::MarkLockAt;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
+use crate::alloc::replicas_format::ReplicasEntryV1;
+use crate::bcachefs_ioctl::ForceIf;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
-                         TransAttempt};
-use crate::btree::trans::TransGuard;
-use crate::alloc::capacity::MarkLockAt;
-use crate::alloc::replicas_format::ReplicasEntryV1;
-use crate::bcachefs_ioctl::ForceIf;
+    TransAttempt};
 use crate::btree::journal_overlay::JournalKeys;
-use crate::journal::journal::JournalRes;
-use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{self, MetadataVersion, Bpos, Bversion, DataType, Bkey, DegradedAction};
+use crate::btree::trans::TransGuard;
+use crate::data_structures::eytzinger::Eytzinger0;
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{self, Bkey, Bpos, Bversion, DataType, DegradedAction, MetadataVersion};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::{count_fsck_err, id, FsckErrCtx};
-use crate::init::passes;
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
 use crate::init::recovery::NotRw;
+use crate::journal::journal::JournalRes;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwSem, Shared, SharedGuard};
-use crate::debug::trace::events;
-use crate::util::alloc::{AllocError, Vec};
-use crate::data_structures::eytzinger::Eytzinger0;
 use crate::os::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
-use crate::util::printbuf::{Join, Msg};
-use crate::util::{rcu, Printbuf};
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::vstructs::{plain_bytes, ArmError, Unvalidated, Validated};
+use crate::util::{rcu, Join, Msg, Printbuf};
 use crate::{btree_trans, fsck_err, fsck_err_on, percpu_field};
-use zerocopy::IntoBytes;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Delta<'a> {
@@ -206,7 +203,7 @@ pub fn to_keys(fs: &Fs, types_mask: u32) -> Result<Vec<u8>, BchError> {
         }
 
         out.extend_from_slice(plain_bytes(&accounting_bkey(e.pos, v.len())))?;
-        out.extend_from_slice(v.as_bytes())?;
+        out.extend_from_slice(plain_bytes(v))?;
     }
     Ok(out)
 }

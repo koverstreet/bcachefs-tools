@@ -5,7 +5,8 @@
 
 use core::cell::{Cell, UnsafeCell};
 use core::ops::{Deref, DerefMut};
-use pin_init::{Init, Zeroable};
+use crate::util::alloc::init_at;
+use pin_init::{init_from_closure, Init, Zeroable};
 
 pub struct RefCell<T> {
     /* readers, or -1 for the writer */
@@ -24,9 +25,9 @@ impl<T> RefCell<T> {
     /// A RefCell holding the value @init makes, in place.
     pub fn init<E>(init: impl Init<T, E>) -> impl Init<Self, E> {
         unsafe {
-            ::pin_init::init_from_closure(move |slot: *mut Self| {
+            init_from_closure(move |slot: *mut Self| {
                 (&raw mut (*slot).borrow).write(Cell::new(0));
-                crate::util::alloc::init_at(init, UnsafeCell::raw_get(&raw const (*slot).value))
+                init_at(init, UnsafeCell::raw_get(&raw const (*slot).value))
             })
         }
     }

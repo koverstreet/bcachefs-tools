@@ -7,8 +7,7 @@
 //! place, no recursion, O(n log n), not stable.
 
 use core::cmp::Ordering;
-
-use super::heap::sift_down;
+use crate::data_structures::heap::sift_down;
 
 /// @v sorted by @cmp, as sort_unstable_by().
 pub fn heapsort_by<T>(v: &mut [T], mut cmp: impl FnMut(&T, &T) -> Ordering) {

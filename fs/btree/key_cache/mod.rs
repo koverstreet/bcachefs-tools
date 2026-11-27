@@ -15,42 +15,40 @@ mod fill;
 mod flush;
 pub(crate) use flush::{btree_insert_key_cached, btree_key_cache_drop};
 
-use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
-use crate::data_structures::{dst_room::DstRoom, fast_list::FastList, cuckoo::{Cuckoo, Entry}};
-use crate::btree::iter::TransAttempt;
-use crate::btree::path::{LockedNode, Paths, Write};
-use crate::btree::trans::BtreeTrans;
-use crate::c;
-use crate::btree::FsBtree;
-use crate::btree::locking::BtreeBkeyCachedCommon;
-use crate::journal::pins::JournalEntryPin;
-use crate::util::time_stats::TimeStat;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree};
-use crate::fs::{Fs, FsFlag};
-use crate::locking::six::{SixHold, SixLockInitFlags};
-use crate::prt;
-use crate::util::alloc::{init_at, Box, Global};
-use crate::util::hash::GoldenRatio;
-use crate::os::kernel::local_clock;
-use crate::os::module::Quiesced;
-use crate::os::slab::KmemCache;
-use crate::util::place::{Contained, PlacedDrop};
-use crate::util::projections::TearSafe;
-use crate::util::rcu::{read_lock, RcuHead, ReadGuard, SrcuReadGuard};
-use crate::util::rcu_pending::{Allocated, RcuPending, RcuRealloc};
-use crate::os::shrinker::{Shrink, Shrinker};
-use crate::os::workqueue::{Queue, ReffedWork};
-use crate::util::{Printbuf, ToText};
-use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::Relaxed};
+use crate::btree::bkey::{BkeyI, BkeySC, SPOS_MAX};
+use crate::btree::iter::TransAttempt;
+use crate::btree::locking::BtreeBkeyCachedCommon;
+use crate::btree::path::{LockedNode, NodeLock, Paths, Write};
+use crate::btree::trans::BtreeTrans;
+use crate::btree::FsBtree;
+use crate::c;
+use crate::data_structures::{cuckoo::{Cuckoo, Entry}, dst_room::DstRoom, fast_list::FastList};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bpos, Btree};
+use crate::fs::{Fs, FsFlag};
+use crate::journal::pins::JournalEntryPin;
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_write};
+use crate::locking::six::{SixHold, SixLockInitFlags};
+use crate::locking::LockedBy;
+use crate::os::kernel::local_clock;
+use crate::os::module::Quiesced;
+use crate::os::shrinker::{Shrink, Shrinker};
+use crate::os::slab::KmemCache;
+use crate::os::workqueue::{Queue, ReffedWork};
+use crate::prt;
+use crate::util::alloc::{init_at, init_or, Box, Flags, Global};
+use crate::util::hash::GoldenRatio;
+use crate::util::place::{Contained, PlacedDrop};
+use crate::util::projections::{TearSafe, Volatile};
+use crate::util::rcu::{read_lock, RcuDropMember, RcuHead, ReadGuard, SrcuReadGuard};
+use crate::util::rcu_pending::{Allocated, RcuPending, RcuRealloc};
+use crate::util::time_stats::TimeStat;
+use crate::util::{Printbuf, ToText};
 use cstruct_macros::{placed, Init, MaybeZeroable, Plain, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};
-use crate::btree::path::NodeLock;
-use crate::locking::LockedBy;
-use crate::util::{alloc::Flags, projections::Volatile, rcu::RcuDropMember};
 
 pub const BKEY_CACHED_ACCESSED: u32 = 0;
 pub const BKEY_CACHED_DIRTY: u32 = 1;
@@ -73,7 +71,7 @@ pub struct BkeyCached {
     pub journal: JournalEntryPin,
 
     #[init(LockedBy::new(Default::default(), ()))]
-    pub contents: LockedBy<crate::btree::key_cache::EntryContents, (), NodeLock<BkeyCached>>,
+    pub contents: LockedBy<EntryContents, (), NodeLock<BkeyCached>>,
     /* the key cache's lookups lock it: dropped once they're past it */
     #[rcu_head]
     #[init(unsafe { RcuDropMember::new() })]
@@ -107,10 +105,8 @@ impl BkeyCached {
     }
 }
 
-
 pub(crate) type KeyTable = Cuckoo<Entry<BkeyCached>, GoldenRatio>;
 
-#[allow(non_camel_case_types)]
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, MaybeZeroable, Plain)]
 pub struct BkeyCachedKey {
@@ -200,7 +196,6 @@ impl<const PCPU: bool> Cached<PCPU> {
 pub(crate) type Pending<const PCPU: bool> = RcuPending<'static, Cached<PCPU>, &'static KmemCache<BkeyCached>>;
 pub(crate) type Pendings = (Pending<false>, Pending<true>);
 
-#[allow(non_camel_case_types)]
 #[placed(FsBtree.key_cache)]
 #[pin_data]
 #[repr(C)]
@@ -211,7 +206,7 @@ pub struct FsBtreeKeyCache {
     pub(crate) table: KeyTable,
     /* what's in the table, to walk: an entry's slot is from insert to evict */
     #[pin]
-    #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_fs_btree_key_cache_init))]
+    #[init(init_or(FastList::new(), Errcode::ENOMEM_fs_btree_key_cache_init))]
     pub(crate) keys: FastList<BkeyCached>,
 
     #[pin]

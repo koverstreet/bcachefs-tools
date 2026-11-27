@@ -3,24 +3,24 @@
 //! gc_gens: each bucket's oldest_gen brought up to its gen, so gens can wrap.
 
 use crate::alloc::{background::alloc_to_v4, capacity::DiskReservation};
+use crate::btree::bbpos::Bbpos;
 use crate::btree::bkey::POS_MIN;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
-use crate::btree::bbpos::Bbpos;
-use crate::util::time_stats::TimeStat;
 use crate::data::ptrs::drop_stale_ptrs;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Btree, SbCompat, SbCompats};
 use crate::fs::{Fs, FsFlag};
 use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
+use crate::os::kernel::local_clock;
 use crate::sb::members::DevRef;
 use crate::util::alloc::Vec;
-use crate::os::kernel::local_clock;
-use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
 use crate::util::projections::Volatile;
-use crate::{message, btree_trans};
+use crate::util::rcu::read_lock;
+use crate::util::time_stats::TimeStat;
+use crate::util::Printbuf;
+use crate::{btree_trans, message};
 use cstruct_macros::{MaybeZeroable, TypeInfo};
 
 #[repr(C)]

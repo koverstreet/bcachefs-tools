@@ -28,54 +28,56 @@
 //! read_done() is node scan's as well, for the nodes it finds: the node its
 //! own, and no failures to record.
 
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, ValidateFlags, POS_MIN, SPOS_MAX};
-use crate::btree::async_ops::AsyncBtreeOp;
-use crate::btree::cache::{btree_id_level_to_text, Bounce, BtreeNodeCacheState, OwnedNode};
-use crate::btree::node::sort::{build_aux_trees, SortRuns};
-use crate::btree::node::{BtreeNode, NodeContents, BtreeNodeFlags};
-use crate::btree::path::Paths;
-use crate::btree::scrub::ReplicaRead;
-use crate::btree::trans::BtreeTrans;
-use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, validate_bset,
-                             validate_bset_keys, ErrAt, NodeIo, NodeValidate};
-use crate::c;
-use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
-use crate::data::ptrs::IoFailures;
-use crate::data::extents_format::BtreePtrV2;
-use crate::errcode::{status::BLK_STS_REMOVED, blk_status_to_bch_err, BchError, Errcode};
-use crate::sb::members::DevReadRefKind;
-use crate::sb::members_format::MemberErrorType;
-use crate::util::time_stats::TimeStat;
-use crate::data::checksum::{csum_err_msg, csum_vstruct, NONCE_BTREE, CHACHA_BLOCK_SIZE};
-use crate::data::ptrs::BkeyVRead;
-use crate::debug::trace::events;
-use crate::format::{BkeyType, Btree, BtreeFlags, DataType, Nonce, Csum, Bkey, Bset, btree_node,
-    BtreeNodeEntry, Bversion, BsetHead};
-use crate::fs::{Dev, Fs};
-use crate::init::{damage::note_lost_extents, error::id, passes::RecoveryPass, recovery::btree_lost_data};
-use crate::sb::{errors::FsckFlags, members::DevIoRef};
-use crate::types::{Le32, Le64};
-use crate::locking::{six::{SixHold, SixLockType::SIX_LOCK_write}, MemallocFlags};
-use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool};
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-use crate::os::kernel::{random_u64, random_u64_below};
-use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
-use crate::util::log::LogLevel;
-use crate::os::module::{Quiesced, ThisModule};
-use crate::util::late::{Late, ModuleInit};
-use crate::util::mempool::Mempool;
-use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
-                            Unsized, Unvalidated, VStruct, Validated};
-use crate::util::{backref::BackRef, printbuf::Msg};
-use crate::util::Printbuf;
-use crate::{fs_fatal_error, ratelimit, prt};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Deref, Range};
 use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::{fence, Ordering::SeqCst};
+use crate::btree::async_ops::AsyncBtreeOp;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, POS_MIN, SPOS_MAX, ValidateFlags};
+use crate::btree::cache::{btree_id_level_to_text, Bounce, BtreeNodeCacheState, OwnedNode};
+use crate::btree::node::sort::{build_aux_trees, SortRuns};
+use crate::btree::node::{BtreeNode, BtreeNodeFlags, NodeContents};
+use crate::btree::path::Paths;
+use crate::btree::scrub::ReplicaRead;
+use crate::btree::trans::BtreeTrans;
+use crate::btree::validate::{btree_err_on, btree_node_bkey_val_validate, validate_bset,
+    validate_bset_keys, ErrAt, NodeIo, NodeValidate};
+use crate::c;
+use crate::data::checksum::{csum_err_msg, csum_vstruct, CHACHA_BLOCK_SIZE, NONCE_BTREE};
+use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
+use crate::data::extents_format::BtreePtrV2;
+use crate::data::ptrs::{BkeyVRead, IoFailures};
+use crate::debug::{params::{btree_node_merging_disabled, inject_invalid_keys}, trace::events};
+use crate::errcode::{blk_status_to_bch_err, status::BLK_STS_REMOVED, BchError, Errcode};
+use crate::format::{btree_node, Bkey, BkeyType, Bset, BsetHead, Btree, BtreeFlags, BtreeNodeEntry,
+    Bversion, Csum, DataType, Nonce};
+use crate::fs::{Dev, Fs};
+use crate::init::damage::note_lost_extents;
+use crate::init::error::id;
+use crate::init::passes::RecoveryPass;
+use crate::init::recovery::btree_lost_data;
+use crate::locking::{six::{SixHold, SixLockType::SIX_LOCK_write}, MemallocFlags};
+use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool};
+use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
+#[cfg(CONFIG_BCACHEFS_DEBUG)]
+use crate::os::kernel::{random_u64, random_u64_below};
+use crate::os::module::{Quiesced, ThisModule};
+use crate::sb::errors::FsckFlags;
+use crate::sb::members::{DevIoRef, DevReadRefKind};
+use crate::sb::members_format::MemberErrorType;
+use crate::types::{Le32, Le64};
+use crate::util::backref::BackRef;
+use crate::util::late::{Late, ModuleInit};
+use crate::util::log::LogLevel;
+use crate::util::mempool::Mempool;
+use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut,
+    Head, Unsized, Unvalidated, VStruct, Validated};
+use crate::util::{Msg, Printbuf};
+use crate::{fs_fatal_error, prt, ratelimit};
 use cstruct_macros::in_place;
 use pin_init::{pin_data, pin_init};
 
@@ -301,7 +303,7 @@ impl NodeRead<'_> {
 
     fn maybe_merge(&self) {
         let (fs, contents) = (self.fs, self.node.contents());
-        if !crate::debug::params::btree_node_merging_disabled() &&
+        if !btree_node_merging_disabled() &&
            (contents.data().min_key != POS_MIN || self.node.key().k.p != SPOS_MAX) &&
            contents.nr.live_u64s < fs.btree.foreground_merge_threshold / 2 {
             /* Ensure very empty btree nodes get merged, in case they're
@@ -781,7 +783,7 @@ fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resul
 
             match btree_node_bkey_val_validate(fs, b, u, ValidateFlags::empty()) {
                 Err(err) if err == BchError::from(Errcode::fsck_delete_bkey) => true,
-                _ if crate::debug::params::inject_invalid_keys() && u.k.bversion == Bversion::MAX => true,
+                _ if inject_invalid_keys() && u.k.bversion == Bversion::MAX => true,
                 Err(err) => {
                     v.replica_failed();
                     return Err(err);

@@ -6,19 +6,18 @@
 //! perf_test's test_raid_bench; in userspace,
 //! `cargo bench -p bcachefs-kernel --bench raid`.
 
-use super::TestRet;
+#[cfg(not(kernel))]
+use bcachefs_shim as kernel;
 use crate::c;
 use crate::data_structures::array_vec::ArrayVec;
+use crate::debug::tests::TestRet;
 use crate::errcode::BchError;
 use crate::os::bio::{io_buf, IoBuf};
 use crate::os::kernel::local_clock;
 use crate::prt;
 use crate::util::alloc::Flags;
-use crate::util::printbuf::Printbuf;
 use crate::util::raid::{fold, recover};
-
-#[cfg(not(kernel))]
-use bcachefs_shim as kernel;
+use crate::util::Printbuf;
 
 /// A block's bytes: a reconstructed read's window, and a bucket's worth
 const BLOCKS: &[usize] = &[4 << 10, 256 << 10];

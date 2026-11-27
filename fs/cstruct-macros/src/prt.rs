@@ -209,7 +209,7 @@ pub(crate) fn prt(PrtInput { krate, out, fmt, args }: PrtInput) -> syn::Result<T
                 };
 
                 body.push(match spec.is_empty() {
-                    true => quote!((&#krate::util::printbuf::prt_arg::Arg(#arg)).prt(__bch_out);),
+                    true => quote!((&#krate::util::prt_arg::Arg(#arg)).prt(__bch_out);),
                     // the argument itself, not its reference: {:p} of a
                     // reference is where the reference is
                     false => {
@@ -238,7 +238,7 @@ pub(crate) fn prt(PrtInput { krate, out, fmt, args }: PrtInput) -> syn::Result<T
             (#(#bindings,)*) => {
                 let __bch_out: &mut #krate::util::Printbuf = &mut *(#out);
                 #[allow(unused_imports)]
-                use #krate::util::printbuf::prt_arg::{ViaText as _, ViaDisplay as _};
+                use #krate::util::prt_arg::{ViaText as _, ViaDisplay as _};
                 #(#body)*
             }
         }

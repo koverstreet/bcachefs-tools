@@ -1,57 +1,53 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use core::mem::offset_of;
+use core::ops::Range;
+use core::pin::Pin;
+use core::sync::atomic::{fence, AtomicI64, Ordering::{Relaxed, SeqCst}};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BkeyValidateContext,
-    BkeyValidateFrom};
+use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, BkeyValidateContext, BkeyValidateFrom,
+    ValidateFlags};
 use crate::btree::cache::Bounce;
 use crate::btree::iter::{BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
-                         Watermark};
-use crate::btree::node::sort::{
-    btree_node_compact, btree_node_set_needs_whiteout, btree_node_sort, build_aux_trees, drop_whiteouts,
-    sort_whiteouts, CompactMode, WriteSortRuns,
-};
-use crate::btree::node::bset::MAX_BSETS;
-use crate::btree::node::{BtreeNode, NodeContents, NodeKey, NR_WRITES, BtreeNodeFlags,
-    BtreeWriteType};
+    Watermark};
 use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_READ_LOCKED;
+use crate::btree::node::bset::MAX_BSETS;
+use crate::btree::node::sort::{btree_node_compact, btree_node_set_needs_whiteout, btree_node_sort,
+    build_aux_trees, drop_whiteouts, sort_whiteouts, CompactMode, WriteSortRuns};
+use crate::btree::node::{BtreeNode, BtreeNodeFlags, BtreeWriteType, NR_WRITES, NodeContents,
+    NodeKey};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
-use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
+use crate::btree::trans::BtreeTrans;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
-use crate::{btree_trans, fs_fatal_error, fs_inconsistent, prt};
 use crate::c;
-use crate::data::ptrs::IoFailures;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
+use crate::data::ptrs::{IoFailures, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::util::time_stats::TimeStat;
-use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_replicas::write_replicas;
 use crate::data_structures::list::Walk;
 use crate::debug::trace::events;
 use crate::errcode::{BchError, Errcode};
+use crate::format::{btree_node, Bset, Btree, BtreeNodeEntry, DataType, MetadataVersion};
 use crate::fs::Fs;
-use crate::format::{Btree, DataType, Bset, btree_node, BtreeNodeEntry, MetadataVersion};
 use crate::init::error::BkeyValidate;
-use crate::posix::inode_opts::get_io_opts;
 use crate::locking::{six::{six_lock_counts, six_lock_write_held, SixLockType}, MemallocFlags};
-use crate::types::{Le16, Le64};
-use crate::util::backref::BackRef;
 use crate::os::bio::{Bio, BioInPlace, BioOwner, BvecMempool};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
-use crate::util::late::{Late, ModuleInit};
 use crate::os::workqueue::Queue;
+use crate::posix::inode_opts::get_io_opts;
+use crate::types::{Le16, Le64};
+use crate::util::backref::BackRef;
+use crate::util::late::{Late, ModuleInit};
 use crate::util::mempool::Mempool;
-use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, TaskSlot};
-use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::util::names::Names;
+use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, TaskSlot};
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
 use crate::util::{rcu, HumanReadable, Printbuf};
-use core::mem::offset_of;
-use core::ops::Range;
-use core::pin::Pin;
-use core::sync::atomic::{fence, Ordering::{Relaxed, SeqCst}};
+use crate::{btree_trans, fs_fatal_error, fs_inconsistent, prt};
 use cstruct_macros::{bch_enum, in_place, MaybeZeroable};
-use core::sync::atomic::AtomicI64;
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -59,7 +55,6 @@ pub struct BtreeWriteStats {
     pub nr: AtomicI64,
     pub bytes: AtomicI64,
 }
-
 
 /*
  * blk-wbt.c throttles all writes except those that have both REQ_SYNC

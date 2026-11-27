@@ -4,9 +4,9 @@
 
 use crate::format::MetadataVersion;
 use crate::types::Le16;
-use zerocopy::byteorder::little_endian as le;
 use crate::util::vstructs::Head;
 use cstruct_macros::{counted, whole, MaybeZeroable, Plain, TypeInfo};
+use zerocopy::byteorder::little_endian as le;
 
 /*
  * Packed, recovery_passes at offset 2: zerocopy's le::U64, aligned to 1,

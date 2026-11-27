@@ -12,12 +12,13 @@
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::sync::atomic::{AtomicU32, Ordering::{Acquire, Relaxed, Release}};
-
-use super::{Refcount, TryRefcount, WaitableRef};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::util::alloc::current_gfp;
 use crate::util::futex::{futex_wait, futex_wake};
+use crate::util::refcount::{Refcount, TryRefcount, WaitableRef};
 use crate::util::sleep::Sleep;
+use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 #[repr(C)]
 pub struct PercpuRef {
@@ -54,25 +55,25 @@ unsafe extern "C" fn release<F: OnRelease>(r: *mut c::percpu_ref) {
 
 impl PercpuRef {
     /// percpu_ref_init(): one ref, the owner's, which stop() puts.
-    pub fn new() -> impl ::pin_init::PinInit<Self, BchError> {
+    pub fn new() -> impl PinInit<Self, BchError> {
         Self::init::<()>(0)
     }
 
     /// As one stop()ped and waited for, until start(): F's released() runs
     /// each time it's stopped and the last ref is put.
-    pub fn new_dead<F: OnRelease>() -> impl ::pin_init::PinInit<Self, BchError> {
+    pub fn new_dead<F: OnRelease>() -> impl PinInit<Self, BchError> {
         Self::init::<F>(c::PERCPU_REF_INIT_DEAD as u32)
     }
 
-    fn init<F: OnRelease>(flags: u32) -> impl ::pin_init::PinInit<Self, BchError> {
+    fn init<F: OnRelease>(flags: u32) -> impl PinInit<Self, BchError> {
         let dead = flags & c::PERCPU_REF_INIT_DEAD as u32 != 0;
         unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+            pin_init_from_closure(move |slot: *mut Self| {
                 (&raw mut (*slot).released).write(AtomicU32::new(dead as u32));
                 (&raw mut (*slot)._pin).write(PhantomData);
                 ret_to_result_void(c::percpu_ref_init(UnsafeCell::raw_get(&raw const (*slot).r),
                                                       Some(release::<F>), flags,
-                                                      crate::util::alloc::current_gfp()))
+                                                      current_gfp()))
             })
         }
     }
@@ -96,7 +97,7 @@ impl PercpuRef {
 }
 
 // Zeroed, it was never initialized: percpu_ref_exit() of one frees nothing.
-unsafe impl ::pin_init::Zeroable for PercpuRef {}
+unsafe impl Zeroable for PercpuRef {}
 
 impl Drop for PercpuRef {
     fn drop(&mut self) {

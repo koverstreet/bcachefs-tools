@@ -9,10 +9,9 @@ use bcachefs_kernel::journal::read::{
 };
 use bcachefs_kernel::journal::validate::journal_entry_to_text;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::util::{ToText, vstructs::SelfSized};
+use bcachefs_kernel::util::{vstructs::SelfSized, Printbuf, ToText};
 use clap::Parser;
 
-use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::util::read_flag_list;
 use crate::wrappers::journal::JournalReplays;
 use bcachefs_kernel::format::{Btree, DegradedAction, ErrorAction, Jset, JsetEntry};

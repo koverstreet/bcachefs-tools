@@ -29,7 +29,7 @@ use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::init::dev::{dev_in_fs, SbHandle};
 use bcachefs_kernel::fs::newest;
 use bcachefs_kernel::sb::members;
-use bcachefs_kernel::util::printbuf::DateTime;
+use bcachefs_kernel::util::DateTime;
 
 pub struct Divergent {
     path: PathBuf,

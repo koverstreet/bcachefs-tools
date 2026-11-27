@@ -22,33 +22,33 @@
 //! the write it decides on there's the fsck question, so the two are atomic
 //! only because gc's walk is single threaded today.
 
-
-use crate::alloc::{buckets::gen_cmp, background::BUCKET_GC_GEN_MAX};
+use bitflags::bitflags;
+use crate::alloc::{background::BUCKET_GC_GEN_MAX, buckets::gen_cmp};
+use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
-use crate::btree::scrub::node_replica_good;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts,
-                         TransAttempt, TransBkey, UpdateTriggerFlags};
+    TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::scrub::node_replica_good;
 use crate::c;
-use crate::data::extents_format::{ExtentPtr, BKEY_EXTENT_U64s_MAX};
-use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::data::write::WriteFlags;
-use crate::fs::FsFlag;
-use crate::sb::{members::DevReadRefKind, members_format::MEMBER_INVALID};
-use crate::errcode::{Errcode, BchError};
 use crate::data::checksum::csum_err_msg;
 use crate::data::ec::stripe::ptr_matches_stripe_m;
-use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
-use crate::init::{damage, error::id};
-use crate::posix::inode_opts::get_io_opts;
-use crate::opts::data_type_str;
-use crate::util::{alloc::Flags, rcu::read_lock, Printbuf};
-use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
-use crate::{message, fsck_err, fsck_err_on, inode_fsck_err, prt};
+use crate::data::extents_format::{BKEY_EXTENT_U64s_MAX, ExtentPtr};
+use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr,
+    Ptrs, PtrsMut};
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::data::write::WriteFlags;
 use crate::data_structures::array_vec::ArrayVec;
-use bitflags::bitflags;
-use core::mem::size_of;
-use crate::format::{Btree, DataType, ErrorKeyReason, BKEY_PTRS_MAX, CsumType};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BKEY_PTRS_MAX, Btree, CsumType, DataType, ErrorKeyReason};
+use crate::fs::FsFlag;
+use crate::init::{damage, error::id, recovery::btree_lost_data};
+use crate::opts::data_type_str;
+use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
+use crate::posix::inode_opts::get_io_opts;
+use crate::sb::{members::DevReadRefKind, members_format::MEMBER_INVALID};
+use crate::util::{alloc::Flags, rcu::read_lock, Printbuf};
+use crate::{fsck_err, fsck_err_on, inode_fsck_err, message, prt};
 
 /// What a key with pointers is copied with room for: as large as one can get,
 /// for the reconcile entry and padding pointers set_needs_reconcile() may add.
@@ -81,7 +81,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
     let mut msg = fs.log().msg();
     prt!(&mut msg, "btree node with no readable replicas, dropping pointer:\n{}", n.to_text(fs));
     damage::note_lost_extents(fs, btree, n);
-    crate::init::recovery::btree_lost_data(fs, &mut msg, btree)?;
+    btree_lost_data(fs, &mut msg, btree)?;
     Ok(false)
 }
 
@@ -478,7 +478,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
             let held = iter.node(t).expect("the node, held by its iterator");
             let b = held.node();
             fs.btree_node_pin(b.node());
-            fs.async_btree_op(b.node(), b.contents(), crate::btree::async_ops::AsyncBtreeOp::Rewrite);
+            fs.async_btree_op(b.node(), b.contents(), AsyncBtreeOp::Rewrite);
             Ok(())
         })? {
             let mut msg = fs.log().msg();

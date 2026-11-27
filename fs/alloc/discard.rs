@@ -42,49 +42,49 @@
 //! fast discard and invalidate works the device's write io ref and a write
 //! ref - so going read-only, and a device going offline, wait for them.
 
-use crate::fs::{Dev, FsFlag, Fs};
+use core::pin::Pin;
+use core::sync::atomic::Ordering;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket, DevUsage};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
+use crate::alloc::format::AllocV4;
 use crate::alloc::lru::LruPos;
+use crate::alloc::lru_format::LRU_TIME_MAX;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
-                         LoopFlow, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, LoopFlow,
+    TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
-use crate::alloc::format::AllocV4;
-use crate::alloc::lru_format::LRU_TIME_MAX;
-use crate::util::time_stats::TimeStat;
-use crate::errcode::{Errcode, BchError};
 use crate::data::ptrs::Ptrs;
-use crate::init::{damage, error::id};
-use crate::locking::{MemallocFlags, SeqLock, Locked, Mutex};
 use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Backpointer, Bpos, Btree, DataType, ErrorKeyReason, MemberState};
+use crate::fs::{Dev, Fs, FsFlag};
+use crate::init::{damage, error::id};
+use crate::locking::{Locked, MemallocFlags, Mutex, SeqLock};
+use crate::os::bio::{Bio, BioSet, BioSubmit, Gathered, HoldsDev};
+use crate::os::blkdev;
+use crate::os::kernel::{unlikely, READ};
+use crate::os::workqueue::ReffedWork;
 use crate::sb::members::{DevIoRef, DevWriteRefKind};
 use crate::util::alloc::Vec;
 use crate::util::atomic::try_update;
-use crate::os::bio::{Bio, BioSubmit, Gathered, HoldsDev, BioSet};
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef, Scope};
-use crate::util::task::{waiter, WaitSync};
-use crate::os::blkdev;
-use crate::os::kernel::{unlikely, READ};
 use crate::util::place::Contained;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, WaitSync};
+use crate::util::time_stats::TimeStat;
 use crate::util::{HumanReadable, Printbuf};
-use crate::{message, fsck_err, has_bio, prt, new_lock};
-use core::pin::Pin;
-use core::sync::atomic::Ordering;
-use pin_init::{pin_data, pin_init, stack_pin_init};
-use crate::format::{Bpos, Btree, DataType, MemberState, ErrorKeyReason, Backpointer};
-use crate::os::workqueue::ReffedWork;
+use crate::{fsck_err, has_bio, message, new_lock, prt};
 use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
+use pin_init::{pin_data, pin_init, stack_pin_init};
 
 /// The discard worker's: its work, its bios, the discards in flight - see
 /// alloc/discard.rs.

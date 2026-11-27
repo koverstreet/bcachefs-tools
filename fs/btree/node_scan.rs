@@ -1,37 +1,37 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::cmp::{Ordering, Reverse};
-use core::mem::{offset_of, replace, size_of};
-
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::data_structures::array_vec::ArrayVec;
-
-use crate::btree::bkey::{BkeyV, BkeyVMut, POS_MIN, SPOS_MAX, BkeyValidateContext,
-    BkeyValidateFrom};
-use crate::init::{error::BkeyValidate, passes};
+use core::mem::{offset_of, replace};
+use crate::btree::bkey::{bkey_validate, BkeyV, BkeyVMut, BkeyValidateContext, BkeyValidateFrom,
+    POS_MIN, SPOS_MAX};
 use crate::btree::cache::{node_mem_alloc, OwnedNode};
 use crate::btree::journal_overlay;
 use crate::btree::node::{BtreeNode, NodeKey};
 use crate::btree::path::LockedNode;
 use crate::btree::read::{read_done, ReadInFlightNode};
 use crate::c;
-use crate::sb::{members_format::MemberErrorType, members::{DevIoRef, DevReadRefKind}};
-use crate::errcode::{Errcode, BchError};
 use crate::data::{extents_format::{BtreePtrV2, ExtentPtr}, ptrs::extent_ptr_to_text};
-use crate::format::{Bpos, Btree, DataType, BkeyType, MetadataVersion, REPLICAS_MAX,
-    BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, btree_node};
+use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::eytzinger::Eytzinger0;
+use crate::data_structures::heap::{MinHeap, PeekMut};
+use crate::data_structures::sort::dedup_by;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{btree_node, BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, BkeyType, Bpos, Btree, DataType,
+    MetadataVersion, REPLICAS_MAX};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
+use crate::init::{error::BkeyValidate, passes::{self, RecoveryPass, RunRecoveryPassFlags}};
 use crate::locking::{Locked, Mutex};
+use crate::os::bio::{Bio, BioBox, BioOwner};
+use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ,
+    PAGE_SIZE};
+use crate::sb::{members::{DevIoRef, DevReadRefKind}, members_format::MemberErrorType};
 use crate::types::{Le16, Le64};
 use crate::util::alloc::Vec;
-use crate::os::bio::{Bio, BioBox, BioOwner};
-use crate::data_structures::{eytzinger::Eytzinger0, heap::{MinHeap, PeekMut}, sort::dedup_by};
-use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ, PAGE_SIZE};
 use crate::util::par::{self, Backend};
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
-use crate::{message, ratelimit, prt};
+use crate::{message, prt, ratelimit};
 
 pub(crate) type NodeScan = Locked<Mutex, Vec<FoundBtreeNode>>;
 
@@ -495,8 +495,7 @@ pub(crate) fn get_scanned_nodes(fs: &Fs, btree: Btree, level: u32, node_min: Bpo
 
         let mut from = BkeyValidateContext { level: (level + 1) as u8, btree, ..Default::default() };
         from.bits.set_from(BkeyValidateFrom::btree_node);
-        assert!(crate::btree::bkey::bkey_validate(
-            &BkeyValidate::new(fs, (&*k).as_sc(), &from)).is_ok());
+        assert!(bkey_validate(&BkeyValidate::new(fs, (&*k).as_sc(), &from)).is_ok());
 
         if *nodes_found == 0 {
             prt!(out, "recovering from btree node scan at btree={btree} level={level}\n");

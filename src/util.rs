@@ -124,7 +124,7 @@ pub fn ask_yn() -> bool {
 
 /// Parse a human-readable size string (e.g. "1G", "512M").
 pub fn parse_human_size(s: &str) -> Result<u64> {
-    bcachefs_kernel::util::printbuf::parse_human_u64(s).map_err(|_| anyhow!("invalid size: {}", s))
+    bcachefs_kernel::util::parse_human_u64(s).map_err(|_| anyhow!("invalid size: {}", s))
 }
 
 pub fn fmt_sectors_human(sectors: u64) -> String {

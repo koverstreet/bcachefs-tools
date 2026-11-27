@@ -58,12 +58,15 @@
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of, transmute_copy, ManuallyDrop, MaybeUninit};
+use core::mem::{transmute_copy, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering, Ordering::Relaxed};
-
+use core::sync::atomic::{AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering,
+    Ordering::Relaxed};
 use crate::locking::{ExclusiveGuard, RawLock};
+use crate::os::kernel::SetOnce;
+use crate::types::CacheAligned;
 use crate::util::vstructs::{Native, NoUninit, Plain};
+use pin_init::Zeroable;
 
 // ── Places ───────────────────────────────────────────────────────────────
 
@@ -184,7 +187,7 @@ impl<T> Publish for core::sync::atomic::AtomicPtr<T> {
 }
 
 // no bytes
-impl Publish for crate::types::CacheAligned {
+impl Publish for CacheAligned {
     type Writer = Self;
 }
 
@@ -352,7 +355,7 @@ unsafe impl<T: NoUninit + TearSafe> VolatileValue for T {
 /// atomic, written with its fetch_add()s, and never a FakePlaceWrite: a
 /// place's load and store would lose another writer's update between them.
 #[repr(transparent)]
-#[derive(::pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct Volatile<T>(UnsafeCell<T>);
 
 unsafe impl<T: Send> Sync for Volatile<T> {}
@@ -420,7 +423,7 @@ impl<T: Default> Default for Volatile<T> {
     }
 }
 
-unsafe impl<T: crate::util::vstructs::Plain> crate::util::vstructs::Plain for Volatile<T> {}
+unsafe impl<T: Plain> Plain for Volatile<T> {}
 unsafe impl<T: NoUninit> NoUninit for Volatile<T> {}
 
 // VolatileWriter is a Volatile; its stores are atomic
@@ -466,7 +469,7 @@ impl<T: Copy + VolatileValue> FakePlaceWrite for VolatileWriter<T> {
 /// A Volatile word published by the lock that protects a @G: read by anyone,
 /// set by whoever shows its guard.
 #[repr(transparent)]
-#[derive(::pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct VolatilePublish<T, G>(Volatile<T>, PhantomData<fn() -> G>);
 
 impl<T: Copy + VolatileValue, G> VolatilePublish<T, G> {
@@ -495,11 +498,6 @@ impl<T: Copy + VolatileValue, G> VolatilePublish<T, G> {
 
 // ── Published once ───────────────────────────────────────────────────────
 
-#[cfg(kernel)]
-use kernel::sync::SetOnce;
-#[cfg(not(kernel))]
-use bcachefs_shim::sync::SetOnce;
-
 /// Unset, or set for good: read without the lock, set only by its holder,
 /// once - PublishedOnceWriter. Zeroed, it's unset.
 #[repr(transparent)]
@@ -523,7 +521,7 @@ impl<T> PublishedOnceWriter<T> {
 }
 
 // SAFETY: SetOnce's zeroes are its unset state
-unsafe impl<T> ::pin_init::Zeroable for PublishedOnce<T> {}
+unsafe impl<T> Zeroable for PublishedOnce<T> {}
 
 // the same SetOnce, whose set is atomic
 impl<T> Publish for PublishedOnce<T> {

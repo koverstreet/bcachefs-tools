@@ -23,7 +23,7 @@ use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::util::{vstructs::{plain_bytes, Validated}, printbuf::Msg, Printbuf, ToText, alloc::Vec};
+use crate::util::{alloc::Vec, vstructs::{plain_bytes, Validated}, Msg, Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::{bch_enum, MaybeZeroable};
 use crate::format::{Bpos, Btree, Backpointer};

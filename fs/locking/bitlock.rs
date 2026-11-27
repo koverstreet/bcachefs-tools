@@ -10,10 +10,10 @@
 //! word first, then wakes; futex_wake() fences between the two, as a
 //! waiter's futex_wait() does between its count and its read.
 
-use crate::util::futex::{futex_wait, futex_wake, FutexWord};
-use crate::os::kernel::jiffies;
-use crate::util::sleep::{Sleep, SleepEnd};
 use core::sync::atomic::Ordering;
+use crate::os::kernel::jiffies;
+use crate::util::futex::{futex_wait, futex_wake, FutexWord};
+use crate::util::sleep::{Sleep, SleepEnd};
 
 /// Sleep, as @how says, until @cond of @word holds - read with acquire, as
 /// test_bit_acquire() is.

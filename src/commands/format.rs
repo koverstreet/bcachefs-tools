@@ -35,7 +35,7 @@ use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use bcachefs_kernel::format::{MetadataVersion, REPLICAS_MAX};
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::Printbuf;
 use crate::commands::format_util::SUPERBLOCK_SIZE_DEFAULT;
 
 

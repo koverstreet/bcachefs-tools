@@ -52,7 +52,7 @@ use super::super_block::SuperBlock;
 use crate::os::ioctl::{arg, input, no_arg, output, vstruct, UserArg, UserStr};
 use crate::util::ioctl::{dir, Ioctl};
 use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Capability};
-use crate::util::printbuf::Printbuf;
+use crate::util::Printbuf;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::{direct::direct_io_read, inode::{InodeInfo, InodeRef}};
 use crate::os::kiocb::Kiocb;

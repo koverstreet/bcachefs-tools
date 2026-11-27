@@ -46,12 +46,13 @@
 //! a guard hands out its T only for as long as the guard is borrowed, and
 //! leak() gives back nothing.
 
-use crate::util::vstructs::NonZeroWord;
 use core::marker::PhantomData;
-use core::mem::{size_of, transmute_copy, ManuallyDrop};
+use core::mem::{transmute_copy, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
+use crate::util::vstructs::NonZeroWord;
+use pin_init::ZeroableOption;
 
 mod atomic;
 mod percpu;
@@ -118,7 +119,7 @@ unsafe impl<T: Refcount + ?Sized + Sync> Send for RefGuard<T> {}
 unsafe impl<T: Refcount + ?Sized + Sync> Sync for RefGuard<T> {}
 
 // None is a null NonNull: all zeroes
-unsafe impl<T: Refcount> ::pin_init::ZeroableOption for RefGuard<T> {}
+unsafe impl<T: Refcount> ZeroableOption for RefGuard<T> {}
 
 impl<T: Refcount + ?Sized> RefGuard<T> {
     pub unsafe fn get(t: &T) -> Self {

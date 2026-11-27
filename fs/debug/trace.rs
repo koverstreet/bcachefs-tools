@@ -14,8 +14,8 @@
 //! which in userspace, or without CONFIG_TRACEPOINTS, has none: none is ever
 //! on.
 
-use crate::sb::counters_format::PersistentCounter_arms;
 use crate::fs::Fs;
+use crate::sb::counters_format::PersistentCounter_arms;
 use crate::util::Printbuf;
 use cstruct_macros::xmacro;
 

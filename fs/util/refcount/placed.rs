@@ -3,8 +3,8 @@
 //! A Placed count is its value's: the refcount traits, forwarded. What a ref
 //! on it keeps is what it's placed in.
 
-use super::{Refcount, TryRefcount};
 use crate::util::place::{At, Contained, Placed};
+use crate::util::refcount::{Refcount, TryRefcount};
 
 unsafe impl<C: Refcount, B, const N: u64> Refcount for Placed<C, At<B, N>>
 where

@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::keys::Shard;
-use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, FlushingGuard, IncGuard, WB_RESIZE_GFP};
+use core::sync::atomic::fence;
 use crate::alloc::{accounting, accounting_mem};
 use crate::btree::async_ops::AsyncBtreeOp;
-use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
+use crate::btree::bkey::{BKEY_U64S, BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
-                         TransAttempt, UpdateTriggerFlags, Watermark};
-use crate::btree::write_buffer::{FsBtreeWriteBuffer, BtreeWriteBufferedKey, WbKeyRef,
-    WbFlushCaller};
-use crate::util::time_stats::TimeStat;
+    TransAttempt, UpdateTriggerFlags, Watermark};
+use crate::btree::write_buffer::keys::Shard;
+use crate::btree::write_buffer::{insert_checks, resize_gfp, wb_btree_to_btree,
+    BtreeWriteBufferedKey, Buf, Flushing, FlushingGuard, FsBtreeWriteBuffer, IncGuard,
+    WB_RESIZE_GFP, WbFlushCaller, WbKeyRef};
+use crate::data_structures::sort::heapsort_by_lt;
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, BkeyType, Btree};
 use crate::fs::FsFlag as Flag;
 use crate::journal::journal::JournalFlag;
-use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Btree, Bkey};
 use crate::locking::MemallocFlags;
-use crate::data_structures::sort::heapsort_by_lt;
-use crate::util::alloc::Vec;
 use crate::os::kernel::{local_clock, num_online_cpus, race_fault};
+use crate::util::alloc::Vec;
 use crate::util::par::{self, Backend};
 use crate::util::projections::VolatileWriter;
+use crate::util::time_stats::TimeStat;
 use crate::{btree_trans, fs_fatal_error, prt};
-use core::sync::atomic::fence;
 
 /*
  * The refs sort as one 192 bit integer, hi:mi:lo - pos, then idx: a sub/sbb

@@ -7,19 +7,21 @@
 //! In-kernel each message is prefixed with the filesystem's name; userspace
 //! prints it bare.
 
+use core::panic::Location;
+use core::sync::atomic::Ordering;
 #[cfg(kernel)]
 use crate::c;
+use crate::errcode::BchError;
+use crate::fs::{Dev, Fs};
+use crate::message;
+use crate::os::printk::{printk, printk_line};
+use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
 #[cfg(kernel)]
 use {crate::locking::{Locked, SpinLockIrq},
      crate::util::{alloc::Arc, thread_with_file::StdioRedirect},
      core::sync::atomic::AtomicBool,
      cstruct_macros::{Init, MaybeZeroable},
      pin_init::pin_data};
-use crate::fs::{Dev, Fs};
-use crate::errcode::BchError;
-use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
-use core::panic::Location;
-use core::sync::atomic::Ordering;
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
 #[derive(Clone, Copy)]
@@ -193,7 +195,7 @@ impl<'a> Log<'a> {
             let e: BchError = (*e).into();
             if !e.is_restart() {
                 let at = Location::caller();
-                self.err(crate::message!("{}:{}: error {}", at.file(), at.line(), e.msg()));
+                self.err(message!("{}:{}: error {}", at.file(), at.line(), e.msg()));
             }
         }
         result
@@ -206,7 +208,7 @@ impl<'a> Log<'a> {
             let e: BchError = (*e).into();
             if !e.is_restart() {
                 let at = Location::caller();
-                self.err(crate::message!("{}:{}: error {} {}", at.file(), at.line(), msg, e.msg()));
+                self.err(message!("{}:{}: error {} {}", at.file(), at.line(), msg, e.msg()));
             }
         }
         result
@@ -338,7 +340,7 @@ fn print_one(fs: &Fs, level: LogLevel, msg: &Printbuf) {
     let mut buf = Printbuf::new();
     buf.write_bytes(&level.prefix());
     buf.write_bytes(msg.as_bytes());
-    crate::os::printk::printk(buf.as_c_str())
+    printk(buf.as_c_str())
 }
 
 /// The most printk() takes at once.
@@ -372,7 +374,7 @@ fn print_lines(prefix: &[u8], lines: &[u8]) {
 
     let mut rest = lines;
     while let Some(n) = lines_under(rest, PRINTK_LIMIT) {
-        crate::os::printk::printk_line(prefix, &rest[..n]);
+        printk_line(prefix, &rest[..n]);
 
         if n == rest.len() {
             break;

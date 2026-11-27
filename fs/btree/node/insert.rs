@@ -3,26 +3,23 @@
 /* Inserting into a given leaf node (last stage of insert): */
 
 use core::sync::atomic::Ordering::Relaxed;
-
-
-use super::aux_tree::pack_pos_or_unpacked;
-use super::iter::KeyIter;
-use super::keys::{key_at, Keys};
-use super::sort::maybe_compact_whiteouts;
-use super::{BtreeNode, NodeContents};
-use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeyP};
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::node::aux_tree::pack_pos_or_unpacked;
+use crate::btree::node::iter::KeyIter;
+use crate::btree::node::keys::{key_at, Keys};
+use crate::btree::node::sort::maybe_compact_whiteouts;
+use crate::btree::node::{BtreeNode, BtreeWriteType, NodeContents};
 use crate::btree::path::{LockedNode, PathIdx, PathsUpdates, Write};
-use crate::btree::node::BtreeWriteType;
 use crate::btree::write::{init_next, node_write, post_write_cleanup, BtreeWriteFlags};
-use crate::locking::six::SixLockType;
 use crate::errcode::{BchError, Errcode};
 use crate::format::{BkeyType, Bpos};
 use crate::fs::Fs;
-use crate::journal::pins::{PinHolder, JournalPinType};
-use crate::types::Le64;
+use crate::journal::pins::{JournalPinType, PinHolder};
+use crate::locking::six::SixLockType;
 use crate::os::kernel::unlikely;
+use crate::types::Le64;
 
 /// A whiteout for @pos - packed, if it packs - in @b's unwritten whiteouts:
 /// for a deletion of a key a write still has to see deleted.

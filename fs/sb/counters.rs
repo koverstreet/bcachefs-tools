@@ -10,24 +10,22 @@
 //! event_inc() takes the one and event_add() the other, as C's
 //! counter_typecheck() checks.
 //!
-//! Counters are util/percpu.rs's PerCpu, added to on this CPU.
+//! Counters are os::percpu's PerCpu, added to on this CPU.
 
-#![allow(non_camel_case_types)]
-
-use cstruct_macros::{Init, MaybeZeroable, TypeInfo};
-use pin_init::pin_data;
-use crate::format::Sb;
-use crate::sb::counters_format::{SbFieldCounters, PersistentCounter, PersistentCounter_arms,
-    PersistentCounterStable};
+use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use crate::debug::trace::{events, TraceEvent};
 use crate::errcode::BchError;
-use crate::util::{vstructs::{Unvalidated, Validated}, Printbuf};
+use crate::format::Sb;
 use crate::fs::{Fs, SbLockGuard};
+use crate::os::{kernel::{nsecs_to_jiffies, NSEC_PER_SEC}, percpu::PerCpu, workqueue::Queue};
 use crate::prt;
+use crate::sb::counters_format::{PersistentCounter, PersistentCounterStable,
+    PersistentCounter_arms, SbFieldCounters};
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
 use crate::types::Le64;
-use crate::os::{kernel::{nsecs_to_jiffies, NSEC_PER_SEC}, workqueue::Queue, percpu::PerCpu};
-use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use crate::util::{vstructs::{Unvalidated, Validated}, Printbuf};
+use cstruct_macros::{Init, MaybeZeroable, TypeInfo};
+use pin_init::pin_data;
 
 pub const NR_RECENT_COUNTERS: u32 = 20;
 
@@ -287,9 +285,8 @@ pub fn counters_init(fs: &Fs) {
 #[cfg(kernel)]
 pub mod ioctl {
     use super::*;
-    use crate::bcachefs_ioctl::QueryCountersFlags;
-    use crate::bcachefs_ioctl::IoctlQueryCounters;
-    use crate::errcode::{Errcode, BchError};
+    use crate::bcachefs_ioctl::{IoctlQueryCounters, QueryCountersFlags};
+    use crate::errcode::Errcode;
     use crate::os::ioctl::UserVstruct;
 
     /// The counters, by stable id, up to the user's @nr of them: now, or at

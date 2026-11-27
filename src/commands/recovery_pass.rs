@@ -7,7 +7,7 @@ use clap::Parser;
 
 use crate::util::read_flag_list;
 
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::Printbuf;
 use bcachefs_kernel::sb::io::SbResize;
 
 /// List and manage scheduled recovery passes

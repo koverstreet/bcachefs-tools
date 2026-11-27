@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Result};
 use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::alloc::accounting;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
-use bcachefs_kernel::util::{HumanReadable, ToText, vstructs::Head, printbuf::Printbuf};
+use bcachefs_kernel::util::{vstructs::Head, HumanReadable, Printbuf, ToText};
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::c;
 use bcachefs_kernel::alloc::buckets::DevUsageFull;

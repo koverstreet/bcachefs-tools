@@ -15,11 +15,11 @@
 //! says; an index is one the owner has, so past the end is a bug, as a
 //! slice's.
 
+use core::marker::PhantomData;
 use crate::data_structures::dst_room::DstRoom;
 use crate::util::alloc::{flags, AllocError, Vec};
 use crate::util::projections::View;
 use crate::util::vstructs::{cast_plain_mut, Plain};
-use core::marker::PhantomData;
 
 pub struct Strided<'a, T> {
     bytes:  &'a [u8],

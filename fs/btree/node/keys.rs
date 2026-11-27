@@ -4,11 +4,11 @@
 //! a view is made of them once per operation, not per access. Keys and bsets
 //! are referred to, as in C, by their offsets in u64s from the node's start.
 
-use super::bset::BsetTree;
-use super::{BtreeNode, NodeContents};
-use crate::types::L1_CACHE_BYTES;
 use crate::btree::bkey::{BkeyP, BkeySC};
-use crate::format::{Bpos, Bkey, Bset, btree_node};
+use crate::btree::node::bset::BsetTree;
+use crate::btree::node::{BtreeNode, NodeContents};
+use crate::format::{btree_node, Bkey, Bpos, Bset};
+use crate::types::L1_CACHE_BYTES;
 use crate::util::vstructs::{cast_plain, plain_bytes, Head};
 
 pub struct Keys<'a> {

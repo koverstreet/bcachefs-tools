@@ -35,10 +35,6 @@
 //! A task's wake (TaskRef::wake(), task/mod.rs) writes to the task only if
 //! it's parked on this Done.
 
-use crate::c;
-use crate::util::rcu;
-use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::task::{current_task, task_in, Resumable, TaskRef, WaitSync};
 use core::cell::{Cell, UnsafeCell};
 use core::ffi::c_void;
 use core::marker::{PhantomData, PhantomPinned};
@@ -46,6 +42,10 @@ use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, Poll};
+use crate::c;
+use crate::util::rcu;
+use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::task::{current_task, park_on, task_in, Resumable, TaskRef, WaitSync};
 
 /* Waiters: a thing to wake, and how */
 
@@ -53,6 +53,7 @@ use core::task::{Context, Poll};
 /// awaiting it - got the same way, a task's awaited.
 pub mod waiter {
     use super::{c, current_task, task_in, Context, NonNull, TaskRef};
+    use crate::os::sched;
 
     /// A thread, by its task_struct, with no ref.
     #[derive(Clone, Copy)]
@@ -60,7 +61,7 @@ pub mod waiter {
 
     impl Sync {
         pub fn current() -> Self {
-            Sync(NonNull::new(crate::os::sched::current())
+            Sync(NonNull::new(sched::current())
                  .expect("a blocking wait needs a task - a kthread, in userspace"))
         }
     }
@@ -120,7 +121,7 @@ impl sealed::Waiter for waiter::Async {
     }
 
     unsafe fn wake(p: NonNull<()>, done: NonNull<()>) {
-        unsafe { super::TaskRef(p.cast()).wake(done.cast()) };
+        unsafe { TaskRef(p.cast()).wake(done.cast()) };
     }
 }
 
@@ -218,7 +219,7 @@ impl Done<waiter::Async> {
             return Poll::Ready(());
         }
         // run() parks the task on it, once the poll's returned
-        super::park_on(cx, self);
+        park_on(cx, self);
         Poll::Pending
     }
 }

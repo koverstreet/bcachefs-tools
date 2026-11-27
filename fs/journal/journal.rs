@@ -118,60 +118,55 @@
 #![allow(non_camel_case_types)]
 
 use core::cell::Cell;
+use core::ffi::c_void;
 use core::mem;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{fence, AtomicPtr};
-use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
-
-
+use core::sync::atomic::{fence, AtomicI64, AtomicPtr, AtomicU64,
+    Ordering::{Acquire, Relaxed, SeqCst}};
+use crate::alloc::foreground::Watermark;
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::alloc::foreground::Watermark;
-use crate::init::recovery::NotRw;
-use crate::util::time_stats::TimeStat;
-use self::JournalCycleFlags as Cycle;
-use crate::journal::flush_wait::{BufWait, FlushEntry, FlushWait, Waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
-                                 JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
+use crate::data_structures::{bitmap::AtomicBitflags, fifo::FifoRead};
 use crate::debug::trace::events;
-use crate::errcode::{AtomicError, Errcode, BchError};
-use crate::format::{SbFeature, Jset, JsetEntry, JsetEntryType, DataType};
-use crate::journal::pins::{PinsRead, flush_degraded, pin_resize, PinBuf, PinRange,
-    JournalEntryPin};
-use crate::data_structures::fifo::FifoRead;
-use crate::locking::{Guard as _, MemallocFlags, ExclusiveGuard, Locked, LockedBy, Mutex, MutexNoio,
-    PercpuRwSem, SpinLockIrq};
+use crate::errcode::{AtomicError, BchError, Errcode};
+use crate::format::{DataType, Jset, JsetEntry, JsetEntryType, SbFeature};
+use crate::fs::Fs;
+use crate::init::recovery::NotRw;
+use crate::journal::buckets::drop_retired;
 use crate::journal::entries::EntryWriter;
+use crate::journal::flush_wait::{BufWait, FlushEntry, FlushWait, JOURNAL_BUF_FLUSH,
+    JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT, Waiters};
+use crate::journal::pins::{flush_degraded, pin_resize, JournalEntryPin, PinBuf, PinRange, PinsRead};
+use crate::journal::reclaim::{JournalSpace, JournalSpaceFrom, ReclaimPublished};
+use crate::journal::write::{jset_buf_alloc, BufJset, BufLockGuard, BufLocked, JournalBufBits,
+    JournalKey, JournalWrite, JournalWriteRef, JsetBuf, WriteAlloc};
+use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, MemallocFlags,
+    Mutex, MutexNoio, PercpuRwSem, SpinLockIrq};
+use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after,
+    unlikely, HZ, WRITE};
+use crate::os::kthread::Daemon;
+use crate::os::workqueue::{DelayedWork, OnQueue, Own, ReffedWork, Workqueue, WqFlags};
+use crate::types::CacheAligned;
 use crate::util::alloc::{flags, Vec};
 use crate::util::backtrace::prt_current_backtrace;
-use crate::util::task::{waiter, Select, WaitSync};
-use crate::util::timer::Timer;
-use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies, time_after, unlikely, HZ, WRITE};
-use crate::os::workqueue::{Own, DelayedWork, OnQueue, ReffedWork, Workqueue, WqFlags};
 use crate::util::futex::EventCount;
-use crate::util::rcu::read_lock;
-use crate::util::sleep::Sleep;
-use crate::util::printbuf::HumanReadable;
-use crate::util::vstructs::Head;
-use crate::util::refcount::{TryRefcount, AtomicRef};
-use crate::util::{Printbuf, ToText};
-use crate::{prt, warn_once, new_lock, published};
-use crate::fs::Fs;
-use cstruct_macros::{bch_enum, bitfield, placed, Init, Late, MaybeZeroable};
-use zerocopy::IntoBytes;
-use crate::types::CacheAligned;
-use crate::journal::write::{JournalBufBits, BufJset, BufLocked, JournalKey, JournalWrite, JournalWriteRef, JsetBuf, WriteAlloc,
-    BufLockGuard, jset_buf_alloc};
-use crate::journal::reclaim::{ReclaimPublished, JournalSpace, JournalSpaceFrom};
 use crate::util::late::Late;
-use crate::journal::buckets::drop_retired;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::{Contained, Placed};
 use crate::util::projections::Volatile;
-use crate::os::kthread::Daemon;
-use core::ffi::c_void;
-use core::sync::atomic::{AtomicI64, AtomicU64};
+use crate::util::rcu::read_lock;
+use crate::util::refcount::{AtomicRef, TryRefcount};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Select, WaitSync};
+use crate::util::time_stats::TimeStat;
+use crate::util::timer::Timer;
+use crate::util::vstructs::{plain_bytes, Head};
+use crate::util::{HumanReadable, Printbuf, ToText};
+use crate::{at, field, new_lock, prt, published, warn_once};
+use cstruct_macros::{bch_enum, bitfield, placed, Init, Late, MaybeZeroable};
 use nestify::nest;
-use pin_init::pin_data;
+use pin_init::{init_zeroed, pin_data, stack_pin_init, zeroed};
+use self::JournalCycleFlags as Cycle;
 
 /* btree write buffer steals 8 bits for its own purposes: */
 pub const JOURNAL_SEQ_MAX: u64 = (1 << 56) - 1;
@@ -220,8 +215,8 @@ pub struct JournalBuf {
     pub bits: BufLocked<JournalBufBits>,
 
     /* must not be memset, only manipulated by xchg/cmpxchg */
-    #[init(AtomicPtr::new(crate::journal::flush_wait::JOURNAL_BUF_NOT_IN_FLIGHT))]
-    pub wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
+    #[init(AtomicPtr::new(JOURNAL_BUF_NOT_IN_FLIGHT))]
+    pub wait: AtomicPtr<FlushEntry>,
 }
 
 // its wait word only ever touched atomically, the rest had only as its
@@ -494,26 +489,26 @@ published! {
 impl JournalPublished {
     /* No entry open */
     fn closed() -> Self {
-        let p: Self = ::pin_init::Zeroable::zeroed();
-        p.hot.reservations.store(JOURNAL_ENTRY_CLOSED_VAL.into(), core::sync::atomic::Ordering::Relaxed);
+        let p: Self = zeroed();
+        p.hot.reservations.store(JOURNAL_ENTRY_CLOSED_VAL.into(), Relaxed);
         p
     }
 }
 
 pub type JournalGuard<'a> =
-    ExclusiveGuard<'a, SpinLockIrq, JournalLocked, JournalPublished, crate::locking::Exclusive, JournalLockAt>;
+    ExclusiveGuard<'a, SpinLockIrq, JournalLocked, JournalPublished, Exclusive, JournalLockAt>;
 
 /// The journal lock's place, for what it covers to name.
-pub type JournalLockAt = crate::at!(Journal.lock);
+pub type JournalLockAt = at!(Journal.lock);
 
-pub(super) type WritesInFlightAt = crate::at!(Journal.writes_in_flight);
+pub(super) type WritesInFlightAt = at!(Journal.writes_in_flight);
 
 /* The filesystem's write refs, from the journal: nest!() takes no macro in a type */
-type FsWrites = crate::field!(super.writes);
+type FsWrites = field!(super.writes);
 /* And its ro refs, for what doesn't need it rw */
-type FsRoRef = crate::field!(super.ro_ref);
+type FsRoRef = field!(super.ro_ref);
 /* And its own queue */
-type JournalWq = OnQueue<crate::field!(wq)>;
+type JournalWq = OnQueue<field!(wq)>;
 pub type ReclaimThread = Daemon;
 pub type RewindRanges = LockedBy<Vec<JournalRewindRange>, (), NotRw<'static>>;
 
@@ -534,7 +529,7 @@ nest! {
         #[pin]
         pub in_flight: InFlight,
 
-        pub flags: crate::data_structures::bitmap::AtomicBitflags<JournalFlag>,
+        pub flags: AtomicBitflags<JournalFlag>,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         #[init(AtomicPtr::new((-(c::EROFS as isize)) as *mut c::task_struct))]
         pub stop_thread: AtomicPtr<c::task_struct>,
@@ -552,7 +547,7 @@ nest! {
          * When we need a flush but no open journal entry was flushable, wait
          * here - transferred to journal_buf.wait on entry open
          */
-        pub flush_wait: AtomicPtr<crate::journal::flush_wait::FlushEntry>,
+        pub flush_wait: AtomicPtr<FlushEntry>,
 
         /* Used when waiting because the journal was full */
         pub async_wait: EventCount,
@@ -601,7 +596,7 @@ nest! {
          * longer needed, the bucket can be discarded and reused.
          */
         #[pin]
-        #[init(new_lock!(PinBuf { entries: Vec::new() }, ::pin_init::zeroed(),
+        #[init(new_lock!(PinBuf { entries: Vec::new() }, zeroed(),
                          "&j->pin_resize_lock"))]
         pub pin_resize_lock: Locked<PercpuRwSem, PinBuf, PinRange>,
         #[pin]
@@ -619,11 +614,11 @@ nest! {
 
         /* the allocating write's: journal writes allocate one at a time, in order */
         #[pin]
-        #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&j->write_alloc"))]
+        #[init(new_lock!(<- init_zeroed(), (), "&j->write_alloc"))]
         pub write_alloc: Locked<Mutex, WriteAlloc>,
 
         #[pin]
-        #[init(new_lock!((), ::pin_init::zeroed(), "&j->reclaim_lock"))]
+        #[init(new_lock!((), zeroed(), "&j->reclaim_lock"))]
         pub reclaim_lock: Locked<Mutex, (), ReclaimPublished>,
         /*
          * Used for waiting until journal reclaim has freed up space in the
@@ -651,7 +646,7 @@ nest! {
         pub res_map: crate::locking::LockdepMap,
     }
 }
-const _: () = assert!(core::mem::size_of::<JournalHot>() == core::mem::align_of::<JournalHot>(),
+const _: () = assert!(size_of::<JournalHot>() == align_of::<JournalHot>(),
                       "JournalHot is more than a cacheline");
 
 impl Journal {
@@ -669,7 +664,6 @@ pub struct JournalEntryRes {
     /* written by entry_res_resize(), under j->lock */
     pub u64s: Volatile<u32>,
 }
-
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -703,7 +697,7 @@ impl Journal {
     /// journal_shutdown if it's halted.
     pub fn error(&self) -> Result<(), BchError> {
         if self.halted() {
-            Err(crate::errcode::Errcode::journal_shutdown.into())
+            Err(Errcode::journal_shutdown.into())
         } else {
             Ok(())
         }
@@ -860,7 +854,6 @@ impl Fs {
         }
     }
 }
-
 
 fn state_idx(seq: u64) -> u32 {
     (seq & u64::from(JOURNAL_STATE_BUF_MASK)) as u32
@@ -1700,21 +1693,17 @@ impl Journal {
      * clearing.
      */
     fn res_unblocked(&self) {
-        use crate::util::time_stats::TimeStat as Time;
-
         let fs = self.fs();
-        for t in [Time::blocked_journal_max_open,
-                  Time::blocked_journal_full,
-                  Time::blocked_journal_pin_full,
-                  Time::blocked_journal_buf_enomem,
-                  Time::blocked_journal_stuck] {
+        for t in [TimeStat::blocked_journal_max_open,
+                  TimeStat::blocked_journal_full,
+                  TimeStat::blocked_journal_pin_full,
+                  TimeStat::blocked_journal_buf_enomem,
+                  TimeStat::blocked_journal_stuck] {
             fs.times.get(t as usize).track_event_change(false);
         }
     }
 
     fn __res_get(&self, res: &mut JournalRes, flags: u32) -> Result<(), BchError> {
-        use crate::util::time_stats::TimeStat as Time;
-
         let fs = self.fs();
 
         let ret = loop {
@@ -1774,13 +1763,13 @@ impl Journal {
             err = fs.err(Errcode::journal_stuck);
         }
 
-        let blocked = [(Errcode::journal_blocked,       Time::blocked_journal_blocked),
-                       (Errcode::journal_max_in_flight, Time::blocked_journal_max_in_flight),
-                       (Errcode::journal_max_open,      Time::blocked_journal_max_open),
-                       (Errcode::journal_full,          Time::blocked_journal_full),
-                       (Errcode::journal_pin_full,      Time::blocked_journal_pin_full),
-                       (Errcode::journal_buf_enomem,    Time::blocked_journal_buf_enomem),
-                       (Errcode::journal_stuck,         Time::blocked_journal_stuck)]
+        let blocked = [(Errcode::journal_blocked,       TimeStat::blocked_journal_blocked),
+                       (Errcode::journal_max_in_flight, TimeStat::blocked_journal_max_in_flight),
+                       (Errcode::journal_max_open,      TimeStat::blocked_journal_max_open),
+                       (Errcode::journal_full,          TimeStat::blocked_journal_full),
+                       (Errcode::journal_pin_full,      TimeStat::blocked_journal_pin_full),
+                       (Errcode::journal_buf_enomem,    TimeStat::blocked_journal_buf_enomem),
+                       (Errcode::journal_stuck,         TimeStat::blocked_journal_stuck)]
             .into_iter().find(|&(e, _)| err == e.into());
         if let Some((_, t)) = blocked {
             fs.times.get(t as usize).track_event_change(true);
@@ -2050,7 +2039,7 @@ impl Journal {
         let total_wait = (fs.dev_latency_max(&online, WRITE as i32) * 5).max(HZ * 10);
 
         if slot.as_ref().as_pin_ref().expect("just made").armed() {
-            pin_init::stack_pin_init!(let _timer = Timer::new(timed_out, total_wait));
+            stack_pin_init!(let _timer = Timer::new(timed_out, total_wait));
             if wait.wait_sync(Sleep::UNINTERRUPTIBLE) & FLUSHED == 0 {
                 let mut msg = fs.log().msg();
                 prt!(&mut *msg, "journal flush_seq() stuck? Waited {}s for seq {seq}\n", total_wait / HZ);
@@ -2310,7 +2299,7 @@ impl Journal {
 
     #[cold]
     fn __debug_to_text(&self, out: &mut Printbuf, g: &JournalGuard<'_>) {
-        use crate::journal::reclaim::JournalSpaceFrom::*;
+        use JournalSpaceFrom::*;
 
         let fs = self.fs();
         let now = jiffies();
@@ -2431,7 +2420,7 @@ impl NotRw<'_> {
         self.get_mut_of(&fs.journal.rewind_ranges).push(JournalRewindRange { from, to })?;
 
         fs.journal.early_entry_add(JsetEntryType::rewind, 0, 0,
-                                   [from.to_le(), to.to_le()].as_bytes())
+                                   plain_bytes(&[from.to_le(), to.to_le()]))
     }
 }
 

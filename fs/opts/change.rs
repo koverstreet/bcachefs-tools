@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+
 //! Changing an option on a running filesystem: OptChange, the option change
 //! lock held, and the hooks either side of the change - before, what it
 //! needs, and whether it may be: the reconcile scans of what it changes the
@@ -6,16 +7,17 @@
 //! starts. The pre-set hooks run at mount too, for every option, with no
 //! change to register: opts_hooks_pre_set().
 
-use crate::format::{MemberState, SbFeature, VersionUpgradeOpt};
-use crate::fs::{Dev, FsFlag, Fs};
-use super::{opt_to_text, Opt, OptId, OPTS};
 use crate::alloc::disk_groups_format::SbFieldDiskGroups;
 use crate::bcachefs_ioctl::ForceIf;
-use crate::data::compress;
-use crate::errcode::{Errcode, BchError};
+use crate::data::{compress, reconcile::check::rotational_changed};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{MemberState, SbFeature, VersionUpgradeOpt};
+use crate::fs::{Dev, Fs, FsFlag};
 use crate::locking::{ExclusiveGuard, Mutex};
+use crate::opts::{opt_set_sb, opt_to_text, OPTS, Opt, OptId};
 use crate::sb::io::SbFieldOps;
-use crate::util::printbuf::Printbuf;
+use crate::util::vstructs::Validated;
+use crate::util::Printbuf;
 
 impl Fs {
     /// Before setting option @id to @v, for device @ca or the filesystem,
@@ -69,7 +71,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, post: bo
             // the groups' devs masks. An error (ENOMEM) leaves it stale until
             // the next superblock swap
             if post {
-                let _ = fs.log().err_fn(SbFieldDiskGroups::<crate::util::vstructs::Validated>::to_cpu(fs, &mut fs.sb_lock()));
+                let _ = fs.log().err_fn(SbFieldDiskGroups::<Validated>::to_cpu(fs, &mut fs.sb_lock()));
             }
 
             // Only the label is in targets: a failure domain only spreads
@@ -109,7 +111,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64, cha
             // Offline: there's no post hook, and nothing to race with
             if let Some(ca) = ca {
                 if change && v != u64::from(ca.mi.get().rotational) && !fs.flags.get(FsFlag::started) {
-                    crate::data::reconcile::check::rotational_changed(fs, ca);
+                    rotational_changed(fs, ca);
                 }
             }
         }
@@ -190,7 +192,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&Dev>, inum: u64, id: OptId, v: u64) {
         OptId::rotational => {
             if let Some(ca) = ca {
                 if fs.flags.get(FsFlag::started) {
-                    crate::data::reconcile::check::rotational_changed(fs, ca);
+                    rotational_changed(fs, ca);
                 }
             }
         }
@@ -242,7 +244,7 @@ impl<'f> OptChange<'f> {
         let mut sb = fs.sb_lock();
 
         let changed = if opt.in_sb() {
-            let changed = crate::opts::opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, Some(val))?;
+            let changed = opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, Some(val))?;
             if changed {
                 fs.write_super(&mut sb);
             }

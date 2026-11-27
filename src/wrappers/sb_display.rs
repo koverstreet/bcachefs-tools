@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use bcachefs_kernel::format::Sb;
 use bcachefs_kernel::sb::{members_format::Member, self, SbFieldType, io::SbState};
-use bcachefs_kernel::util::{printbuf::Printbuf, vstructs::Unvalidated};
+use bcachefs_kernel::util::{vstructs::Unvalidated, Printbuf};
 use bcachefs_kernel::init::dev::SbHandle;
 use bcachefs_kernel::fs::Fs;
 

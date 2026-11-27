@@ -18,19 +18,19 @@
 //! A request's done when its durability's met - or at its first bucket, for
 //! a cached write, a stripe's block, or a cache device's: add_new_bucket().
 
-use crate::alloc::foreground::{AllocWait, FreelistGuard, OpenBucket, OpenBucketRef, alloc_request};
-use crate::btree::iter::TransAttempt;
-use crate::alloc::dev_select::DevStripeState;
-use crate::alloc::write_point::WritePointLocked;
-use crate::data::{write::WriteFlags, ec::head::{head_get, stripe_head_put}};
-use crate::format::REPLICAS_MAX;
-use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::debug::trace::events;
-use crate::util::ToText;
-use crate::data_structures::array_vec::ArrayVec;
 use core::sync::atomic::Ordering::Relaxed;
+use crate::alloc::dev_select::DevStripeState;
+use crate::alloc::foreground::{alloc_request, AllocWait, FreelistGuard, OpenBucket, OpenBucketRef};
+use crate::alloc::write_point::WritePointLocked;
+use crate::btree::iter::TransAttempt;
+use crate::data::{ec::head::{head_get, stripe_head_put}, write::WriteFlags};
+use crate::data_structures::array_vec::ArrayVec;
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::REPLICAS_MAX;
+use crate::fs::Fs;
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::util::ToText;
 
 /// Partial buckets taken while placement was restricted - their devices,
 /// and the copies the request had before each - traced once freelist_lock

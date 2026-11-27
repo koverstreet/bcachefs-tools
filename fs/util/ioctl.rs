@@ -24,7 +24,6 @@
 
 #![allow(non_snake_case)]
 
-use core::mem::size_of;
 #[cfg(kernel)]
 use crate::c as ioc;
 #[cfg(not(kernel))]

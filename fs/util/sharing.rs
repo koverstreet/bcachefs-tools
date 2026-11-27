@@ -5,6 +5,7 @@
 //! takes; Unshared, they're plain, had through &mut.
 
 use core::cell::UnsafeCell;
+use pin_init::Zeroable;
 
 pub trait Sharing {
     /// What a lock protects.
@@ -49,7 +50,7 @@ pub struct LockCell<T>(UnsafeCell<T>);
 
 unsafe impl<T: Send> Sync for LockCell<T> {}
 
-unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable for LockCell<T> {}
+unsafe impl<T: Zeroable> Zeroable for LockCell<T> {}
 
 impl<T> LockCell<T> {
     pub fn get(&self) -> *mut T {

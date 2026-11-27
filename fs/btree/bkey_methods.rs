@@ -26,18 +26,15 @@
 //! A value is an integer (decimal, 0x hex, or negative), or for an
 //! enum-coded field the codeword's name.
 
-#![allow(non_camel_case_types)]
-
-use crate::btree::{bkey::{BkeyP, BkeyS, BkeySC}, bkey::prelude::*, iter::{NoRoom, TransBkey}};
-use crate::posix::{inode::InodeUnpacked, dirent, inode};
-use crate::snapshots::format::{SnapshotState, SubvolumeState};
+use core::fmt;
+use crate::btree::{bkey::{prelude::*, BkeyP, BkeyS, BkeySC}, iter::{NoRoom, TransBkey}};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::format::{BkeyType, ErrorKeyReason, MetadataVersion, Bkey, Error};
+use crate::format::{Bkey, BkeyType, Error, ErrorKeyReason, MetadataVersion};
 use crate::fs::Fs;
+use crate::posix::{dirent, inode::{self, InodeUnpacked}};
+use crate::snapshots::format::{SnapshotState, SubvolumeState};
 use crate::typeinfo::{self, AccessError, FieldRef, ResolveError, TypeInfo};
 use crate::util::names::Names;
-use core::fmt;
-use core::mem::size_of;
 
 type EnumValues = &'static [(&'static str, u64)];
 

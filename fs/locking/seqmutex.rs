@@ -7,11 +7,11 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{ExclusiveGuard, Locked, Mutex, RawLock, RawLockBase, RawTryLock};
-use crate::os::lockdep::LockClass;
 use core::convert::Infallible;
 use core::ffi::CStr;
 use core::sync::atomic::{AtomicU32, Ordering};
+use crate::locking::{ExclusiveGuard, Locked, Mutex, RawLock, RawLockBase, RawTryLock};
+use crate::os::lockdep::LockClass;
 use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]

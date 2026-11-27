@@ -17,11 +17,11 @@ use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-
-use crate::util::alloc::{with_alloc_layout, Alloc, Box};
+use crate::util::alloc::{with_alloc_layout, Alloc, Box, Global};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::FreeAnytime;
 use crate::util::vstructs::SelfSized;
+use pin_init::ZeroableOption;
 
 /// A &'a T, thin.
 pub struct ThinRef<'a, T: ?Sized + SelfSized> {
@@ -123,7 +123,7 @@ impl<T: ?Sized + SelfSized> DerefMut for ThinMut<'_, T> {
 /// the A before it, as with_alloc_layout() has it.
 #[repr(transparent)]
 #[derive(cstruct_macros::NonZeroWord)]
-pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc + Copy = crate::os::alloc::Global> {
+pub struct ThinBox<T: ?Sized + SelfSized, A: Alloc + Copy = Global> {
     p:  NonNull<()>,
     _t: PhantomData<(Box<T, A>, A)>,
 }
@@ -133,7 +133,7 @@ unsafe impl<T: ?Sized + SelfSized + Send, A: Alloc + Copy> Send for ThinBox<T, A
 unsafe impl<T: ?Sized + SelfSized + Sync, A: Alloc + Copy> Sync for ThinBox<T, A> {}
 
 // None is its pointer null - zeroed
-unsafe impl<T: ?Sized + SelfSized, A: Alloc + Copy> ::pin_init::ZeroableOption for ThinBox<T, A> {}
+unsafe impl<T: ?Sized + SelfSized, A: Alloc + Copy> ZeroableOption for ThinBox<T, A> {}
 
 impl<T: ?Sized + SelfSized, A: Alloc + Copy> ThinBox<T, A> {
     /// FreeAnytime: a Box has no head before it, for what waits out readers

@@ -106,24 +106,25 @@ pub use select::{Select, SelectWait};
 pub use waitlist::{Complete, DynComplete, WaitList, WaitlistCompletion};
 pub use r#box::{exclusive_size, spawn, Exclusive, Join, Shared, TaskBox, TaskSlot};
 
-use crate::data_structures::llist::LlistNode;
-use crate::errcode::BchError;
-use crate::os::kthread::{Kthread, KthreadRef};
-use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
-use crate::util::sleep::{sleep_until, Sleep};
-use crate::util::Printbuf;
-use crate::prt;
-use crate::os::workqueue::{Queue, WorkAt};
+use core::cell::Cell;
 use core::fmt;
 use core::future::Future;
-use core::cell::Cell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use core::task::{Context, ContextBuilder, Poll, Waker};
-use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
+use crate::data_structures::llist::LlistNode;
+use crate::errcode::BchError;
+use crate::os::kthread::{Kthread, KthreadRef};
+use crate::os::workqueue::{run_raw, Queue, WorkAt};
+use crate::util::alloc::init_at;
+use crate::util::rcu::{self, HasRcuHead, RcuHead, RcuMember, RcuWorkHead};
+use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::Printbuf;
+use crate::{new_work, prt};
+use pin_init::{pin_data, pin_init, pin_init_from_closure, pinned_drop, PinInit};
 
 /// Where an await resumes its task: one word, in every await - a queue, a
 /// RunQueue, tagged in its low bit, or a value neither is at. A queue's
@@ -401,13 +402,13 @@ impl<'q, F: Future + Send> Task<'q, F> {
             Spawn::Thread(_) => Target::UNUSED,
         };
         let body = unsafe {
-            pin_init::pin_init_from_closure(move |slot: *mut Body<F, F::Output>| {
-                crate::util::alloc::init_at(future, (&raw mut (*slot).future).cast::<F>())
+            pin_init_from_closure(move |slot: *mut Body<F, F::Output>| {
+                init_at(future, (&raw mut (*slot).future).cast::<F>())
             })
         };
         pin_init!(Self {
             header <- pin_init!(Header {
-                work <- RcuWorkHead::new_work(crate::new_work!(crate::os::workqueue::run_raw::<Header>, "bcachefs task")),
+                work <- RcuWorkHead::new_work(new_work!(run_raw::<Header>, "bcachefs task")),
                 waiting:   AtomicPtr::new(null_mut()),
                 target:    Cell::new(target),
                 thread:    None,
@@ -523,7 +524,7 @@ impl<'q, F: Future + Send> TaskInPlace<'q, F> {
         if core::mem::replace(&mut this.made, false) {
             unsafe { this.task.assume_init_drop() };
         }
-        unsafe { crate::util::alloc::init_at(init, this.task.as_mut_ptr()) }?;
+        unsafe { init_at(init, this.task.as_mut_ptr()) }?;
         this.made = true;
         Ok(unsafe { Pin::new_unchecked(this.task.assume_init_mut()) })
     }

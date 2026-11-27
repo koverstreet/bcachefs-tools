@@ -17,16 +17,16 @@
 //! taking its own off; if a wake took it first, the completion is the wake's,
 //! and the waiter waits for it - the wake's last touch of its memory.
 
-use crate::data_structures::list::{List, ListLinks};
-use crate::locking::{Locked, SpinLockIrq};
-use crate::os::lockdep::LockClass;
-use crate::util::task::{Completion, Done, DynDone, Waiter};
 use core::cell::{Cell, UnsafeCell};
 use core::ffi::CStr;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering};
+use crate::data_structures::list::{List, ListLinks};
+use crate::locking::{Locked, SpinLockIrq};
+use crate::os::lockdep::LockClass;
+use crate::util::task::{Completion, Done, DynDone, Waiter};
 
 /// What a waitlist completes, in place, from any context - an endio's too.
 /// Seen done, its waiter's memory may go.

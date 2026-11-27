@@ -29,23 +29,23 @@
 //! are stashed, by range, where the node's lost, and attributed to inodes
 //! later, when the inodes btree can be walked: lost extents below.
 
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, spos, BkeySC, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::data::extents_format::BtreePtrV2;
-use crate::init::{damage_format::Damage, error::{id, BkeyValidate}};
-use crate::snapshots::{subvolume::SubvolInum, subvolume};
-use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::posix::inode;
-use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorId, SbErrorEntryCpu};
-use crate::util::{DateTime, Printbuf, alloc::Vec, vstructs::{Unvalidated, Validated}};
-use crate::os::kernel::ktime_get_real_seconds;
-use crate::{message, ratelimit, bkey_fsck_err_on, btree_trans, fsck_err_on, prt};
-use crate::sb::errors_format::SbFieldErrorEntryV2 as Entry;
 use core::cmp::Ordering;
-use core::mem::size_of;
-use crate::format::{Bpos, Btree, BkeyType, BKEY_VAL_U64s_MAX};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{spos, AnyKeySC, BkeyOps, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
+    UpdateTriggerFlags};
+use crate::data::extents_format::BtreePtrV2;
+use crate::errcode::BchError;
+use crate::format::{BKEY_VAL_U64s_MAX, BkeyType, Bpos, Btree};
+use crate::fs::Fs;
+use crate::init::{damage_format::Damage, error::{fsck_damaged, id, BkeyValidate}};
+use crate::os::kernel::ktime_get_real_seconds;
+use crate::posix::inode;
+use crate::sb::errors::{merge, prt_error_nr, ErrorEntry, SbErrorEntryCpu, SbErrorId};
+use crate::sb::errors_format::SbFieldErrorEntryV2 as Entry;
+use crate::snapshots::subvolume::{self, SubvolInum};
+use crate::util::{alloc::Vec, vstructs::{Unvalidated, Validated}, DateTime, Printbuf};
+use crate::{bkey_fsck_err_on, btree_trans, fsck_err_on, message, prt, ratelimit};
 
 // ── The key ──────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ const ENTRY: usize = size_of::<Entry>();
 /// The most entries a key's value holds: its u64s are a u8.
 const MAX_ENTRIES: usize = BKEY_VAL_U64s_MAX * size_of::<u64>() / ENTRY;
 
-impl crate::btree::bkey::BkeyOps for Damage {
+impl BkeyOps for Damage {
     fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let val_bytes = v.k.k.val_bytes();
         bkey_fsck_err_on!(v, val_bytes % ENTRY != 0,
@@ -138,7 +138,7 @@ pub fn accumulate(t: &TransAttempt<'_, '_>, inum: u64, mut snapshot: u32)
 pub fn record(t: &TransAttempt<'_, '_>, pos: Bpos, err: SbErrorId) -> Result<(), BchError> {
     let at = spos(0, if pos.inode != 0 { pos.inode } else { pos.offset }, pos.snapshot);
 
-    crate::init::error::fsck_damaged(t.fs(), pos, err);
+    fsck_damaged(t.fs(), pos, err);
 
     let mut iter = BtreeIter::new(t, Btree::damage, at,
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);

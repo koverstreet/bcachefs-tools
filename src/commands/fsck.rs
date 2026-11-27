@@ -14,7 +14,7 @@ use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
 use crate::wrappers::{handle::BcachefsHandle, sysfs};
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::Printbuf;
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::{device_scan, thread_with_file};
 

@@ -58,12 +58,6 @@
 //! out but the owner's, or it's a bug: a drop can't await, and one that
 //! slept would hide the wait it was meant to be.
 
-use crate::errcode::{BchError, AtomicError};
-use crate::locking::{Locked, SpinLockIrq};
-use crate::new_lock;
-use crate::util::alloc::{AllocError, Vec};
-use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, WaitSync, Waiter};
 use core::cell::UnsafeCell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
@@ -71,7 +65,13 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use core::task::{ready, Context, Poll};
-use pin_init::{pin_data, pin_init, PinInit};
+use crate::errcode::{AtomicError, BchError};
+use crate::locking::{Locked, SpinLockIrq};
+use crate::new_lock;
+use crate::util::alloc::{AllocError, Vec};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Completion, Done, Resumable, Resume, Resumed, WaitSync, Waiter};
+use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /// A Gather's result, and how what its refs put is folded into it:
 /// concurrently, from any context - an endio's - so into atomics.
@@ -455,7 +455,7 @@ impl<T: Send, Wt: Waiter, W: Width> Gather<Vec<T>, Wt, W> {
     }
 }
 
-#[pin_init::pinned_drop]
+#[pinned_drop]
 impl<T: Fold, Wt: Waiter, W: Width> PinnedDrop for Gather<T, Wt, W> {
     fn drop(self: Pin<&mut Self>) {
         self.assert_drained();

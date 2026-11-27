@@ -15,22 +15,19 @@
 //! the object it read is still live and the same incarnation, before and
 //! after sleeping now and then: one freed under it is the bug.
 
+#[cfg(not(kernel))]
+use bcachefs_shim as kernel;
 use core::mem::offset_of;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering::{Acquire, Relaxed, Release}};
-use pin_init::stack_try_pin_init;
-
-use super::TestRet;
-use crate::c;
-use crate::c::rcu_head;
+use crate::c::{self, rcu_head};
+use crate::debug::tests::TestRet;
 use crate::errcode::{BchError, Errcode};
 use crate::fs::Fs;
 use crate::new_srcu;
 use crate::os::kernel::{local_clock, msleep, num_online_cpus, random_u64_below};
 use crate::util::{par::{self, Backend}, rcu::{Flavor, RcuHead, RcuOwned, Srcu}, task::TASKS};
-
-#[cfg(not(kernel))]
-use bcachefs_shim as kernel;
+use pin_init::stack_try_pin_init;
 
 fn failed(what: core::fmt::Arguments<'_>) -> TestRet {
     kernel::pr_err!("test_srcu: {what}\n");

@@ -2,11 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::util::{futex::EventCount, sleep::Sleep};
-use cstruct_macros::MaybeZeroable;
 use core::marker::PhantomData;
 use core::sync::atomic::AtomicIsize;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use crate::util::{futex::EventCount, sleep::Sleep};
+use cstruct_macros::MaybeZeroable;
 
 /*
  * Two-state lock - can be taken for add or block - both states are shared,

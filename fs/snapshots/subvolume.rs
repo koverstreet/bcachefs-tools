@@ -17,37 +17,36 @@
 //! subvolume_children has a bit at (fs_path_parent, subvolume) for each nested
 //! subvolume, maintained by the trigger.
 
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, pos, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps,
-    BkeyValidateFrom};
-use crate::util::vstructs::{Unvalidated, Validated, Whole};
-use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::cow_key::CowKey;
-use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
-    Keys, LoopControl, TransAttempt, TransBkey, UpdateTriggerFlags,
-};
-use crate::btree::trans::TransGuard;
+use core::mem::offset_of;
 use crate::alloc::capacity::DiskReservation;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyOps, BkeySC, BkeyVal, BkeyValidateFrom,
+    BkeyWhole, POS_MIN};
+use crate::btree::cow_key::CowKey;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
+    Keys, LoopControl, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
+use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::c;
-use crate::posix::{inode::InodeUnpacked, inode_format::BCACHEFS_ROOT_INO, inode};
-use crate::posix::dev::dev_t;
-use crate::posix::mode::{umode_t, S_IFDIR};
-use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState, SnapshotTree,
-    Subvolume, SubvolumeState};
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BkeyType, Bpos, Btree, MetadataVersion};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
-use crate::init::passes;
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
+use crate::posix::dev::dev_t;
+use crate::posix::inode::{self, InodeUnpacked};
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::posix::mode::{umode_t, S_IFDIR};
+use crate::snapshots::delete::node_set_deleted;
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Snapshot, SnapshotState, SnapshotTree,
+    Subvolume, SubvolumeState};
 use crate::snapshots::{snapshot, FsSnapshots};
 use crate::util::alloc::Vec;
 use crate::util::place::Contained;
+use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::util::Printbuf;
-use crate::{message, bkey_fsck_err_on, fs_inconsistent, fsck_err,
-            fsck_err_on, fsck_err_report, prt};
-use core::mem::offset_of;
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
+use crate::{bkey_fsck_err_on, fs_inconsistent, fsck_err, fsck_err_on, fsck_err_report,
+    message, prt};
 use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]
@@ -751,7 +750,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
     }
 
     set_state_trans(t, subvol, SubvolumeState::deleted)?;
-    crate::snapshots::delete::node_set_deleted(t, snapid)
+    node_set_deleted(t, snapid)
 }
 
 fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {

@@ -4,7 +4,7 @@
 
 use crate::format::Val;
 use crate::types::Le64;
-use cstruct_macros::{bch_enum, MaybeZeroable, Plain, TypeInfo, SizedVal};
+use cstruct_macros::{bch_enum, MaybeZeroable, Plain, SizedVal, TypeInfo};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain, TypeInfo, SizedVal)]

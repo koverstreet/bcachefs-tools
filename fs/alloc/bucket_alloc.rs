@@ -30,22 +30,22 @@
 //! counter snapshot saying whether a wake was for it - or bails, committing
 //! the copies it has, when waiting won't help: alloc_should_bail().
 
-use crate::init::passes::RecoveryPass;
-use crate::fs::{Dev, Fs};
-use crate::alloc::background::{FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT, alloc_to_v4};
-use crate::alloc::check::{check_freespace_key, FreespaceCheck};
-use crate::alloc::foreground::{Blocked, OpenBucket, alloc_request, Watermark};
-use crate::btree::{bkey::pos, iter::{BtreeIter, BtreeIterFlags, TransAttempt}};
-use crate::data::{write::WriteFlags, copygc::{can_make_progress, dev_wait_amount}};
-use crate::util::{time_stats::TimeStat, Printbuf, rcu::read_lock};
-use crate::errcode::{Errcode, BchError};
-use crate::opts::data_type_str;
-use crate::debug::trace::events;
-use crate::os::kernel::{unlikely, WRITE};
 use core::sync::atomic::Ordering::Relaxed;
-
-use crate::alloc::foreground::AllocBtreeBitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO, BTREE_BITMAP_YES};
+use crate::alloc::background::{alloc_to_v4, FREESPACE_GENBITS_NR, FREESPACE_GENBITS_SHIFT};
+use crate::alloc::check::{check_freespace_key, FreespaceCheck};
+use crate::alloc::foreground::AllocBtreeBitmap::{BTREE_BITMAP_ANY, BTREE_BITMAP_NO,
+    BTREE_BITMAP_YES};
+use crate::alloc::foreground::{alloc_request, Blocked, OpenBucket, Watermark};
+use crate::btree::{bkey::pos, iter::{BtreeIter, BtreeIterFlags, TransAttempt}};
+use crate::data::{copygc::{can_make_progress, dev_wait_amount}, write::WriteFlags};
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree, DataType};
+use crate::fs::{Dev, Fs};
+use crate::init::passes::RecoveryPass;
+use crate::opts::data_type_str;
+use crate::os::kernel::{unlikely, WRITE};
+use crate::util::{rcu::read_lock, time_stats::TimeStat, Printbuf};
 
 const BUCKET_MASK: u64 = (1 << FREESPACE_GENBITS_SHIFT) - 1;
 

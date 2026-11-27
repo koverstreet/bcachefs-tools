@@ -29,39 +29,42 @@
 //! again. That's checked only at runtime, by verify_not_restarted() and an
 //! ended attempt's checks.
 
-use crate::btree::bkey::BkeyI;
-use super::bkey::*;
-use super::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
-use super::trans::BtreeTrans;
-use crate::alloc::{capacity::DiskReservation, buckets::FsUsageBase};
-use crate::c;
-use crate::btree::{journal_overlay::JournalKeys, update::TransCommitFlags};
-use crate::data::{extents_format::BKEY_BTREE_PTR_U64s_MAX, write::WriteFlags};
-use crate::journal::flush_wait::Flush;
 pub use crate::alloc::foreground::Watermark;
-use crate::errcode::{BchError, Errcode};
-use crate::btree::path::Paths;
-use crate::btree::trans::{TransGuard, BTREE_TRANS_MEM_MAX};
-use crate::fs::Fs;
-use crate::locking::MemallocFlags;
-use crate::types::Le64;
-use crate::os::kernel::unlikely;
-use crate::util::alloc::flags;
-use crate::util::{Printbuf, ToText};
+
 use core::cell::Cell;
 use core::fmt;
 use core::marker::PhantomData;
-use core::mem::{size_of, ManuallyDrop};
+use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
+use crate::alloc::{buckets::FsUsageBase, capacity::DiskReservation};
+use crate::btree::bkey::*;
+use crate::btree::bkey_buf::copy_key;
 use crate::btree::cache::btree_ptr_hash_val;
+use crate::btree::interior::{increase_depth, node_rewrite};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags};
+use crate::btree::journal_overlay::JournalKeys;
 use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::iter::KeyIter;
-use crate::btree::write::{node_write_trans, BtreeWriteFlags};
 use crate::btree::node::BtreeWriteType;
-use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes_mut, State};
+use crate::btree::path::Paths;
+use crate::btree::trans::{BTREE_TRANS_MEM_MAX, BtreeTrans, TransGuard};
+use crate::btree::update::TransCommitFlags;
+use crate::btree::write::{node_write_trans, BtreeWriteFlags};
+use crate::btree::write_buffer::FlushKey;
+use crate::c;
+use crate::data::{extents_format::BKEY_BTREE_PTR_U64s_MAX, write::WriteFlags};
 use crate::data_structures::dst_room::DstRoom;
-use crate::btree::bkey_buf::copy_key;
-use crate::format::{Bpos, Btree, BkeyType, Val, Bkey, BKEY_U64s, BTREE_MAX_DEPTH};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BKEY_U64s, BTREE_MAX_DEPTH, Bkey, BkeyType, Bpos, Btree, Val};
+use crate::fs::Fs;
+use crate::journal::flush_wait::Flush;
+use crate::locking::MemallocFlags;
+use crate::os::kernel::unlikely;
+use crate::types::Le64;
+use crate::util::alloc::{flags, init_at};
+use crate::util::futex::EventCount;
+use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes_mut, State};
+use crate::util::{Printbuf, ToText};
 
 /// One attempt at @trans: from one begin() to the next.
 ///
@@ -231,7 +234,7 @@ impl<'f> BtreeTrans<'f> {
     /// while it holds a leaf write locked, and begins again only once it's let
     /// go: its key is its own.
     #[inline(always)]
-    pub(in crate::btree) fn begin_flush(&self, _: super::write_buffer::FlushKey) -> TransAttempt<'_, 'f> {
+    pub(in crate::btree) fn begin_flush(&self, _: FlushKey) -> TransAttempt<'_, 'f> {
         self.begin()
     }
 
@@ -362,11 +365,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.unlock_long()
     }
 
-    pub fn wait_until<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>) -> T {
+    pub fn wait_until<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>) -> T {
         self.trans.wait_until(ev, cond)
     }
 
-    pub fn wait_until_timeout<T>(&self, ev: &crate::util::futex::EventCount, cond: impl FnMut() -> Option<T>,
+    pub fn wait_until_timeout<T>(&self, ev: &EventCount, cond: impl FnMut() -> Option<T>,
                                  timeout: isize) -> Option<T> {
         self.trans.wait_until_timeout(ev, cond, timeout)
     }
@@ -679,7 +682,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         const { assert!(core::mem::align_of::<T>() <= 8) };
 
         let p = self.kmalloc_raw(size_of::<T>())?.cast::<T>();
-        unsafe { crate::util::alloc::init_at(init, p) }.map_err(Into::into)?;
+        unsafe { init_at(init, p) }.map_err(Into::into)?;
         Ok(unsafe { &mut *p })
     }
 
@@ -831,7 +834,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn btree_increase_depth(&self, iter: &BtreeIter<'a>) -> Result<(), BchError> {
         let trans = self.trans();
-        super::interior::increase_depth(self, &mut trans.paths(), iter.path, CommitOpts::new())
+        increase_depth(self, &mut trans.paths(), iter.path, CommitOpts::new())
     }
 
     /// The pointer at @level of @btree, at @pos, edited by @f - handed a copy
@@ -951,8 +954,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         write_flags: WriteFlags,
     ) -> Result<(), BchError> {
         let trans = self.trans();
-        super::interior::node_rewrite(self, &mut trans.paths(), iter, node, target,
-                                      flags.into(), write_flags)
+        node_rewrite(self, &mut trans.paths(), iter, node, target, flags.into(), write_flags)
     }
 
     /// The node @pos's pointer at @level of @btree points to, rewritten.
@@ -1237,11 +1239,10 @@ impl CommitOpts {
     /// A btree update's watermark: copygc's becomes btree_copygc, and below
     /// btree, btree - btree_update_set_watermark_hipri().
     pub fn watermark_hipri(self) -> Self {
-        use crate::alloc::foreground::Watermark as wm;
-        let w = match wm::from_bits(self.0 & Self::WATERMARK_MASK) {
-            wm::copygc                         => wm::btree_copygc,
-            w if (w as u32) < wm::btree as u32 => wm::btree,
-            w                                                => w,
+        let w = match Watermark::from_bits(self.0 & Self::WATERMARK_MASK) {
+            Watermark::copygc                         => Watermark::btree_copygc,
+            w if (w as u32) < Watermark::btree as u32 => Watermark::btree,
+            w                                         => w,
         };
         self.watermark(w)
     }

@@ -104,22 +104,23 @@
 //! drain() and empty() free buffers a grace period on. So drain() reads a
 //! table only until it unlinks it.
 
-use crate::data_structures::array_vec::ArrayVec;
 use core::hash::Hash;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64};
-use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
-
-use super::{Contents, Cuckoo, CuckooHasher, CuckooItem, Equivalent, Faults, Held, Mode};
-use crate::util::alloc::AllocError;
-use crate::util::printbuf::{Printbuf, ToText};
-use crate::prt;
+use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64,
+    Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst}};
+use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::cuckoo::{Contents, Cuckoo, CuckooHasher, CuckooItem, Equivalent,
+    Faults, Held, Mode};
 use crate::os::kernel::random_u64;
 use crate::os::percpu::CpuGuard;
+use crate::prt;
+use crate::util::alloc::AllocError;
 use crate::util::projections::Publish;
-use crate::util::rcu::{read_lock, RcuArray, RcuArrayBox, RcuArrayBuf, RcuArrayHead, RcuArrayWriter, ReadGuard};
+use crate::util::rcu::{read_lock, RcuArray, RcuArrayBox, RcuArrayBuf, RcuArrayHead,
+    RcuArrayWriter, ReadGuard};
 use crate::util::thin::{ThinBox, ThinRef};
+use crate::util::{Printbuf, ToText};
 
 const MAX_KICKS: usize = 16;
 

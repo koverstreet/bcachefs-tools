@@ -22,20 +22,22 @@
 //! they strand - a bucket each - and shrink when an allocation finds it
 //! isn't: too_many_writepoints().
 
-use crate::fs::{Dev, Fs};
-use crate::btree::iter::TransAttempt;
 use crate::alloc::{dev_select::DevStripeState, foreground::{FsAllocator, OpenBuckets}};
+use crate::btree::iter::TransAttempt;
 use crate::data::ec::head::stripe_heads_stop;
-use crate::locking::{ByteLock, ExclusiveGuard, Lockdep, Locked};
-use crate::{prt, new_lock, published};
-use crate::util::hash::hash_64;
-use crate::os::{kernel::local_clock, workqueue::Queue};
-use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use crate::format::DataType;
+use crate::fs::{Dev, Fs};
+use crate::locking::{ByteLock, ExclusiveGuard, Lockdep, Locked};
+use crate::os::{kernel::local_clock, workqueue::Queue};
 use crate::types::CacheAligned;
+use crate::util::hash::hash_64;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::projections::Volatile;
+use crate::util::rcu::read_lock;
 use crate::util::task::RunQueue;
+use crate::util::vstructs::Plain;
+use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
+use crate::{new_lock, prt, published};
 use cstruct_macros::{Init, MaybeZeroable, NonZeroWord};
 use pin_init::pin_data;
 
@@ -52,7 +54,7 @@ pub struct WritePointIdx(core::num::NonZero<u8>);
 unsafe impl pin_init::ZeroableOption for WritePointIdx {}
 
 // SAFETY: a u8, any of which is an Option of one - 0 None
-unsafe impl crate::util::vstructs::Plain for Option<WritePointIdx> {}
+unsafe impl Plain for Option<WritePointIdx> {}
 
 impl WritePointIdx {
     pub fn new(idx: usize) -> Self {
@@ -137,7 +139,6 @@ published! {
         pub write_points_hash: [Volatile<Option<WritePointIdx>>; WRITE_POINT_HASH_NR as usize],
     }
 }
-
 
 /// write_points_hash_lock, held.
 type HashGuard<'a> = ExclusiveGuard<'a, Lockdep<ByteLock>, (), WritePointsHash>;
@@ -445,7 +446,7 @@ impl Fs {
     }
 
     pub fn reset_alloc_cursors(&self) {
-        let rcu = crate::util::rcu::read_lock();
+        let rcu = read_lock();
         for ca in self.devs_rcu(&rcu) {
             ca.alloc_cursor.iter().for_each(|cursor| cursor.set(0));
         }

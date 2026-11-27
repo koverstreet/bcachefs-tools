@@ -4,10 +4,9 @@
 //! filesystem's name and a string.
 
 use core::ffi::CStr;
-use core::mem::{offset_of, size_of};
-
-use crate::sb::counters_format::PersistentCounter_arms;
+use core::mem::offset_of;
 use crate::os::tracepoint::{EventClass, Field, TraceSeq};
+use crate::sb::counters_format::PersistentCounter_arms;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
 use cstruct_macros::Plain;
 

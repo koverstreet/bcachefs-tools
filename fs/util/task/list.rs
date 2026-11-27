@@ -4,31 +4,30 @@
 //! finishes, for debugfs to walk. A task's memory is freed a grace period
 //! after it's done, so the walk, under RCU, can read what it finds.
 
-use super::{Header, TaskRef};
-use crate::data_structures::fast_list::FastList;
-use crate::locking::MemallocFlags;
-use crate::os::kernel::msleep;
-use crate::util::late::{Late, LateInit, ModuleInit};
-use crate::prt;
-use crate::errcode::BchError;
-use crate::util::log::Log;
-use crate::util::printbuf::Msg;
-use crate::util::rcu::{self, ReadGuard};
-use crate::util::Printbuf;
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use pin_init::{pin_data, pin_init, PinInit};
+use crate::data_structures::fast_list::FastList;
+use crate::errcode::BchError;
+use crate::locking::MemallocFlags;
+use crate::os::kernel::msleep;
+use crate::prt;
+use crate::util::late::{Late, LateInit, ModuleInit};
+use crate::util::log::Log;
+use crate::util::rcu::{self, ReadGuard};
+use crate::util::task::{Header, TaskRef};
+use crate::util::{Msg, Printbuf};
+use pin_init::{pin_data, pin_init, zeroed, PinInit, Zeroable};
 
 #[pin_data]
 #[repr(transparent)]
-#[derive(::pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct TaskList {
     #[pin]
     list: FastList<c_void>,
 }
 
 /// Tasks of no filesystem's.
-pub static TASKS: Late<TaskList, ModuleInit> = ::pin_init::zeroed();
+pub static TASKS: Late<TaskList, ModuleInit> = zeroed();
 
 impl LateInit for TaskList {
     fn is_made(&self) -> bool {

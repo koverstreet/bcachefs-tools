@@ -16,18 +16,17 @@
 //! - allocator depends on the journal (when it rewrites prios and gens)
 
 use core::sync::atomic::Ordering::Relaxed;
-
-use crate::init::passes::RecoveryPass;
 use crate::alloc::{accounting::verify_accounting_clean, capacity::recalc_capacity};
 use crate::btree::init::btree_init_rw;
-use crate::fs::{FsFlag as Flag, Fs, StateLockWrite};
-use crate::journal::journal::{JournalFlag, JournalGuard};
-use crate::data::ec::head::stripe_heads_stop;
-use crate::errcode::{Errcode, BchError};
+use crate::data::{ec::head::stripe_heads_stop, scrub_journal};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{MemberState, SbFeature};
+use crate::fs::{Fs, FsFlag as Flag, StateLockWrite};
+use crate::init::passes::RecoveryPass;
+use crate::journal::{buckets, journal::{JournalFlag, JournalGuard}};
+use crate::os::{kernel::WRITE, workqueue::Queue};
 use crate::sb::members::{btree_bitmap_gc_schedule, SbMembersMut};
 use crate::util::futex::EventCount;
-use crate::os::{kernel::WRITE, workqueue::Queue};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{OnRelease, WaitableRef};
 use crate::util::sleep::Sleep;
@@ -81,7 +80,7 @@ impl Fs {
             self.btree_cancel_all_writes();
             self.btree_interior_updates_flush();
         } else {
-            crate::journal::buckets::drop_retired_going_ro(self);
+            buckets::drop_retired_going_ro(self);
         }
 
         self.log().verbose(message!(
@@ -140,7 +139,6 @@ impl Fs {
     pub fn emergency_read_only_locked(&self, out: &mut Printbuf, g: &mut JournalGuard<'_>) -> bool {
         self.emergency_read_only_to(out, Some(g))
     }
-
 }
 
 impl StateLockWrite<'_> {
@@ -350,7 +348,7 @@ impl StateLockWrite<'_> {
         fs.do_invalidates();
         fs.do_stripe_deletes();
         fs.run_pending_async_btree_ops();
-        crate::data::scrub_journal::do_repairs(fs);
+        scrub_journal::do_repairs(fs);
         btree_bitmap_gc_schedule(fs);
         Ok(())
     }

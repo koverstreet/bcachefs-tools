@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::OwnedNode;
-use super::state::state_hashed;
-use crate::btree::{node::bset::BSET_CACHELINE, node::{BtreeNode, NodeContents}};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::locking::{six::{six_lock_exit, SixLockInitFlags}, MemallocFlags};
-use crate::util::alloc::{flags, Flags, kfree, kv_layout, AllocGfp, Allocator, Global, KVmalloc, Vmalloc, WithFlags};
-use crate::os::kernel::is_vmalloc_addr;
-use crate::util::maybe_rcu_alloc::alloc_at;
 use core::alloc::Layout;
 use core::ptr::NonNull;
+use crate::btree::cache::state::state_hashed;
+use crate::btree::cache::OwnedNode;
+use crate::btree::node::bset::BSET_CACHELINE;
+use crate::btree::node::{BtreeNode, NodeContents};
+use crate::errcode::{BchError, Errcode};
+use crate::fs::Fs;
+use crate::locking::{six::{six_lock_exit, SixLockInitFlags}, MemallocFlags};
+use crate::os::{bio::MapBuf, kernel::{account_reclaimed, is_vmalloc_addr}};
+use crate::util::alloc::{flags, kfree, kv_layout, AllocGfp, Allocator, Flags, Global, KVmalloc,
+    Vmalloc, WithFlags};
+use crate::util::maybe_rcu_alloc::alloc_at;
 use cstruct_macros::MaybeZeroable;
 
 /// The bounce pool's elements, kvmalloc()'d as a bounce buffer is: accounted
@@ -86,7 +88,7 @@ impl core::ops::DerefMut for Bounce<'_> {
 
 // Its buffer, until it's dropped: swap() trades it, but isn't reached
 // through the bytes
-unsafe impl crate::os::bio::MapBuf for Bounce<'_> {
+unsafe impl MapBuf for Bounce<'_> {
     fn as_raw(&self) -> (*mut u8, usize) {
         (self.p.as_ptr().cast(), self.bytes)
     }
@@ -232,9 +234,9 @@ impl NodeBufs {
          * kmalloc_large() path, so we're working around a slub bug by doing
          * this here:
          */
-        crate::os::kernel::account_reclaimed(self.data_bytes());
+        account_reclaimed(self.data_bytes());
         if !self.aux_data.is_null() {
-            crate::os::kernel::account_reclaimed(self.aux_data_bytes());
+            account_reclaimed(self.aux_data_bytes());
         }
 
         self.free();

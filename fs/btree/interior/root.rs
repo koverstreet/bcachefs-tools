@@ -5,26 +5,24 @@
 //! to the in-memory roots; and the reserve cache, as text.
 
 use core::ptr;
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeyV, POS_MIN, SPOS_MAX};
+use crate::btree::interior::{reserve, BtreeAlloc, InteriorUpdate, NewNode};
 use crate::btree::iter::BtreeTrans;
-use crate::btree::node::BtreeNode;
 use crate::btree::node::sort::build_aux_trees;
+use crate::btree::node::BtreeNode;
 use crate::btree::path::{PathIdx, Paths};
-use crate::btree::bkey::{BkeyV, BkeyI, BKEY_U64S};
-use crate::btree::interior::BtreeAlloc;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
+use crate::data_structures::dst_room::DstRoom;
 use crate::debug::trace::events;
 use crate::errcode::{AtomicError, BchError};
-use crate::format::{BkeyType, Btree, BTREE_ID_NR_MAX, JsetEntry, jset_entry_btree_root};
+use crate::format::{jset_entry_btree_root, BTREE_ID_NR_MAX, BkeyType, Btree, JsetEntry};
 use crate::fs::Fs;
-use crate::{prt, POS_MIN, SPOS_MAX};
-use crate::util::Printbuf;
-use crate::util::printbuf::ToText;
-use crate::util::vstructs::Validated;
-use super::{reserve, InteriorUpdate, NewNode};
-use crate::data_structures::dst_room::DstRoom;
 use crate::locking::{ExclusiveGuard, Mutex};
+use crate::prt;
 use crate::util::alloc::Vec;
 use crate::util::projections::Volatile;
+use crate::util::vstructs::Validated;
+use crate::util::{Printbuf, ToText};
 use cstruct_macros::{Init, MaybeZeroable};
 use pin_init::pin_data;
 
@@ -117,7 +115,6 @@ impl BtreeRootsLive {
         self.roots_error.get(id as usize)?.load()
     }
 }
-
 
 fn root_pack(b: &BtreeNode) -> usize {
     let mask = (1 << BTREE_ROOT_LEVEL_BITS) - 1;
@@ -241,7 +238,7 @@ pub(crate) fn root_alloc_fake_trans(trans: &BtreeTrans<'_>, btree: Btree, level:
         let k = room.init();
         k.k.set_key_type(BkeyType::btree_ptr);
         k.k.p = SPOS_MAX;
-        room.elems_mut()[crate::btree::bkey::BKEY_U64S] = u64::MAX - u64::from(btree.0);
+        room.elems_mut()[BKEY_U64S] = u64::MAX - u64::from(btree.0);
     });
 
     let contents = locked.contents_mut();

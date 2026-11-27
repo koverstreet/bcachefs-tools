@@ -1,11 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! A key format's unpack, compiled to x86-64: off while the kernel has no
 //! interface for allocating executable memory - bkey.h's
 //! HAVE_BCACHEFS_COMPILED_UNPACK.
 
 use core::mem::offset_of;
-
-use super::format::{bkey_fields, FIELDS};
-use super::BKEY_U64S;
+use crate::btree::bkey::{format::{bkey_fields, FIELDS}, BKEY_U64S};
 use crate::format::{BkeyField::{self, *}, BkeyFormat, KEY_FORMAT_CURRENT};
 use crate::types::field_size;
 

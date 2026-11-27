@@ -13,25 +13,26 @@
 //! made. Allocating is GFP_KERNEL, as the task's memalloc scope says: it waits
 //! for an element - or, in a NORECLAIM scope, where it can't, fails.
 
-use crate::errcode::BchError;
-use crate::locking::{Locked, SpinLockIrq};
-use crate::new_lock;
-use crate::os::kernel::HZ;
-use crate::util::alloc::{flags, Flags, current_gfp_context, kv_layout, Alloc, AllocError, AllocGfp, Allocator, Vec};
-use crate::util::futex::EventCount;
-use crate::util::late::LateInit;
-use crate::util::projections::Volatile;
-use crate::util::sleep::Sleep;
 use core::alloc::Layout;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering};
-use pin_init::{pin_data, pinned_drop, PinInit};
+use crate::errcode::BchError;
+use crate::locking::{Locked, SpinLockIrq};
+use crate::new_lock;
+use crate::os::kernel::HZ;
+use crate::util::alloc::{current_gfp_context, flags, kv_layout, Alloc, AllocError, AllocGfp,
+    Allocator, Flags, Global, Vec};
+use crate::util::futex::EventCount;
+use crate::util::late::{LateInit, LateStop};
+use crate::util::projections::Volatile;
+use crate::util::sleep::Sleep;
+use pin_init::{pin_data, pin_init, pinned_drop, PinInit, Zeroable};
 
 /// A pool's allocator is its own, made in place - pinned, as an RcuPending is -
 /// and dropped once the reserve's given back to it.
 #[pin_data(PinnedDrop)]
-pub struct Mempool<A: AllocGfp = crate::os::alloc::Global> {
+pub struct Mempool<A: AllocGfp = Global> {
     /* the reserve, and its length published, for free_raw()'s unlocked check */
     #[pin]
     reserve: Locked<SpinLockIrq, Vec<Element>, Volatile<usize>>,
@@ -51,15 +52,15 @@ struct Element(NonNull<u8>);
 unsafe impl Send for Element {}
 
 // SAFETY: zeroed is not made
-unsafe impl<A: AllocGfp + ::pin_init::Zeroable> ::pin_init::Zeroable for Mempool<A> {}
+unsafe impl<A: AllocGfp + Zeroable> Zeroable for Mempool<A> {}
 
-impl<A: AllocGfp + ::pin_init::Zeroable> LateInit for Mempool<A> {
+impl<A: AllocGfp + Zeroable> LateInit for Mempool<A> {
     fn is_made(&self) -> bool {
         Mempool::is_made(self)
     }
 }
 
-impl<A: AllocGfp + ::pin_init::Zeroable> crate::util::late::LateStop for Mempool<A> {}
+impl<A: AllocGfp + Zeroable> LateStop for Mempool<A> {}
 
 /// @layout's bytes from @alloc: zeroed, if @gfp has __GFP_ZERO.
 fn element_alloc<A: AllocGfp>(alloc: &A, layout: Layout, gfp: Flags) -> Option<NonNull<u8>> {
@@ -108,7 +109,7 @@ impl<A: AllocGfp> Mempool<A> {
     where
         BchError: From<E>,
     {
-        ::pin_init::pin_init!(Self {
+        pin_init!(Self {
             reserve <- new_lock!(Vec::with_capacity(min_nr)?, Volatile::new(0), "mempool"),
             freed: EventCount::new(),
             min_nr,
@@ -245,7 +246,7 @@ impl<A: AllocGfp> Mempool<A> {
 impl Mempool {
     /// mempool_init_kmalloc_pool(), of the port's allocator.
     pub fn new(min_nr: usize, size: usize) -> impl PinInit<Self, BchError> {
-        Self::new_in(crate::os::alloc::Global, min_nr, size)
+        Self::new_in(Global, min_nr, size)
     }
 }
 

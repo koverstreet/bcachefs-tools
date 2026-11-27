@@ -4,7 +4,6 @@
 
 use core::cmp::Ordering;
 use core::ops::{Deref, DerefMut};
-
 use crate::util::alloc::Vec;
 
 /// @v[node] moved down until no child orders after it: a max-heap's sift, by

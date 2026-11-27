@@ -7,28 +7,24 @@
 //! an older one to read - sb_set_downgrade(), when an older version
 //! mounts a newer filesystem.
 
-use core::mem::size_of;
-
-
-use crate::init::{passes::RecoveryPass, dev::bch_sb_buf, passes};
 use crate::btree::bkey::ValidateFlags;
+use crate::data_structures::bitmap::LeBitmap;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Btree, MetadataVersion, Sb, SbFieldExt};
+use crate::fs::{Fs, FsFlag, SbLockGuard};
+use crate::init::{dev::bch_sb_buf, passes::{self, RecoveryPass}};
 use crate::sb::downgrade_format::{SbFieldDowngrade, SbFieldDowngradeEntry};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard, FsFlag};
-use crate::{prt, sb_err_on};
 use crate::sb::errors::{prt_error_ids, SbErrorId};
 use crate::sb::io::{entries_end, SbFieldOps, SbResize};
 use crate::types::Le64;
 use crate::util::alloc::{AllocError, Vec};
-use crate::data_structures::bitmap::LeBitmap;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated};
 use crate::util::Printbuf;
-use crate::format::{Btree, MetadataVersion, Sb, SbFieldExt};
+use crate::{prt, sb_err_on};
 
 type Section = SbFieldDowngrade<Validated>;
 
 const SECTION_HEAD: usize = size_of::<Head<Section>>();
-
 
 impl SbFieldOps for Section {
     fn validate(sb: &Sb<Unvalidated>, f: &SbFieldDowngrade<Unvalidated>,

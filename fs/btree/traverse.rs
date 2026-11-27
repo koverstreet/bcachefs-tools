@@ -5,9 +5,7 @@
 
 use core::cmp::Ordering;
 use core::ptr::{self, NonNull};
-
-
-use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{bkey_val_to_text, BKEY_U64S, BkeyI, BkeySC, BkeyV, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::btree_id_level_to_text;
 use crate::btree::interior::{check_topology_msg, BTREE_ROOT_LEVEL_BITS};
@@ -20,12 +18,12 @@ use crate::btree::path::{BtreePath, DownKey, KeyVal, LockedNode, NodePtr, PathId
 use crate::c;
 use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Bpos, Bkey, BTREE_MAX_DEPTH};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bkey, BkeyType, Bpos, Btree};
 use crate::fs::{Fs, FsFlag};
+use crate::os::{kernel::race_fault, sched::current};
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
-use crate::os::kernel::race_fault;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 
 // ── A level: its node, and its node iterator ────────────────────────────────
@@ -166,7 +164,7 @@ fn root_unpack(packed: usize) -> (Option<NonNull<BtreeNode>>, usize) {
     (NonNull::new((packed & !mask) as *mut BtreeNode), level)
 }
 
-fn root_packed(fs: &Fs, btree: crate::format::Btree) -> usize {
+fn root_packed(fs: &Fs, btree: Btree) -> usize {
     fs.btree.cache.roots.roots_b.get(btree.0 as usize).map_or(0, |r| r.get())
 }
 
@@ -413,7 +411,7 @@ impl BtreeTrans<'_> {
         {
             let mut msg = msg.indent(2);
             prt!(&mut *msg, "parent:     ");
-            btree_id_level_to_text(&mut msg, crate::format::Btree(b.c.btree_id.get().into()), b.c.level.get().into());
+            btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.get().into()), b.c.level.get().into());
             prt!(&mut *msg, " {} - {}\n", contents.data().min_key, contents.data().max_key);
 
             prt!(&mut *msg, "parent key:  ");
@@ -453,7 +451,7 @@ impl BtreeTrans<'_> {
             prt!(&mut *msg, "\n");
         }
 
-        let _ = prt_task_backtrace(&mut msg, crate::os::sched::current(), 1);
+        let _ = prt_task_backtrace(&mut msg, current(), 1);
 
         let mut msg = msg.indent(2);
         match check_topology_msg(t, b, &mut msg) {

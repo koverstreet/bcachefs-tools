@@ -19,13 +19,31 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::locking::{Locked, Mutex, SpinLockIrq};
-use crate::{new_lock, published};
+pub use crate::init::passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
+
+use crate::data_structures::bitmap::LeBitmap;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Btree, Sb, SbFeature, SbFieldExt};
+use crate::fs::{Fs, FsFlag, SbLockGuard};
+use crate::init::passes::pass::RUN;
+use crate::init::passes::RecoveryRunner as Runner;
+use crate::init::passes_format::{RecoveryPassEntry, SbFieldRecoveryPasses};
+use crate::init::progress::ProgressIndicator;
+use crate::locking::{ExclusiveGuard, Locked, Mutex, SpinLockIrq};
+use crate::os::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
+use crate::os::kthread::Kthread;
+use crate::os::workqueue::{Queue, ReffedWork};
+use crate::posix::{inode, inode_format::BCACHEFS_ROOT_INO};
+use crate::sb::io::{SbFieldOps, SbResize, SbWrite};
+use crate::snapshots::{format::BCACHEFS_ROOT_SUBVOL, subvolume::{self, SubvolInum}};
+use crate::types::{Le32, Le64};
+use crate::util::place::Contained;
 use crate::util::projections::Volatile;
-use crate::os::workqueue::ReffedWork;
-use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo, bch_enum};
+use crate::util::vstructs::{Head, Unvalidated, Validated};
+use crate::util::{names, DateTime, Nsecs, Printbuf};
+use crate::{here, message, new_lock, prt, published};
+use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
-use crate::format::{Btree, SbFeature, Sb, SbFieldExt};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -149,28 +167,6 @@ pub trait Run {
     fn run(fs: &Fs) -> Result<(), BchError>;
 }
 
-use crate::init::passes_format::{SbFieldRecoveryPasses, RecoveryPassEntry};
-use crate::init::progress::ProgressIndicator;
-use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
-use crate::snapshots::{format::BCACHEFS_ROOT_SUBVOL, subvolume::SubvolInum, subvolume};
-use self::RecoveryRunner as Runner;
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard, FsFlag};
-use crate::locking::ExclusiveGuard;
-use crate::sb::io::{SbFieldOps, SbWrite};
-use crate::types::{Le32, Le64};
-use crate::data_structures::bitmap::LeBitmap;
-use crate::util::{names, DateTime, Nsecs, Printbuf};
-use crate::os::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
-use crate::os::kthread::Kthread;
-use crate::util::vstructs::{Head, Validated, Unvalidated};
-use crate::util::place::Contained;
-use crate::os::workqueue::Queue;
-use crate::{here, message, prt};
-use core::mem::size_of;
-
-pub use crate::init::passes_format::{PassFlags, RecoveryPass, RecoveryPassStable};
-
 type Pass = RecoveryPass;
 type Flags = RunRecoveryPassFlags;
 
@@ -198,8 +194,6 @@ pub mod pass {
     }
     RecoveryPass_arms!(pass_types);
 }
-use pass::RUN;
-use crate::sb::io::SbResize;
 
 /// Each pass's stable id, by pass.
 const TO_STABLE: [u8; NR] = {

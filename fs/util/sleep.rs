@@ -16,9 +16,11 @@
 //! A timeout is in jiffies, for the whole sleep, not each pass: what
 //! schedule_timeout() returns, the time left, is the next pass's.
 
-use crate::c;
 use core::convert::Infallible;
 use core::marker::PhantomData;
+use crate::c;
+use crate::os::kernel::jiffies;
+use crate::os::sched;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SleepError {
@@ -65,7 +67,7 @@ impl<E> Sleep<E> {
         if self.timeout == FOREVER {
             return self;
         }
-        let left = self.timeout - crate::os::kernel::jiffies().wrapping_sub(start) as isize;
+        let left = self.timeout - jiffies().wrapping_sub(start) as isize;
         Sleep { timeout: left.max(0), ..self }
     }
 }
@@ -91,7 +93,7 @@ pub trait SleepEnd: sealed::Sealed + Copy {
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::SleepError {}
-    impl Sealed for core::convert::Infallible {}
+    impl Sealed for super::Infallible {}
 }
 
 impl SleepEnd for SleepError {
@@ -108,28 +110,28 @@ impl SleepEnd for Infallible {
 
 /// Sleep, as @how says, until @cond returns Some - which it may at once.
 pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Option<T>) -> Result<T, E> {
-    crate::os::sched::might_sleep();
+    sched::might_sleep();
 
     let mut left = how.timeout;
     let ret = loop {
         // SAFETY: our own state; set before the check
-        crate::os::sched::set_current_state(how.state);
+        sched::set_current_state(how.state);
         if let Some(v) = cond() {
             break Ok(v);
         }
         if left == 0 {
             break Err(E::early(SleepError::Timeout));
         }
-        if crate::os::sched::signal_pending_state(how.state) {
+        if sched::signal_pending_state(how.state) {
             break Err(E::early(SleepError::Signal));
         }
         left = if how.io {
-            crate::os::sched::io_schedule_timeout(left)
+            sched::io_schedule_timeout(left)
         } else {
-            crate::os::sched::schedule_timeout(left)
+            sched::schedule_timeout(left)
         };
     };
-    crate::os::sched::set_current_state_running();
+    sched::set_current_state_running();
     ret
 }
 

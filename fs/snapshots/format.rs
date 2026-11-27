@@ -4,7 +4,8 @@
 
 use crate::format::{Le128, Val};
 use crate::types::{Le32, Le64};
-use cstruct_macros::{bitfield, bch_enum, grown, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View, SizedVal};
+use cstruct_macros::{bch_enum, bitfield, grown, BitfieldMembers, MaybeZeroable, Plain, SizedVal,
+    TypeInfo, View};
 
 pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 

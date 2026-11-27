@@ -5,14 +5,14 @@
 //! write's flush decision too, or on flush_wait, a plain list, with no live
 //! buf to wait on.
 
-use crate::journal::journal::{Journal, JournalBuf};
-use crate::util::alloc::{kbox_zeroed_nofail, KBox};
-use crate::util::task::{waiter, Armable, Completion, DynDone, Unarmed, Waiter};
 use core::cell::UnsafeCell;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering::{Relaxed, SeqCst}};
+use crate::journal::journal::{Journal, JournalBuf};
+use crate::util::alloc::{kbox_zeroed_nofail, KBox};
+use crate::util::task::{waiter, Armable, Completion, DynDone, Unarmed, Waiter};
 use pin_init::pin_data;
 
 /*

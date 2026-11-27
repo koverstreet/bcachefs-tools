@@ -27,15 +27,15 @@ use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize};
-use core::sync::atomic::Ordering;
-
+use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use crate::locking::{ByteLock, ExclusiveGuard, Locked};
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
 use crate::util::backref::BackRef;
-use crate::util::rcu::{read_lock, Detach, DetachMember, FreeAnytime, RcuArray, RcuMember, ReadGuard};
+use crate::util::rcu::{read_lock, Detach, DetachMember, FreeAnytime, RcuArray, RcuMember,
+    ReadGuard};
 use crate::util::siphash::SipHash13Key;
+use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 use table::{Head, Mirror, Slot};
 
 /// A slot's word, read.
@@ -369,11 +369,11 @@ type Held<'a> = ExclusiveGuard<'a, ByteLock>;
 
 // SAFETY: atomics, an RcuArray, no bytes, an unlocked ByteLock, Faults'
 // integers and atomics, and PhantomDatas: all valid zeroed
-unsafe impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> ::pin_init::Zeroable for Cuckoo<I, S, W, M> {}
+unsafe impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Zeroable for Cuckoo<I, S, W, M> {}
 
 impl<I: CuckooItem, S: CuckooHasher, const W: usize, M: Mode> Default for Cuckoo<I, S, W, M> {
     fn default() -> Self {
-        ::pin_init::Zeroable::zeroed()
+        Zeroable::zeroed()
     }
 }
 
@@ -555,7 +555,7 @@ where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
     /// pin-init's &this - with this initialized last, and detached before
     /// the rest of @e is dropped: @e's Detach, which its drop runs first.
     pub unsafe fn new<'w>(table: &'w Cuckoo<Entry<E>, S, W, M>, key: K, e: NonNull<E>)
-        -> impl ::pin_init::PinInit<Self, RegisterError> + use<'w, K, E, S, W, M>
+        -> impl PinInit<Self, RegisterError> + use<'w, K, E, S, W, M>
     {
         let () = Self::NOTHING_TO_DROP;
         let init = move |slot: *mut Self| {
@@ -570,7 +570,7 @@ where K: Hash + Eq + Equivalent<E>, E: Hash + Eq + Sync, S: CuckooHasher
             Err(err)
         };
         // SAFETY: @slot is initialized on Ok, and not on Err; nothing moves it
-        unsafe { ::pin_init::pin_init_from_closure(init) }
+        unsafe { pin_init_from_closure(init) }
     }
 
     /// Registers @e in @table under @key until this is dropped, for an entry

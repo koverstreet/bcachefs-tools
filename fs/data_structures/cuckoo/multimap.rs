@@ -10,19 +10,19 @@
 //! its group empty, under the lock, has met it on its way out, and goes
 //! again: once, as the remove took it out before letting go.
 
-use super::{Cuckoo, CuckooHasher, Entry};
+use core::hash::Hash;
+use core::ptr::NonNull;
+use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, Entry};
 use crate::data_structures::dst_vec::DstVec;
 use crate::data_structures::inline_vec::InlineVec;
 use crate::errcode::BchError;
 use crate::locking::{Locked, MemallocFlags, SpinLock};
-use crate::new_lock;
 use crate::util::alloc::AllocError;
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::util::printbuf::{Printbuf, ToText};
 use crate::util::rcu::{read_lock, RcuMember};
 use crate::util::siphash::SipHash13Key;
-use core::hash::Hash;
-use core::ptr::NonNull;
+use crate::util::{Printbuf, ToText};
+use crate::{keyed_by, new_lock};
 use pin_init::{pin_data, pin_init};
 
 /// Its key, hashed and compared as the group, and its values. Readers past
@@ -37,7 +37,7 @@ struct Group<K, V, const N: usize> {
     _rcu: RcuMember,
 }
 
-crate::keyed_by!(impl[K: Hash + Eq, V, const N: usize] Group<K, V, N>, |g| &g.key => K);
+keyed_by!(impl[K: Hash + Eq, V, const N: usize] Group<K, V, N>, |g| &g.key => K);
 
 type GroupBox<K, V, const N: usize> = MaybeRcuAlloc<Group<K, V, N>>;
 

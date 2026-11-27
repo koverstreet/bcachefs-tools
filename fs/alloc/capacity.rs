@@ -30,32 +30,32 @@
 //! FsCapacity is made by its Init and freed by its drop: its locks, and
 //! the per-cpu counters, whose online reservations must all be put by then.
 
-
-use crate::fs::{Dev, FsFlag, Fs};
-use crate::btree::iter::TransAttempt;
-use crate::c;
-use crate::alloc::buckets::{FsPlaceable, FsUsageBase, FsUsageShort,
-    ReservationFlags, RESERVE_FACTOR};
-use crate::alloc::foreground::open_bucket;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, WriteDegradedAction};
-use crate::init::{error::trans_inconsistent, dev::DevsMask};
-use crate::{percpu_field, new_lock};
-use crate::debug::trace::events;
-use crate::util::atomic::try_update;
-use crate::util::sleep::Sleep;
-use crate::os::{kernel::unlikely, percpu::{CpuGuard, PerCpuRef, Counters, PerCpu}};
-use crate::util::log::Log;
-use crate::util::rcu::read_lock;
-use crate::util::{HumanReadable, Printbuf};
-use crate::alloc::dev_select::{PlacementWriter, Placement};
 use core::cell::Cell;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering, AtomicU64};
-use pin_init::{pinned_drop, pin_data};
-use crate::locking::{Locked, SpinLockIrq};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use crate::alloc::buckets::{FsPlaceable, FsUsageBase, FsUsageShort, RESERVE_FACTOR,
+    ReservationFlags};
+use crate::alloc::dev_select::{Placement, PlacementWriter};
+use crate::alloc::foreground::open_bucket;
+use crate::btree::iter::TransAttempt;
+use crate::c;
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{DataType, WriteDegradedAction};
+use crate::fs::{Dev, Fs, FsFlag, StateLockWrite};
+use crate::init::{dev::DevsMask, error::trans_inconsistent};
+use crate::locking::{Locked, PercpuRwsemNoio, SpinLockIrq};
+use crate::os::{kernel::unlikely, percpu::{Counters, CpuGuard, PerCpu, PerCpuRef}};
+use crate::util::atomic::try_update;
+use crate::util::log::Log;
+use crate::util::place::Placed;
 use crate::util::projections::Volatile;
+use crate::util::rcu::read_lock;
+use crate::util::sleep::Sleep;
+use crate::util::{HumanReadable, Printbuf};
+use crate::{new_lock, percpu_field};
 use cstruct_macros::{Fieldwise, Init, MaybeZeroable, TypeInfo};
+use pin_init::{pin_data, pinned_drop};
 
 /* capacity.pcpu's counters: each CPU's a delta, summed over them */
 #[repr(C)]
@@ -84,8 +84,8 @@ pub struct FsCapacityPcpu {
 #[derive(MaybeZeroable, TypeInfo, Init)]
 pub struct FsCapacity {
     /* sectors: recalc_capacity()'s, under state_lock, read without it */
-    pub capacity: crate::util::projections::Volatile<u64>,
-    pub reserved: crate::util::projections::Volatile<u64>,
+    pub capacity: Volatile<u64>,
+    pub reserved: Volatile<u64>,
 
     /*
      * When capacity _decreases_ (due to a disk being removed), we
@@ -93,7 +93,7 @@ pub struct FsCapacity {
      * and forces them to be revalidated
      */
     pub capacity_gen: u32,
-    pub bucket_size_max: crate::util::projections::Volatile<u32>,
+    pub bucket_size_max: Volatile<u32>,
 
     pub sectors_available: [AtomicU64; REPLICAS_MAX],
 
@@ -107,12 +107,11 @@ pub struct FsCapacity {
 
     #[pin]
     #[init(new_lock!((), "&c->capacity.mark_lock"))]
-    pub mark_lock: crate::util::place::Placed<crate::locking::PercpuRwsemNoio, MarkLockAt>,
+    pub mark_lock: Placed<PercpuRwsemNoio, MarkLockAt>,
 }
 
 /// mark_lock's place, for what it covers to name.
 pub type MarkLockAt = crate::at!(FsCapacity.mark_lock);
-
 
 // ── Capacity ─────────────────────────────────────────────────────────────
 
@@ -165,11 +164,7 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
 
     // Cached: every reservation that comes up short asks, and only this
     // changes it
-    if all_devs_rw {
-        fs.flags.set(FsFlag::all_devs_rw, true);
-    } else {
-        fs.flags.set(FsFlag::all_devs_rw, false);
-    }
+    fs.flags.set(FsFlag::all_devs_rw, all_devs_rw);
 
     #[cfg(kernel)]
     if let Some(sb) = fs.vfs_super() {
@@ -270,7 +265,7 @@ impl Fs {
     }
 }
 
-impl crate::fs::StateLockWrite<'_> {
+impl StateLockWrite<'_> {
     pub fn dev_allocator_add(&self, ca: &Dev) {
         dev_allocator_set_rw(self.fs(), ca, true);
     }

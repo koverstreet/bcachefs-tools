@@ -15,9 +15,8 @@
 //! is read under RCU, by the in-flight listing, while it's in use.
 
 use crate::btree::bkey::{BkeyI, BkeySC};
-use crate::format::{Btree, Bkey};
-use core::mem::size_of;
 use crate::data_structures::dst_room::{DstRoom, InlineOrBoxed};
+use crate::format::{Bkey, Btree};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 
 const ONSTACK_U64S: usize = 12;

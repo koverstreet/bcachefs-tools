@@ -5,8 +5,8 @@
 use crate::alloc::accounting_format::{DataType, DataTypes};
 use crate::format::Val;
 use crate::types::{Le8, Le64};
-use cstruct_macros::{bitfield, xmacro, grown, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo, View,
-                     SizedVal};
+use cstruct_macros::{bitfield, grown, whole, xmacro, BitfieldMembers, MaybeZeroable, Plain,
+    SizedVal, TypeInfo, View};
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]

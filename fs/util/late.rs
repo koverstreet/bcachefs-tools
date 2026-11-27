@@ -10,14 +10,14 @@
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
-use pin_init::PinInit;
-
+use crate::fs::{SbLockGuard, StateLockWrite};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::alloc::init_at;
+use pin_init::{PinInit, Zeroable};
 
 /// Zeroed is not yet made, and what's not made owns nothing: is_made() is
 /// false for zeroed, and Drop of an unmade T does nothing.
-pub trait LateInit: ::pin_init::Zeroable {
+pub trait LateInit: Zeroable {
     fn is_made(&self) -> bool;
 }
 
@@ -35,12 +35,12 @@ pub trait LateLock {
 
 pub enum StateLock {}
 impl LateLock for StateLock {
-    type Guard<'a> = crate::fs::StateLockWrite<'a>;
+    type Guard<'a> = StateLockWrite<'a>;
 }
 
 pub enum SbLock {}
 impl LateLock for SbLock {
-    type Guard<'a> = crate::fs::SbLockGuard<'a>;
+    type Guard<'a> = SbLockGuard<'a>;
 }
 
 /// A module's static: made at module init, as nothing else of ours runs, and
@@ -55,7 +55,7 @@ pub struct Late<T: LateInit, L: LateLock = StateLock>(UnsafeCell<T>, PhantomData
 
 unsafe impl<T: LateInit + Sync, L: LateLock> Sync for Late<T, L> {}
 unsafe impl<T: LateInit + Send, L: LateLock> Send for Late<T, L> {}
-unsafe impl<T: LateInit, L: LateLock> ::pin_init::Zeroable for Late<T, L> {}
+unsafe impl<T: LateInit, L: LateLock> Zeroable for Late<T, L> {}
 
 impl<T: LateInit, L: LateLock> Late<T, L> {
     /// Make it with @init's initializer, unless it's made: on failure, it's

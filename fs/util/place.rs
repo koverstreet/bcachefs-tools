@@ -104,14 +104,14 @@
 //! #[derive(Init)], for the one field of that type - gives it its At, Contained
 //! as any field's type is (os/*/workqueue.rs).
 
+use core::marker::{PhantomData, PhantomPinned};
+use core::pin::Pin;
+use core::sync::atomic::AtomicU8;
 use crate::errcode::BchError;
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox, Vec};
 use crate::util::rcu::FreeAnytime;
-use core::marker::{PhantomData, PhantomPinned};
-use core::mem::size_of;
-use core::pin::Pin;
-use core::sync::atomic::AtomicU8;
-use pin_init::{pin_data, pin_init, Init, PinInit, Zeroable};
+use pin_init::{init_from_closure, init_zeroed, pin_data, pin_init, pin_init_array_from_fn, Init,
+    PinInit, Zeroable};
 
 /// A field's name, as Field<N>'s N: its FNV-1a hash.
 pub const fn name(s: &str) -> u64 {
@@ -125,7 +125,6 @@ pub const fn name(s: &str) -> u64 {
     }
     h
 }
-
 
 /// Self's field N, named N: its type, Type, and where it is, OFFSET.
 /// #[derive(Init)] and #[derive(Fields)] make them.
@@ -214,7 +213,7 @@ impl<T, const L: usize> Array for [T; L] {
     type Elem = T;
 
     fn init_each<I: PinInit<T, E>, E>(make: impl FnMut(usize) -> I) -> impl PinInit<Self, E> {
-        pin_init::pin_init_array_from_fn(make)
+        pin_init_array_from_fn(make)
     }
 }
 
@@ -407,10 +406,9 @@ where
     B::Type: Zeroable,
 {
     fn pick(&self) -> impl Init<B::Type> {
-        pin_init::init_zeroed()
+        init_zeroed()
     }
 }
-
 
 /// Every Self is its parent's field: it holds an At, which at() made where
 /// the At says - a field of the At's type, so a Self is had only from an
@@ -854,7 +852,7 @@ where
 {
     // SAFETY: all of it written
     unsafe {
-        pin_init::init_from_closure(|slot: *mut Container<T, C>| {
+        init_from_closure(|slot: *mut Container<T, C>| {
             slot.write(Container { c: C::empty(), _t: PhantomData });
             Ok(())
         })

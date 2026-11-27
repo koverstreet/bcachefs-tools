@@ -270,11 +270,12 @@
  * The \textbf{write buffer}: \bchdoc{btree-write-buffer}
  */
 
+use core::ptr::NonNull;
 use crate::btree::{trans::{cached_trans_retire, FsBtreeTrans}, FsBtree};
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::os::lockdep::reclaim_lock_order;
 use crate::util::{place::{Contained, PlacedDrop}, rcu::Flavor};
-use core::ptr::NonNull;
 
 impl PlacedDrop for FsBtreeTrans {
     unsafe fn placed_drop(&self) {
@@ -323,7 +324,7 @@ pub(crate) fn btree_init(fs: &Fs) -> Result<(), BchError> {
      * static annotation (hackily done) for lock ordering of reclaim vs.
      * btree node locks:
      */
-    crate::os::lockdep::reclaim_lock_order(|| {
+    reclaim_lock_order(|| {
         let trans = crate::btree_trans!(fs);
         trans.mark_locked(false);
         drop(trans);

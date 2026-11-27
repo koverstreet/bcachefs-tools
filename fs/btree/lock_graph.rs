@@ -3,32 +3,33 @@
 //! The cycle detector, and the graph of waiting transactions it walks: see
 //! "Cycle detection" in locking.rs.
 
-use crate::btree::iter::BtreeTrans;
-use crate::btree::locking::{BtreeNodeLockedType, btree_node_pos, BtreeBkeyCachedCommon};
-use crate::btree::node::BtreeNode;
-use crate::btree::path::{table_arrays, table_header, BtreePath, PathNode};
-use crate::btree::trans::{foreign_bits, BtreeTransBits};
-use crate::c;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Btree, BTREE_MAX_DEPTH};
-use crate::fs::Fs;
-use crate::locking::{MemallocFlags, six::{six_lock_counts, SixLockWaiter, SixLockType}};
-use crate::prt;
-use crate::debug::trace::events;
-use crate::util::alloc::AllocError;
-use crate::util::backtrace::prt_task_backtrace;
-use crate::util::refcount::RefGuard;
-use crate::data_structures::{bitmap::AtomicBitmap, inline_vec::InlineVec};
-use crate::types::bits_to_longs;
-use crate::os::kernel::time_after64;
-use crate::os::percpu::{free_percpu, raw_smp_processor_id, CpuGuard, PerCpu, PerCpuRef};
-use crate::os::sched::{set_current_wake_cpu, task_pid};
-use crate::util::rcu::{self, ReadGuard};
-use crate::util::Printbuf;
 use core::ffi::{c_uint, c_void};
 use core::mem::offset_of;
 use core::ptr::{self, null_mut};
-use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Relaxed, Release, SeqCst}};
+use core::sync::atomic::{fence, AtomicPtr, AtomicUsize,
+    Ordering::{Acquire, Relaxed, Release, SeqCst}};
+use crate::btree::iter::BtreeTrans;
+use crate::btree::locking::{btree_node_pos, BtreeBkeyCachedCommon, BtreeNodeLockedType};
+use crate::btree::node::BtreeNode;
+use crate::btree::path::{table_arrays, table_header, BtreePath, PathNode};
+use crate::btree::trans::{foreign_bits, transaction_fn_name, BtreeTransBits};
+use crate::c;
+use crate::data_structures::{bitmap::AtomicBitmap, inline_vec::InlineVec};
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Btree};
+use crate::fs::Fs;
+use crate::locking::{six::{six_lock_counts, SixLockType, SixLockWaiter}, MemallocFlags};
+use crate::os::kernel::time_after64;
+use crate::os::percpu::{free_percpu, raw_smp_processor_id, CpuGuard, PerCpu, PerCpuRef};
+use crate::os::sched::{set_current_wake_cpu, task_pid};
+use crate::prt;
+use crate::types::bits_to_longs;
+use crate::util::alloc::AllocError;
+use crate::util::backtrace::prt_task_backtrace;
+use crate::util::rcu::{self, ReadGuard};
+use crate::util::refcount::RefGuard;
+use crate::util::Printbuf;
 
 /// A transaction the walk reaches, of whichever thread: it's read as C reads
 /// it, never through a reference - another thread's is changing under us.
@@ -75,7 +76,7 @@ impl Trans {
     }
 
     fn fn_name(self) -> &'static str {
-        crate::btree::trans::transaction_fn_name(unsafe { (*self.0).fn_idx.get() })
+        transaction_fn_name(unsafe { (*self.0).fn_idx.get() })
     }
 
     /// For the waiting transaction's own thread: the one the walk starts from.

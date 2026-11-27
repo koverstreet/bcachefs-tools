@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::mem::{offset_of, size_of};
-
+use core::mem::offset_of;
 use crate::alloc::{replicas::SbEntry, replicas_format::ReplicasEntryV1};
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Btree, DataType, MetadataVersion, BkeyFormatBits, BkeyPacked,
-    BTREE_MAX_DEPTH, FsUsageType, Jset, JsetEntry, JsetEntryBlacklist, JsetEntryBlacklistV2,
-    JsetEntryClock, JsetEntryDataUsage, JsetEntryDatetime, JsetEntryDevUsage,
-    JsetEntryLog, JsetEntryPrioPtrs, JsetEntryRewind, JsetEntryRewindLimit,
-    JsetEntryUsage, KEY_FORMAT_CURRENT, JsetEntry_by_tag, JsetEntry_match,
-    JsetEntryDataUsageWhole, JsetEntryType, jset_entry_btree_keys, jset_entry_btree_root,
-    jset_entry_overwrite, jset_entry_write_buffer_keys, jset_entry_log_bkey};
+use crate::btree::bkey::{bkey_val_to_text, bkey_validate, AnyKey, AnyKeySC, BkeyP, BkeySC,
+    BkeyValidateContext, BkeyValidateFrom, ValidateFlags};
+use crate::btree::compat::bkey_compat;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{jset_entry_btree_keys, jset_entry_btree_root, jset_entry_log_bkey,
+    jset_entry_overwrite, jset_entry_write_buffer_keys, BTREE_MAX_DEPTH, BkeyFormatBits,
+    BkeyPacked, Btree, DataType, FsUsageType, Jset, JsetEntry, JsetEntryBlacklist,
+    JsetEntryBlacklistV2, JsetEntryClock, JsetEntryDataUsage, JsetEntryDataUsageWhole,
+    JsetEntryDatetime, JsetEntryDevUsage, JsetEntryLog, JsetEntryPrioPtrs, JsetEntryRewind,
+    JsetEntryRewindLimit, JsetEntryType, JsetEntryUsage, JsetEntry_by_tag, JsetEntry_match,
+    KEY_FORMAT_CURRENT, MetadataVersion};
 use crate::fs::{Dev, Fs};
-use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags, BkeyValidateContext,
-    BkeyValidateFrom};
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::{errors::SbErrorId, members::DevName};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
-                            Head, Unvalidated, VStructError, from_bytes};
+use crate::types::Le64;
+use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, from_bytes, ArmRef,
+    Head, Unvalidated, VStructError};
 use crate::util::{DateTime, Printbuf, ToText};
 use crate::{message, prt};
 
@@ -168,15 +169,15 @@ enum Key {
     Deleted,
 }
 
-fn bkey_compat(ctx: &Ctx<'_>, k: &mut [u8]) {
+fn journal_key_compat(ctx: &Ctx<'_>, k: &mut [u8]) {
     if ctx.version < MetadataVersion::CURRENT ||
        ctx.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
         let k = cast_plain_slice_mut(k).and_then(BkeyP::from_slice_mut)
             .expect("a journal key: whole u64s, its u64s checked");
         unsafe {
-            crate::btree::compat::bkey_compat(Some(ctx.fs), ctx.from.btree, ctx.version, ctx.big_endian,
-                                              ctx.write(), None, k);
+            bkey_compat(Some(ctx.fs), ctx.from.btree, ctx.version, ctx.big_endian,
+                        ctx.write(), None, k);
         }
     }
 }
@@ -219,10 +220,10 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
     }
 
     if !write {
-        bkey_compat(ctx, &mut e[at..at + bytes]);
+        journal_key_compat(ctx, &mut e[at..at + bytes]);
     }
 
-    let ret = key_at(e, at).map(|k| crate::btree::bkey::bkey_validate(
+    let ret = key_at(e, at).map(|k| bkey_validate(
         &BkeyValidate::new(ctx.fs, k, &ctx.from)));
     match ret {
         Ok(Err(err)) if journal_entry_err_on!(ctx, true, journal_entry_bkey_bad_format,
@@ -233,7 +234,7 @@ fn journal_validate_key(ctx: &Ctx<'_>, e: &mut [u8], at: usize) -> Result<Key, B
     }
 
     if write {
-        bkey_compat(ctx, &mut e[at..at + bytes]);
+        journal_key_compat(ctx, &mut e[at..at + bytes]);
     }
     Ok(Key::Kept)
 }
@@ -282,7 +283,7 @@ fn journal_entry_btree_keys_to_text(out: &mut Printbuf, fs: Option<&Fs>, e: &[u8
 
         prt!(out, "btree={} level={} ", Btree(h.btree_id.into()), h.level);
         match key_at(e, at) {
-            Ok(k) => crate::btree::bkey::bkey_val_to_text(out, fs, k),
+            Ok(k) => bkey_val_to_text(out, fs, k),
             Err(err) => {
                 prt!(out, "(invalid, {err})");
                 break;
@@ -641,7 +642,7 @@ pub(crate) fn jset_last_seq_check(fs: &Fs, h: &mut Head<Jset>, flags: ValidateFl
 
     if journal_entry_err_on!(ctx, h.last_seq.get() > seq, jset_last_seq_newer_than_seq,
                              "invalid journal entry: last_seq > seq ({} > {})", h.last_seq.get(), seq) {
-        h.last_seq = crate::types::Le64::new(seq);
+        h.last_seq = Le64::new(seq);
         return Ok(true);
     }
     Ok(false)

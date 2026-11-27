@@ -29,11 +29,12 @@
 //! The links are Cells, written through shared references under the list's
 //! lock; ListLinks, what an item embeds, is Sync on that ground.
 
-use crate::c;
 use core::cell::Cell;
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::ptr;
+use crate::c;
+use pin_init::Zeroable;
 
 /// struct list_head.
 #[repr(C)]
@@ -123,7 +124,7 @@ unsafe impl Send for ListLinks {}
 unsafe impl Sync for ListLinks {}
 
 // Null links are on no list: is_empty()'s never init()ed
-unsafe impl pin_init::Zeroable for ListLinks {}
+unsafe impl Zeroable for ListLinks {}
 
 impl ListLinks {
     pub const fn new() -> Self {
@@ -158,7 +159,7 @@ macro_rules! list {
 unsafe impl<T: Sync, const OFFSET: usize> Send for List<T, OFFSET> {}
 
 // Zeroed, it's empty: see init()
-unsafe impl<T, const OFFSET: usize> pin_init::Zeroable for List<T, OFFSET> {}
+unsafe impl<T, const OFFSET: usize> Zeroable for List<T, OFFSET> {}
 
 impl<T, const OFFSET: usize> List<T, OFFSET> {
     const FITS: () = assert!(OFFSET + size_of::<ListHead>() <= size_of::<T>(),

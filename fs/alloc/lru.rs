@@ -16,27 +16,26 @@
 //!
 //! lru.h's inlines are the same encoding, for C's callers.
 
-use crate::fs::{Dev, Fs};
+use core::ops::RangeInclusive;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
+use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_END, LRU_BUCKET_FRAGMENTATION_OLD,
+    LRU_BUCKET_FRAGMENTATION_START, LRU_READ_MAX, LRU_STRIPE_FRAGMENTATION, LRU_STRIPE_REUSE,
+    LRU_TIME_BITS, LRU_TIME_MAX, Lru, LruType};
+use crate::btree::bbpos::Bbpos;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
-use crate::util::{vstructs::Unvalidated, rcu::read_lock, Printbuf};
+use crate::btree::bkey::{pos, spos, AnyKeySC, BkeyOps, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::cache::BtreeCachePins;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags,
-                         TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::data::ec::format::Stripe;
-use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_END, LRU_BUCKET_FRAGMENTATION_OLD,
-    LRU_BUCKET_FRAGMENTATION_START, LRU_READ_MAX, LRU_STRIPE_FRAGMENTATION,
-    LRU_STRIPE_REUSE, Lru, LRU_TIME_BITS, LRU_TIME_MAX, LruType};
-use crate::btree::bbpos::Bbpos;
 use crate::errcode::BchError;
+use crate::format::{BkeyType, Bpos, Btree, MetadataVersion};
+use crate::fs::{Dev, Fs};
 use crate::init::{error::BkeyValidate, progress::Progress};
+use crate::util::{rcu::read_lock, vstructs::Unvalidated, Printbuf};
 use crate::{bkey_fsck_err_on, fsck_err};
-use core::ops::RangeInclusive;
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 /// What an lru id says: which lru, and for a per-device one, the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -8,10 +8,10 @@
 //! Between steps the walk keeps only positions: each step's nodes are had by
 //! node iterators at their keys, so a restart runs the step again.
 
-use core::mem::size_of;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::cache::BtreeNodeCacheState;
 use crate::btree::interior::{check_topology as node_check_topology, root_alloc_fake_trans};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt};
 use crate::btree::journal_overlay::{self, shoot_down_journal_keys, BtreeAndJournalIter};
@@ -22,16 +22,14 @@ use crate::btree::path::{DownKey, LockedNode, NodePtr, PathIdx, Paths};
 use crate::btree::read::drop_keys_outside_node;
 use crate::btree::trans::BtreeTrans;
 use crate::c;
-use crate::btree::cache::BtreeNodeCacheState;
 use crate::data::extents_format::BtreePtrV2;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Bpos, Btree, Bkey, BTREE_MAX_DEPTH};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bkey, BkeyType, Bpos, Btree};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::FsckFlags;
 use crate::util::{vstructs::{plain_bytes, plain_bytes_mut}, Printbuf};
-use crate::{message, btree_trans, fsck_err_flags, mustfix_fsck_err,
-            mustfix_fsck_err_on, prt};
+use crate::{btree_trans, fsck_err_flags, message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
 
 type Node<'n> = LockedNode<'n, BtreeNode>;
 

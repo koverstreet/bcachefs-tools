@@ -434,7 +434,7 @@ fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
 }
 
 fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
-    use bcachefs_kernel::util::printbuf::Printbuf;
+    use bcachefs_kernel::util::Printbuf;
 
     let opts: Opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)

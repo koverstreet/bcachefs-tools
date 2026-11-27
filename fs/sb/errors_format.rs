@@ -3,9 +3,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::types::Le64;
-use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{bitfield, bch_enum, whole, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, bitfield, whole, MaybeZeroable, Plain, TypeInfo};
 use nestify::nest;
+use zerocopy::byteorder::little_endian as le;
 
 #[bch_enum(flags)]
 #[repr(u32)]

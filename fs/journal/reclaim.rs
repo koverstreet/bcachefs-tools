@@ -4,37 +4,36 @@
 //! reclaim thread, or directly.
 
 use core::sync::atomic::Ordering::{Acquire, Relaxed};
-
 use crate::alloc::{discard::discard_opt_enabled, foreground::Watermark};
-use crate::util::alloc::flags;
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
-use crate::journal::buckets::JournalDevice;
-use crate::sb::members::DevWriteRefKind;
-use crate::util::time_stats::{TimeStats, TimeStat};
-use crate::journal::buckets::JournalBucketStage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard};
-use crate::journal::journal::{JournalFlag, JournalGuard, Journal, JournalCycleFlags};
-use crate::journal::pins::JournalPinType::{JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache, JOURNAL_PIN_TYPE_NR};
-use self::JournalSpaceFrom::{self as SpaceFrom, *};
 use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead};
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, SbFeature, REPLICAS_MAX};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{DataType, REPLICAS_MAX, SbFeature};
 use crate::fs::{Dev, FsFlag};
-use crate::journal::pins::{PinsRead, JournalEntryPin};
+use crate::journal::buckets::{JournalBucketStage::{JOURNAL_BUCKET_cur, JOURNAL_BUCKET_discard},
+    JournalDevice};
+use crate::journal::journal::{Journal, JournalCycleFlags, JournalFlag, JournalGuard};
+use crate::journal::pins::{JournalEntryPin, JournalPinType::{JOURNAL_PIN_TYPE_NR,
+    JOURNAL_PIN_TYPE_btree0, JOURNAL_PIN_TYPE_key_cache}, PinsRead};
 use crate::locking::{ExclusiveGuard, Guard as _, MemallocFlags, Mutex};
+use crate::os::blkdev;
+use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after,
+    time_in_range, totalram_bytes, HZ};
+use crate::os::kthread::{Kthread, KthreadSelf};
+use crate::sb::members::DevWriteRefKind;
+use crate::util::alloc::flags;
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_task_backtrace;
-use crate::os::blkdev;
-use crate::os::kernel::{cond_resched, jiffies, jiffies_to_msecs, msecs_to_jiffies, time_after, time_in_range,
-                        totalram_bytes, HZ};
-use crate::os::kthread::{Kthread, KthreadSelf};
 use crate::util::place::Contained;
+use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, Sleep, SleepError};
+use crate::util::time_stats::{TimeStat, TimeStats};
 use crate::util::{Nsecs, Printbuf};
 use crate::{message, prt, published};
-use crate::util::projections::Volatile;
 use cstruct_macros::{bch_enum, MaybeZeroable};
+use self::JournalSpaceFrom::{self as SpaceFrom, *};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
@@ -63,7 +62,6 @@ published! {
         pub nr_background_reclaim: Volatile<u64>,
     }
 }
-
 
 type ReclaimGuard<'a> = ExclusiveGuard<'a, Mutex, (), ReclaimPublished>;
 
@@ -95,7 +93,6 @@ impl Journal {
     }
 
     pub fn set_watermark(&self, g: &mut JournalGuard<'_>) {
-        use crate::util::time_stats::TimeStat as Time;
         let fs = self.fs();
         let clean = u64::from(g.space[journal_space_clean as usize].total);
         let total = u64::from(g.space[journal_space_total as usize].total);
@@ -117,10 +114,10 @@ impl Journal {
 
         let times = |t: TimeStat| fs.times.get(t as usize);
         let mut changed = false;
-        changed |= times(Time::blocked_journal_low_on_space).track_event_change(low_on_space);
-        changed |= times(Time::blocked_journal_low_on_pin).track_event_change(low_on_pin);
-        changed |= times(Time::blocked_journal_low_on_open_buckets).track_event_change(open_buckets > 0);
-        changed |= times(Time::blocked_write_buffer_full).track_event_change(low_on_wb);
+        changed |= times(TimeStat::blocked_journal_low_on_space).track_event_change(low_on_space);
+        changed |= times(TimeStat::blocked_journal_low_on_pin).track_event_change(low_on_pin);
+        changed |= times(TimeStat::blocked_journal_low_on_open_buckets).track_event_change(open_buckets > 0);
+        changed |= times(TimeStat::blocked_write_buffer_full).track_event_change(low_on_wb);
 
         if changed {
             fs.event_inc_trace(events::journal_full, |out| {
@@ -481,7 +478,6 @@ impl Journal {
     /* returns true if we did work */
     fn flush_pins_locked(&self, reclaim: &mut ReclaimGuard<'_>, seq_to_flush: u64, allowed_below_seq: u32,
                          mut min_any: usize, mut min_key_cache: usize) -> usize {
-        use crate::util::time_stats::TimeStat as Time;
         let fs = self.fs();
         let mut nr_flushed = 0;
 
@@ -507,11 +503,11 @@ impl Journal {
             min_any = min_any.saturating_sub(1);
 
             let flush_time = if (ty as u32) <= JOURNAL_PIN_TYPE_btree0 as u32 {
-                Time::journal_pin_flush_btree
+                TimeStat::journal_pin_flush_btree
             } else if ty == JOURNAL_PIN_TYPE_key_cache {
-                Time::journal_pin_flush_key_cache
+                TimeStat::journal_pin_flush_key_cache
             } else {
-                Time::journal_pin_flush_other
+                TimeStat::journal_pin_flush_other
             };
             let ok = fs.times.get(flush_time as usize).time(|| flushing.run());
 
@@ -862,7 +858,6 @@ impl Journal {
 
     #[cold]
     pub fn reclaim_to_text(&self, out: &mut Printbuf) {
-        use crate::util::time_stats::TimeStat as Time;
         let fs = self.fs();
         let now = jiffies();
 
@@ -889,20 +884,20 @@ impl Journal {
 
         out.newline();
         prt!(out, "Pin flush time stats:\tcount\tavg\tmax\n");
-        for (name, t) in [("  btree",     Time::journal_pin_flush_btree),
-                          ("  key_cache", Time::journal_pin_flush_key_cache),
-                          ("  other",     Time::journal_pin_flush_other)] {
+        for (name, t) in [("  btree",     TimeStat::journal_pin_flush_btree),
+                          ("  key_cache", TimeStat::journal_pin_flush_key_cache),
+                          ("  other",     TimeStat::journal_pin_flush_other)] {
             time_stats_summary_to_text(out, name, fs.times.get(t as usize).stats());
         }
 
         out.newline();
         prt!(out, "Blocked time stats:\tcount\tavg\tmax\n");
-        for (name, t) in [("  low_on_space",        Time::blocked_journal_low_on_space),
-                          ("  low_on_pin",          Time::blocked_journal_low_on_pin),
-                          ("  low_on_open_buckets", Time::blocked_journal_low_on_open_buckets),
-                          ("  max_in_flight",       Time::blocked_journal_max_in_flight),
-                          ("  max_open",            Time::blocked_journal_max_open),
-                          ("  write_buffer_full",   Time::blocked_write_buffer_full)] {
+        for (name, t) in [("  low_on_space",        TimeStat::blocked_journal_low_on_space),
+                          ("  low_on_pin",          TimeStat::blocked_journal_low_on_pin),
+                          ("  low_on_open_buckets", TimeStat::blocked_journal_low_on_open_buckets),
+                          ("  max_in_flight",       TimeStat::blocked_journal_max_in_flight),
+                          ("  max_open",            TimeStat::blocked_journal_max_open),
+                          ("  write_buffer_full",   TimeStat::blocked_write_buffer_full)] {
             time_stats_summary_to_text(out, name, fs.times.get(t as usize).stats());
         }
 

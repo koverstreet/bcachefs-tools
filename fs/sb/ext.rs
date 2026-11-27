@@ -4,21 +4,20 @@
 //! passes to run, errors to fix silently, btrees that lost data - and since
 //! it grew, what's been learned of the btrees over the filesystem's life.
 
-use core::mem::{offset_of, size_of};
-
+use core::mem::offset_of;
+use crate::data_structures::bitmap::LeBitmap;
+use crate::format::{Btree, Sb, SbFieldExt, SbFieldExtWhole};
 use crate::fs::Fs;
 use crate::init::passes;
 use crate::sb::{errors::{prt_error_ids, SbErrorId}, io::SbFieldOps};
 use crate::types::Le64;
-use crate::data_structures::bitmap::LeBitmap;
-use crate::util::{vstructs::{Validated, Unvalidated}, Printbuf};
-use crate::format::{Btree, Sb, SbFieldExt, SbFieldExtWhole};
+use crate::util::{names::prt_set, vstructs::{Unvalidated, Validated}, Printbuf};
 
 type Section = SbFieldExt<Validated>;
 
 fn prt_btrees(out: &mut Printbuf, what: &str, btrees: Le64) {
     write!(out, "{what}:\t");
-    crate::util::names::prt_set::<Btree>(out, btrees.get());
+    prt_set::<Btree>(out, btrees.get());
     out.newline();
 }
 
@@ -57,11 +56,11 @@ impl SbFieldOps for Section {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::SbFieldType;
-    use crate::format::bch_sb_field;
     use crate::btree::btree_id_str;
+    use crate::format::{bch_sb_field, SbFieldType};
+    use crate::sb::io::field_ops_to_text;
     use crate::types::Le32;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head};
 
     /// An ext section of @u64s, @buf's first, as the superblock's printer
     /// prints it - by its type.
@@ -79,7 +78,7 @@ mod tests {
         let f = bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
 
         let mut out = Printbuf::new();
-        crate::sb::io::field_ops_to_text(&mut out, None, sb, f);
+        field_ops_to_text(&mut out, None, sb, f);
         out.as_str().to_owned()
     }
 

@@ -27,13 +27,15 @@
 //! and completes it itself. A waiter whose wait a wake took waits for the
 //! wake's completion, and reports a wake.
 
+use core::pin::pin;
+use core::ptr;
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use crate::lock_class_key;
 use crate::os::kernel::jiffies;
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::task::{waiter, Resumable, Resume, WaitList, WaitSync, WaitlistCompletion};
 use crate::util::timer::with_timeout;
-use core::pin::pin;
-use core::ptr;
-use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use pin_init::Zeroable;
 
 /// A word futex_wait() can wait on.
 pub trait FutexWord {
@@ -79,7 +81,7 @@ fn waitlist<W: FutexWord>(w: &W) -> (&'static WaitList<usize>, usize) {
 
 /// Before anything can wait: at module init, in both builds.
 pub fn futex_init() {
-    let key = crate::lock_class_key!();
+    let key = lock_class_key!();
 
     for b in &TABLE.0 {
         // SAFETY: zeroed, and nothing can take it until we return; static
@@ -131,7 +133,7 @@ pub fn futex_wake(addr: *const (), n: usize) -> usize {
 pub struct EventCount(AtomicU32);
 
 // SAFETY: zeroed, it's new()'s
-unsafe impl ::pin_init::Zeroable for EventCount {}
+unsafe impl Zeroable for EventCount {}
 
 impl EventCount {
     pub const fn new() -> Self {

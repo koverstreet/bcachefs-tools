@@ -92,7 +92,6 @@ mod pins;
 mod reclaim;
 mod state;
 
-use bufs::cache_node_struct_alloc;
 pub(crate) use bufs::node_mem_alloc;
 pub(crate) use bufs::cached_node;
 pub(crate) use alloc::OwnedNode;
@@ -101,39 +100,37 @@ pub use bufs::{bounce_bufs, node_mem_free, Bounce, BounceBufs};
 pub use pins::BtreeCachePins;
 pub(crate) use state::NodeTable;
 
-use crate::btree::bkey::{bkey_val_to_text, val_to_text, BkeyI, BkeySC, BkeyVal, BKEY_U64S};
-use crate::data_structures::{dst_room::DstRoom, fast_list::FastList};
+use core::mem::offset_of;
+use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
+use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64};
+use crate::btree::bbpos::Bbpos;
+use crate::btree::bkey::{bkey_val_to_text, val_to_text, BKEY_U64S, BkeyI, BkeySC, BkeyVal};
+use crate::btree::interior::{BTREE_ROOT_LEVEL_BITS, BtreeRoots, BtreeRootsLive};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::bset::BsetStats;
-use crate::btree::node::{BtreeNode, NodeContents, BtreeNodeFlags};
-use crate::util::alloc::{Box, Global};
-use crate::util::place::{Contained, PlacedDrop};
-use crate::os::{shrinker::{Shrink, Shrinker}, sched::current};
-use crate::util::sleep::Sleep;
-use crate::c;
+use crate::btree::node::{BtreeNode, BtreeNodeFlags, NodeContents};
 use crate::btree::FsBtree;
-use crate::btree::bbpos::Bbpos;
+use crate::c;
 use crate::data::extents_format::BtreePtrV2;
+use crate::data_structures::{dst_room::DstRoom, fast_list::FastList};
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::prt;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{btree_node, BkeyType, Btree};
 use crate::fs::Fs;
-use crate::util::vstructs::Head;
-use core::mem::offset_of;
-use crate::util::{HumanReadable, Printbuf, ToText};
-use core::sync::atomic::{AtomicU64, AtomicBool, AtomicIsize};
-use core::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
-use crate::format::{Btree, BkeyType, btree_node};
-use crate::btree::interior::{BtreeRoots, BtreeRootsLive, BTREE_ROOT_LEVEL_BITS};
-use crate::locking::{ExclusiveGuard, Locked, Memalloc, Mutex, PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+use crate::locking::{Exclusive, ExclusiveGuard, Locked, Memalloc, Mutex, PF_MEMALLOC_NOIO,
+    PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
+use crate::os::{kernel::SetOnce, sched::current, shrinker::{Shrink, Shrinker}};
+use crate::prt;
 use crate::types::CacheAligned;
+use crate::util::alloc::{Box, Global};
+use crate::util::futex::EventCount;
+use crate::util::place::{Contained, Placed, PlacedDrop};
 use crate::util::projections::Volatile;
-use cstruct_macros::{bch_enum, Init, MaybeZeroable, placed, TypeInfo};
+use crate::util::sleep::Sleep;
+use crate::util::vstructs::Head;
+use crate::util::{HumanReadable, Printbuf, ToText};
+use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
-#[cfg(kernel)]
-use kernel::sync::SetOnce;
-#[cfg(not(kernel))]
-use bcachefs_shim::sync::SetOnce;
 
 /*
  * Membership state of a struct btree in the btree node cache.
@@ -222,7 +219,7 @@ pub(crate) type BtreeCacheMutex = Memalloc<Mutex, { PF_MEMALLOC_NOIO | PF_MEMALL
 
 /// bc->lock, held.
 pub type BtreeCacheGuard<'a> =
-    ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive, crate::locking::Exclusive, BtreeCacheLockAt>;
+    ExclusiveGuard<'a, BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive, Exclusive, BtreeCacheLockAt>;
 
 /// bc->lock's place, for what it covers to name.
 pub type BtreeCacheLockAt = crate::at!(FsBtreeCache.lock);
@@ -268,7 +265,7 @@ pub struct FsBtreeCache {
 
     #[pin]
     #[init(::pin_init::init_zeroed())]
-    pub(crate) table: crate::btree::cache::NodeTable,
+    pub(crate) table: NodeTable,
     /*
      * We never free a struct btree, except on shutdown - we just put it on
      * the btree_cache_freed list and reuse it later. This simplifies the
@@ -284,7 +281,7 @@ pub struct FsBtreeCache {
      */
     #[pin]
     #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->lock"))]
-    pub lock: crate::util::place::Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
+    pub lock: Placed<Locked<BtreeCacheMutex, BtreeCacheLists, BtreeCacheLive>, BtreeCacheLockAt>,
     #[pin]
     pub shrinkers: [BtreeCacheShrinker; 2],
 
@@ -303,7 +300,7 @@ pub struct FsBtreeCache {
     #[init(AtomicIsize::new(0))]
     pub nr_in_flight: AtomicIsize,
     pub nr_in_flight_inner: AtomicIsize,
-    pub nr_in_flight_wait: crate::util::futex::EventCount,
+    pub nr_in_flight_wait: EventCount,
     pub __should_throttle_align: CacheAligned,
     pub should_throttle: AtomicBool,
 
@@ -327,8 +324,8 @@ pub struct FsBtreeCache {
     #[init(core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))]
     pub alloc_lock: core::sync::atomic::AtomicPtr<c::task_struct>,
     #[pin]
-    #[init(crate::util::futex::EventCount::new())]
-    pub alloc_wait: crate::util::futex::EventCount,
+    #[init(EventCount::new())]
+    pub alloc_wait: EventCount,
 }
 
 /*

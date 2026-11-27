@@ -16,30 +16,30 @@
 
 #![allow(non_camel_case_types)]
 
+use core::fmt;
+use core::mem::offset_of;
+use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use crate::alloc::accounting::{replicas_entry, CounterSet, DiskAccountingPos, ReplicasCounters};
 use crate::alloc::accounting_mem;
+use crate::alloc::replicas_format::{ReplicasEntryV0, ReplicasEntryV1, SbFieldReplicas,
+    SbFieldReplicasV0};
+use crate::bcachefs_ioctl::ForceIf;
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::data::{ec::format::Stripe, ptrs::{BkeyVPtrs, Ptrs}};
-use crate::alloc::replicas_format::{ReplicasEntryV0, ReplicasEntryV1,
-    SbFieldReplicas, SbFieldReplicasV0};
-use crate::bcachefs_ioctl::ForceIf;
+use crate::data_structures::{dst_room::DstRoom, eytzinger::Eytzinger0, strided::StridedBuf};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BKEY_PTRS_MAX, DataType, DataTypes, MetadataVersion, Sb, SbFieldType};
+use crate::fs::{Fs, FsFlag, SbLockGuard};
 use crate::init::{dev::{DevsList, DevsMask}, passes::RecoveryPass};
-use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, DataTypes, MetadataVersion, BKEY_PTRS_MAX, Sb, SbFieldType};
-use crate::fs::{Fs, SbLockGuard, FsFlag};
-use crate::sb::io::{entries_end, SbFieldOps, SbSection, SbState, SbResize};
-use crate::sb::members::member_exists;
 use crate::os::kernel::{cold_path, likely};
-use crate::util::rcu::read_lock;
+use crate::sb::io::{entries_end, SbFieldOps, SbResize, SbSection, SbState};
+use crate::sb::members::member_exists;
+use crate::sb::members_format::MEMBER_INVALID;
 use crate::util::alloc::{AllocError, Vec};
-use crate::data_structures::{eytzinger::Eytzinger0, dst_room::DstRoom, strided::StridedBuf};
+use crate::util::rcu::read_lock;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, Head, State, Unsized, Unvalidated,
-                            Validated};
+    Validated};
 use crate::util::{Printbuf, ToText};
-use core::fmt;
-use core::mem::{offset_of, size_of};
-use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use cstruct_macros::bch_enum;
 
 #[bch_enum(closed)]

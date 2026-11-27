@@ -26,30 +26,26 @@
 //! The node being checked is a CowKey: one copy, read by every check and
 //! written by every repair, so one repair can't lose another's.
 
-use crate::btree::bkey::prelude::*;
+use core::fmt;
 use crate::alloc::accounting;
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
-use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
-    UpdateTriggerFlags,
-};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
+    UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::c;
-use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::snapshots::snapshot::SnapshotIdState as IdState;
-use crate::posix::{check, inode};
-use crate::errcode::{Errcode, BchError, Found};
+use crate::errcode::{BchError, Errcode, Found};
+use crate::format::{BTREE_MAX_DEPTH, Bpos, Btree, MetadataVersion};
 use crate::fs::{Fs, FsFlag};
-use crate::init::passes;
-use crate::init::progress::Progress;
-use crate::snapshots::{delete, snapshot, subvolume};
-use crate::snapshots::snapshot::{add_nodup, edit_node, lookup_node};
-use crate::util::{alloc::Vec, printbuf::Msg, vstructs::Validated, Join, Printbuf, ToText};
-use crate::{message, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
-use core::fmt;
-use crate::format::{Bpos, Btree, MetadataVersion, BTREE_MAX_DEPTH};
+use crate::init::{passes::{self, RecoveryPass, RunRecoveryPassFlags}, progress::Progress};
+use crate::posix::{check, inode};
+use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
+use crate::snapshots::snapshot::SnapshotIdState as IdState;
+use crate::snapshots::snapshot::{self, add_nodup, edit_node, lookup_node};
+use crate::snapshots::{delete, subvolume};
+use crate::util::{alloc::Vec, vstructs::Validated, Join, Msg, Printbuf, ToText};
+use crate::{fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, message, prt};
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
 /// btrees keyed by id, subvolumes and snapshot trees.

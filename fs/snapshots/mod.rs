@@ -8,17 +8,15 @@ pub mod format;
 pub mod snapshot;
 pub mod subvolume;
 
-use crate::snapshots::snapshot::SnapshotTable;
+use core::sync::atomic::AtomicBool;
 use crate::fs::Fs;
 use crate::locking::{Locked, Mutex, PercpuRwSem};
 use crate::new_lock;
-use crate::util::alloc::Vec;
 use crate::os::workqueue::ReffedWork;
-use core::sync::atomic::AtomicBool;
-use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo};
+use crate::snapshots::{delete::SnapshotDelete, snapshot::SnapshotTable, subvolume::delete_unlinked};
+use crate::util::alloc::Vec;
+use cstruct_macros::{placed, Init, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
-use subvolume::delete_unlinked;
-
 
 /*
  * Snapshot creation must prevent userspace from dirtying the page cache while
@@ -53,8 +51,8 @@ pub struct FsSnapshots {
     pub create_lock: Locked<PercpuRwSem>,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
-    #[init(crate::snapshots::delete::SnapshotDelete::init())]
-    pub(crate) delete: crate::snapshots::delete::SnapshotDelete,
+    #[init(SnapshotDelete::init())]
+    pub(crate) delete: SnapshotDelete,
     #[pin]
     pub(crate) wait_for_pagecache_and_delete_work: ReffedWork<delete_unlinked, crate::field!(super.writes)>,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.

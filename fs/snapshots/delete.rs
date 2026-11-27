@@ -51,32 +51,30 @@
 //! an RwSem and holds it for read until it's done; the progress indicator is
 //! outside it, with its own lock.
 
-use crate::alloc::capacity::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeySC, Typed, POS_MIN};
-use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
-    TransBkey, UpdateTriggerFlags,
-};
-use crate::btree::trans::TransGuard;
-use crate::c;
-use crate::init::progress::ProgressIndicator;
-use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::init::{damage, passes};
-use crate::locking::{Locked, RwSem};
-use crate::{new_lock, message, fs_inconsistent, fsck_err, prt,
-    trans_inconsistent};
-use crate::snapshots::{check_snapshots, snapshot};
-use crate::snapshots::snapshot::{add_nodup, edit_node, edit_node_opt, get_node};
-use crate::util::{alloc::Vec, log::LogMsg, Printbuf};
-use crate::data_structures::eytzinger::Eytzinger1;
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
+use crate::alloc::capacity::DiskReservation;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, Typed};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
+    UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
+use crate::c;
+use crate::data_structures::eytzinger::Eytzinger1;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BkeyType, Bpos, Btree, MetadataVersion};
+use crate::fs::Fs;
+use crate::init::damage;
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
+use crate::init::progress::ProgressIndicator;
+use crate::locking::{Locked, RwSem};
+use crate::os::kernel::random_u64_below;
+use crate::snapshots::check_snapshots;
+use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree, Subvolume, SubvolumeState};
+use crate::snapshots::snapshot::{self, add_nodup, edit_node, edit_node_opt, get_node};
+use crate::util::{alloc::Vec, log::LogMsg, Printbuf};
+use crate::{fs_inconsistent, fsck_err, message, new_lock, prt, trans_inconsistent};
 use pin_init::{pin_data, pin_init, PinInit};
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
 crate::module_param! {
     /// Stop the key sweep after the extents/dirents/xattrs/damage pass and
@@ -1208,7 +1206,7 @@ fn fix_child_of_deleted_snapshot(
         for s in &mut skip {
             if live_child_of(deleted, *s).is_some() {
                 let n = if depth > 1 {
-                    crate::os::kernel::random_u64_below((depth - 1) as u64) as u32
+                    random_u64_below((depth - 1) as u64) as u32
                 } else {
                     0
                 };

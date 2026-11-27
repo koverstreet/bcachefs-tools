@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #![allow(non_camel_case_types)]
 
 /* DOC_LATEX(btree-programmer-interface)
@@ -139,11 +141,15 @@
  * resume from where it left off.
  */
 
-use crate::btree::bkey::BkeyI;
-use super::bkey::*;
 pub use super::trans::BtreeTrans;
 pub use super::for_each::*;
 pub use super::trans_attempt::*;
+
+use bitflags::bitflags;
+use core::cell::Cell;
+use core::marker::PhantomData;
+use core::ptr::{self, NonNull};
+use crate::btree::bkey::*;
 use crate::btree::cache::cached_node;
 use crate::btree::journal_overlay;
 use crate::btree::node::BtreeNode;
@@ -152,16 +158,12 @@ use crate::btree::update::TransCommitFlags;
 use crate::data::{extents::{cut_back_s, cut_front_s}, ptrs::BtreePtrs};
 use crate::debug::{params::debug_check_iterators, trace::events};
 use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bkey, BkeyType, Bpos, Btree, Val};
 use crate::fs::Fs;
-use crate::{prt, SPOS_MAX};
+use crate::prt;
 use crate::snapshots::snapshot::is_ancestor;
 use crate::util::{max_of, Printbuf};
-use bitflags::bitflags;
-use core::cell::Cell;
-use core::marker::PhantomData;
-use core::ptr::{self, NonNull};
-use cstruct_macros::{MaybeZeroable, bch_enum, bitfield, BitfieldMembers};
-use crate::format::{Bpos, Btree, BkeyType, Val, Bkey, BTREE_MAX_DEPTH};
+use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
 
 #[bch_enum(closed)]

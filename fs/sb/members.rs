@@ -1,38 +1,41 @@
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::{Dev, Fs, SbLockGuard};
-use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter};
-use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::c;
-use crate::init::dev::{DevsList, DevsMask, bch_sb_buf, DevFlag};
-use crate::sb::members_format::{Member, SbFieldMembersV1, SbFieldMembersV2, MEMBER_INVALID,
-    MEMBERS_MAX, IopsMeasurement, MemberErrorType};
-use crate::errcode::{Errcode, BchError};
-use crate::locking::MemallocFlags;
-use crate::{prt, sb_err_on};
-use crate::os::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
-use crate::os::workqueue::Queue;
-use crate::util::backtrace::prt_current_backtrace;
-use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
-use crate::init::error::{count_fsck_err, id};
-use crate::init::passes;
-use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::place::Placed;
-use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, TryRefcount};
-use crate::alloc::disk_groups;
-use crate::util::ffi::c_char;
-use crate::data_structures::strided::{Strided, StridedMut};
-use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, Unvalidated, Validated};
 use core::ffi::CStr;
 use core::marker::PhantomData;
-use core::sync::atomic::Ordering;
-use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo, VolatileValue};
+use core::sync::atomic::Ordering::Relaxed;
+use crate::alloc::disk_groups;
+use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter};
+use crate::c;
+use crate::data::ptrs::{BkeyVPtrs, Ptrs};
+use crate::data_structures::strided::{Strided, StridedMut};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bpos, DataType, DataTypes, MemberInitialized, MemberState,
+    MetadataVersion, Sb, SbFeatures, SbFieldType};
+use crate::fs::{Dev, Fs, SbLockGuard};
+use crate::init::dev::{bch_sb_buf, read_identity, DevFlag, DevsList, DevsMask};
+use crate::init::error::{count_fsck_err, id};
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
+use crate::locking::{AsLockedBy, MemallocFlags};
+use crate::os::blkdev::{self, BlockDevice};
+use crate::os::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
+use crate::os::{kobject::Kobject, workqueue::Queue};
+use crate::sb::io::{SbFieldOps, SbResize, SbSection, SbState};
+use crate::sb::members_format::{IopsMeasurement, MEMBERS_MAX, MEMBER_INVALID, Member,
+    MemberErrorType, SbFieldMembersV1, SbFieldMembersV2};
+use crate::util::backtrace::prt_current_backtrace;
+use crate::util::ffi::{c_char, cstr_in, strscpy};
+use crate::util::place::{Path, Placed};
 use crate::util::projections::TearSafe;
-use super::io::*;
-use crate::format::{Bpos, DataType, DataTypes, MemberInitialized, MemberState, MetadataVersion, SbFeatures,
-    Sb, BTREE_MAX_DEPTH, SbFieldType};
+use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::refcount::{AtomicRef, PercpuRef, RefGuard, TryRefcount};
+use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, InPlace, Unsized, Unvalidated,
+    Validated};
+use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
+use crate::{at, btree_trans, display_via_to_text, fs_inconsistent, message, names_by_value,
+    percpu_field, prt, recovery_pass, sb_err_on};
+use cstruct_macros::{bch_enum, MaybeZeroable, Plain, TypeInfo, VolatileValue};
+use pin_init::{zeroed, Zeroable};
 
 #[bch_enum(closed)]
 #[nr]
@@ -66,7 +69,6 @@ pub enum DevWriteRefKind {
     io_write,
     ec_bucket_zero,
 }
-
 
 #[repr(C)]
 #[derive(Clone, Copy, MaybeZeroable, TypeInfo)]
@@ -153,7 +155,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &Sb) -> Result<u32, BchError> {
     let mut nr_deleted = 0;
 
     for dev in (0..MEMBERS_MAX).filter(|&i| i != MEMBER_INVALID) {
-        let m = sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed);
+        let m = sb_member(sb, dev).unwrap_or_else(zeroed);
         nr_deleted += m.deleted() as u32;
 
         let last_mount = m.last_mount.get();
@@ -166,7 +168,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &Sb) -> Result<u32, BchError> {
         return Ok(dev);
     }
     if nr_deleted != 0 {
-        fs.log().err(crate::message!(
+        fs.log().err(message!(
             "unable to allocate new member, but have {nr_deleted} deleted: run fsck"));
     }
     Err(Errcode::ENOSPC_sb_members.into())
@@ -343,7 +345,7 @@ pub trait SbMembersMut: SbResize {
             mi.member_bytes = (V1_BYTES as u16).into();
 
             for i in 0..nr {
-                let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_else(::pin_init::zeroed);
+                let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_else(zeroed);
                 self.put_member_v1::<SbFieldMembersV2>(MEMBERS_V2_HEAD, i, &m);
             }
         }
@@ -364,8 +366,8 @@ impl<T: SbResize + ?Sized> SbMembersMut for T {}
 // ── Validating, and printing ─────────────────────────────────────────────
 
 /// By value, as a member's arrays of them are.
-const MEMBER_ERROR_NAMES: &[&str] = crate::names_by_value!(MemberErrorType);
-const IOPS_NAMES: &[&str] = crate::names_by_value!(IopsMeasurement);
+const MEMBER_ERROR_NAMES: &[&str] = names_by_value!(MemberErrorType);
+const IOPS_NAMES: &[&str] = names_by_value!(IopsMeasurement);
 
 /// A __nonstring field: NUL terminated only if shorter than the field.
 fn nonstring(b: &[u8]) -> &[u8] {
@@ -468,7 +470,7 @@ impl SbFieldOps for SbFieldMembersV2<Validated> {
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         for ca in fs.members() {
             let dev = u32::from(ca.dev_idx);
-            let m = sb_member(sb.sb(), dev).unwrap_or_else(::pin_init::zeroed);
+            let m = sb_member(sb.sb(), dev).unwrap_or_else(zeroed);
             let mut mi = m.to_cpu();
             mi.failure_domain = failure_domain_id(sb.sb(), dev, &m);
 
@@ -478,7 +480,7 @@ impl SbFieldOps for SbFieldMembersV2<Validated> {
 
         if let Some(mi2) = members_v2(sb.sb()) {
             for i in 0..fs.nr_devices() {
-                fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_else(::pin_init::zeroed).deleted());
+                fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_else(zeroed).deleted());
             }
         }
         Ok(())
@@ -490,7 +492,7 @@ impl SbFieldOps for SbFieldMembersV2<Validated> {
         for ca in fs.devs_rcu(&rcu) {
             let m = sb.fs_member_mut(ca.dev_idx.into());
             for (d, e) in m.errors.iter_mut().zip(&ca.errors) {
-                *d = (e.load(Ordering::Relaxed) as u64).into();
+                *d = (e.load(Relaxed) as u64).into();
             }
         }
         Ok(())
@@ -613,7 +615,7 @@ fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &Member, sb: &Sb<S>, 
 }
 
 pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &Sb, dev: u32) {
-    member_to_text_short(out, &sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed), sb, dev);
+    member_to_text_short(out, &sb_member(sb, dev).unwrap_or_else(zeroed), sb, dev);
 }
 
 /// Each of @devs that's a device of @fs's, short.
@@ -666,7 +668,7 @@ fn failure_domain_id(sb: &Sb, dev: u32, m: &Member) -> u16 {
     if m.failure_domain[0] == 0 {
         return 0;
     }
-    (0..=dev).find(|&i| sb_member(sb, i).unwrap_or_else(::pin_init::zeroed).failure_domain == m.failure_domain)
+    (0..=dev).find(|&i| sb_member(sb, i).unwrap_or_else(zeroed).failure_domain == m.failure_domain)
         .map_or(0, |i| i as u16 + 1)
 }
 
@@ -873,7 +875,7 @@ impl Fs {
         }
 
         {
-            let trans = crate::btree_trans!(self);
+            let trans = btree_trans!(self);
 
             for btree in 0..self.btree_id_nr_alive() {
                 for level in 1..BTREE_MAX_DEPTH {
@@ -912,13 +914,13 @@ impl Fs {
             self.write_super(&mut sb);
         }
 
-        self.log().info(crate::message!("mi_btree_bitmap sectors {} -> {}",
-                                        HumanReadable(old << 9), HumanReadable(new << 9)));
+        self.log().info(message!("mi_btree_bitmap sectors {} -> {}",
+                                 HumanReadable(old << 9), HumanReadable(new << 9)));
         Ok(())
     }
 }
 
-crate::recovery_pass!(btree_bitmap_gc => |fs: &Fs| fs.btree_bitmap_gc());
+recovery_pass!(btree_bitmap_gc => |fs: &Fs| fs.btree_bitmap_gc());
 
 /// Daily, while rw: btree_bitmap_gc scheduled - ratelimited - if a
 /// device's bitmap marks four times the sectors of its btree buckets.
@@ -1172,7 +1174,6 @@ impl Fs {
     pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<DevWriteRefKind>> + '_ {
         self.io_members::<DevWriteRefKind>(|s| s == MemberState::rw)
     }
-
 }
 
 // ── Missing devices and buckets, reported ────────────────────────────────
@@ -1188,8 +1189,8 @@ impl Fs {
         }
 
         let removed = self.devs_removed.test(dev as usize);
-        crate::prt!(out, "pointer to {} device {dev} in key\n{}\n",
-                    if removed { "removed" } else { "nonexistent" }, k.to_text(self));
+        prt!(out, "pointer to {} device {dev} in key\n{}\n",
+             if removed { "removed" } else { "nonexistent" }, k.to_text(self));
 
         count_fsck_err(self, if removed { id::ptr_to_removed_device } else { id::ptr_to_invalid_device }, out);
         passes::run_explicit(self, out, RecoveryPass::check_allocations,
@@ -1222,8 +1223,8 @@ impl Dev {
     /// A pointer to bucket @bucket, which this device hasn't: an
     /// inconsistency.
     pub fn bucket_missing(&self, bucket: u64) {
-        crate::fs_inconsistent!(self.fs(), "pointer to nonexistent bucket {bucket} on device {} (valid range {}-{})",
-                                self, self.mi.get().first_bucket, self.mi.get().nbuckets);
+        fs_inconsistent!(self.fs(), "pointer to nonexistent bucket {bucket} on device {} (valid range {}-{})",
+                         self, self.mi.get().first_bucket, self.mi.get().nbuckets);
     }
 }
 
@@ -1232,16 +1233,16 @@ impl Dev {
 /// A ref on a device - ca->ref, which its removal drains before it's freed:
 /// it stays a member while this is held. Option<DevRef> has C's layout - a
 /// nullable bch_dev *, ref_ being its first field.
-pub type DevRef = RefGuard<Placed<PercpuRef, crate::at!(Dev.ref_)>>;
+pub type DevRef = RefGuard<Placed<PercpuRef, at!(Dev.ref_)>>;
 
 /// ca->ref_outer: keeps the bch_dev's memory alive and nothing else - its
 /// removal can complete while this is held. For contexts that block on
 /// state_lock, where a DevRef mustn't be held: recheck ca.removing under the
 /// lock before touching member state.
-pub type DevOuterRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>>;
+pub type DevOuterRef = RefGuard<Placed<AtomicRef<()>, at!(Dev.ref_outer)>>;
 
 /// A ref on a device's kobject, as c->devs[] owns it: the last put frees it.
-pub type DevKobjRef = RefGuard<Placed<crate::os::kobject::Kobject, crate::at!(Dev.kobj)>>;
+pub type DevKobjRef = RefGuard<Placed<Kobject, at!(Dev.kobj)>>;
 
 impl DevRef {
     /// An outer ref on it: this ref holds ref_outer
@@ -1262,7 +1263,7 @@ pub trait IoRefIdx: 'static {
 
 impl IoRefIdx for DevReadRefKind {
     const RW: usize = READ;
-    type Count = Placed<PercpuRef, crate::at!(Dev.io_ref_read)>;
+    type Count = Placed<PercpuRef, at!(Dev.io_ref_read)>;
 
     fn count(ca: &Dev) -> &Self::Count {
         &ca.io_ref_read
@@ -1271,7 +1272,7 @@ impl IoRefIdx for DevReadRefKind {
 
 impl IoRefIdx for DevWriteRefKind {
     const RW: usize = WRITE;
-    type Count = Placed<PercpuRef, crate::at!(Dev.io_ref_write)>;
+    type Count = Placed<PercpuRef, at!(Dev.io_ref_write)>;
 
     fn count(ca: &Dev) -> &Self::Count {
         &ca.io_ref_write
@@ -1290,7 +1291,7 @@ unsafe impl DevIoCount for <DevWriteRefKind as IoRefIdx>::Count {}
 
 impl<C: DevIoCount> RefGuard<C> {
     /// Its block device: open, as the ref is held.
-    pub fn bdev(&self) -> &crate::os::blkdev::BlockDevice {
+    pub fn bdev(&self) -> &BlockDevice {
         unsafe { self.disk_sb.bdev.get().as_ref() }.expect("an io ref on a device with no block device")
     }
 
@@ -1308,10 +1309,10 @@ impl<C: DevIoCount> RefGuard<C> {
 }
 
 /// @bdev's name, model and serial, and whether it's rotational.
-pub(crate) fn identity(bdev: &crate::os::blkdev::BlockDevice) -> DevIdentity {
-    let mut id = ::pin_init::zeroed::<DevIdentity>();
-    crate::init::dev::read_identity(bdev, &mut id);
-    id.rotational = crate::os::blkdev::rotational(bdev);
+pub(crate) fn identity(bdev: &BlockDevice) -> DevIdentity {
+    let mut id = zeroed::<DevIdentity>();
+    read_identity(bdev, &mut id);
+    id.rotational = blkdev::rotational(bdev);
     id
 }
 
@@ -1328,8 +1329,8 @@ pub(crate) struct DevPieces<'g, N, F> {
 
 impl<'g, N: 'static, F> DevPieces<'g, N, F>
 where
-    F: crate::util::place::Path<Dev>,
-    F::To: crate::locking::AsLockedBy<L = N> + 'static,
+    F: Path<Dev>,
+    F::To: AsLockedBy<L = N> + 'static,
 {
     /// # Safety
     /// A guard of N, held alone, for 'g - which only this hands out F of
@@ -1344,25 +1345,24 @@ where
     }
 
     /// @ca's, for as long as the split lives.
-    pub(crate) fn take(&mut self, ca: &'g Dev) -> &'g mut <F::To as crate::locking::AsLockedBy>::G {
+    pub(crate) fn take(&mut self, ca: &'g Dev) -> &'g mut <F::To as AsLockedBy>::G {
         self.check(ca);
         self.taken.set(ca.dev_idx.into());
-        unsafe { crate::locking::AsLockedBy::locked_by(F::get(ca)).protected_mut() }
+        unsafe { AsLockedBy::locked_by(F::get(ca)).protected_mut() }
     }
 
     /// @ca's, for as long as this is borrowed.
-    pub(crate) fn get_mut<'d>(&'d mut self, ca: &'d Dev) -> &'d mut <F::To as crate::locking::AsLockedBy>::G {
+    pub(crate) fn get_mut<'d>(&'d mut self, ca: &'d Dev) -> &'d mut <F::To as AsLockedBy>::G {
         self.check(ca);
-        unsafe { crate::locking::AsLockedBy::locked_by(F::get(ca)).protected_mut() }
+        unsafe { AsLockedBy::locked_by(F::get(ca)).protected_mut() }
     }
 }
-
 
 /// A device's name, C's char array: published, as attaching it renames it,
 /// so a reader has a copy - torn, if it raced the rename: each byte some
 /// name's, and the last a NUL, as every name's is.
 #[repr(transparent)]
-#[derive(Clone, Copy, ::pin_init::Zeroable, cstruct_macros::Plain)]
+#[derive(Clone, Copy, Zeroable, Plain)]
 pub struct DevName([c_char; c::BDEVNAME_SIZE as usize]);
 
 impl TearSafe for DevName {}
@@ -1371,13 +1371,13 @@ impl DevName {
     /// @s, up to a NUL in it, truncated to leave room for its own.
     pub fn new(s: &[u8]) -> Self {
         let mut n = Self([0; c::BDEVNAME_SIZE as usize]);
-        crate::util::ffi::strscpy(&mut n.0, s);
+        strscpy(&mut n.0, s);
         n
     }
 
     /// Up to its NUL, or empty if it has none.
     pub fn as_cstr(&self) -> &CStr {
-        crate::util::ffi::cstr_in(&self.0)
+        cstr_in(&self.0)
     }
 
     pub fn to_str(&self) -> Result<&str, core::str::Utf8Error> {
@@ -1422,7 +1422,7 @@ impl From<DevIoRef<DevWriteRefKind>> for BlockDev {
 }
 
 impl BlockDev {
-    pub fn bdev(&self) -> &crate::os::blkdev::BlockDevice {
+    pub fn bdev(&self) -> &BlockDevice {
         match self {
             BlockDev::Read(ca)  => ca.bdev(),
             BlockDev::Write(ca) => ca.bdev(),
@@ -1490,8 +1490,8 @@ impl Dev {
     /// Its IO errors, by kind: since the filesystem was made, and since they
     /// were last reset.
     pub fn io_errors_to_text(&self, out: &mut Printbuf) {
-        let m = sb_member(self.fs().sb_lock().sb(), self.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
-        let errors = || MEMBER_ERROR_NAMES.iter().zip(&self.errors).map(|(n, e)| (n, e.load(Ordering::Relaxed) as u64));
+        let m = sb_member(self.fs().sb_lock().sb(), self.dev_idx.into()).unwrap_or_else(zeroed);
+        let errors = || MEMBER_ERROR_NAMES.iter().zip(&self.errors).map(|(n, e)| (n, e.load(Relaxed) as u64));
 
         out.tabstop_push(12);
 
@@ -1524,7 +1524,7 @@ impl Dev {
         let m = sb.fs_member_mut(self.dev_idx.into());
 
         for (r, e) in m.errors_at_reset.iter_mut().zip(&self.errors) {
-            *r = (e.load(Ordering::Relaxed) as u64).into();
+            *r = (e.load(Relaxed) as u64).into();
         }
         m.errors_reset_time = (ktime_get_real_seconds() as u64).into();
 
@@ -1534,7 +1534,7 @@ impl Dev {
     /// @sectors of IO of @data_type, reading or writing as @rw, counted in
     /// io_done: this_cpu_add(ca->io_done->sectors[rw][data_type], sectors).
     pub fn io_done_add(&self, rw: usize, data_type: DataType, sectors: u64) {
-        crate::percpu_field!(self.io_done.get(), sectors[rw][data_type.0 as usize]).add(sectors);
+        percpu_field!(self.io_done.get(), sectors[rw][data_type.0 as usize]).add(sectors);
     }
 
     /// An IO of type @ty, submitted at @submit_time, completed: its latency -
@@ -1560,11 +1560,9 @@ impl Dev {
     /// account_io_completion() but for the latency: what can wait till the
     /// IO's waiter has it.
     pub fn account_io_result(&self, ty: MemberErrorType, success: bool) {
-        use crate::sb::members_format::MemberErrorType as T;
-
         if success {
-            if ty == T::write && self.write_errors_start.load(Ordering::Relaxed) != 0 {
-                self.write_errors_start.store(0, Ordering::Relaxed);
+            if ty == MemberErrorType::write && self.write_errors_start.load(Relaxed) != 0 {
+                self.write_errors_start.store(0, Relaxed);
             }
         } else {
             self.io_error(ty);
@@ -1588,7 +1586,7 @@ impl Dev {
 
     /// The latest IO's latency, for reads (READ) or writes (WRITE).
     pub fn cur_latency(&self, rw: usize) -> i64 {
-        self.cur_latency[rw].load(Ordering::Relaxed)
+        self.cur_latency[rw].load(Relaxed)
     }
 
     /// The data types with data on it, by the superblock's replicas.
@@ -1633,7 +1631,7 @@ impl ToText for Dev {
         out.write_bytes(self.name().to_bytes())
     }
 }
-crate::display_via_to_text!(Dev);
+display_via_to_text!(Dev);
 
 #[cfg(test)]
 mod tests {
@@ -1649,7 +1647,7 @@ mod tests {
     }
 
     fn member(i: u8) -> Member {
-        let mut m = ::pin_init::zeroed::<Member>();
+        let mut m = zeroed::<Member>();
         m.uuid.b = [i + 1; 16];
         m.nbuckets = (1000 * u64::from(i) + 1).into();
         m
@@ -1699,7 +1697,7 @@ mod tests {
 
         sb.members_v2_init().unwrap();
         for i in 0..3 {
-            let mut want = ::pin_init::zeroed::<Member>();
+            let mut want = zeroed::<Member>();
             plain_bytes_mut(&mut want)[..V1_BYTES]
                 .copy_from_slice(&plain_bytes(&member(i))[..V1_BYTES]);
             assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&want));

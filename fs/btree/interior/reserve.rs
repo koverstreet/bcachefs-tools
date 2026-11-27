@@ -5,34 +5,35 @@
 //! it's done, the space of those it didn't use to the reserve cache; the nodes
 //! it takes from it, set up; and the nodes it frees, freed in memory.
 
-use core::mem::size_of;
 use core::ptr;
-use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::{AllocWait, alloc_request, OpenBuckets};
-use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut};
-use crate::btree::iter::CommitOpts;
-use crate::btree::node::BtreeNode;
-use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
-use crate::btree::path::{LockedNode, PathIdx, Paths};
-use crate::c;
 use crate::alloc::buckets::ReservationFlags;
+use crate::alloc::capacity::DiskReservation;
+use crate::alloc::disk_groups::Target;
+use crate::alloc::foreground::{alloc_request, AllocWait, OpenBuckets};
 use crate::alloc::write_point::WritePointSpecifier;
+use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut, POS_MIN, SPOS_MAX};
 use crate::btree::cache::BtreeNodeCacheState;
+use crate::btree::interior::{BTREE_RESERVE_MAX, BtreeUpdate, InteriorUpdate, NewNode, Reserved,
+    Taken, TakenNode};
+use crate::btree::iter::CommitOpts;
+use crate::btree::node::sort::{btree_sort_into, build_aux_trees};
+use crate::btree::node::{BtreeNode, NodeContents};
+use crate::btree::path::{LockedNode, PathIdx, Paths};
 use crate::btree::update::TransCommitFlags;
-use crate::data::extents_format::BtreePtrV2;
-use crate::data::write::WriteFlags;
-use crate::init::dev::DevsList;
+use crate::c;
 use crate::data::durability::BkeyVDurability;
+use crate::data::extents_format::BtreePtrV2;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs};
+use crate::data::write::WriteFlags;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::{POS_MIN, SPOS_MAX, prt};
-use crate::format::{BkeyType, Bpos, DataType, BkeyFormat, BTREE_MAX_DEPTH};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, BkeyFormat, BkeyType, Bpos, Btree, DataType};
 use crate::fs::Fs;
+use crate::init::dev::DevsList;
 use crate::os::kernel::WRITE;
+use crate::prt;
+use crate::types::Le64;
 use crate::util::{rcu::read_lock, sleep::Sleep};
-use super::{BtreeUpdate, InteriorUpdate, NewNode, Reserved, Taken, TakenNode, BTREE_RESERVE_MAX};
 
 /**
  * bch2_btree_node_format_fits - check if we could rewrite node with a new format
@@ -65,7 +66,7 @@ fn node_free(fs: &Fs, b: &BtreeNode) {
 }
 
 /// A new node's range: its key's, and its data's.
-pub(super) fn set_range(b: &BtreeNode, contents: &mut crate::btree::node::NodeContents, min: Bpos, max: Bpos) {
+pub(super) fn set_range(b: &BtreeNode, contents: &mut NodeContents, min: Bpos, max: Bpos) {
     b.update_key(contents, |k| {
         if let Some(mut p) = (&mut **k).as_s().arm::<BtreePtrV2>() {
             p.v_mut().min_key = min;
@@ -306,7 +307,7 @@ impl<'t> InteriorUpdate<'t> {
 
         contents.nr = Default::default();
         let data = contents.data_mut();
-        data.magic = crate::types::Le64::new(fs.bset_magic());
+        data.magic = Le64::new(fs.bset_magic());
         data._ptr = Default::default();
         data.flags = Default::default();
         data.set_btree_id(self.btree);
@@ -396,7 +397,7 @@ impl<'t> InteriorUpdate<'t> {
     /// @n, given to a path of its own: the update puts the path.
     pub(crate) fn take_path(&self, paths: &mut Paths<'_>, n: NewNode<'_>) -> TakenNode {
         let pos = n.held().key().k().p;
-        let idx = self.trans().path_get_unlocked_mut(paths, crate::format::Btree(n.c.btree_id.get().into()),
+        let idx = self.trans().path_get_unlocked_mut(paths, Btree(n.c.btree_id.get().into()),
                                                      n.c.level.get().into(), pos, false, crate::ret_ip!());
         self.owned.borrow_mut().paths.push(idx);
         self.take_node(paths, idx, n)

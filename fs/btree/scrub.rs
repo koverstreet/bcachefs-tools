@@ -4,6 +4,7 @@
 //! the node rewritten from another if it's bad. The journal's scrub and
 //! check_data read replicas this way too.
 
+use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{types_with, BkeySC};
 use crate::btree::bkey_buf::BtreeKeyBuf;
@@ -11,24 +12,23 @@ use crate::btree::cache::{btree_pos_to_text, Bounce};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags};
 use crate::btree::read::{BsetHolder, NodePtr};
 use crate::c;
+use crate::data::checksum::csum_err_msg;
 use crate::data::extents::ReadFlags;
 use crate::data::extents_format::BtreePtrV2;
-use crate::data::checksum::csum_err_msg;
 use crate::data::inline_data::InlineDataRef;
 use crate::data::moving::{Moving, MovingIo};
 use crate::data::ptrs::BkeyVRead;
 use crate::data::update::dev_ptr_bit;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::errcode::{BchError, Errcode};
-use crate::format::{BkeyTypeFlags, Btree, BKEY_PTRS_MAX, btree_node, BtreeNodeEntry};
+use crate::format::{btree_node, BKEY_PTRS_MAX, BkeyTypeFlags, Btree, BtreeNodeEntry};
 use crate::fs::{Dev, Fs, WriteRef};
-use crate::os::{workqueue::Queue, bio::{Bio, BioBox, BioSubmit, Buffer}};
+use crate::os::{bio::{Bio, BioBox, BioSubmit, Buffer}, workqueue::Queue};
+use crate::prt;
 use crate::sb::members::{DevIoRef, DevReadRefKind};
 use crate::util::task::{spawn, waiter, Resumable, Resume};
 use crate::util::vstructs::{cast_plain, Head, Unvalidated};
 use crate::util::{refcount::TryRefcount, Printbuf};
-use crate::prt;
-use core::sync::atomic::Ordering::Relaxed;
 
 fn replica_bset<H: BsetHolder + ?Sized>(fs: &Fs, buf: &[u8], written: usize, end: usize,
                                         err: &mut Printbuf) -> Option<usize> {

@@ -1,10 +1,9 @@
 use core::time::Duration;
-
-use super::{Question, Reply, UNANSWERED};
 use crate::c;
 use crate::fs::Fs;
-use crate::util::alloc::{Arc, Vec};
 use crate::os::kernel::ktime_get_ns;
+use crate::util::alloc::{Arc, Vec};
+use crate::util::prompt::{Question, Reply, UNANSWERED};
 use crate::util::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
 

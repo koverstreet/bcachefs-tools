@@ -27,14 +27,14 @@
 //! complete. An input that sees a Done owed after its bit was had completes
 //! it spuriously - the next wait finds nothing new, and waits again.
 
-use super::{park_on, waiter, Done, DynDone, Resumable, WaitSync, Waiter};
-use crate::util::sleep::{sleep_until, Sleep};
 use core::marker::PhantomPinned;
 use core::mem::offset_of;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll};
+use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::task::{park_on, waiter, Done, DynDone, Resumable, WaitSync, Waiter};
 
 pub struct Select<W: Waiter, const N: usize> {
     done:      Done<W>,

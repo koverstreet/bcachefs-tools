@@ -16,22 +16,22 @@
 
 use core::ffi::CStr;
 use core::ptr::NonNull;
-
-use crate::posix::dev::dev_t;
+use crate::errcode::{BchError, Errcode};
 use crate::format::__uuid_t;
-use crate::opts::Opts;
-use crate::errcode::{Errcode, BchError};
 use crate::fs::{Claimed, Fs, OpenFs};
 use crate::locking::{ByteLock, Locked};
+use crate::opts::Opts;
+use crate::os::blkdev;
+use crate::posix::dev::dev_t;
+use crate::prt;
 use crate::sb::io::Holder;
 use crate::util::alloc::{Arc, Vec};
 use crate::util::backref::BackRef;
 use crate::util::futex::EventCount;
 use crate::util::log::Log;
-use crate::util::printbuf::{Printbuf, ToText};
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
-use crate::prt;
+use crate::util::{Printbuf, ToText};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Opener {
@@ -63,7 +63,7 @@ pub enum FsKey<'a> {
 pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<dev_t>, BchError> {
     let mut devs = Vec::new();
     for path in paths {
-        let dev = crate::os::blkdev::lookup(path).inspect_err(|e| {
+        let dev = blkdev::lookup(path).inspect_err(|e| {
             Log::NO_FS.err(crate::message!("cannot open with device {}: {}",
                                                      path.to_str().unwrap_or("?"), e.msg()));
         })?;

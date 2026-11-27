@@ -8,29 +8,30 @@
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
-use crate::data_structures::{fifo::FifoRead, array_vec::ArrayVec};
 use crate::btree::cache::btree_ptr_hash_val;
-use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
-                         TransBkey, UpdateTriggerFlags, Watermark};
-use crate::btree::node::{BtreeNode, NR_WRITES, BtreeNodeFlags, BtreeWriteType};
+use crate::btree::interior::{update_free, write_blocked, BtreeUpdate, CommitGuard, InteriorUpdate,
+    Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee, TakenNode, UPDATE_NODES_MAX, UpdateBox,
+    WriteBlocked};
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts,
+    TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
+use crate::btree::node::{BtreeNode, BtreeNodeFlags, BtreeWriteType, NR_WRITES};
 use crate::btree::path::{LockedNode, Paths};
 use crate::btree::trigger::{deleted_room, key_trigger, TriggerOp};
 use crate::btree::write::{node_write_if_need, node_write_locked, BtreeWriteFlags};
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
-use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
-use crate::format::{btree_node, Deleted, JsetEntryType};
-use crate::journal::pins::JournalPinType;
-use crate::sb::members_format::MEMBER_INVALID;
-use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
 use crate::data::ptrs::{BkeyVPtrs, ExtentEntry, Ptrs};
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
-use crate::errcode::{Errcode, BchError};
+use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
+use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{btree_node, Deleted, JsetEntryType};
 use crate::fs::Fs;
 use crate::fs_fatal_error;
-use crate::types::Le64;
+use crate::journal::pins::JournalPinType;
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read};
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::types::{Le16, Le64};
 use crate::util::vstructs::Head;
-use super::{write_blocked, BtreeUpdate, InteriorUpdate, Mode, NewNode, NewPointer, NodeKey, OldNode, Pointee,
-            TakenNode, UpdateBox, WriteBlocked, UPDATE_NODES_MAX};
 
 impl InteriorUpdate<'_> {
     /*
@@ -67,7 +68,7 @@ impl InteriorUpdate<'_> {
         let sectors = (bytes.next_multiple_of(fs.block_bytes() as usize) >> 9) as u16;
 
         n.update_key(|k| if let Some(mut p) = (&mut **k).as_s().arm::<BtreePtrV2>() {
-            p.v_mut().sectors_written = crate::types::Le16::new(sectors);
+            p.v_mut().sectors_written = Le16::new(sectors);
         });
     }
 
@@ -187,7 +188,7 @@ type KeyChanged<'t> = ArrayVec<(BtreeNodeIter<'t>, usize), UPDATE_NODES_MAX>;
  * The transactional part of an interior btree node update, where we journal the
  * update we did to the interior node and update alloc info:
  */
-fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_lock: &mut super::CommitGuard<'_>)
+fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_lock: &mut CommitGuard<'_>)
     -> Result<KeyChanged<'t>, BchError>
 {
     let fs = t.fs();
@@ -287,7 +288,7 @@ fn nodes_written_trans<'t>(t: &TransAttempt<'t, 't>, u: &BtreeUpdate, commit_loc
 /// the path that's held it since: nofail, as nothing after the commit can
 /// restart. Under commit_lock, as btree_node_update_key() changes a new node's
 /// key.
-fn new_node_keys_set(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut super::CommitGuard<'_>,
+fn new_node_keys_set(t: &TransAttempt<'_, '_>, u: &BtreeUpdate, commit_lock: &mut CommitGuard<'_>,
                      key_changed: &KeyChanged<'_>) {
     let trans = t.trans();
     let mut paths = trans.paths();
@@ -559,7 +560,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
 
     u.owned.borrow_mut().open_buckets.clear();
 
-    super::update_free(fs, owner);
+    update_free(fs, owner);
 }
 
 /// The interior update worker: the updates on unwritten completed in order,

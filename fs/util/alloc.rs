@@ -11,10 +11,13 @@ pub use core::alloc::{AllocError, Allocator};
 use core::alloc::Layout;
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
-
-use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
+use crate::data_structures::array_vec::LenUint;
+use crate::errcode::{BchError, Errcode};
+use crate::os::kernel::PAGE_SIZE;
+use crate::util::maybe_rcu_alloc::{alloc_at, assert_head_in_place, MaybeRcuAlloc, RcuFreeing};
+use crate::util::rcu::{FreeAnytime, HasRcuHead};
 use crate::util::vstructs::Unsized;
-use crate::util::rcu::FreeAnytime;
+use pin_init::{init_from_closure, pin_init_from_closure, Init, PinInit, Zeroable, ZeroableOption};
 
 // ── Allocators ───────────────────────────────────────────────────────────
 //
@@ -25,12 +28,12 @@ use crate::util::rcu::FreeAnytime;
 // RCU read section's, where vfree() can't sleep. In userspace, std's
 // allocator. Each port's impls are its own (os::alloc).
 
-#[derive(Clone, Copy, ::pin_init::Zeroable)]
+#[derive(Clone, Copy, Zeroable)]
 pub struct Kmalloc;
-#[derive(Clone, Copy, ::pin_init::Zeroable)]
+#[derive(Clone, Copy, Zeroable)]
 pub struct KVmalloc;
 /// vmalloc(): pages one at a time, mapped - no high-order allocation, to wait on compaction.
-#[derive(Clone, Copy, ::pin_init::Zeroable)]
+#[derive(Clone, Copy, Zeroable)]
 pub struct Vmalloc;
 
 /// An Allocator of ours, which says whether kvfree() frees what it gives.
@@ -62,7 +65,6 @@ pub enum AsTypeSays {}
 
 impl Frees for AsTypeSays {
     unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A) {
-        use crate::util::maybe_rcu_alloc::{assert_head_in_place, RcuFreeing};
         assert_head_in_place::<T>();
         unsafe { <T as RcuFreeing>::free(p, a) }
     }
@@ -73,7 +75,7 @@ pub enum AtOnce {}
 
 impl Frees for AtOnce {
     unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A) {
-        <T as crate::util::maybe_rcu_alloc::RcuFreeing>::assert_drops_at_free();
+        <T as RcuFreeing>::assert_drops_at_free();
         let (layout, off) = with_alloc_layout::<A>(Layout::new::<T>()).expect("a T's layout, with its allocator");
         unsafe {
             core::ptr::drop_in_place(p.as_ptr());
@@ -189,7 +191,7 @@ impl<T, A> WithAlloc<T, A> {
 }
 
 // its head is its T's
-impl<T: crate::util::rcu::HasRcuHead, A> crate::util::rcu::HasRcuHead for WithAlloc<T, A> {
+impl<T: HasRcuHead, A> HasRcuHead for WithAlloc<T, A> {
     const HEAD: usize = Self::T_OFF + T::HEAD;
     const WORK: bool = T::WORK;
 }
@@ -232,7 +234,7 @@ pub fn stateless<A: Alloc>() -> A {
 /// std's Box<T, A>, as much of it as is used, in both builds: the kernel has
 /// no alloc crate. Unlike std's, it frees by the size A gave, not T's - a
 /// mempool tells its elements by their size.
-pub struct Box<T: ?Sized, A: Alloc = crate::os::alloc::Global> {
+pub struct Box<T: ?Sized, A: Alloc = Global> {
     ptr:   NonNull<T>,
     /// what A gave, which its free goes by
     given: usize,
@@ -243,11 +245,11 @@ unsafe impl<T: ?Sized + Send, A: Alloc + Send> Send for Box<T, A> {}
 unsafe impl<T: ?Sized + Sync, A: Alloc + Sync> Sync for Box<T, A> {}
 
 // None is its pointer null - zeroed - whatever the rest are
-unsafe impl<T: ?Sized, A: Alloc> ::pin_init::ZeroableOption for Box<T, A> {}
+unsafe impl<T: ?Sized, A: Alloc> ZeroableOption for Box<T, A> {}
 
 impl<T, A: Alloc> Box<T, A> {
     /// @init's T, in place: pin-init's try_init(), in @alloc.
-    pub fn try_init_in<E: From<AllocError>>(init: impl ::pin_init::Init<T, E>, alloc: A) -> Result<Self, E> {
+    pub fn try_init_in<E: From<AllocError>>(init: impl Init<T, E>, alloc: A) -> Result<Self, E> {
         let mem = alloc.allocate(Layout::new::<T>())?;
         if let Err(e) = unsafe { init_at(init, mem.cast::<T>().as_ptr()) } {
             unsafe { alloc.deallocate(mem.cast(), Layout::from_size_align_unchecked(mem.len(), align_of::<T>())) };
@@ -257,7 +259,7 @@ impl<T, A: Alloc> Box<T, A> {
     }
 
     /// try_init_in(), of an @init that can't fail: pin-init's init().
-    pub fn init_in(init: impl ::pin_init::Init<T>, alloc: A) -> Result<Self, AllocError> {
+    pub fn init_in(init: impl Init<T>, alloc: A) -> Result<Self, AllocError> {
         let mem = alloc.allocate(Layout::new::<T>())?;
         let Ok(()) = unsafe { init_at(init, mem.cast::<T>().as_ptr()) };
         Ok(Box { ptr: mem.cast(), given: mem.len(), alloc })
@@ -313,7 +315,7 @@ impl<T: ?Sized + Unsized, A: Alloc> Box<T, A> {
     }
 }
 
-impl<U: ::pin_init::Zeroable, A: Alloc> Box<[U], A> {
+impl<U: Zeroable, A: Alloc> Box<[U], A> {
     /// @len Us, zeroed - each a valid U.
     pub fn try_zeroed_slice_in(len: usize, alloc: A) -> Result<Self, AllocError> {
         // SAFETY: zeroed, a U is valid
@@ -406,7 +408,7 @@ unsafe impl<T: ?Sized + Send, const ALIGN: usize> Send for AlignedBox<T, ALIGN> 
 unsafe impl<T: ?Sized + Sync, const ALIGN: usize> Sync for AlignedBox<T, ALIGN> {}
 
 // None is its pointer null - zeroed
-unsafe impl<T: ?Sized, const ALIGN: usize> ::pin_init::ZeroableOption for AlignedBox<T, ALIGN> {}
+unsafe impl<T: ?Sized, const ALIGN: usize> ZeroableOption for AlignedBox<T, ALIGN> {}
 
 impl<U, const ALIGN: usize> AlignedBox<[MaybeUninit<U>], ALIGN> {
     pub fn try_new_uninit_slice_gfp(len: usize, gfp: Flags) -> Result<Self, AllocError> {
@@ -423,7 +425,7 @@ impl<U, const ALIGN: usize> AlignedBox<[MaybeUninit<U>], ALIGN> {
     }
 }
 
-impl<U: ::pin_init::Zeroable, const ALIGN: usize> AlignedBox<[U], ALIGN> {
+impl<U: Zeroable, const ALIGN: usize> AlignedBox<[U], ALIGN> {
     pub fn try_new_zeroed_slice_gfp(len: usize, gfp: Flags) -> Result<Self, AllocError> {
         let b = AlignedBox::<[MaybeUninit<U>], ALIGN>::try_new_uninit_slice_gfp(len, gfp | flags::ZERO)?;
         Ok(unsafe { b.assume_init() })
@@ -458,15 +460,14 @@ impl<T: ?Sized, const ALIGN: usize> Drop for AlignedBox<T, ALIGN> {
 }
 
 pub use crate::data_structures::vec::{DrainAll, IntoIter, PushError, Vec};
-use crate::data_structures::array_vec::LenUint;
 
 /// A @T, kvmalloc()'d, the allocation failing with @err - @init with its own.
-pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchError>, err: crate::errcode::Errcode)
-    -> Result<MaybeRcuAlloc<T, KVmalloc>, crate::errcode::BchError>
+pub fn alloc_pinned_or<T>(init: impl PinInit<T, BchError>, err: Errcode)
+    -> Result<MaybeRcuAlloc<T, KVmalloc>, BchError>
 {
     enum Failed {
         Alloc,
-        Init(crate::errcode::BchError),
+        Init(BchError),
     }
     impl From<AllocError> for Failed {
         fn from(_: AllocError) -> Self {
@@ -474,7 +475,7 @@ pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchE
         }
     }
 
-    let init = unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(Failed::Init)) };
+    let init = unsafe { pin_init_from_closure(move |slot| init_at(init, slot).map_err(Failed::Init)) };
     MaybeRcuAlloc::new(init).map_err(|e| match e {
         Failed::Alloc   => err.into(),
         Failed::Init(e) => e,
@@ -483,19 +484,19 @@ pub fn alloc_pinned_or<T>(init: impl ::pin_init::PinInit<T, crate::errcode::BchE
 
 /// A KBox frees when it drops, without waiting out RCU readers: what they may
 /// reach, which isn't FreeAnytime, can't be in one.
-pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
+pub fn kbox_pin_init<T: FreeAnytime, E: From<AllocError>>(init: impl PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
-    let p = crate::util::maybe_rcu_alloc::alloc_at::<T, Kmalloc, E>(init, Flags::empty())?;
+    let p = alloc_at::<T, Kmalloc, E>(init, Flags::empty())?;
     Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(p.as_ptr())) })
 }
 
 /// kmalloc()'s alignment of @n bytes: to the largest power of two in it, up
 /// to a page - what IO into it, O_DIRECT's in userspace, needs.
-pub(crate) fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
+pub(crate) fn kv_layout(n: usize) -> Result<Layout, AllocError> {
     let align = if n == 0 { 1 } else { 1 << n.ilog2() };
-    let align = align.clamp(size_of::<u64>(), crate::os::kernel::PAGE_SIZE);
-    core::alloc::Layout::from_size_align(n, align).map_err(|_| AllocError)
+    let align = align.clamp(size_of::<u64>(), PAGE_SIZE);
+    Layout::from_size_align(n, align).map_err(|_| AllocError)
 }
 
 /// @size bytes kvmalloc()'d, zeroed: for kvfree(), or kvfree_rcu(), to take
@@ -508,7 +509,7 @@ pub fn kvzalloc(size: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
 ///
 /// # Safety
 /// As PinInit's: @slot is a T's, and stays put if @init needs it to.
-pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) -> Result<(), E> {
+pub unsafe fn init_at<T, E>(init: impl PinInit<T, E>, slot: *mut T) -> Result<(), E> {
     unsafe { init.__init(slot) }
 }
 
@@ -517,15 +518,15 @@ pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) 
 ///
 /// # Safety
 /// The field's initialized by the time its struct's initializer runs.
-pub unsafe fn untouched<T>() -> impl ::pin_init::Init<T> {
-    unsafe { ::pin_init::init_from_closure(|_| Ok(())) }
+pub unsafe fn untouched<T>() -> impl Init<T> {
+    unsafe { init_from_closure(|_| Ok(())) }
 }
 
 /// What @make returns, written where it's initialized: for what's too big to
 /// make and move, a future.
-pub fn init_with<T>(make: impl FnOnce() -> T) -> impl ::pin_init::Init<T> {
+pub fn init_with<T>(make: impl FnOnce() -> T) -> impl Init<T> {
     unsafe {
-        ::pin_init::init_from_closure(move |slot: *mut T| {
+        init_from_closure(move |slot: *mut T| {
             slot.write(make());
             Ok(())
         })
@@ -534,7 +535,7 @@ pub fn init_with<T>(make: impl FnOnce() -> T) -> impl ::pin_init::Init<T> {
 
 /// @init, failing with @err: an allocation's ENOMEM, as the error that says
 /// which it was
-pub fn init_or<T, E>(init: impl ::pin_init::PinInit<T, E>, err: crate::errcode::Errcode)
-    -> impl ::pin_init::PinInit<T, crate::errcode::BchError> {
-    unsafe { ::pin_init::pin_init_from_closure(move |slot| init_at(init, slot).map_err(|_| err.into())) }
+pub fn init_or<T, E>(init: impl PinInit<T, E>, err: Errcode)
+    -> impl PinInit<T, BchError> {
+    unsafe { pin_init_from_closure(move |slot| init_at(init, slot).map_err(|_| err.into())) }
 }

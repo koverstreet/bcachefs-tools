@@ -25,10 +25,10 @@
 //! step to move it back. An impl's own path is parsed and not printed: the
 //! steps between Skip and Unskip print nothing, and don't follow backrefs.
 
+use core::fmt::Write;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::{AllocError, Vec};
 use crate::util::Printbuf;
-use core::fmt::Write;
 
 /// The most a name is demangled to: a backref can repeat what it points at,
 /// so output can be exponential in the input.
@@ -37,7 +37,7 @@ const MAX_OUT: usize = 16 << 10;
 /// The most steps pending: a page's worth, so the Vec is kmalloc()'d -
 /// kvmalloc() of a page or less never falls back to vmalloc - and freed by
 /// kfree(), which a caller under a spinlock can do, where vfree() can't.
-const MAX_STEPS: usize = 4096 / core::mem::size_of::<Step>();
+const MAX_STEPS: usize = 4096 / size_of::<Step>();
 
 /// Why a name isn't demangled: it's printed raw.
 struct Raw;

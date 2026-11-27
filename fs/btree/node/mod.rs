@@ -2,11 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-/// The checks behind debug_check_bset_lookups, in debug builds.
-fn check_lookups() -> bool {
-    cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_bset_lookups()
-}
-
 pub mod aux_tree;
 pub mod bset;
 pub mod insert;
@@ -14,27 +9,35 @@ pub mod iter;
 pub mod keys;
 pub mod sort;
 
-use crate::btree::bkey::{BkeyI, BkeyP, BkeySC, BkeyV, BKEY_U64S, POS_MIN, SPOS_MAX,
-    BkeyFormatState};
-use crate::btree::cache::{NodeBufs, BtreeNodeCacheState};
-use crate::btree::path::{LockedNode, NodeLock};
-use crate::btree::locking::BtreeBkeyCachedCommon;
-use crate::btree::node::bset::MAX_BSETS;
-use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
-use crate::locking::{six::SixLockInitFlags, LockedBy};
-use crate::data_structures::{dst_room::DstRoom, list::ListLinks};
-use crate::fs::Fs;
-use crate::journal::pins::Pin;
-use crate::util::{projections::{Publish, Volatile}, vstructs::Head, Printbuf, ToText, alloc::Flags};
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Range};
 use core::ptr;
-use bset::{BsetTree, BSET_CACHELINE};
-use iter::KeyIter;
-use crate::format::{BkeyType, Bkey, BkeyFormat, btree_node, BtreeNodeEntry, BkeyField};
-use cstruct_macros::{Init, MaybeZeroable, bch_enum, bitfield};
+use crate::btree::bkey::{BKEY_U64S, BkeyFormatState, BkeyI, BkeyP, BkeySC, BkeyV, POS_MIN,
+    SPOS_MAX};
+use crate::btree::cache::{btree_node_pos_to_text, btree_node_to_text, BtreeCacheLockAt,
+    BtreeNodeCacheState, NodeBufs};
+use crate::btree::interior::{UpdatesLockAt, WillMakeReachable, WriteBlocked};
+use crate::btree::locking::BtreeBkeyCachedCommon;
+use crate::btree::node::bset::{BSET_CACHELINE, BsetTree, MAX_BSETS};
+use crate::btree::node::iter::KeyIter;
+use crate::btree::path::{LockedNode, NodeLock};
+use crate::btree::read::node_ondisk_to_text;
+use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
+use crate::data_structures::{dst_room::DstRoom, list::ListLinks};
+use crate::debug::params::{btree_node_merging_disabled, debug_check_bset_lookups};
+use crate::format::{btree_node, Bkey, BkeyField, BkeyFormat, BkeyType, Bset, BtreeNodeEntry};
+use crate::fs::Fs;
+use crate::journal::pins::Pin;
+use crate::locking::{six::SixLockInitFlags, LockedBy};
+use crate::util::{alloc::Flags, projections::{Publish, Volatile}, vstructs::Head, Printbuf, ToText};
+use cstruct_macros::{bch_enum, bitfield, Init, MaybeZeroable};
 use pin_init::pin_data;
+
+/// The checks behind debug_check_bset_lookups, in debug builds.
+fn check_lookups() -> bool {
+    cfg!(CONFIG_BCACHEFS_DEBUG) && debug_check_bset_lookups()
+}
 
 #[bch_enum(closed)]
 #[nr]
@@ -84,7 +87,6 @@ pub struct BtreeNodeFlags {
 
 const _: () = assert!(BtreeNodeFlags::WRITE_TYPE_OFFSET == 0 &&
                       BtreeNodeFlags::WRITE_TYPE_BITS == BTREE_WRITE_TYPE_BITS as usize);
-
 
 /* Btree nodes: */
 
@@ -195,8 +197,7 @@ pub struct BtreeNode {
      * btree_updates that are blocking this node from being
      * written - each write's, by its slot of writes[]:
      */
-    pub(crate) write_blocked: LockedBy<[crate::btree::interior::WriteBlocked; NR_WRITES as usize], (),
-                                       crate::btree::interior::UpdatesLockAt>,
+    pub(crate) write_blocked: LockedBy<[WriteBlocked; NR_WRITES as usize], (), UpdatesLockAt>,
 
     /*
      * Also for asynchronous splits/interior node updates:
@@ -204,13 +205,13 @@ pub struct BtreeNode {
      * another write - because that write also won't yet be reachable and
      * marking it as completed before it's reachable would be incorrect:
      */
-    #[init(crate::btree::interior::WillMakeReachable::default())]
-    pub will_make_reachable: crate::btree::interior::WillMakeReachable,
+    #[init(WillMakeReachable::default())]
+    pub will_make_reachable: WillMakeReachable,
 
     /* lru list */
     pub list: ListLinks,
 
-    pub cache_state: LockedBy<BtreeNodeCacheState, (), crate::btree::cache::BtreeCacheLockAt>,
+    pub cache_state: LockedBy<BtreeNodeCacheState, (), BtreeCacheLockAt>,
 
     /* its slot in bc->nodes */
     pub nodes_idx: u32,
@@ -545,7 +546,7 @@ impl BtreeNode {
     fn unwritten_end(&self, contents: &NodeContents, fs: &Fs) -> usize {
         let unwritten = usize::from(self.flags.nr_written_bsets())..;
         let u64s = contents.sets()[unwritten].iter().map(BsetTree::u64s).sum::<usize>();
-        let bytes = offset_of!(Head<BtreeNodeEntry>, keys) + size_of::<Head<crate::format::Bset>>() + u64s * size_of::<u64>();
+        let bytes = offset_of!(Head<BtreeNodeEntry>, keys) + size_of::<Head<Bset>>() + u64s * size_of::<u64>();
 
         self.written_end() + bytes.next_multiple_of(fs.block_bytes() as usize) / size_of::<u64>()
     }
@@ -603,7 +604,7 @@ impl BtreeNode {
     /// btree_node_needs_merge().
     pub fn needs_merge(&self, contents: &NodeContents, fs: &Fs, d: i32) -> bool {
         let sib_u64s = contents.sib_u64s[0].get().min(contents.sib_u64s[1].get());
-        !crate::debug::params::btree_node_merging_disabled() &&
+        !btree_node_merging_disabled() &&
             i32::from(sib_u64s) + d <= i32::from(fs.btree.foreground_merge_threshold)
     }
 
@@ -625,7 +626,7 @@ impl BtreeNode {
         let t = contents.last_set();
         let bne = if pending { self.unwritten_end(contents, fs) } else { self.written_end() }
             .max(t.end_offset as usize);
-        let keys = (offset_of!(Head<BtreeNodeEntry>, keys) + offset_of!(Head<crate::format::Bset>, _data)) / size_of::<u64>();
+        let keys = (offset_of!(Head<BtreeNodeEntry>, keys) + offset_of!(Head<Bset>, _data)) / size_of::<u64>();
 
         let want = if self.last_bset_written(contents) {
             self.written.get() as u32 + fs.block_sectors() <= fs.btree_sectors()
@@ -659,7 +660,7 @@ pub struct BtreeNodeToText<'b, 'f> {
 
 impl ToText for BtreeNodeToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::cache::btree_node_to_text(out, self.fs, self.b, self.contents)
+        btree_node_to_text(out, self.fs, self.b, self.contents)
     }
 }
 crate::display_via_to_text!(BtreeNodeToText<'_, '_>);
@@ -672,7 +673,7 @@ pub struct BtreeNodeOndiskToText<'b, 'f> {
 
 impl ToText for BtreeNodeOndiskToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::read::node_ondisk_to_text(out, self.fs, self.b, self.contents)
+        node_ondisk_to_text(out, self.fs, self.b, self.contents)
     }
 }
 crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
@@ -684,7 +685,7 @@ pub struct BtreeNodePosToText<'b, 'f> {
 
 impl ToText for BtreeNodePosToText<'_, '_> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::cache::btree_node_pos_to_text(out, self.fs, self.b)
+        btree_node_pos_to_text(out, self.fs, self.b)
     }
 }
 crate::display_via_to_text!(BtreeNodePosToText<'_, '_>);

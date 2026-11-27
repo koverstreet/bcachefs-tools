@@ -23,30 +23,28 @@
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
-use crate::btree::trans::transaction_fns;
-use crate::fs::Dev;
 use core::ffi::CStr;
-
-
 use crate::alloc::accounting;
-use crate::sb::counters_format::{PersistentCounter, PersistentCounter_arms};
-use crate::util::time_stats::{TimeStat, TimeStat_arms};
-use crate::errcode::{Errcode, BchError};
+use crate::btree::trans::transaction_fns;
+use crate::debug::tests::btree_perf_test;
+use crate::errcode::{BchError, Errcode};
 use crate::format::{CompressionType, DataType};
-use crate::fs::{Fs, WriteRef, FsFlag};
+use crate::fs::{Dev, Fs, FsFlag, WriteRef};
 use crate::init::passes;
 use crate::locking::MemallocFlags;
-use crate::opts::{self, OptChange, OptType, Opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
-use crate::sb::counters::COUNTERS;
-use crate::sb::members;
-use crate::prt;
+use crate::opts::{self, OPT_SHOW_FULL_LIST, OptChange, OptFlags, OptId, OptType, Opts};
 use crate::os::kernel::{READ, WRITE};
-use crate::util::refcount::TryRefcount;
 use crate::os::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
-use crate::util::place::Placed;
-use crate::util::printbuf::parse_human_u64;
 use crate::os::sysfs::{self, gated, parse_int, Attr, Dir, Files};
-use crate::util::{HumanReadable, Printbuf, ToText};
+use crate::prt;
+use crate::sb::counters::COUNTERS;
+use crate::sb::counters_format::{PersistentCounter, PersistentCounter_arms};
+use crate::sb::members;
+use crate::snapshots::delete::delete_dead_snapshots_forced;
+use crate::util::place::Placed;
+use crate::util::refcount::TryRefcount;
+use crate::util::time_stats::{TimeStat, TimeStat_arms};
+use crate::util::{parse_human_u64, HumanReadable, Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────
 
@@ -121,7 +119,7 @@ const INTERNAL: &[Attr<Fs>] = &gated(started, [
         let _run = passes::run_lock(c);
         // Deletion stopping because it was told to isn't the write failing -
         // and cancelled's errno is EINTR, which a write must not return:
-        match crate::snapshots::delete::delete_dead_snapshots_forced(c) {
+        match delete_dead_snapshots_forced(c) {
             Err(e) if e.matches(Errcode::cancelled) => Ok(()),
             ret => ret,
         }
@@ -133,7 +131,7 @@ const INTERNAL: &[Attr<Fs>] = &gated(started, [
         Ok(())
     })),
 
-    Attr::ro(c"gc_gens_pos",            |c, out| crate::prt!(out, "{}\n", c.gc_gens.pos.get())),
+    Attr::ro(c"gc_gens_pos",            |c, out| prt!(out, "{}\n", c.gc_gens.pos.get())),
     Attr::ro(c"copy_gc_wait",           |c, out| c.copygc_wait_to_text(out)),
     Attr::ro(c"recent_counters",        |c, out| c.counters.recent_to_text(out)),
     Attr::ro(c"internal_uuid",          |c, out| prt!(out, "{}\n", c.sb.uuid())),
@@ -247,7 +245,7 @@ macro_rules! file_name {
 
 macro_rules! time_stat_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const TIME_STAT_NAMES: [&CStr; crate::util::time_stats::TimeStat::NR as usize] = [$(file_name!($name),)*];
+        const TIME_STAT_NAMES: [&CStr; TimeStat::NR as usize] = [$(file_name!($name),)*];
     };
 }
 TimeStat_arms!(time_stat_names);
@@ -268,7 +266,7 @@ const TIME_STATS_JSON: [Attr<Fs>; TIME_STATS_NR] = Attr::list(&TIME_STAT_NAMES, 
 
 macro_rules! counter_names {
     ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
-        const COUNTER_NAMES: [&CStr; crate::sb::counters_format::PersistentCounter::NR as usize] = [$(file_name!($name),)*];
+        const COUNTER_NAMES: [&CStr; PersistentCounter::NR as usize] = [$(file_name!($name),)*];
     };
 }
 PersistentCounter_arms!(counter_names);
@@ -575,5 +573,5 @@ fn perf_test(c: &Fs, s: &str) -> Result<(), BchError> {
     let threads = parse_int(threads)?;
     let nr = parse_human_u64(nr)?;
 
-    crate::debug::tests::btree_perf_test(c, test, nr, threads)
+    btree_perf_test(c, test, nr, threads)
 }

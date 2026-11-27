@@ -6,6 +6,7 @@ use crate::posix::{dev::dev_t, mode::umode_t};
 #[path = "../kernel.rs"]
 mod common;
 pub use common::*;
+pub use kernel::sync::SetOnce;
 
 pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
 pub const MAX_FILE_SIZE: u64 = c::MAX_LFS_FILESIZE as u64;

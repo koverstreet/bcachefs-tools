@@ -46,29 +46,29 @@
 //! hits and misses apart, as only a miss should see the writer. Members are
 //! odd keys, misses even ones.
 
+#[cfg(not(kernel))]
+use bcachefs_shim as kernel;
 use core::ptr::NonNull;
-use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, Ordering::{AcqRel, Acquire, Relaxed, Release}};
-
-use super::TestRet;
+use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64,
+    Ordering::{AcqRel, Acquire, Relaxed, Release}};
 use crate::c;
+use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, CuckooMultimap, Entry,
+    Faults, Registration};
+use crate::debug::tests::TestRet;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
+use crate::os::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
 use crate::prt;
 use crate::util::alloc::Vec;
-use crate::data_structures::cuckoo::{Cuckoo, CuckooHasher, CuckooItem, CuckooMultimap, Entry, Faults, Registration};
 use crate::util::hash::GoldenRatio;
-use crate::util::siphash::SipHash13Key;
-use crate::os::kernel::{cond_resched, local_clock, num_online_cpus, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
-use crate::util::task::TASKS;
-use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
-
-#[cfg(not(kernel))]
-use bcachefs_shim as kernel;
+use crate::util::siphash::SipHash13Key;
+use crate::util::task::TASKS;
+use crate::util::{HumanReadable, Printbuf};
 
 fn xorshift(s: &mut u64) -> u64 {
     *s ^= *s << 13;

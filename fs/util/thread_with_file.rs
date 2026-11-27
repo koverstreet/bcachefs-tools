@@ -30,29 +30,29 @@
 //!    spinlock keeps and an rtlock saves. readline sleeps TASK_IDLE: someone
 //!    typing is no hung task.
 
+use core::pin::Pin;
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use core::time::Duration;
 use crate::c;
 use crate::data_structures::fifo::FifoRead;
 use crate::errcode::{BchError, Errcode};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
-use crate::types::Fifo;
-use crate::util::alloc::{kbox_pin_init, Arc, KBox, Vec};
-use kernel::alloc::flags::GFP_KERNEL;
-use kernel::init::InPlaceInit;
-use crate::util::ffi::c_char;
-use crate::util::rcu::{FreeAnytime, NothingToDetach};
-use crate::os::file::{file_data, Any, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
-use crate::util::futex::EventCount;
+use crate::os::file::{file_data, Any, File, FileData, FileOps, NewFile, PollQueue, PollTable,
+    UserBuf};
 use crate::os::kernel::{current_comm, HZ};
-use core::time::Duration;
 use crate::os::kthread::Kthread;
 use crate::os::sched::may_sleep;
+use crate::types::Fifo;
+use crate::util::alloc::{kbox_pin_init, Arc, KBox, Vec};
+use crate::util::ffi::{c_char, c_long, c_ulong};
+use crate::util::futex::EventCount;
+use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::util::sleep::Sleep;
-use core::pin::Pin;
-use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use cstruct_macros::vtable;
-use crate::util::ffi::{c_long, c_ulong};
+use kernel::alloc::flags::GFP_KERNEL;
+use kernel::init::InPlaceInit;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /* ThreadWithFile */

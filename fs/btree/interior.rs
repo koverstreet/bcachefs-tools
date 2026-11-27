@@ -7,50 +7,53 @@
 
 #![allow(non_camel_case_types)]
 
-use core::mem::{size_of, ManuallyDrop};
+use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
-use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::{Acquire, AcqRel, Relaxed, SeqCst}};
-use cstruct_macros::{placed, MaybeZeroable, Init, Late, TypeInfo, bch_enum};
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize,
+    Ordering::{AcqRel, Acquire, Relaxed, SeqCst}};
 use crate::alloc::{capacity::DiskReservation, foreground::{OpenBucket, OpenBuckets}};
-use crate::data_structures::fifo::FifoRead;
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeyV};
 use crate::btree::cache::OwnedNode;
 use crate::btree::iter::{BtreeNodeRef, BtreeTrans, CommitOpts, TransAttempt, Watermark};
 use crate::btree::node::BtreeNode;
-use crate::btree::bkey::{BkeyI, BkeyV, BKEY_U64S};
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths};
-use crate::c;
-use crate::btree::FsBtree;
 use crate::btree::update::TransCommitFlags;
+use crate::btree::FsBtree;
+use crate::c;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BKEY_BTREE_PTR_VAL_U64s_MAX};
-use crate::data::write::WriteFlags;
-use crate::journal::{journal::JournalFlag, entries::{EntryWriter, NoRoom}, pins::Pin};
-use crate::util::time_stats::TimeStat;
 use crate::data::keylist::Keylist;
-use crate::data_structures::dst_room::DstRoom;
+use crate::data::write::WriteFlags;
 use crate::data_structures::array_vec::ArrayVec;
+use crate::data_structures::dst_room::DstRoom;
+use crate::data_structures::fifo::FifoRead;
 use crate::data_structures::list::ListLinks;
 use crate::data_structures::ref_cell::RefCell;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, REPLICAS_MAX, BTREE_MAX_DEPTH, Deleted, JSET_KEYS_U64s,
-    JsetEntryType};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bpos, Btree, Deleted, JSET_KEYS_U64s, JsetEntryType,
+    REPLICAS_MAX};
 use crate::fs::{Fs, FsFlag};
-use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Mutex, RwSem, SharedGuard};
-use crate::{new_lock, prt};
+use crate::journal::{entries::{EntryWriter, NoRoom}, journal::JournalFlag, pins::Pin};
+use crate::locking::six::SixLockType::SIX_LOCK_intent;
+use crate::locking::{Exclusive, ExclusiveGuard, Guard as _, Locked, LockedBy, Mutex, RwSem,
+    SharedGuard};
+use crate::os::{kernel::local_clock, workqueue::{OnQueue, Own, ReffedWork, Workqueue, WqFlags}};
 use crate::types::{Fifo, Le64, Lent};
-use crate::util::Printbuf;
 use crate::util::alloc::{Box, Vec};
 use crate::util::atomic::try_update;
 use crate::util::backref::BackRef;
 use crate::util::backtrace::prt_symbol;
 use crate::util::futex::EventCount;
-use crate::util::sleep::Sleep;
-use crate::os::{kernel::local_clock, workqueue::{OnQueue, Own, ReffedWork, Workqueue, WqFlags}};
+use crate::util::late::Late;
+use crate::util::mempool::Mempool;
 use crate::util::place::{Contained, Placed};
-use crate::util::{late::Late, mempool::Mempool};
-use crate::locking::six::SixLockType::SIX_LOCK_intent;
+use crate::util::sleep::Sleep;
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::plain_bytes_mut;
+use crate::util::Printbuf;
+use crate::{new_lock, prt};
+use cstruct_macros::{bch_enum, placed, Init, Late, MaybeZeroable, TypeInfo};
 use pin_init::{init, init_zeroed, pin_data};
-use zerocopy::IntoBytes;
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -60,11 +63,6 @@ pub enum BtreeNodeRewriteReason {
     error,
     ptr_written_zero,
 }
-
-
-/* Number of nodes btree coalesce will try to coalesce at once */
-pub const GC_MERGE_NODES: u32 = 4;
-
 
 mod completion;
 mod reserve;
@@ -104,10 +102,10 @@ pub struct BtreeReserveCache {
 
 impl BtreeReserveCache {
     /// Empty, made in place: a stack frame's worth of keys.
-    fn init() -> impl ::pin_init::Init<Self> {
-        ::pin_init::init!(BtreeReserveCache {
+    fn init() -> impl pin_init::Init<Self> {
+        init!(BtreeReserveCache {
             nr: 0,
-            data <- ::pin_init::init_array_from_fn(|_| BtreeAlloc::default()),
+            data <- pin_init::init_array_from_fn(|_| BtreeAlloc::default()),
         })
     }
 }
@@ -120,6 +118,9 @@ pub struct FsBtreeReserveCache {
     #[init(new_lock!(<- BtreeReserveCache::init(), (), "&c->btree.reserve_cache.lock"))]
     pub lock: Locked<Mutex, BtreeReserveCache>,
 }
+
+/* Number of nodes btree coalesce will try to coalesce at once */
+const GC_MERGE_NODES: u32 = 4;
 
 const UPDATE_NODES_MAX: usize = (BTREE_MAX_DEPTH as usize - 2) * 2 + GC_MERGE_NODES as usize;
 
@@ -1068,8 +1069,8 @@ fn push_roots(fs: &Fs, root_lock: &RootsGuard<'_>, skip: u64, w: &mut EntryWrite
 {
     for (id, r) in roots(fs, root_lock, skip) {
         let k = &*r.key;
-        w.add_entry(JsetEntryType::btree_root, id as u8, r.level, k.k.u64s.into())?
-            .as_mut_bytes().copy_from_slice(k.as_bytes());
+        plain_bytes_mut(w.add_entry(JsetEntryType::btree_root, id as u8, r.level, k.k.u64s.into())?)
+            .copy_from_slice(k.as_bytes());
     }
     Ok(())
 }

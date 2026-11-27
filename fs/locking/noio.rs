@@ -23,12 +23,11 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Exclusive, ExclusiveGuard, Locked, Mutex, PercpuRwSem, RawLock, RawLockBase, RawReadLock, RawRwLock,
-            RawTryLock, Shared, SharedGuard};
-use crate::util::alloc::{flags, Flags};
-use crate::os::lockdep::LockClass;
-use crate::os::sched;
 use core::ffi::CStr;
+use crate::locking::{Exclusive, ExclusiveGuard, Locked, Mutex, PercpuRwSem, RawLock, RawLockBase,
+    RawReadLock, RawRwLock, RawTryLock, Shared, SharedGuard};
+use crate::os::{lockdep::LockClass, sched};
+use crate::util::alloc::{flags, Flags};
 
 pub(crate) use crate::c::{PF_MEMALLOC_NOIO, PF_MEMALLOC_NORECLAIM, PF_MEMALLOC_NOWARN};
 

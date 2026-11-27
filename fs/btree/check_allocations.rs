@@ -8,32 +8,34 @@
 use core::cmp::Ordering;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, Init, TypeInfo, BitfieldMembers};
-use nestify::nest;
-use pin_init::pin_data;
 use crate::alloc::accounting::dev_usage_init;
-use crate::alloc::accounting_mem::{accounting_gc_free, gc_accounting_done, gc_accounting_start, MarkWrite};
+use crate::alloc::accounting_mem::{accounting_gc_free, gc_accounting_done, gc_accounting_start,
+    MarkWrite};
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::capacity::DiskReservation;
+use crate::alloc::format::AllocV4;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::interior::check_topology;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt,
-                         UpdateTriggerFlags};
+    UpdateTriggerFlags};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trigger::{key_trigger, TriggerOp};
 use crate::data::ec::format::Stripe;
-use crate::alloc::format::AllocV4;
 use crate::data::reflink::{gc_reflink_add, gc_reflink_done, gc_reflink_free, gc_reflink_start};
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BtreeFlags, DataType, BTREE_MAX_DEPTH, Deleted};
-use crate::locking::{Locked, RwSem, SeqLock};
-use crate::{new_lock, message, btree_trans, fsck_err_on, mustfix_fsck_err_on, prt};
+use crate::debug::params::journal_seq_verify;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bpos, Btree, BtreeFlags, DataType, Deleted};
 use crate::fs::{Dev, Fs, FsFlag};
 use crate::init::progress::Progress;
+use crate::locking::{Locked, RwSem, SeqLock};
+use crate::os::kernel::READ;
 use crate::types::Le16;
 use crate::util::Printbuf;
-use crate::os::kernel::READ;
+use crate::{btree_trans, fsck_err_on, message, mustfix_fsck_err_on, new_lock, prt};
+use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, Init, MaybeZeroable, TypeInfo};
+use nestify::nest;
+use pin_init::pin_data;
 
 #[bch_enum(closed)]
 #[repr(u32)]
@@ -180,7 +182,7 @@ fn gc_mark_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, iter: &BtreeI
     let fs = t.fs();
 
     let version = k.k.bversion.lo;
-    assert!(!crate::debug::params::journal_seq_verify() || version <= fs.journal_cur_seq(),
+    assert!(!journal_seq_verify() || version <= fs.journal_cur_seq(),
             "key version {version} past the journal's seq {}", fs.journal_cur_seq());
 
     let key_version = fs.key_version.load(Relaxed) as u64;

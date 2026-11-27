@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedNode};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, BkeyV};
+use crate::btree::cache::{btree_id_level_to_text, btree_ptr_hash_val, cached_node, OwnedNode};
 use crate::btree::iter::{BtreeIterFlags, BtreeTrans};
 use crate::btree::locking::BtreeNodeLockedType;
 use crate::btree::node::{BtreeNode, BtreeWriteType};
@@ -10,14 +10,14 @@ use crate::btree::read::{btree_node_wait_on_read, btree_node_wait_on_write};
 use crate::btree::write::{node_write, BtreeWriteFlags};
 use crate::data::extents_format::BtreePtrV2;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Btree, BTREE_MAX_DEPTH};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, BkeyType, Btree};
 use crate::fs::Fs;
 use crate::init::passes::RecoveryPass;
-use crate::locking::{six::SixHold, six::SixLockType::{self, SIX_LOCK_read}};
+use crate::locking::six::{SixHold, SixLockType::{self, SIX_LOCK_read}};
+use crate::os::kernel::{likely, prefetch, race_fault, unlikely};
 use crate::prt;
 use crate::types::L1_CACHE_BYTES;
-use crate::os::kernel::{likely, prefetch, race_fault, unlikely};
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<BtreePtrV2>()?;

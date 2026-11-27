@@ -31,6 +31,7 @@
 //! slice::swap() are.
 
 use core::cmp::Ordering;
+use crate::os::kernel::cond_resched;
 
 /// A one-based eytzinger tree of `size` nodes.
 #[derive(Clone, Copy, Debug)]
@@ -294,7 +295,7 @@ fn sort_impl<S: ?Sized>(
             swap(v, j, k);
         }
 
-        crate::os::kernel::cond_resched();
+        cond_resched();
     }
 
     // sort
@@ -325,7 +326,7 @@ fn sort_impl<S: ?Sized>(
             swap(v, j, k);
         }
 
-        crate::os::kernel::cond_resched();
+        cond_resched();
     }
 }
 

@@ -13,29 +13,26 @@
 //! The journal lock's; the list changes with sb_lock held too, as the
 //! superblock does.
 
-use crate::data::write::WriteFlags;
-use self::JournalBucketStage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL_BUCKET_dirty as DIRTY,
-                                     JOURNAL_BUCKET_dirty_ondisk as DIRTY_ONDISK,
-                                     JOURNAL_BUCKET_discard as DISCARD};
-
 use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation, ReservationFlags};
 use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::btree::iter::UpdateTriggerFlags;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, SbFeature, JOURNAL_BUCKETS_MIN, Sb, SbFieldJournal,
-    SbFieldJournalV2};
-use crate::fs::{Dev, Fs, SbLockGuard, FsFlag};
-use crate::journal::sb::buckets_to_sb;
-use crate::journal::journal::{JournalGuard, Journal, JournalLockAt};
-use crate::locking::{Guard as _, LockedBy, Locked, Mutex};
-use crate::util::{alloc::Vec, projections::Volatile, Printbuf, late::Late};
-use crate::os::{kernel::totalram_bytes, bio::BioSet, workqueue::ReffedWork};
-use crate::{message, btree_trans, prt,
-    new_lock};
 use crate::data::dev_bio::DevBio;
+use crate::data::write::WriteFlags;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{DataType, JOURNAL_BUCKETS_MIN, Sb, SbFeature, SbFieldJournal, SbFieldJournalV2};
+use crate::fs::{Dev, Fs, FsFlag, SbLockGuard};
+use crate::journal::journal::{Journal, JournalGuard, JournalLockAt};
 use crate::journal::reclaim::{discard_work, JournalSpaceFrom};
+use crate::journal::sb::buckets_to_sb;
+use crate::locking::{Guard as _, Locked, LockedBy, Mutex};
+use crate::os::{bio::BioSet, kernel::totalram_bytes, workqueue::ReffedWork};
+use crate::util::{alloc::{AllocError, Vec}, late::Late, projections::Volatile, Printbuf};
+use crate::{btree_trans, field, message, new_lock, prt, recovery_pass};
 use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable};
 use pin_init::pin_data;
+use self::JournalBucketStage::{self as Stage, JOURNAL_BUCKET_cur as CUR,
+    JOURNAL_BUCKET_dirty as DIRTY, JOURNAL_BUCKET_dirty_ondisk as DIRTY_ONDISK,
+    JOURNAL_BUCKET_discard as DISCARD};
 
 /* Where each stage of a journal bucket's life starts: journal/buckets.rs */
 #[bch_enum(closed)]
@@ -70,9 +67,8 @@ pub struct JournalDevice {
     #[init(new_lock!((), "&ca->journal.discard_lock"))]
     pub discard_lock: Locked<Mutex>,
     #[pin]
-    pub(crate) discard: ReffedWork<discard_work, crate::field!(super.io_ref_write)>,
+    pub(crate) discard: ReffedWork<discard_work, field!(super.io_ref_write)>,
 }
-
 
 const STAGES: [Stage; 4] = [DISCARD, DIRTY_ONDISK, DIRTY, CUR];
 
@@ -199,7 +195,7 @@ impl JournalRing {
 
     /// The buckets a journal entry may use, counting @from's as free.
     pub fn available(&self, from: JournalSpaceFrom) -> u32 {
-        use crate::journal::reclaim::JournalSpaceFrom::*;
+        use JournalSpaceFrom::*;
 
         let available = self.free(match from {
             journal_space_discarded     => DISCARD,
@@ -374,7 +370,7 @@ impl JournalDevice {
     }
 }
 
-fn enomem(fs: &Fs) -> impl Fn(crate::util::alloc::AllocError) -> BchError + '_ {
+fn enomem(fs: &Fs) -> impl Fn(AllocError) -> BchError + '_ {
     |_| fs.err(Errcode::ENOMEM_set_nr_journal_buckets)
 }
 
@@ -615,7 +611,7 @@ pub fn dev_journal_alloc(ca: &Dev, new_fs: bool) -> Result<(), BchError> {
     ca.log().err_fn(set_nr_loop(fs, ca, nr, new_fs))
 }
 
-crate::recovery_pass!(fs_journal_alloc => |fs: &Fs| fs.online_members()
+recovery_pass!(fs_journal_alloc => |fs: &Fs| fs.online_members()
     .filter(|ca| ca.journal.nr() == 0)
     .try_for_each(|ca| dev_journal_alloc(&ca, true)));
 

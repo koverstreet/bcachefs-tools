@@ -3,47 +3,50 @@
 //! Recovery: a filesystem brought up from its superblock and journal, or a
 //! new one initialized.
 
-use crate::init::passes::{RecoveryPass, self, run_explicit_sb, RunRecoveryPassFlags};
+use core::cmp::Ordering;
+use core::sync::atomic::Ordering::Relaxed;
 use crate::alloc::accounting;
+use crate::bcachefs_ioctl::ProgressUnit as Units;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
-                         TransAttempt, UpdateTriggerFlags, Watermark};
-use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys,
-    journal_key, JournalKeys};
-use crate::journal::init::JournalStartInfo;
-use crate::posix::inode::InodeUnpacked;
-use crate::posix::dev::dev_t;
-use crate::posix::mode::{umode_t, S_IFDIR};
-use crate::posix::inode_format::BCACHEFS_ROOT_INO;
-use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume};
-use crate::snapshots::subvolume::SubvolInum;
-use crate::errcode::{Errcode, BchError};
+use crate::btree::interior::roots_journal_u64s;
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts, TransAttempt,
+    UpdateTriggerFlags, Watermark};
+use crate::btree::journal_overlay::{journal_key, journal_keys_put_initial, keys_sort,
+    shoot_down_journal_keys, JournalKeys};
+use crate::data::scrub_journal;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, Bkey, BkeyType, Btree, ErrorAction,
+    FsUsageType, JsetEntry, JsetEntryRef, MemberInitialized, MetadataVersion, SbCompat, SbCompats,
+    SbFeature, SbFeatures, SbFieldClean, ScrubJournalOpt, VersionUpgradeOpt};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs, FsFlag as Flag};
 use crate::init::error::{self, id};
-use crate::journal::read::{journal_pos_from_member_info_resume, journal_read, journal_reread_for_rewind};
+use crate::init::passes::{self, run_explicit_sb, RecoveryPass, RunRecoveryPassFlags};
+use crate::journal::init::JournalStartInfo;
+use crate::journal::read::{journal_pos_from_member_info_resume, journal_read,
+    journal_reread_for_rewind};
 use crate::journal::sb as journal_sb;
 use crate::journal::seq_blacklist::blacklist_entries_gc;
+use crate::locking::{Alone, Guard, HoldsRef};
 use crate::opts::{opts_hooks_pre_set, FsckErrOpt};
-use crate::sb::io::{check_version_downgrade, sb_upgrade, SbWrite};
-use crate::snapshots::snapshot::snapshots_read;
-use crate::snapshots::subvolume;
-use crate::types::Le64;
-use crate::locking::Guard as _;
-use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf};
 use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
-use crate::posix::{inode, logged_ops, namei, quota};
-use crate::posix::namei::CreateFlags;
-use crate::{btree_trans, fs_fatal_error, fsck_err_on,
-            message, mustfix_fsck_err, mustfix_fsck_err_on, prt};
-use crate::bcachefs_ioctl::ProgressUnit as Units;
-use core::cmp::Ordering;
-use core::sync::atomic::Ordering::Relaxed;
-use crate::format::{Btree, MemberInitialized, BkeyType, SbFeature, SbFeatures, SbFieldClean,
-    Bkey, BTREE_ID_NR_MAX, BTREE_MAX_DEPTH, ErrorAction, FsUsageType, JsetEntry, MetadataVersion,
-    SbCompat, ScrubJournalOpt, VersionUpgradeOpt, JsetEntryRef, SbCompats};
-use zerocopy::IntoBytes;
+use crate::os::sched::current;
+use crate::posix::dev::dev_t;
+use crate::posix::inode::{self, InodeUnpacked};
+use crate::posix::inode_format::BCACHEFS_ROOT_INO;
+use crate::posix::mode::{umode_t, S_IFDIR};
+use crate::posix::namei::{self, CreateFlags};
+use crate::posix::{logged_ops, quota};
+use crate::sb::io::{check_version_downgrade, sb_upgrade, SbWrite};
+use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume};
+use crate::snapshots::snapshot::snapshots_read;
+use crate::snapshots::subvolume::{self, SubvolInum};
+use crate::types::Le64;
+use crate::util::vstructs::{plain_bytes_mut, Validated};
+use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf};
+use crate::{btree_trans, fs_fatal_error, fsck_err_on, message, mustfix_fsck_err,
+    mustfix_fsck_err_on, prt};
 
 type Pass = RecoveryPass;
 
@@ -56,7 +59,7 @@ pub struct NotRw<'a> {
 
 /// What's written only before the filesystem can go rw is a LockedBy of
 /// NotRw: had through one, alone - nothing else runs.
-impl crate::locking::Guard for NotRw<'_> {
+impl Guard for NotRw<'_> {
     type Name = NotRw<'static>;
     type Root = Fs;
 
@@ -65,12 +68,12 @@ impl crate::locking::Guard for NotRw<'_> {
     }
 }
 
-impl crate::locking::Alone for NotRw<'_> {}
+impl Alone for NotRw<'_> {}
 
 // Recovery's ref on the journal keys - their AtomicRef's first - is put by
 // journal_keys_put_initial(): in journal_replay, a pass after set_may_go_rw,
 // or at the filesystem's release
-impl crate::locking::HoldsRef<crate::at!(Fs.journal_keys)> for NotRw<'_> {}
+impl HoldsRef<crate::at!(Fs.journal_keys)> for NotRw<'_> {}
 
 impl Fs {
     /// The asserts are that nothing else runs: called before the filesystem
@@ -81,7 +84,7 @@ impl Fs {
         assert!(!self.flags.get(Flag::rw));
         /* the journal keys are frozen for the scrub, whose reads run on workqueues */
         assert!(!self.flags.get(Flag::scrub_journal));
-        assert!(self.recovery_task.load(Relaxed) == crate::os::sched::current());
+        assert!(self.recovery_task.load(Relaxed) == current());
 
         NotRw { fs: self, _task: core::marker::PhantomData }
     }
@@ -318,7 +321,7 @@ fn journal_replay_key(t: &TransAttempt<'_, '_>, jk: &JournalKeys, idx: usize) ->
     if bk.k.key_type() == BkeyType::accounting {
         let val = &bk.as_bytes()[size_of::<Bkey>()..];
         return t.subbuf_push(&t.trans().accounting, &bk.k, val.len() / size_of::<u64>(),
-                             |v| v.as_mut_bytes().copy_from_slice(val));
+                             |v| plain_bytes_mut(v).copy_from_slice(val));
     }
 
     let new = t.bkey_make_mut_noupdate(BkeySC::from(bk))?;
@@ -547,7 +550,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &JsetEntry) -> Result<(), BchError
             drop(roots);
             if id >= Btree::NR {
                 fs.journal_entry_res_resize(&fs.btree.root_journal_res,
-                                            crate::btree::interior::roots_journal_u64s(nr_roots));
+                                            roots_journal_u64s(nr_roots));
             }
         }
         Ok(JsetEntryRef::usage(u)) => {
@@ -569,7 +572,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &JsetEntry) -> Result<(), BchError
     Ok(())
 }
 
-fn journal_replay_early(fs: &Fs, clean: Option<&SbFieldClean<crate::util::vstructs::Validated>>)
+fn journal_replay_early(fs: &Fs, clean: Option<&SbFieldClean<Validated>>)
     -> Result<(), BchError>
 {
     if let Some(clean) = clean {
@@ -853,7 +856,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
 
     if fs.journal_scrub_will_run() {
         fs.flags.set(Flag::scrub_journal, true);
-        let rewind_seq = crate::data::scrub_journal::scrub(fs)?;
+        let rewind_seq = scrub_journal::scrub(fs)?;
         fs.flags.set(Flag::scrub_journal, false);
 
         /*

@@ -17,32 +17,31 @@ mod keys;
 
 pub use intake::Intake;
 pub(in crate::btree) use flush::FlushKey;
-use keys::{KeysLive, WbKeys};
 
-use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BKEY_U64S};
+use core::sync::atomic::fence;
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::write_buffer::keys::{KeysLive, WbKeys};
+use crate::btree::write_buffer::WbFlushCaller as Caller;
 use crate::btree::FsBtree;
-use crate::util::time_stats::TimeStat;
-use crate::fs::{FsFlag as Flag, Fs};
-use crate::journal::{pins::JournalPinType::JOURNAL_PIN_TYPE_other, pins::{Pin, PinHolder}};
-use self::WbFlushCaller as Caller;
 use crate::data_structures::dst_room::DstRoom;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BtreeFlags, Bkey};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, Bpos, Btree, BtreeFlags};
+use crate::fs::{Fs, FsFlag as Flag};
+use crate::journal::pins::{JournalPinType::JOURNAL_PIN_TYPE_other, Pin, PinHolder};
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
-use crate::util::alloc::{flags, Flags, AllocError, Vec};
-use crate::util::place::{Contained, FieldPath};
-use crate::util::refcount::TryRefcount;
-use crate::util::projections::Volatile;
 use crate::os::workqueue::{OnQueue, Own, ReffedWork};
+use crate::util::alloc::{flags, AllocError, Flags, Vec};
+use crate::util::place::{Contained, FieldPath};
+use crate::util::projections::Volatile;
+use crate::util::refcount::TryRefcount;
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::DstHead;
 use crate::util::{Printbuf, ToText};
 use crate::{btree_trans, new_lock, prt};
-use core::mem::size_of;
-use core::sync::atomic::fence;
-use cstruct_macros::{placed, MaybeZeroable, Init, Plain, SelfSized, TypeInfo, bch_enum};
-use crate::util::vstructs::DstHead;
+use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable, Plain, SelfSized, TypeInfo};
 use pin_init::pin_data;
 
 /*
@@ -306,7 +305,7 @@ pub fn wb_btree_idx(btree: Btree) -> WbBtree {
     macro_rules! idx {
         ($(($name:ident, $nr:expr)),* $(,)?) => {
             $(if btree == Btree::$name {
-                return crate::btree::write_buffer::WbBtree::$name;
+                return WbBtree::$name;
             })*
         };
     }
@@ -318,7 +317,7 @@ pub fn wb_btree_to_btree(idx: WbBtree) -> Btree {
     macro_rules! btree {
         ($(($name:ident, $nr:expr)),* $(,)?) => {
             match idx {
-                $(crate::btree::write_buffer::WbBtree::$name => Btree::$name,)*
+                $(WbBtree::$name => Btree::$name,)*
             }
         };
     }

@@ -13,22 +13,20 @@
 //! ICRNL/ICANON repair for an unconfigured initramfs console, zeroized, and
 //! through the agents with their keyring caching.
 
-use std::io::{self, stdin, BufRead, IsTerminal, Read};
+use crate::format::Sb;
+use crate::util::plymouth;
+use crate::util::prompt::{Question, Reply, UNANSWERED, US};
+use crate::util::Printbuf;
+use log::debug;
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::termios;
+use std::io::{self, stdin, BufRead, IsTerminal, Read, Result};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-
-use std::io::Result;
-use rustix::event::{poll, PollFd, PollFlags, Timespec};
-use rustix::termios;
-use log::debug;
 use zeroize::Zeroizing;
-
-use super::{Question, Reply, UNANSWERED, US};
-use crate::util::Printbuf;
-use crate::format::Sb;
 
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
 
@@ -155,7 +153,7 @@ impl Prompt {
     fn detect_uncached() -> Option<Prompt> {
         let tty = stdin().is_terminal();
 
-        if tty && !crate::util::plymouth::active() {
+        if tty && !plymouth::active() {
             debug!("asking on the terminal");
             return Some(Prompt::Stdin);
         }

@@ -27,14 +27,13 @@
 //! atomics are: LLVM masks a word where the CPU has none, and a plain store
 //! to the word's other bytes only makes the LL/SC or CAS retry.
 
-use super::{Locked, RawLock, RawLockBase, RawTimedLock, RawTryLock};
-use core::sync::atomic::{AtomicU8, Ordering};
-use crate::util::futex::{futex_wait, futex_wake};
-use crate::os::kernel::jiffies;
-use crate::os::lockdep::LockClass;
-use crate::util::sleep::Sleep;
 use core::convert::Infallible;
 use core::ffi::CStr;
+use core::sync::atomic::{AtomicU8, Ordering};
+use crate::locking::{Locked, RawLock, RawLockBase, RawTimedLock, RawTryLock};
+use crate::os::{kernel::jiffies, lockdep::LockClass, sched::might_sleep};
+use crate::util::futex::{futex_wait, futex_wake};
+use crate::util::sleep::Sleep;
 use pin_init::Zeroable;
 
 const UNLOCKED:  u8 = 0;
@@ -66,7 +65,7 @@ impl ByteLock {
     fn take(&self) {
         // as C's wait_on_bit_lock(): caught taken where it can't sleep, even
         // when it wouldn't
-        crate::os::sched::might_sleep();
+        might_sleep();
 
         if !self.try_take() {
             self.take_contended();
@@ -131,7 +130,7 @@ impl RawTryLock for ByteLock {
 
 impl RawTimedLock for ByteLock {
     fn try_lock_timeout(&self, timeout: usize) -> Option<()> {
-        crate::os::sched::might_sleep();
+        might_sleep();
 
         (self.try_take() || self.take_contended_until(jiffies().wrapping_add(timeout))).then_some(())
     }

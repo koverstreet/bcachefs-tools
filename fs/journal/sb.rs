@@ -4,18 +4,17 @@
 //! bucket per entry, and journal_v2, which replaced it, a run of contiguous
 //! buckets per entry. Both are validated as runs - v1's of one bucket.
 
-use crate::btree::bkey::ValidateFlags;
-use crate::fs::Dev;
 use core::ops::Range;
-
+use crate::btree::bkey::ValidateFlags;
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Sb, SbFieldJournal, SbFieldJournalV2};
-use crate::util::{vstructs::{Unvalidated, Validated}, alloc::Vec, Printbuf};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard, FsFlag};
+use crate::fs::{Dev, Fs, FsFlag, SbLockGuard};
 use crate::journal::buckets;
-use crate::{prt, sb_err_on};
 use crate::sb::{io::{sb_field_u64s, SbFieldOps, SbState}, members::sb_member};
 use crate::types::Le64;
+use crate::util::{alloc::Vec, vstructs::{Unvalidated, Validated}, Printbuf};
+use crate::{prt, sb_err_on};
+use pin_init::zeroed;
 
 fn invalid() -> BchError {
     Errcode::invalid_sb_journal.into()
@@ -31,7 +30,7 @@ fn runs_validate<S: SbState>(sb: &Sb<S>, mut runs: Vec<Range<u64>>, err: &mut Pr
     let (Some(first), Some(last)) = (runs.first(), runs.last()) else {
         return Ok(());
     };
-    let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
+    let m = sb_member(sb, sb.dev_idx.into()).unwrap_or_else(zeroed);
 
     sb_err_on!(err, first.start == 0, invalid_sb_journal, "journal bucket at sector 0")?;
 

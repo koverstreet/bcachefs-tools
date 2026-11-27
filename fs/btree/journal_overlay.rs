@@ -36,39 +36,39 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{polonius_key, BtreeTrans, TransAttempt};
-use crate::alloc::accounting;
-use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, SPOS_MAX};
-use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::node::{iter::KeyIter, BtreeNode};
-use crate::btree::path::{LockedNode, PathIdx, Paths};
-use crate::data::extents_format::BtreePtrV2;
-use crate::journal::{journal::JournalRewindRange, read::JournalEntries};
-use crate::errcode::{BchError, Errcode as e};
-use crate::fs::{btree_id_is_alloc, Fs, FsFlag as f};
-use crate::init::recovery::NotRw;
-use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
-use crate::util::projections::VolatilePublish;
-use crate::util::alloc::{Box, Vec, Global};
-use crate::util::thin::{ThinBox, ThinMut, ThinRef};
-use crate::data_structures::gap_buffer::GapBuffer;
-use crate::os::kernel::cond_resched;
-use crate::util::log::LogLevel;
-use crate::util::place::Placed;
-use crate::util::rcu::{self, ReadGuard, RcuArray};
-use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
-use crate::{message, field, prt, new_lock, published};
 use core::cmp::Ordering;
-use core::mem::{size_of, ManuallyDrop};
+use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{bitfield, MaybeZeroable, Init, BitfieldMembers, SelfSized};
-use crate::util::vstructs::Head;
 use core::sync::atomic::{AtomicU64, AtomicUsize};
+use crate::alloc::accounting;
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, SPOS_MAX};
+use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::iter::{polonius_key, BtreeTrans, TransAttempt};
+use crate::btree::node::{iter::KeyIter, BtreeNode};
+use crate::btree::path::{LockedNode, PathIdx, Paths};
+use crate::data::extents_format::BtreePtrV2;
+use crate::data_structures::gap_buffer::GapBuffer;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, BkeyType, Bpos, Btree, Csum, Deleted, Jset, JsetEntryRef};
+use crate::fs::{btree_id_is_alloc, Fs, FsFlag};
+use crate::init::recovery::NotRw;
+use crate::journal::{journal::JournalRewindRange, read::JournalEntries};
+use crate::locking::{ExclusiveGuard, Guard as _, Locked, LockedBy, Mut, Mutex, Ref};
+use crate::os::kernel::cond_resched;
+use crate::util::alloc::{Box, Global, Vec};
+use crate::util::log::LogLevel;
+use crate::util::place::Placed;
+use crate::util::projections::VolatilePublish;
+use crate::util::rcu::{self, RcuArray, ReadGuard};
+use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
+use crate::util::thin::{ThinBox, ThinMut, ThinRef};
+use crate::util::vstructs::Head;
+use crate::{field, message, new_lock, prt, published};
+use cstruct_macros::{bitfield, BitfieldMembers, Init, MaybeZeroable, SelfSized};
 use nestify::nest;
 use pin_init::{pin_data, pinned_drop};
-use crate::format::{Bpos, Btree, BkeyType, Csum, Bkey, Deleted, Jset, JsetEntryRef};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable)]
@@ -643,9 +643,9 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
     let jk = jk.value();
     let mut n = journal_key::new_allocated(btree, level, k);
 
-    if !fs.flags.get(f::btree_running) {
+    if !fs.flags.get(FsFlag::btree_running) {
         return not_rw.get_mut_of(&jk.pre_sort).push(n)
-            .map_err(|_| fs.err(e::ENOMEM_journal_key_insert));
+            .map_err(|_| fs.err(Errcode::ENOMEM_journal_key_insert));
     }
 
     let idx = jk.search(btree, level, jk.key_pos(&n));
@@ -670,7 +670,7 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
         fs.log().err(message!(
             "journal_overlay::insert_take: error allocating new key array (size {})",
             keys.size.max(8) * 2));
-        return fs.throw(e::ENOMEM_journal_key_insert);
+        return fs.throw(Errcode::ENOMEM_journal_key_insert);
     }
     keys.insert(idx, n);
     jk.seq.fetch_add(1, Relaxed);
@@ -678,7 +678,7 @@ fn insert_take(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: KeyBox) -> R
 }
 
 pub(crate) fn insert(not_rw: &mut NotRw<'_>, btree: Btree, level: u32, k: &BkeyI) -> Result<(), BchError> {
-    let k = Box::try_clone_from_ref_in(k, Global).map_err(|_| not_rw.fs.err(e::ENOMEM_journal_key_insert))?;
+    let k = Box::try_clone_from_ref_in(k, Global).map_err(|_| not_rw.fs.err(Errcode::ENOMEM_journal_key_insert))?;
     insert_take(not_rw, btree, level, ThinBox::new(k))
 }
 
@@ -818,7 +818,7 @@ impl<'a, 't> BtreeAndJournalIter<'a, 't> {
         if level == 0 {
             return;
         }
-        let nr = if fs.flags.get(f::started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
+        let nr = if fs.flags.get(FsFlag::started) { if level > 1 { 0 } else { 2 } } else if level > 1 { 1 } else { 16 };
 
         iter.fail_if_too_many_whiteouts = true;
 
@@ -956,7 +956,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         if seq_rewound && !j.has_overwrites() {
             fs.log().err(message!(
                 "cannot rewind journal seq {seq}: no overwrite entries (journal_transaction_names was off)"));
-            return fs.throw(e::journal_rewind_no_overwrites);
+            return fs.throw(Errcode::journal_rewind_no_overwrites);
         }
 
         for entry in j.entries() {
@@ -996,7 +996,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
                         fs.log().err(message!(
                             "Too many journal keys for slowpath; have {} compacted, buf size {}, \
                              processed {nr_read} keys at seq {seq}", keys.len(), keys.size));
-                        return fs.throw(e::ENOMEM_journal_keys_sort);
+                        return fs.throw(Errcode::ENOMEM_journal_keys_sort);
                     }
                 }
                 keys.insert(keys.len(), n);
@@ -1010,7 +1010,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
      * device add: the main array's now
      */
     while !pre_sort.is_empty() {
-        keys.reserve().map_err(|_| fs.err(e::ENOMEM_journal_keys_sort))?;
+        keys.reserve().map_err(|_| fs.err(Errcode::ENOMEM_journal_keys_sort))?;
         keys.insert(keys.len(), pre_sort.pop().expect("not empty"));
     }
 

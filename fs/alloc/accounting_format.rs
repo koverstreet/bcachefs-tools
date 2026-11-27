@@ -3,10 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::replicas_format::ReplicasEntryV1;
-use crate::util::vstructs::Head;
-use cstruct_macros::{bch_enum, counters, tagged_union, whole, MaybeZeroable, Plain, TypeInfo};
 use crate::format::{Bpos, Val};
 use crate::types::Le8;
+use crate::util::vstructs::Head;
+use cstruct_macros::{bch_enum, counters, tagged_union, whole, MaybeZeroable, Plain, TypeInfo};
 
 /*
  * Disk accounting - KEY_TYPE_accounting - on disk format:

@@ -136,50 +136,58 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::alloc::replicas::SbReplicas;
-use crate::btree::bkey::ValidateFlags;
-use crate::fs::{Dev, Fs, SbLockGuard};
-use crate::c;
+use core::ffi::CStr;
+use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 use crate::alloc::disk_groups_format::SbFieldDiskGroups;
+use crate::alloc::replicas::SbReplicas;
 use crate::alloc::replicas_format::SbFieldReplicas;
 use crate::bcachefs_ioctl::ForceIf;
+use crate::btree::bkey::ValidateFlags;
+use crate::c;
+use crate::data::checksum::{csum_err_msg, csum_vstruct};
 use crate::data::extents_sb_format::SbFieldExtentTypeU64s;
-use crate::opts::{Opts, OPT_SHOW_FULL_LIST, OptFlags, OptId};
-use crate::sb::counters_format::SbFieldCounters;
-use crate::sb::downgrade_format::SbFieldDowngrade;
-use crate::sb::errors_format::SbFieldErrorsV2;
-use crate::sb::members::DevReadRefKind;
-use crate::sb::members_format::{SbFieldMembersV2, MEMBERS_MAX, MemberErrorType};
-use crate::util::time_stats::TimeStat;
-use crate::format::{Sb, SbFieldCrypt, __uuid_t, Csum, Key, bch_sb_field, SbFieldExt, SbLayout,
-    SINGLE_DEVICE_SB_FIELDS,
-    CsumType, DegradedAction, ErrorAction, SbCompat, bch_sb_field_by_tag, bch_sb_field_match,
-    SbFieldExtWhole, SbHead, BCH_VERSION, SbCompats, SbFeatures, SbFieldType, Btree,
-    DataType, Nonce, MetadataVersion, SbFeature};
-use crate::init::dev::{bch_sb_buf, SbHandle, DevsMask, FsSb, SbIo, SbBio, SbStorage};
-use crate::os::{blkdev::BlockDevice, bio::{Bio, BioBox, BioOwner, BioSubmit}, kernel::NSEC_PER_SEC};
-use crate::errcode::{Errcode, BchError};
-use crate::util::refcount::{RefGuard, Refcount};
+use crate::data_structures::{array_vec::ArrayVec, bitmap::LeBitmap, dst_room::DstRoom};
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{__uuid_t, bch_sb_field, bch_sb_field_by_tag, bch_sb_field_match, BCH_VERSION,
+    Btree, Csum, CsumType, DataType, DegradedAction, ErrorAction, Key, MetadataVersion, Nonce,
+    SINGLE_DEVICE_SB_FIELDS, Sb, SbCompat, SbCompats, SbFeature, SbFeatures, SbFieldCrypt,
+    SbFieldExt, SbFieldExtWhole, SbFieldType, SbHead, SbLayout};
+use crate::fs::{Dev, Fs, FsFlag, SbLockGuard};
+use crate::init::dev::{bch_sb_buf, DevsMask, FsSb, SbBio, SbHandle, SbIo, SbStorage};
+use crate::init::passes::{self, passes_from_stable};
 use crate::locking::Guard as _;
+use crate::opts::{opt_from_sb, opt_to_text, OPTS, OPT_SHOW_FULL_LIST, OptFlags, OptId, Opts};
+use crate::os::bio::{buf_nr_bvecs, Bio, BioBox, BioOwner, BioSubmit};
+use crate::os::blkdev::{logical_block_size, open_by_path, BdevFile, BlockDevice};
+use crate::os::kernel::{ktime_get_real_seconds, NSEC_PER_SEC, READ, WRITE};
+use crate::sb::clean::{fs_mark_clean, fs_mark_dirty};
+use crate::sb::counters_format::SbFieldCounters;
+use crate::sb::downgrade::set_upgrade_incompat;
+use crate::sb::downgrade_format::SbFieldDowngrade;
 use crate::sb::errors::SbErrorId;
-use crate::sb::members;
-use crate::data_structures::{bitmap::LeBitmap, array_vec::ArrayVec, dst_room::DstRoom};
-use crate::util::projections::{Volatile, VolatileValue, VolatileWriter, PublishedOnce};
-use crate::util::names::{self, Names};
-use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
-use crate::{prt, published};
+use crate::sb::errors_format::SbFieldErrorsV2;
+use crate::sb::members::{self, DevReadRefKind, SbMembersMut};
+use crate::sb::members_format::{MEMBERS_MAX, MemberErrorType, SbFieldMembersV2};
 use crate::types::{bits_to_longs, ArmOf, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut,
-    read_past, ArmRef, Head, SelfSized, InPlace, InState, State, Unsized, Unvalidated,
-    UnvalidatedEntries, Validated, ValidatedEntriesMut, VStructError};
-use core::ffi::CStr;
-use crate::util::alloc::{Arc, Flags, Vec};
-use core::sync::atomic::AtomicPtr;
+use crate::util::alloc::{arc_new, AllocError, Arc, Flags, Vec};
 use crate::util::gather::{Gather, Scope};
+use crate::util::log::Log;
+use crate::util::names::{self, Names};
+use crate::util::projections::{PublishedOnce, Volatile, VolatileValue, VolatileWriter};
+use crate::util::ratelimit::Ratelimit;
+use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::sleep::Sleep;
 use crate::util::task::{waiter, WaitSync};
-use cstruct_macros::{MaybeZeroable, TypeInfo, bch_enum};
-use core::mem::{size_of, size_of_val};
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, plain_bytes, plain_bytes_mut,
+    read_past, ArmRef, Head, InPlace, InState, SelfSized, State, Unsized, Unvalidated,
+    UnvalidatedEntries, VStructError, Validated, ValidatedEntriesMut};
+use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
+use crate::{at, display_via_to_text, field, fs_fatal_error, fs_inconsistent, message, prt,
+    published};
+use cstruct_macros::{bch_enum, MaybeZeroable, TypeInfo};
+use pin_init::{init, stack_pin_init, zeroed, Init, Zeroable};
 
 /*
  * bringup: this write is part of bringing the filesystem up - allowed before
@@ -433,7 +441,7 @@ impl bch_sb_field<Unvalidated> {
 impl SbFieldType {
     /// The type named @name.
     pub fn from_name(name: &str) -> Option<Self> {
-        crate::util::names::value_of(Self::ENTRIES, name).map(|t| Self(t as u32))
+        names::value_of(Self::ENTRIES, name).map(|t| Self(t as u32))
     }
 }
 
@@ -594,7 +602,7 @@ pub fn validate<'a>(sb: &'a mut Sb<Unvalidated>, opts: &Opts, read_offset: u64,
         let btree_node_bytes = u64::from(sb.btree_node_size()) << 9;
         // the members, as C reads them - not yet validated
         let fs_size = (0..sb.number_of_devices()).map(|i| {
-            let m = crate::sb::members::sb_member(sb, i).unwrap_or_else(::pin_init::zeroed);
+            let m = members::sb_member(sb, i).unwrap_or_else(zeroed);
             m.nbuckets.get() * u64::from(m.bucket_size.get())
         }).sum::<u64>();
         let bits = crate::posix::inode::shard_bits_default(
@@ -639,7 +647,7 @@ pub fn validate<'a>(sb: &'a mut Sb<Unvalidated>, opts: &Opts, read_offset: u64,
     }
 
     if write {
-        let m = crate::sb::members::sb_member(sb, sb.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
+        let m = members::sb_member(sb, sb.dev_idx.into()).unwrap_or_else(zeroed);
         sb_err_on!(out, m.seq != sb.seq, invalid_sb_members_missing,
                    "Invalid superblock: member seq {} != sb seq {}", m.seq.get(), sb.seq.get())?;
     }
@@ -662,7 +670,7 @@ pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &Opts, read_offset: u64,
 // ── Versions ─────────────────────────────────────────────────────────────
 
 /// The versions this one knows, oldest first, and their names.
-const VERSIONS: &[(&str, u64)] = <MetadataVersion as crate::util::names::Names>::ENTRIES;
+const VERSIONS: &[(&str, u64)] = <MetadataVersion as Names>::ENTRIES;
 
 impl MetadataVersion {
     pub const fn new(major: u32, minor: u32) -> Self {
@@ -686,7 +694,7 @@ impl MetadataVersion {
 
     /// Its name, if it's a version this one knows.
     pub fn name(self) -> Option<&'static str> {
-        crate::util::names::name_of(VERSIONS, self.0.into())
+        names::name_of(VERSIONS, self.0.into())
     }
 
     /// The newest version this one knows of the same major - itself at major
@@ -705,7 +713,7 @@ impl ToText for MetadataVersion {
         prt!(out, "{} ({}.{})", self.name().unwrap_or("(unknown version)"), self.major(), self.minor());
     }
 }
-crate::display_via_to_text!(MetadataVersion);
+display_via_to_text!(MetadataVersion);
 
 impl Fs {
     /// Whether features of @version may be used, without asking:
@@ -733,7 +741,7 @@ impl Fs {
         let minor = version.minor() as usize;
         let requested = &self.incompat_versions_requested;
         if !requested.test(minor) && !requested.test_and_set(minor) {
-            self.log().notice(crate::message!(
+            self.log().notice(message!(
                 "requested incompat feature {} currently not enabled, allowed up to {}\n  set version_upgrade=incompatible to enable",
                 version, self.sb.version_incompat_allowed.get()));
         }
@@ -761,17 +769,17 @@ impl Fs {
             return;
         }
 
-        self.log().notice(crate::message!(
+        self.log().notice(message!(
             "Now allowing incompatible features up to {v}, previously allowed up to {allowed}\n"));
 
         let s = sb.sb_mut();
         s.features.update(|f| f | SbFeatures::ALL);
         s.update_version_incompat_allowed(|a| a.max(v));
 
-        crate::sb::downgrade::set_upgrade_incompat(&mut sb, allowed, v);
+        set_upgrade_incompat(&mut sb, allowed, v);
         self.write_super(&mut sb);
 
-        crate::init::passes::run_async(self);
+        passes::run_async(self);
     }
 }
 
@@ -884,11 +892,11 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &Sb<Unvalidated>, pri
     prt!(out, "\nOptions:\n");
     {
         let mut out = out.indent(2);
-        for opt in crate::opts::OPTS.iter().filter(|o| o.fs_field().is_some()) {
-            let v = crate::opts::opt_from_sb(sb, opt.id, None);
+        for opt in OPTS.iter().filter(|o| o.fs_field().is_some()) {
+            let v = opt_from_sb(sb, opt.id, None);
             write!(out, "{}:\t", opt.name);
-            crate::opts::opt_to_text(&mut out, None, Some(sb), opt, v,
-                                     OptFlags::human_readable.bits() | OPT_SHOW_FULL_LIST);
+            opt_to_text(&mut out, None, Some(sb), opt, v,
+                        OptFlags::human_readable.bits() | OPT_SHOW_FULL_LIST);
             out.newline();
         }
     }
@@ -904,6 +912,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &Sb<Unvalidated>, pri
         field_to_text(out, fs, sb, f);
     }
 }
+
 impl PartialEq for SbHead {
     fn eq(&self, other: &Self) -> bool {
         self.magic.b == other.magic.b
@@ -966,7 +975,6 @@ impl SbHead {
     pub fn nonce(&self) -> Nonce {
         let [a, b, c, d, e, f, g, h, _rest @ ..] = self.uuid.b;
         // nonce.d is __le32: the raw bytes, as they are.
-        use crate::types::Le32;
         let raw = |b| Le32::new(u32::from_le_bytes(b));
         Nonce {
             d: [Le32::new(0), Le32::new(0), raw([a, b, c, d]), raw([e, f, g, h])],
@@ -1040,13 +1048,13 @@ impl bch_sb_buf {
     /// with what it counts: an error if @f changed it, the header left as it
     /// was.
     pub fn edit_header<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, &'static str> {
-        const N: usize = core::mem::size_of::<Head<Sb>>();
+        const N: usize = size_of::<Head<Sb>>();
         let mut h: [u8; N] = self.sb_bytes()[..N].try_into().unwrap();
         let r = f(&mut h);
         if read_past::<Head<Sb>>(&h, 0).u64s() != self.sb().u64s() {
             return Err("u64s is the superblock's count: it changes with the fields it counts");
         }
-        crate::util::vstructs::bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
+        bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
         Ok(r)
     }
 }
@@ -1068,7 +1076,7 @@ const SB_BIO_FITS: &str = "the superblock's buffer, or the scratch, into the bio
 /// @bio, made again if it has fewer bvecs than @buf maps to: apart from the
 /// buffer, so one that failed is made again next time.
 fn bio_fit(bio: &mut SbBio, buf: &[u8]) -> Result<(), BchError> {
-    let nr = crate::os::bio::buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
+    let nr = buf_nr_bvecs(buf.as_ptr().cast_mut(), buf.len());
     if bio.as_ref().is_some_and(|b| usize::from(b.bio().max_vecs()) >= nr) {
         return Ok(());
     }
@@ -1087,26 +1095,25 @@ impl SbIo {
 
     /// Its device, while it has it open: from read_super() till it's freed.
     pub(crate) fn bdev(&self) -> Option<&BlockDevice> {
-        self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev)
+        self.s_bdev_file.as_ref().map(BdevFile::bdev)
     }
 
     /// Room for a superblock of @u64s - 0, the minimum: with a device, at
     /// least its logical block, not past what the superblock's layout allows -
     /// -ENOSPC - and the bio grown to map it.
     fn realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        let Some(bdev) = self.s_bdev_file.as_ref().map(crate::os::blkdev::BdevFile::bdev) else {
+        let Some(bdev) = self.s_bdev_file.as_ref().map(BdevFile::bdev) else {
             return self.buf.reserve(u64s, 0);
         };
 
         let bytes = bytes_for(u64s as usize);
         let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
         if bytes as u64 > max {
-            use crate::util::log::Log;
-            Log::NO_FS.err(crate::message!("{bdev}: superblock too big: want {bytes} but have {max}"));
+            Log::NO_FS.err(message!("{bdev}: superblock too big: want {bytes} but have {max}"));
             return Err(Errcode::ENOSPC_sb.into());
         }
 
-        self.buf.reserve(u64s, crate::os::blkdev::logical_block_size(bdev) as usize)?;
+        self.buf.reserve(u64s, logical_block_size(bdev) as usize)?;
         bio_fit(&mut self.bio, self.buf.buffer())
     }
 
@@ -1114,7 +1121,7 @@ impl SbIo {
     /// two, at least the device's logical block - and the bio grown to map it.
     fn read_buf(&mut self, bytes: usize) -> Result<SbStorage, BchError> {
         let bdev = self.s_bdev_file.as_ref().expect("a superblock read with no device open").bdev();
-        let size = bytes.max(crate::os::blkdev::logical_block_size(bdev) as usize).next_power_of_two();
+        let size = bytes.max(logical_block_size(bdev) as usize).next_power_of_two();
         let buf = SbStorage::try_new_zeroed_slice_gfp(size / size_of::<u64>(), Flags::empty())
             .map_err(|_| BchError::from(Errcode::ENOMEM_sb_buf_realloc))?;
         bio_fit(&mut self.bio, plain_bytes(&buf[..]))?;
@@ -1232,7 +1239,7 @@ impl Sb<Unvalidated> {
     pub fn checksum(&self) -> Csum {
         let ty = self.csum_type();
         assert!(!ty.is_encryption(), "a superblock checksum of encryption type {ty}");
-        crate::data::checksum::csum_vstruct(None, ty, Nonce::default(), self)
+        csum_vstruct(None, ty, Nonce::default(), self)
     }
 }
 
@@ -1274,7 +1281,7 @@ fn read_one_super(io: &mut SbIo, storage: &mut SbStorage, offset: u64,
         // XXX: verify MACs
         let csum = sb.checksum();
         if csum != h.csum {
-            crate::data::checksum::csum_err_msg(err, ty, h.csum, csum);
+            csum_err_msg(err, ty, h.csum, csum);
             return Err(Errcode::invalid_sb_csum.into());
         }
 
@@ -1352,7 +1359,7 @@ fn read_backup_supers(io: &mut SbIo, storage: &mut SbStorage, layout: &SbLayout,
 /// the next superblock write - which reads back slot 0 first, and would take
 /// a torn primary for another writer's.
 fn rewrite_primary_super(sb: &mut SbHandle) -> Result<(), BchError> {
-    let block = crate::os::blkdev::logical_block_size(sb.bdev()) as usize;
+    let block = logical_block_size(sb.bdev()) as usize;
     let io = sb.io_mut();
     let s = io.buf.sb_mut();
     s.offset = s.layout.sb_offset[0];
@@ -1420,7 +1427,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Hold
         let ops = &raw const crate::init::dev::HOLDER_OPS;
         #[cfg(not(kernel))]
         let ops = core::ptr::null();
-        crate::os::blkdev::open_by_path(path, mode, holder.cast(), ops)
+        open_by_path(path, mode, holder.cast(), ops)
     };
 
     let mut file = open(io.mode, io.holder);
@@ -1487,7 +1494,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Hold
 
     let h = head_of(plain_bytes(&storage[..]));
     let block_bytes = u32::from(h.block_size.get()) << 9;
-    let dev_block = crate::os::blkdev::logical_block_size(io.bdev().expect("the device it was read from"));
+    let dev_block = logical_block_size(io.bdev().expect("the device it was read from"));
     if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
             return Err(Errcode::EINTR_sb_read_buffered_instead.into());
@@ -1558,7 +1565,7 @@ pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
     let mut out = Printbuf::new();
     let ret = read_super_to(path, opts, holder, &mut out);
     if !out.as_bytes().is_empty() {
-        let log = crate::util::log::Log::NO_FS;
+        let log = Log::NO_FS;
         if ret.is_err() { log.err(&out) } else { log.notice(&out) }
     }
     ret
@@ -1578,7 +1585,7 @@ pub struct Holder {
 
 impl Holder {
     pub fn new() -> Result<Arc<Holder>, BchError> {
-        Ok(crate::util::alloc::arc_new(Holder { fs: AtomicPtr::new(core::ptr::null_mut()) })?)
+        Ok(arc_new(Holder { fs: AtomicPtr::new(core::ptr::null_mut()) })?)
     }
 }
 
@@ -1940,7 +1947,7 @@ impl SbResize for SbHandle {
 pub struct FsSbResize<'a> {
     fs:      &'a Fs,
     disk_sb: &'a mut FsSb,
-    devs:    members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
+    devs:    members::DevPieces<'a, at!(Fs.sb), field!(disk_sb)>,
 }
 
 impl Fs {
@@ -1996,7 +2003,7 @@ pub struct DevSbMut<'a> {
 impl<'a> DevSbMut<'a> {
     /// @ca's, from the split that hands each device's superblock out once,
     /// and so its scratch: None if it has none, not attached.
-    fn take(fs_sb: &'a Sb, devs: &mut members::DevPieces<'a, crate::at!(Fs.sb), crate::field!(disk_sb)>,
+    fn take(fs_sb: &'a Sb, devs: &mut members::DevPieces<'a, at!(Fs.sb), field!(disk_sb)>,
             ca: &'a Dev)
         -> Option<Self>
     {
@@ -2023,7 +2030,7 @@ impl Fs {
     /// @ca's superblock, to edit: None if it has none, not attached.
     pub fn dev_sb_mut<'a>(&self, sb: &'a mut SbLockGuard<'_>, ca: &'a Dev) -> Option<DevSbMut<'a>> {
         self.dev_sb_check(sb, ca);
-        let (fs_sb, mut devs) = sb.split_devs::<crate::field!(disk_sb)>();
+        let (fs_sb, mut devs) = sb.split_devs::<field!(disk_sb)>();
         DevSbMut::take(fs_sb.sb(), &mut devs, ca)
     }
 }
@@ -2112,7 +2119,7 @@ impl Fs {
             self.dev_sb_check(sb, ca);
         }
 
-        let (fs_sb, mut pieces) = sb.split_devs::<crate::field!(disk_sb)>();
+        let (fs_sb, mut pieces) = sb.split_devs::<field!(disk_sb)>();
         let fs_sb = fs_sb.sb();
         devs.iter().map(move |ca| DevSbMut::take(fs_sb, &mut pieces, ca))
     }
@@ -2174,15 +2181,15 @@ pub const READ_SCRATCH_BUF_SIZE: u32 = 4096;
 /// ca->sb_read_scratch: read into by the write's own bio, so aligned as
 /// kmalloc() aligns its size - what O_DIRECT, in userspace, needs.
 #[repr(C, align(4096))]
-#[derive(::pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct SbReadScratch {
     buf: core::cell::UnsafeCell<[u8; READ_SCRATCH_BUF_SIZE as usize]>,
 }
 
 impl SbReadScratch {
     /// Zeroed in place: 4096 bytes aren't built on the stack.
-    pub fn new() -> impl ::pin_init::Init<Self, crate::util::alloc::AllocError> {
-        ::pin_init::init!(Self { ..Zeroable::init_zeroed() }? crate::util::alloc::AllocError)
+    pub fn new() -> impl Init<Self, AllocError> {
+        init!(Self { ..Zeroable::init_zeroed() }? AllocError)
     }
 }
 
@@ -2207,7 +2214,7 @@ impl DevSbMut<'_> {
         let csum = self.io.buf.sb().as_unvalidated().checksum();
         self.io.buf.sb_mut().csum = csum;
 
-        let block = crate::os::blkdev::logical_block_size(self.io.bdev().expect("an attached device's superblock, with no device open")) as usize;
+        let block = logical_block_size(self.io.bdev().expect("an attached device's superblock, with no device open")) as usize;
         (sector, self.io.buf.sb_bytes().len().next_multiple_of(block))
     }
 }
@@ -2220,7 +2227,7 @@ fn sb_io_result(fs: &Fs, ca: &Dev, rw: MemberErrorType, ret: Result<(), BchError
     match ret {
         Ok(()) => {
             if rw == MemberErrorType::write {
-                ca.write_errors_start.store(0, core::sync::atomic::Ordering::Relaxed);
+                ca.write_errors_start.store(0, Relaxed);
             }
             Ok(())
         }
@@ -2256,9 +2263,8 @@ struct Copies {
 #[track_caller]
 fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>,
                       flags: SbWriteFlags) -> Result<(), BchError> {
-    use crate::fs::FsFlag as f;
 
-    if !fs.flags.get(f::may_upgrade_downgrade) {
+    if !fs.flags.get(FsFlag::may_upgrade_downgrade) {
         return Ok(());
     }
 
@@ -2268,13 +2274,13 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>
     // start is either part of bringing the filesystem up (as recovery's own
     // are), or from an open that said it will never start, which skips
     // those decisions:
-    if !fs.flags.get(f::start_begun) &&
+    if !fs.flags.get(FsFlag::start_begun) &&
        fs.opts().will_not_start.get() == 0 &&
        !flags.contains(SbWriteFlags::bringup) {
         return fs.throw(Errcode::erofs_sb_write_before_start);
     }
 
-    fs.event_inc_trace(crate::debug::trace::events::write_super, |_| {});
+    fs.event_inc_trace(events::write_super, |_| {});
 
     // Note: we do writes to RO devices here, and we might want to change that
     // in the future. For now, we expect to be able to call write_super() when
@@ -2285,7 +2291,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>
             continue;
         }
         if cas.push(ca).is_err() {
-            crate::fs_fatal_error!(fs, "error allocating online devices");
+            fs_fatal_error!(fs, "error allocating online devices");
             return fs.throw(Errcode::ENOMEM_write_super_devs);
         }
     }
@@ -2295,7 +2301,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>
     for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
         let mut err = Printbuf::new();
         if dev_sb.validate_write(&mut err).is_err() {
-            crate::fs_inconsistent!(fs, "sb invalid before write: {err}");
+            fs_inconsistent!(fs, "sb invalid before write: {err}");
             return Ok(());
         }
     }
@@ -2314,15 +2320,15 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>
         if fs.opts().will_not_start.get() == 0 {
             return Ok(());
         }
-        fs.log().err(crate::message!(
+        fs.log().err(message!(
             "filesystem has never been started, not writing superblock: mount it once first"));
         return fs.throw(Errcode::erofs_sb_never_started);
     }
 
     let version = sb.sb().version.get();
     if version > MetadataVersion::CURRENT {
-        crate::fs_fatal_error!(fs, ": attempting to write superblock that wasn't version downgraded ({} > {})",
-                               version, MetadataVersion::CURRENT);
+        fs_fatal_error!(fs, ": attempting to write superblock that wasn't version downgraded ({} > {})",
+                        version, MetadataVersion::CURRENT);
         return fs.throw(Errcode::sb_not_downgraded);
     }
 
@@ -2335,13 +2341,11 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>
 /// clean, its seq - and its members' - the time and flags, each section's
 /// from_cpu(), and each device's copy synced from it.
 fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), BchError> {
-    use crate::fs::FsFlag as f;
-    use crate::sb::members::SbMembersMut;
 
     if sb.sb().has_journal() {
-        crate::sb::clean::fs_mark_dirty(sb);
+        fs_mark_dirty(sb);
     } else {
-        crate::sb::clean::fs_mark_clean(fs, sb);
+        fs_mark_clean(fs, sb);
     }
 
     // Make sure we're using the new magic numbers:
@@ -2355,11 +2359,11 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(
     }
 
     let s = sb.sb_mut();
-    s.write_time = Le64::new(crate::os::kernel::ktime_get_real_seconds() as u64);
-    if fs.flags.get(f::error) {
+    s.write_time = Le64::new(ktime_get_real_seconds() as u64);
+    if fs.flags.get(FsFlag::error) {
         s.set_has_errors(true);
     }
-    if fs.flags.get(f::topology_error) {
+    if fs.flags.get(FsFlag::topology_error) {
         s.set_has_topology_errors(true);
     }
     s.set_big_endian(cfg!(target_endian = "big"));
@@ -2391,16 +2395,14 @@ fn dev_sbs<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, cas: &'a WriteDevs) -> Resu
 /// fix_safe, which only say so - or another writer's, and the filesystem
 /// goes read-only.
 fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), BchError> {
-    const READ: MemberErrorType = MemberErrorType::read;
-
     let mut sbs = dev_sbs(fs, sb, cas)?;
     {
-        pin_init::stack_pin_init!(let gather = Gather::new());
+        stack_pin_init!(let gather = Gather::new());
         let mut ios = SbIos::new(&gather);
         for dev_sb in sbs.iter_mut() {
             let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
             dev_sb.scratch.fill(0);
-            dev_sb.ca.io_done_add(crate::os::kernel::READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
+            dev_sb.ca.io_done_add(READ, DataType::sb, (dev_sb.scratch.len() >> 9) as u64);
             ios.read(dev_sb, sector);
         }
         ios.wait();
@@ -2408,7 +2410,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 
     for dev_sb in sbs.iter() {
         let ca = dev_sb.ca;
-        if sb_io_result(fs, ca, READ, dev_sb.io_result()).is_err() {
+        if sb_io_result(fs, ca, MemberErrorType::read, dev_sb.io_result()).is_err() {
             continue;
         }
 
@@ -2437,8 +2439,6 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
 /// Each layout slot's copy to every device that has one, a slot at a time,
 /// each round waited on before the next.
 fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Copies, BchError> {
-    const WRITE: MemberErrorType = MemberErrorType::write;
-
     let mut copies = Copies { written: Default::default(), failed: Vec::new(), any_failed: false };
     let mut sbs = dev_sbs(fs, sb, cas)?;
 
@@ -2446,11 +2446,11 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
         let in_slot = |dev_sb: &DevSbMut<'_>| idx < usize::from(dev_sb.io.buf.sb().layout.nr_superblocks);
         let mut wrote = false;
         {
-            pin_init::stack_pin_init!(let gather = Gather::new());
+            stack_pin_init!(let gather = Gather::new());
             let mut ios = SbIos::new(&gather);
             for dev_sb in sbs.iter_mut().filter(|s| in_slot(s)) {
                 let (sector, bytes) = dev_sb.copy_for(fs, idx);
-                dev_sb.ca.io_done_add(crate::os::kernel::WRITE, DataType::sb, (bytes >> 9) as u64);
+                dev_sb.ca.io_done_add(WRITE, DataType::sb, (bytes >> 9) as u64);
                 ios.write(dev_sb, sector, bytes);
                 wrote = true;
             }
@@ -2459,7 +2459,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
 
         for dev_sb in sbs.iter_mut().filter(|s| in_slot(s)) {
             let ca = dev_sb.ca;
-            match sb_io_result(fs, ca, WRITE, dev_sb.io_result()) {
+            match sb_io_result(fs, ca, MemberErrorType::write, dev_sb.io_result()) {
                 Ok(()) => {
                     copies.written.set(ca.dev_idx.into());
                     dev_sb.io.seq = dev_sb.io.buf.sb().seq.get();
@@ -2486,7 +2486,6 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
 #[track_caller]
 fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &WriteDevs,
                 copies: &Copies) -> Result<(), BchError> {
-
     let mut degraded_flags = ForceIf::DEGRADED;
     if fs.opts().degraded() == DegradedAction::very {
         degraded_flags |= ForceIf::LOST;
@@ -2518,7 +2517,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
     // ratelimit it. A fatal failure goes emergency read-only below and always
     // prints.
     if !fatal {
-        static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();
+        static RATELIMIT: Ratelimit = Ratelimit::new();
         msg.ratelimit(&RATELIMIT);
     }
 
@@ -2532,7 +2531,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
     for ca in cas.iter() {
         let dev = u32::from(ca.dev_idx);
         sb_unwritten.clear(dev as usize);
-        crate::sb::members::dev_to_text_short(&mut msg, sb.sb(), dev);
+        members::dev_to_text_short(&mut msg, sb.sb(), dev);
 
         let mut failed = copies.failed.iter().filter(|f| f.dev == dev).peekable();
         if failed.peek().is_none() {
@@ -2554,7 +2553,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
     // skipped, not devices that went away - don't call them offline.
     prt!(msg, "{}", if devs.is_some() { "Not written:\n" } else { "Offline devices:\n" });
     msg.indent_add(2);
-    crate::sb::members::devs_mask_to_text(&mut msg, fs, sb.sb(), &sb_unwritten);
+    members::devs_mask_to_text(&mut msg, fs, sb.sb(), &sb_unwritten);
     msg.indent_sub(2);
 
     if fatal {
@@ -2776,7 +2775,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     match handle.field::<SbFieldExt<Validated>>() {
         Some(e) => {
             cpu.recovery_passes_required.set(
-                crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get()));
+                passes_from_stable(e.recovery_passes_required[0].get()));
 
             // the section's little-endian words as longs: le_bitvector_to_cpu()
             const _: () = assert!(size_of::<[usize; bits_to_longs(SbErrorId::NR as usize)]>()
@@ -2868,7 +2867,7 @@ pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &Sb) -> Result<(), BchEr
     let _ = make::<SbFieldErrorsV2>(&mut disk_sb);
     let _ = make::<SbFieldDowngrade>(&mut disk_sb);
     if make::<SbFieldExtentTypeU64s>(&mut disk_sb).is_err() {
-        fs.log().err(crate::message!("error allocating superblock space for extent_type_u64s"));
+        fs.log().err(message!("error allocating superblock space for extent_type_u64s"));
         return fs.throw(Errcode::ENOSPC_sb_extent_type_u64s);
     }
     // nothing to read back after the first write: init reads every section
@@ -2911,16 +2910,16 @@ impl<S: State> SbBuf<S> {
     /// @b, in a buffer of its own.
     fn copied(b: &[u8]) -> Self {
         let mut buf = vec![0u64; b.len().div_ceil(size_of::<u64>())];
-        crate::util::vstructs::plain_bytes_mut(&mut buf[..])[..b.len()].copy_from_slice(b);
+        plain_bytes_mut(&mut buf[..])[..b.len()].copy_from_slice(b);
         SbBuf { buf, _state: core::marker::PhantomData }
     }
 
     fn raw(&self) -> &[u8] {
-        crate::util::vstructs::plain_bytes(&self.buf[..])
+        plain_bytes(&self.buf[..])
     }
 
     fn raw_mut(&mut self) -> &mut [u8] {
-        crate::util::vstructs::plain_bytes_mut(&mut self.buf[..])
+        plain_bytes_mut(&mut self.buf[..])
     }
 }
 
@@ -2984,19 +2983,19 @@ pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut SbHandle, flags: Va
 
 #[cfg(test)]
 mod tests {
-    use super::SbResize;
-    use super::{sb_field_u64s, validate_section};
+    use super::{field_get_id, sb_field_u64s, validate_section, SbField, SbResize};
     use crate::btree::bkey::ValidateFlags;
-    use crate::errcode::Errcode;
-    use crate::format::{bch_sb_field, SbFieldClean, SbFieldCrypt, SbFieldExt,
-        BchSbFieldRef, SbFieldType};
+    use crate::data_structures::dst_room::DstRoom;
+    use crate::errcode::{ret_to_c, Errcode};
+    use crate::format::{bch_sb_field, BchSbFieldRef, SbFieldClean, SbFieldCrypt, SbFieldExt,
+        SbFieldType};
     use crate::init::dev::SbHandle;
     use crate::posix::quota_format::SbFieldQuota;
     use crate::sb::counters_format::SbFieldCounters;
-    use crate::sb::errors_format::{SbFieldErrorsV2, SbErrorId};
+    use crate::sb::errors_format::{SbErrorId, SbFieldErrorsV2};
     use crate::types::Le32;
-    use crate::data_structures::dst_room::DstRoom;
-    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated, Validated, VStructError};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes, plain_bytes_mut, Head, Unvalidated,
+        VStructError, Validated};
     use crate::util::Printbuf;
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
@@ -3030,19 +3029,17 @@ mod tests {
     /// - against its whole size, or a grown type's floor - and isn't printed.
     #[test]
     fn sb_field_ops_short_section() {
-        use crate::util::Printbuf;
-
-        fn short<F: super::SbField + ?Sized>(ty: SbFieldType, u64s: usize) -> String {
+        fn short<F: SbField + ?Sized>(ty: SbFieldType, u64s: usize) -> String {
             let mut sb = SbHandle::default();
             sb.sb_realloc(0).unwrap();
             sb.field_resize_id(ty, u64s as u32).unwrap();
 
             let mut err = Printbuf::new();
             let ret = validate_section::<F>(&mut sb, ValidateFlags::empty(), &mut err);
-            assert_eq!(crate::errcode::ret_to_c(ret), -(Errcode::invalid_sb_field_size.0 as i32));
+            assert_eq!(ret_to_c(ret), -(Errcode::invalid_sb_field_size.0 as i32));
 
             let mut out = Printbuf::new();
-            super::field_get_id(sb.sb(), ty).unwrap().as_unvalidated()
+            field_get_id(sb.sb(), ty).unwrap().as_unvalidated()
                 .to_text(&mut out, None, sb.sb().as_unvalidated());
             assert_eq!(out.as_str(), "");
             err.as_str().to_owned()
@@ -3113,7 +3110,7 @@ mod tests {
         let Ok(BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
         assert_eq!(clean.entries().count(), 1);
 
-        let b = crate::util::vstructs::plain_bytes(&buf[..]);
+        let b = plain_bytes(&buf[..]);
         let f = bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
         let Ok(BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
         let es: Vec<_> = clean.entries().collect();
@@ -3161,7 +3158,7 @@ mod tests {
         assert!(sb.field::<E>().is_none());
 
         let mut err = Printbuf::new();
-        let ret = crate::errcode::ret_to_c(validate_section::<E>(&mut sb, flags, &mut err));
+        let ret = ret_to_c(validate_section::<E>(&mut sb, flags, &mut err));
         (sb, ret, err)
     }
 

@@ -1,16 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! BkeyP, a key as a btree node holds it: mod.rs has how it fits with the
 //! other forms.
 
 use core::cmp::Ordering;
 use core::marker::PhantomData;
-
-use super::{AnyKey, BkeySC, BKEY_U64S};
+use crate::btree::bkey::{types::{cast_unsized, cast_unsized_mut}, AnyKey, BKEY_U64S, BkeySC};
 use crate::btree::node::NodeContents;
-use crate::format::{Bpos, BkeyType, Bkey, BkeyFormat, BkeyFormatBits, BkeyPacked,
+use crate::format::{Bkey, BkeyFormat, BkeyFormatBits, BkeyPacked, BkeyType, Bpos,
     KEY_FORMAT_CURRENT};
 use crate::os::kernel::likely;
-use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, State, Unsized,
-                            Unvalidated};
+use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut,
+    State, Unsized, Unvalidated};
 use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain};
 
 /// A key as a node holds it, in state S: its header, then the rest of its
@@ -222,7 +223,6 @@ impl BkeyP {
             val:  PhantomData,
         }
     }
-
 }
 
 impl NodeContents {
@@ -294,7 +294,7 @@ impl<'a, S: State> TryFrom<&'a BkeyP<S>> for &'a AnyKey<S> {
         if !k.is_bkey_i() {
             return Err(k);
         }
-        Ok(unsafe { &*super::types::cast_unsized(core::ptr::from_ref(k).cast()) })
+        Ok(unsafe { &*cast_unsized(core::ptr::from_ref(k).cast()) })
     }
 }
 
@@ -305,7 +305,7 @@ impl<'a, S: State> TryFrom<&'a mut BkeyP<S>> for &'a mut AnyKey<S> {
         if !k.is_bkey_i() {
             return Err(k);
         }
-        Ok(unsafe { &mut *super::types::cast_unsized_mut(core::ptr::from_mut(k).cast()) })
+        Ok(unsafe { &mut *cast_unsized_mut(core::ptr::from_mut(k).cast()) })
     }
 }
 

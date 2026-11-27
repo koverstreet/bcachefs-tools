@@ -1,35 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::prelude::*;
-use crate::alloc::{capacity::DiskReservation, buckets::ReservationFlags};
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
-use crate::btree::bkey_buf::BkeyBuf;
-use crate::data_structures::dst_room::DstRoom;
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef,
-    CommitFlags, TransAttempt, UpdateTriggerFlags,
-};
-use crate::data::{ec::open::OpenStripe, ptrs::{ExtentEntry, ExtentEntryMut, Ptrs}};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::os::kernel::{local_clock, random_u64_below};
-use crate::util::par::{self, Backend};
-use crate::prt;
-use crate::util::printbuf::{HumanReadable, Printbuf};
-use crate::c;
-use crate::sb::members_format::MEMBER_INVALID;
-
-use crate::util::{alloc::{kbox_pin_init, KBox, Vec}, place::{Container, PlacedInit}};
+#[cfg(not(kernel))]
+use bcachefs_shim as kernel;
 use core::ops::ControlFlow;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
+use crate::alloc::{buckets::ReservationFlags, capacity::DiskReservation};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags,
+    TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::c;
+use crate::data::{ec::open::OpenStripe, ptrs::{ExtentEntry, ExtentEntryMut, Ptrs}};
+use crate::data_structures::dst_room::DstRoom;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, BkeyType, Btree, Cookie};
+use crate::fs::Fs;
+use crate::os::kernel::{local_clock, random_u64_below};
+use crate::prt;
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::snapshots::snapshot::node_create;
+use crate::util::par::{self, Backend};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
+use crate::util::{alloc::{kbox_pin_init, KBox, Vec}, place::{Container, PlacedInit}, HumanReadable,
+    Printbuf};
 use cstruct_macros::{placed, Init};
 use pin_init::{pin_data, pinned_drop};
-
-#[cfg(not(kernel))]
-use bcachefs_shim as kernel;
-use crate::format::{Btree, BkeyType, Bkey, Cookie};
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 mod cuckoo;
@@ -85,7 +82,7 @@ fn insert_cookie(fs: &Fs, btree: Btree, k: &mut BkeyI<Cookie>) -> TestRet {
 
 fn trans_cookie_alloc<'a, 't>(
     t: &TransAttempt<'a, 't>,
-) -> Result<crate::btree::iter::TransBkey<'a, 't, Cookie>, BchError> {
+) -> Result<TransBkey<'a, 't, Cookie>, BchError> {
     t.bkey_alloc_typed::<Cookie>()
 }
 
@@ -729,7 +726,7 @@ fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
     let snapid_subvols = [1u32, 1u32];
 
     fs.trans_commit_do(None, NO_ENOSPC, |t| {
-        crate::snapshots::snapshot::node_create(t, u32::MAX, &mut snapids, &snapid_subvols)
+        node_create(t, u32::MAX, &mut snapids, &snapid_subvols)
     })?;
 
     if snapids[0] > snapids[1] {

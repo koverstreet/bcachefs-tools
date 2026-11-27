@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::key_buf;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{bkey_val_to_text, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::btree::journal_overlay::peek_max;
+use crate::btree::key_cache::{key_buf, BKEY_CACHED_ACCESSED, BKEY_CACHED_IMMEDIATE_FLUSH,
+    BkeyCached, BkeyCachedKey};
 use crate::btree::locking::BtreeNodeLockedType::BTREE_NODE_UNLOCKED;
 use crate::btree::path::{NodePtr, PathIdx, Paths};
 use crate::btree::trans::BtreeTrans;
 use crate::c;
-use crate::btree::key_cache::{BkeyCached, BKEY_CACHED_ACCESSED, BKEY_CACHED_IMMEDIATE_FLUSH,
-    BkeyCachedKey};
 use crate::data_structures::cuckoo::Entry;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::locking::{six::SixHold, MemallocFlags, six::SixLockType::SIX_LOCK_read};
+use crate::errcode::{BchError, Errcode};
+use crate::locking::{six::{SixHold, SixLockType::SIX_LOCK_read}, MemallocFlags};
 use crate::prt;
-use core::ptr::NonNull;
-use core::sync::atomic::Ordering::Relaxed;
 
 impl BtreeTrans<'_> {
     fn btree_path_cached_set(&self, paths: &mut Paths<'_>, idx: PathIdx, ck: &BkeyCached, held: SixHold<'_>) {

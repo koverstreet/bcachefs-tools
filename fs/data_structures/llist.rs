@@ -9,11 +9,10 @@
 //!
 //! The node is a field of the item, named: llist!(P, field).
 
-use crate::util::place::Field;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
-use core::sync::atomic::AtomicPtr;
-use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Relaxed, Release}};
+use crate::util::place::Field;
 
 /// An item's link, while it's on an Llist.
 #[repr(transparent)]

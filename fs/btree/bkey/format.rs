@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! bkey_format, how a btree node packs its keys, and BkeyFormatState, the
 //! builder that picks one to fit the keys a node will hold.
 
-use super::BKEY_U64S;
+use crate::btree::bkey::BKEY_U64S;
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::errcode::BchError;
-use crate::format::{BkeyField::{self, *}, BkeyFormat, Bpos, Bkey, KEY_PACKED_BITS_START};
+use crate::format::{Bkey, BkeyField::{self, *}, BkeyFormat, Bpos, KEY_PACKED_BITS_START};
 use crate::sb_err_on;
 use crate::types::{field_size, Le64};
 use crate::util::{Printbuf, ToText};

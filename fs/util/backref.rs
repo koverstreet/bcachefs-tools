@@ -31,6 +31,7 @@
 
 use core::ops::Deref;
 use core::ptr::NonNull;
+use pin_init::ZeroableOption;
 
 /// A pointer, to C: repr(transparent), for a field C reads as T *.
 #[repr(transparent)]
@@ -66,7 +67,7 @@ impl<T: ?Sized> Deref for BackRef<T> {
 }
 
 // None is a null NonNull: all zeroes
-unsafe impl<T> ::pin_init::ZeroableOption for BackRef<T> {}
+unsafe impl<T> ZeroableOption for BackRef<T> {}
 
 // SAFETY: a &T for as long as it lives, by new()'s contract - and a &T is
 // Send and Sync when T is Sync

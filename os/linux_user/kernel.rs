@@ -2,6 +2,7 @@
 
 #[path = "../kernel.rs"]
 mod common;
+pub use bcachefs_shim::sync::SetOnce;
 pub use common::*;
 
 use rustix::time::{clock_gettime, ClockId, Timespec};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #![allow(non_camel_case_types)]
 
 pub mod async_ops;
@@ -40,32 +42,39 @@ pub use iter::BtreeIter;
 pub use iter::BtreeNodeIter;
 pub use iter::BtreeTrans;
 pub use iter::BtreeIterFlags;
-use crate::btree::{node_scan::NodeScan, node::sort::SortRun};
-use crate::new_lock;
-use crate::errcode::BchError;
-use crate::format::{BkeyType, Btree, BtreeFlags, btree_node};
-use crate::fs::Fs;
-use crate::os::workqueue::{Workqueue, WqFlags};
-use crate::util::{alloc::Vec, mempool::Mempool, ratelimit::Ratelimit, late::Late};
-use cstruct_macros::{bch_enum, Init, Late, MaybeZeroable, placed, TypeInfo};
-use pin_init::{pin_data, PinInit};
-#[cfg(kernel)]
-use kernel::sync::SetOnce;
-#[cfg(not(kernel))]
-use bcachefs_shim::sync::SetOnce;
-#[cfg(feature = "std")]
-use std::str::FromStr;
-#[cfg(feature = "std")]
-use crate::errcode::Errcode;
-use crate::btree::cache::{FsBtreeCache, BtreeEvictedSize};
+
+use crate::btree::async_ops::AsyncOps;
+use crate::btree::cache::{bounce_bufs, BounceBufs, BtreeEvictedSize, FsBtreeCache};
 use crate::btree::interior::{FsBtreeInteriorUpdates, FsBtreeReserveCache};
 use crate::btree::key_cache::FsBtreeKeyCache;
+use crate::btree::node::sort::SortRun;
 use crate::btree::node::BtreeWriteType;
+use crate::btree::node_scan::NodeScan;
 use crate::btree::trans::FsBtreeTrans;
 use crate::btree::write::BtreeWriteStats;
 use crate::btree::write_buffer::{FsBtreeWriteBuffer, WbBtree};
+use crate::errcode::BchError;
+#[cfg(feature = "std")]
+use crate::errcode::Errcode;
+use crate::format::{btree_node, BkeyType, Btree, BtreeFlags};
+use crate::fs::Fs;
 use crate::journal::journal::JournalEntryRes;
+use crate::new_lock;
 use crate::opts::Opts;
+use crate::os::kernel::SetOnce;
+use crate::os::workqueue::{Workqueue, WqFlags};
+use crate::util::alloc::Vec;
+use crate::util::futex::EventCount;
+use crate::util::late::Late;
+use crate::util::mempool::Mempool;
+#[cfg(feature = "std")]
+use crate::util::names::{value_of, Names};
+use crate::util::ratelimit::Ratelimit;
+use crate::util::vstructs::Head;
+use cstruct_macros::{bch_enum, placed, Init, Late, MaybeZeroable, TypeInfo};
+use pin_init::{pin_data, PinInit};
+#[cfg(feature = "std")]
+use std::str::FromStr;
 
 #[placed(Fs.btree)]
 #[pin_data]
@@ -77,8 +86,8 @@ pub struct FsBtree {
     pub foreground_merge_threshold: u16,
 
     #[pin]
-    #[init(Mempool::new_in(crate::btree::cache::bounce_bufs(), 1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
-    pub bounce_pool: Mempool<crate::btree::cache::BounceBufs>,
+    #[init(Mempool::new_in(bounce_bufs(), 1, opts.btree_node_size as usize), ENOMEM_fs_other_alloc)]
+    pub bounce_pool: Mempool<BounceBufs>,
 
     pub write_stats: [BtreeWriteStats; BtreeWriteType::NR as usize],
 
@@ -144,7 +153,7 @@ pub struct FsBtree {
      * their target seq. Waked from the flush worker after drain and from
      * journal_keys_to_write_buffer_end after pin drops.
      */
-    pub write_buffer_flush_wait: crate::util::futex::EventCount,
+    pub write_buffer_flush_wait: EventCount,
     #[pin]
     pub trans: FsBtreeTrans,
     #[pin]
@@ -154,9 +163,9 @@ pub struct FsBtree {
     #[late]
     pub interior_updates: FsBtreeInteriorUpdates,
     #[pin]
-    #[init(crate::btree::async_ops::AsyncOps::init())]
+    #[init(AsyncOps::init())]
     #[late]
-    pub(crate) async_ops: crate::btree::async_ops::AsyncOps,
+    pub(crate) async_ops: AsyncOps,
     #[pin]
     #[init(new_lock!(Vec::new()))]
     pub(crate) node_scan: NodeScan,
@@ -164,7 +173,7 @@ pub struct FsBtree {
 
 /// What a node of @btree_node_size bytes has room for, past its header.
 pub fn btree_max_u64s(btree_node_size: u32) -> usize {
-    (btree_node_size as usize - size_of::<crate::util::vstructs::Head<btree_node>>()) / size_of::<u64>()
+    (btree_node_size as usize - size_of::<Head<btree_node>>()) / size_of::<u64>()
 }
 
 fn fill_iter_pool(opts: &Opts) -> impl PinInit<Mempool, BchError> {
@@ -194,9 +203,7 @@ impl Btree {
             _              => self.0 as u8,
         }
     }
-}
 
-impl Btree {
     /// The key types it may hold, a bit each - deleted, which every btree
     /// may, and its own. 0 for a btree this code
     /// doesn't know.
@@ -242,7 +249,7 @@ impl FromStr for Btree {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        <Btree as crate::util::names::Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
+        <Btree as Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
             .and_then(|&(_, v)| Btree::from_raw(v as u32))
             .ok_or(Errcode::EINVAL_parse_btree_id.into())
     }
@@ -253,7 +260,7 @@ impl FromStr for BkeyType {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::util::names::value_of(<Self as crate::util::names::Names>::ENTRIES, s)
+        value_of(<Self as Names>::ENTRIES, s)
             .map(|v| BkeyType(v as u32))
             .ok_or_else(|| Errcode::EINVAL_parse_bkey_type.into())
     }

@@ -16,15 +16,14 @@
 //! six's wait list and multimap's vals free what they've grown out of under a
 //! spinlock, where a kvfree_rcu() with no head to queue may sleep.
 
-use crate::data_structures::array_vec::LenUint;
-use crate::os::alloc::Global;
-use crate::util::alloc::{flags, with_alloc_layout, Alloc, AllocError, AllocGfp, Flags};
 use core::alloc::Layout;
+use core::ptr::{self, NonNull};
+use crate::data_structures::array_vec::LenUint;
+use crate::util::alloc::{flags, with_alloc_layout, Alloc, AllocError, AllocGfp, Flags, Global};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
 use crate::util::rcu::HasRcuHead;
 use crate::util::thin::ThinBox;
 use crate::util::vstructs::{align_max, DstHead, FlexArray, SelfSized, VStructError};
-use core::ptr::{self, NonNull};
 use zerocopy::FromZeros;
 
 /// The count is its own, after the header: written only as it's made, so

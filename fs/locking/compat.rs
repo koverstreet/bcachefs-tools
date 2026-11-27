@@ -3,8 +3,7 @@
 //! What exists because C owns the lock - to go as the C does: a C struct's
 //! lock borrowed as a Locked.
 
-use super::{Locked, RawLockBase};
-use core::mem::{align_of, size_of};
+use crate::locking::{Locked, RawLockBase};
 
 impl<R: RawLockBase> Locked<R> {
     /// A lock in a C struct - C's to initialize and free - as a Locked over

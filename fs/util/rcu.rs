@@ -39,20 +39,21 @@
 //!   and FromBytes to grow, copied bytewise. Its writer is an RcuArrayWriter.
 
 use core::marker::PhantomData;
-use core::mem::size_of;
-use core::ptr::NonNull;
+use core::mem::ManuallyDrop;
 use core::ops::Deref;
+use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, Ordering};
-use zerocopy::{FromBytes, FromZeros};
-
 use crate::c::rcu_head;
 use crate::data_structures::dst_array::DstArray;
-use crate::util::alloc::AllocError;
-use crate::util::vstructs::NonZeroWord;
+use crate::os::workqueue::RawWork;
+use crate::util::alloc::{init_at, AllocError};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
-use crate::util::thin::ThinBox;
 use crate::util::projections::{Publish, Volatile};
 use crate::util::refcount::{ARef, AlwaysRefCounted};
+use crate::util::thin::ThinBox;
+use crate::util::vstructs::NonZeroWord;
+use pin_init::{pin_init_from_closure, PinInit, Zeroable};
+use zerocopy::{FromBytes, FromZeros};
 
 // ── Reading, and grace periods ───────────────────────────────────────────
 
@@ -132,24 +133,22 @@ pub use crate::os::rcu::RcuHead;
 /// memory is the head once it's done: a task's.
 #[repr(C)]
 pub union RcuWorkHead {
-    rcu:  core::mem::ManuallyDrop<RcuHead>,
-    work: core::mem::ManuallyDrop<crate::os::workqueue::RawWork>,
+    rcu:  ManuallyDrop<RcuHead>,
+    work: ManuallyDrop<RawWork>,
 }
 
 impl RcuWorkHead {
     /// The work @init makes: what it is till its free.
-    pub fn new_work<E>(init: impl ::pin_init::PinInit<crate::os::workqueue::RawWork, E>)
-        -> impl ::pin_init::PinInit<Self, E>
-    {
+    pub fn new_work<E>(init: impl PinInit<RawWork, E>) -> impl PinInit<Self, E> {
         unsafe {
-            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                crate::util::alloc::init_at(init, (&raw mut (*slot).work).cast())
+            pin_init_from_closure(move |slot: *mut Self| {
+                init_at(init, (&raw mut (*slot).work).cast())
             })
         }
     }
 
     /// The work new_work() made.
-    pub fn work(&self) -> &crate::os::workqueue::RawWork {
+    pub fn work(&self) -> &RawWork {
         unsafe { &self.work }
     }
 }
@@ -209,7 +208,7 @@ impl HasRcuHead for RcuDropWorkMember<RcuWorkHead> {
     const HEAD: usize = 0;
     const WORK: bool = true;
 }
-impl<T: HasRcuHead> HasRcuHead for core::mem::ManuallyDrop<T> {
+impl<T: HasRcuHead> HasRcuHead for ManuallyDrop<T> {
     const HEAD: usize = T::HEAD;
     const WORK: bool = T::WORK;
 }
@@ -312,7 +311,7 @@ impl<T: ?Sized> NoDetach<T> {
 #[repr(transparent)]
 pub struct RcuPtr<P: Deref + NonZeroWord>(Volatile<Option<P>>);
 
-unsafe impl<P: Deref + NonZeroWord> ::pin_init::Zeroable for RcuPtr<P> {}
+unsafe impl<P: Deref + NonZeroWord> Zeroable for RcuPtr<P> {}
 
 impl<P: Deref + NonZeroWord> RcuPtr<P> {
     /// Loaded relaxed, as rcu_dereference() is: its target is ordered after
@@ -436,7 +435,7 @@ pub type RcuArrayBox<T, H = ()> = ThinBox<RcuArrayBuf<T, H>>;
 #[repr(transparent)]
 pub struct RcuArray<T: Sync, H: Sync = ()>(RcuPtr<RcuArrayBox<T, H>>);
 
-unsafe impl<T: Sync, H: Sync> ::pin_init::Zeroable for RcuArray<T, H> {}
+unsafe impl<T: Sync, H: Sync> Zeroable for RcuArray<T, H> {}
 
 impl<T: Sync, H: Sync> RcuArray<T, H> {
     /// None published reads as none.

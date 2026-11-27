@@ -26,8 +26,12 @@
 
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicUsize, Ordering};
-
+use crate::prt;
 use crate::types::Le64;
+use crate::util::projections::{Publish, TearSafe};
+use crate::util::vstructs::Plain;
+use crate::util::{Printbuf, ToText};
+use pin_init::Zeroable;
 
 const BITS: usize = usize::BITS as usize;
 
@@ -193,13 +197,13 @@ impl Eq for Bitmap {}
 #[derive(Clone, Copy, PartialEq, Eq, zerocopy_derive::FromZeros)]
 pub struct BitArray<const W: usize>([usize; W]);
 
-impl<const W: usize> crate::util::projections::TearSafe for BitArray<W> {}
+impl<const W: usize> TearSafe for BitArray<W> {}
 
 // SAFETY: integers; all zeroes is empty
-unsafe impl<const W: usize> ::pin_init::Zeroable for BitArray<W> {}
+unsafe impl<const W: usize> Zeroable for BitArray<W> {}
 
 // SAFETY: words, unpadded; any bits are a set
-unsafe impl<const W: usize> crate::util::vstructs::Plain for BitArray<W> {}
+unsafe impl<const W: usize> Plain for BitArray<W> {}
 
 impl<const W: usize> Default for BitArray<W> {
     fn default() -> Self {
@@ -328,10 +332,10 @@ impl<const W: usize> AtomicBitArray<W> {
 }
 
 // SAFETY: atomic integers; all zeroes is empty
-unsafe impl<const W: usize> ::pin_init::Zeroable for AtomicBitArray<W> {}
+unsafe impl<const W: usize> Zeroable for AtomicBitArray<W> {}
 
 // its writes are atomic, so its writer is itself
-impl<const W: usize> crate::util::projections::Publish for AtomicBitArray<W> {
+impl<const W: usize> Publish for AtomicBitArray<W> {
     type Writer = Self;
 }
 
@@ -354,7 +358,7 @@ impl<const W: usize> Deref for AtomicBitArray<W> {
 /// A #[closed] enum as bit numbers - set_bit()'s, as BCH_FS_FLAGS are - and
 /// the words a set of it takes: #[bch_enum]'s, from the enum's values.
 pub trait BitEnum: Copy {
-    type Words: Deref<Target = AtomicBitmap> + ::pin_init::Zeroable;
+    type Words: Deref<Target = AtomicBitmap> + Zeroable;
 
     fn bit(self) -> usize;
     /// None for a bit that's no variant's
@@ -366,7 +370,7 @@ pub trait BitEnum: Copy {
 #[repr(transparent)]
 pub struct AtomicBitflags<T: BitEnum>(T::Words, core::marker::PhantomData<T>);
 
-unsafe impl<T: BitEnum> ::pin_init::Zeroable for AtomicBitflags<T> {}
+unsafe impl<T: BitEnum> Zeroable for AtomicBitflags<T> {}
 
 impl<T: BitEnum> AtomicBitflags<T> {
     /// test_bit()
@@ -385,16 +389,16 @@ impl<T: BitEnum> AtomicBitflags<T> {
     }
 }
 
-impl<T: BitEnum + crate::util::ToText> crate::util::ToText for AtomicBitflags<T> {
+impl<T: BitEnum + ToText> ToText for AtomicBitflags<T> {
     /// The flags set, by name - by number, a bit the enum has no name for.
-    fn to_text(&self, out: &mut crate::util::Printbuf) {
+    fn to_text(&self, out: &mut Printbuf) {
         for (i, bit) in self.0.iter().enumerate() {
             if i > 0 {
-                crate::prt!(out, ",");
+                prt!(out, ",");
             }
             match T::from_bit(bit) {
                 Some(f) => f.to_text(out),
-                None    => crate::prt!(out, "{bit}"),
+                None    => prt!(out, "{bit}"),
             }
         }
     }

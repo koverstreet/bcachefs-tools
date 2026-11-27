@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! Comparing positions: Bpos's Ord - every field, C's bpos_*() - and
 //! bkey_*() - inode and offset, the snapshot field ignored. Its Hash is of
 //! every field too, as its Eq.

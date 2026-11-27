@@ -29,32 +29,32 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::{Dev, FsFlag, Fs};
-use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags,
-    BkeyValidateContext, BkeyValidateFrom};
-use crate::btree::trans::TransGuard;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
-use crate::errcode::{Errcode, BchError};
-use crate::{prt, new_lock};
-use crate::sb::errors::{FsckFlags, SbErrorId, SbErrorEntryCpu};
-use crate::util::alloc::Vec;
-use crate::os::{kernel::{jiffies, time_after, HZ}, workqueue::Queue};
-use crate::util::log::LogLevel;
-use crate::util::printbuf::Msg;
-use crate::util::prompt::{Choice, Prompt, Question, Reply};
-use crate::util::{Printbuf, ToText};
-use crate::util::vstructs::Unvalidated;
 use core::ffi::CStr;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{MaybeZeroable, Init, TypeInfo};
-use crate::locking::{Locked, MemallocFlags, Mutex};
-use pin_init::pin_data;
-use crate::format::{Bpos, Btree, MemberState, ErrorAction};
 use crate::bcachefs_ioctl::ForceIf;
+use crate::btree::bkey::{bkey_val_to_text, pos, AnyKeySC, BkeySC, BkeyVal, BkeyValidateContext,
+    BkeyValidateFrom, POS_MIN, ValidateFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
+use crate::btree::trans::TransGuard;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bpos, Btree, ErrorAction, MemberState};
+use crate::fs::{Dev, Fs, FsFlag};
+use crate::init::{damage, passes::{self, RecoveryPass, RunRecoveryPassFlags}};
+use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::opts::FsckErrOpt;
+use crate::os::{kernel::{jiffies, time_after, HZ}, workqueue::Queue};
+use crate::posix::namei::{inum_snapshot_to_path, inum_to_path};
+use crate::sb::errors::{FsckFlags, SbErrorEntryCpu, SbErrorId};
 use crate::sb::members_format::MemberErrorType;
 use crate::snapshots::subvolume::SubvolInum;
+use crate::util::alloc::Vec;
+use crate::util::log::LogLevel;
+use crate::util::prompt::{Choice, Prompt, Question, Reply};
+use crate::util::vstructs::Unvalidated;
+use crate::util::{Msg, Printbuf, ToText};
+use crate::{new_lock, prt};
+use cstruct_macros::{Init, MaybeZeroable, TypeInfo};
+use pin_init::pin_data;
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -482,15 +482,11 @@ fn error_action_name(a: ErrorAction) -> &'static str {
 #[cold]
 pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos, mut flags: FsckFlags,
                         err: SbErrorId, msg: &dyn ToText) -> BchError {
-    use Errcode as e;
-    use crate::format::ErrorAction as a;
-    use crate::fs::FsFlag as fl;
-
     flags |= flags_extra(err);
 
     // the error is the damage, whatever's decided: recorded first
     if pos != POS_MIN && !crate::warn_on!(trans.is_none()) {
-        if let Err(r) = crate::init::damage::record(trans.expect("checked"), pos, err) {
+        if let Err(r) = damage::record(trans.expect("checked"), pos, err) {
             return r;
         }
     }
@@ -501,8 +497,8 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     fs.current_has_btree_trans());
 
     if flags.contains(FsckFlags::ERR_SILENT) || error_silent(fs, err) {
-        fs.flags.set(fl::errors_fixed_silent, true);
-        return fs.err(if flags.contains(FsckFlags::CAN_FIX) { e::fsck_fix } else { e::fsck_ignore });
+        fs.flags.set(FsFlag::errors_fixed_silent, true);
+        return fs.err(if flags.contains(FsckFlags::CAN_FIX) { Errcode::fsck_fix } else { Errcode::fsck_ignore });
     }
 
     let mut buf = Printbuf::new();
@@ -542,17 +538,17 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
 
         let ret = 'print: {
             let ret = if flags.contains(FsckFlags::AUTOFIX) &&
-                         (errors == a::continue_ || errors == a::fix_safe) {
+                         (errors == ErrorAction::continue_ || errors == ErrorAction::fix_safe) {
                 break 'print if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::fsck_fix)
+                    fs.err(Errcode::fsck_fix)
                 } else {
                     write!(out, ", continuing");
-                    fs.err(e::fsck_ignore)
+                    fs.err(Errcode::fsck_ignore)
                 };
-            } else if !fs.flags.get(fl::in_fsck) {
-                if errors != a::continue_ || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
+            } else if !fs.flags.get(FsFlag::in_fsck) {
+                if errors != ErrorAction::continue_ || !flags.intersects(FsckFlags::CAN_FIX | FsckFlags::CAN_IGNORE) {
                     if flags.contains(FsckFlags::AUTOFIX) {
                         write!(out, ", shutting down\n\
                                      error is autofix, but errors={} prevents self-healing\n\
@@ -569,18 +565,18 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                     }
                     inconsistent = true;
                     cnt.print = true;
-                    fs.err(e::fsck_errors_not_fixed)
+                    fs.err(Errcode::fsck_errors_not_fixed)
                 } else if flags.contains(FsckFlags::CAN_FIX) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::fsck_fix)
+                    fs.err(Errcode::fsck_fix)
                 } else {
                     write!(out, ", continuing");
-                    fs.err(e::fsck_ignore)
+                    fs.err(Errcode::fsck_ignore)
                 }
             } else if fix_errors == FsckErrOpt::exit {
                 write!(out, ", exiting");
-                fs.err(e::fsck_errors_not_fixed)
+                fs.err(Errcode::fsck_errors_not_fixed)
             } else if flags.contains(FsckFlags::CAN_FIX) {
                 let fix = s.as_ref().and_then(|s| s.fix).unwrap_or(fix_errors);
 
@@ -600,37 +596,37 @@ pub fn fsck_err_verdict(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, pos: Bpos
                         }
                     }
                     fs.err(if matches!(answer, Answer::Yes | Answer::AllYes) {
-                        e::fsck_fix
+                        Errcode::fsck_fix
                     } else {
-                        e::fsck_ignore
+                        Errcode::fsck_ignore
                     })
                 } else if fix == FsckErrOpt::yes ||
                           (fs.opts.nochanges.get() != 0 && !flags.contains(FsckFlags::CAN_IGNORE)) {
                     write!(out, ", ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::fsck_fix)
+                    fs.err(Errcode::fsck_fix)
                 } else {
                     write!(out, ", not ");
                     prt_actioning(&mut out, action);
-                    fs.err(e::fsck_ignore)
+                    fs.err(Errcode::fsck_ignore)
                 }
             } else if flags.contains(FsckFlags::CAN_IGNORE) {
                 write!(out, ", continuing");
-                fs.err(e::fsck_ignore)
+                fs.err(Errcode::fsck_ignore)
             } else {
                 write!(out, " (repair unimplemented)");
-                fs.err(e::fsck_repair_unimplemented)
+                fs.err(Errcode::fsck_repair_unimplemented)
             };
 
-            let ret = if ret.matches(e::fsck_ignore) &&
+            let ret = if ret.matches(Errcode::fsck_ignore) &&
                          (fix_errors == FsckErrOpt::exit || !flags.contains(FsckFlags::CAN_IGNORE)) {
-                fs.err(e::fsck_errors_not_fixed)
+                fs.err(Errcode::fsck_errors_not_fixed)
             } else {
                 ret
             };
 
-            if fs.flags.get(fl::in_fsck) &&
-               !ret.matches(e::fsck_fix) && !ret.matches(e::fsck_ignore) {
+            if fs.flags.get(FsFlag::in_fsck) &&
+               !ret.matches(Errcode::fsck_fix) && !ret.matches(Errcode::fsck_ignore) {
                 exiting = true;
                 cnt.print = true;
             }
@@ -673,13 +669,10 @@ fn report(fs: &Fs, out: &mut Printbuf, s: Option<&mut FsckErrState>, cnt: Counte
 /// filesystem's error flags.
 fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: SbErrorId,
           st: impl Sized, mut ret: BchError) -> BchError {
-    use Errcode as e;
-    use crate::fs::FsFlag as fl;
-
     drop(st);
 
     if let Some(t) = trans {
-        if !flags.contains(FsckFlags::ERR_NO_LOG) && ret == BchError::from(e::fsck_fix) {
+        if !flags.contains(FsckFlags::ERR_NO_LOG) && ret == BchError::from(Errcode::fsck_fix) {
             let mut name = Printbuf::new();
             err.to_text(&mut name);
             if let Err(r) = t.log_str(name.as_bytes()) {
@@ -690,12 +683,12 @@ fn finish(fs: &Fs, trans: Option<&TransAttempt<'_, '_>>, flags: FsckFlags, err: 
 
     // Whether the filesystem has errors still isn't tracked, for
     // log_fsck_err()s: that'd take knowing which pass corrects each
-    if ret.matches(e::transaction_restart) {
-    } else if ret.matches(e::fsck_fix) {
-        fs.flags.set(fl::errors_fixed, true);
+    if ret.matches(Errcode::transaction_restart) {
+    } else if ret.matches(Errcode::fsck_fix) {
+        fs.flags.set(FsFlag::errors_fixed, true);
     } else {
-        fs.flags.set(fl::errors_not_fixed, true);
-        fs.flags.set(fl::error, true);
+        fs.flags.set(FsFlag::errors_not_fixed, true);
+        fs.flags.set(FsFlag::error, true);
     }
     ret
 }
@@ -726,7 +719,7 @@ pub fn bkey_fsck_err_verdict(fs: &Fs, k: AnyKeySC<'_, Unvalidated>, from: &BkeyV
         }
         let btree = from.btree;
         write!(out, " btree={btree} level={}: ", from.level);
-        crate::btree::bkey::bkey_val_to_text(out, Some(fs), k.into());
+        bkey_val_to_text(out, Some(fs), k.into());
         out.newline();
         msg.to_text(out);
         write!(out, ", delete?");
@@ -813,7 +806,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
     -> Result<(), BchError>
 {
     path.reset();
-    match crate::posix::namei::inum_snapshot_to_path(t, inum, snapshot, path) {
+    match inum_snapshot_to_path(t, inum, snapshot, path) {
         Err(e) if !e.is_restart() => {}
         r => return r,
     }
@@ -827,7 +820,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
         let snap = k.k.p.snapshot;
         if snap != snapshot && k.k.is_inode() {
             path.reset();
-            match crate::posix::namei::inum_snapshot_to_path(t, inum, snap, path) {
+            match inum_snapshot_to_path(t, inum, snap, path) {
                 Err(e) if !e.is_restart() => ret = Err(e),
                 r => return r,
             }
@@ -896,9 +889,9 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
     -> Result<(), BchError>
 {
     let ret = if subvol != 0 {
-        crate::posix::namei::inum_to_path(t, SubvolInum { subvol: subvol.into(), inum: pos.inode }, out)
+        inum_to_path(t, SubvolInum { subvol: subvol.into(), inum: pos.inode }, out)
     } else if pos.snapshot != 0 {
-        crate::posix::namei::inum_snapshot_to_path(t, pos.inode, pos.snapshot, out)
+        inum_snapshot_to_path(t, pos.inode, pos.snapshot, out)
     } else {
         Ok(())
     };
@@ -928,16 +921,14 @@ impl Fs {
     /// emergency read-only, or panic - and noted in @out: whether we're going
     /// read-only.
     pub fn inconsistent_error(&self, out: &mut Printbuf) -> bool {
-        use crate::format::ErrorAction as a;
-
         self.flags.set(FsFlag::error, true);
         match self.opts.errors() {
-            a::continue_ => false,
-            a::fix_safe | a::ro => {
+            ErrorAction::continue_ => false,
+            ErrorAction::fix_safe | ErrorAction::ro => {
                 self.emergency_read_only(out);
                 true
             }
-            a::panic => {
+            ErrorAction::panic => {
                 self.log().print(LogLevel::ERR, out.as_bytes());
                 panic_after_error(self)
             }
@@ -954,7 +945,7 @@ impl Fs {
         self.flags.set(FsFlag::topology_error, true);
         if !self.flags.get(FsFlag::in_recovery) {
             self.inconsistent_error(out);
-        } else if let Err(e) = crate::init::passes::run_explicit(self, out,
+        } else if let Err(e) = passes::run_explicit(self, out,
                 RecoveryPass::check_topology,
                 RunRecoveryPassFlags::from_bits_retain(0)) {
             return e;

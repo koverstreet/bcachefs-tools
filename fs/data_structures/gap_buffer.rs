@@ -13,9 +13,10 @@
 //! one. Growing is reserve()'s, apart from insert(), so an element that owns
 //! something is never handed over to an allocation that fails.
 
-use crate::util::alloc::{AllocError, Vec};
 use core::ops::Index;
 use core::ptr;
+use crate::util::alloc::{AllocError, Vec};
+use pin_init::Zeroable;
 
 #[repr(C)]
 pub struct GapBuffer<T> {
@@ -163,7 +164,7 @@ impl<T> Index<usize> for GapBuffer<T> {
 }
 
 // SAFETY: zeroed is empty, nothing allocated - as DArray's
-unsafe impl<T> ::pin_init::Zeroable for GapBuffer<T> {}
+unsafe impl<T> Zeroable for GapBuffer<T> {}
 
 #[cfg(test)]
 mod tests {
@@ -173,7 +174,7 @@ mod tests {
     /// Inserts anywhere, through growth, give the sequence in order.
     #[test]
     fn insert() {
-        let mut b: GapBuffer<u32> = ::pin_init::zeroed();
+        let mut b: GapBuffer<u32> = Zeroable::zeroed();
         let mut want = Vec::new();
 
         let mut x = 0x2545f4914f6cdd1du64;

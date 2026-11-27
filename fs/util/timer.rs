@@ -9,15 +9,17 @@
 //! waited for, to the Select's bit for it - the wake's last touch of the
 //! wait.
 
-use crate::os::kernel::jiffies;
-use crate::os::timer::{run_raw, RawTimer, TimerList};
-use crate::util::sleep::SleepError;
-use crate::util::task::{waiter, DynComplete, DynDone, Resumable, Resume, Select, WaitList, WaitlistCompletion};
 use core::cell::UnsafeCell;
 use core::convert::Infallible;
 use core::mem::offset_of;
 use core::pin::{pin, Pin};
 use core::ptr::NonNull;
+use crate::new_timer;
+use crate::os::kernel::jiffies;
+use crate::os::timer::{run_raw, RawTimer, TimerList};
+use crate::util::sleep::SleepError;
+use crate::util::task::{waiter, DynComplete, DynDone, Resumable, Resume, Select, WaitList,
+    WaitlistCompletion};
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init, PinInit};
 
 #[pin_data(PinnedDrop)]
@@ -35,7 +37,7 @@ impl<'a> Timer<'a> {
     /// @done completed in @delay jiffies.
     pub fn new(done: DynDone<'a>, delay: usize) -> impl PinInit<Self> {
         pin_init!(Self {
-            timer <- crate::new_timer!(run_raw::<Self>, "bcachefs timer"),
+            timer <- new_timer!(run_raw::<Self>, "bcachefs timer"),
             done:  UnsafeCell::new(Some(done)),
         })
         .pin_chain(move |t| {

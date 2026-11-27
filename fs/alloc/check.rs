@@ -23,27 +23,27 @@
 //! The injection tests for every error here: ktest's alloc-inject.ktest and
 //! lru-inject.ktest.
 
-use crate::fs::Dev;
-use crate::alloc::background::{alloc_to_v4, bucket_do_freespace_index, BucketGensPos, FreespacePos, NeedDiscardPos};
+use crate::alloc::background::{alloc_to_v4, bucket_do_freespace_index, BucketGensPos, FreespacePos,
+    NeedDiscardPos};
 use crate::alloc::buckets::bucket_to_u64;
+use crate::alloc::format::BucketGens;
 use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId, LruPos};
-
+use crate::btree::bbpos::Bbpos;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_eq, bkey_lt, bkey_min, pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{polonius_key, BtreeIter, BtreeIterFlags,
-                         CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{polonius_key, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
-use crate::alloc::format::BucketGens;
-use crate::btree::bbpos::Bbpos;
+use crate::data::ec::check::check_stripe_refs;
 use crate::errcode::{BchError, Errcode};
-use crate::fs::{Fs, WriteRef};
+use crate::format::{BkeyType, Bpos, Btree, DataType, SbFeature, Set};
+use crate::fs::{Dev, Fs, WriteRef};
 use crate::init::{error::id, passes, progress::Progress};
-use crate::sb::{errors::FsckFlags, members::DevRef};
 use crate::os::kernel::{local_clock, READ};
-use crate::{message, fsck_err, fsck_err_flags, fsck_err_on};
-use crate::format::{Bpos, Btree, DataType, BkeyType, SbFeature, Set};
+use crate::sb::{errors::FsckFlags, members::DevRef};
+use crate::{fsck_err, fsck_err_flags, fsck_err_on, message};
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
 
@@ -717,7 +717,7 @@ fn check_alloc_to_lru_refs(fs: &Fs) -> Result<(), BchError> {
         check_alloc_to_lru_ref(t, iter, k, &mut last_flushed)
     })?;
 
-    crate::data::ec::check::check_stripe_refs(&trans)
+    check_stripe_refs(&trans)
 }
 
 crate::recovery_pass!(check_alloc_to_lru_refs => check_alloc_to_lru_refs);

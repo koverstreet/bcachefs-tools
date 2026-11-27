@@ -8,9 +8,9 @@
 //! LOCK_CONTENDED() takes a mutex. Not for what there are millions of: a
 //! ByteLock in an array stays one byte.
 
-use super::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
-use crate::os::lockdep::{LockClass, LockdepMap};
 use core::ffi::CStr;
+use crate::locking::{RawLock, RawLockBase, RawTimedLock, RawTryLock};
+use crate::os::lockdep::{LockClass, LockdepMap};
 
 /// A LockdepMap's initializer, its class the call site's, named @name:
 /// lockdep_init_map().

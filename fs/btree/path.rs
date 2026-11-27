@@ -4,29 +4,38 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BkeyI, BkeyV, BKEY_U64S};
+use core::cmp::Ordering;
+use core::marker::PhantomData;
+use core::mem::{offset_of, ManuallyDrop};
+use core::ops::{Deref, DerefMut, Index, IndexMut};
+use core::ptr::{self, NonNull};
+use crate::btree::bkey::{bkey_eq, bkey_ge, bkey_le, BKEY_U64S, BkeyI, BkeyV};
 use crate::btree::cache::{btree_id_level_to_text, OwnedNode};
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeRef, BtreeTrans};
-use crate::btree::key_cache::{EntryContents, BkeyCached};
+use crate::btree::key_cache::{BkeyCached, EntryContents};
+use crate::btree::locking::{BtreeBkeyCachedCommon, BtreeNodeLockedType::{self, *}};
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::keys::{Keys, KeysMut};
-use crate::btree::locking::BtreeNodeLockedType::{self, *};
 use crate::btree::node::{BtreeNode, NodeContents, NodeKey, PublishedKey};
 use crate::btree::traverse::advance_to_pos;
-use crate::btree::locking::BtreeBkeyCachedCommon;
 use crate::btree::update::BtreeInsertEntry;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
-use crate::data_structures::{dst_room::DstRoom, bitmap::Bitmap};
+use crate::data_structures::{bitmap::Bitmap, dst_room::DstRoom};
 use crate::debug::{params::debug_check_iterators, trace::{events, TraceEvent}};
-use crate::prt;
-use crate::errcode::{Errcode, err_ptr, errptr_or_null, BchError};
-use crate::format::{BkeyType, Bpos, Btree, Val, Bkey, BTREE_MAX_DEPTH};
+use crate::errcode::{err_ptr, errptr_or_null, BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bkey, BkeyType, Bpos, Btree, Val};
 use crate::fs::Fs;
+use crate::locking::six::{six_trylock_ip, SixHold, SixLock, SixLockType, SixLockWaiter};
+use crate::locking::{Alone, Guard, Locked, LockedBy};
+#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+use crate::os::kernel::local_clock;
+use crate::prt;
 use crate::types::{bits_to_longs, Lent};
-use crate::util::alloc::kvzalloc_nofail;
+use crate::util::alloc::{kfree_rcu_mightsleep, kvzalloc_nofail};
 use crate::util::backtrace::prt_symbol;
 use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
+use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 
 /* Number of btree paths we preallocate, usually enough */
 pub const BTREE_ITER_INITIAL: u32 = 64;
@@ -40,17 +49,6 @@ pub struct BtreeTransPaths {
     pub nr_paths: usize,
     pub paths: [BtreePath; 0],
 }
-
-#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::os::kernel::local_clock;
-use cstruct_macros::{bitfield, MaybeZeroable, BitfieldMembers};
-use crate::locking::{Alone, Guard, Locked, LockedBy};
-use crate::locking::six::{six_trylock_ip, SixHold, SixLock, SixLockWaiter, SixLockType};
-use core::cmp::Ordering;
-use core::marker::PhantomData;
-use core::mem::{offset_of, ManuallyDrop};
-use core::ops::{Deref, DerefMut, Index, IndexMut};
-use core::ptr::{self, NonNull};
 
 pub type PathIdx = u16;
 
@@ -473,7 +471,7 @@ impl BtreeTrans<'_> {
     fn table_retire(&self, allocated: *mut usize, nr: usize) {
         if allocated != self._paths_allocated.as_ptr().cast() {
             // kfree_rcu_mightsleep() is kvfree_rcu_mightsleep()
-            unsafe { crate::util::alloc::kfree_rcu_mightsleep(allocated.cast(), TableLayout::of(nr).size) };
+            unsafe { kfree_rcu_mightsleep(allocated.cast(), TableLayout::of(nr).size) };
         }
     }
 }

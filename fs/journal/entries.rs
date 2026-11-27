@@ -4,12 +4,9 @@
 //! each whole, a u64 multiple, after the last: jset_entry_init() and
 //! journal_entry_set(), bounded by the buffer.
 
-use core::mem::size_of;
-
-use crate::format::{JsetEntry, JSET_KEYS_U64s, JsetEntryType};
+use crate::format::{JSET_KEYS_U64s, JsetEntry, JsetEntryType};
 use crate::types::ArmOf;
-use crate::util::vstructs::{plain_bytes, Head, Plain};
-use zerocopy::IntoBytes;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head, Plain};
 
 /// No room left in the buffer for the entry.
 #[derive(Debug)]
@@ -38,7 +35,7 @@ fn header(ty: JsetEntryType, btree_id: u8, level: u8, u64s: usize) -> u64 {
     e.set_u64s(u64s);
 
     let mut h = 0u64;
-    h.as_mut_bytes().copy_from_slice(plain_bytes(&e));
+    plain_bytes_mut(&mut h).copy_from_slice(plain_bytes(&e));
     h
 }
 
@@ -92,7 +89,7 @@ impl<'a> EntryWriter<'a> {
     pub fn push_bytes(&mut self, ty: JsetEntryType, btree_id: u8, level: u8, data: &[u8])
         -> Result<(), NoRoom>
     {
-        let v = self.add_entry(ty, btree_id, level, data.len().div_ceil(size_of::<u64>()))?.as_mut_bytes();
+        let v = plain_bytes_mut(self.add_entry(ty, btree_id, level, data.len().div_ceil(size_of::<u64>()))?);
         let (d, pad) = v.split_at_mut(data.len());
         d.copy_from_slice(data);
         pad.fill(0);
@@ -112,7 +109,7 @@ impl<'a> EntryWriter<'a> {
     {
         const { assert!(size_of::<E>() % size_of::<u64>() == 0) };
         let v = self.add_entry(JsetEntryType(E::TAG.into()), btree_id, level, size_of::<E>() / size_of::<u64>())?;
-        v.as_mut_bytes().copy_from_slice(plain_bytes(&e));
+        plain_bytes_mut(v).copy_from_slice(plain_bytes(&e));
         Ok(())
     }
 }

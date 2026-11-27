@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::bkey::*;
-use super::iter::{BtreeIter, polonius_key, BtreeIterFlags, BtreeNodeIter};
-use super::trans::BtreeTrans;
-use super::trans_attempt::{CommitOpts, TransAttempt};
-use crate::alloc::capacity::DiskReservation;
-use crate::btree::{node::BtreeNode, path::{LockedNode, Paths}};
-use crate::errcode::{BchError, Errcode};
-use crate::fs::Fs;
-use crate::SPOS_MAX;
 use core::ops::ControlFlow;
+use crate::alloc::capacity::DiskReservation;
+use crate::btree::bkey::*;
+use crate::btree::iter::{polonius_key, BtreeIter, BtreeIterFlags, BtreeNodeIter};
+use crate::btree::node::BtreeNode;
+use crate::btree::path::{LockedNode, Paths};
+use crate::btree::trans::BtreeTrans;
+use crate::btree::trans_attempt::{CommitOpts, TransAttempt};
 use crate::data::ptrs::BtreePtrs;
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree};
+use crate::fs::Fs;
+use crate::snapshots::subvolume::get_snapshot;
 
 /// What a for_each body returns on success: whether the loop goes on - to the
 /// next key, or from a position of the body's - and if not, what it stopped
@@ -119,7 +120,7 @@ impl Keys {
         -> Result<(), BchError>
     {
         if let Keys::InSubvolume(_, _, subvol) = self {
-            let snapshot = paths.lend(|| crate::snapshots::subvolume::get_snapshot(t, subvol))?;
+            let snapshot = paths.lend(|| get_snapshot(t, subvol))?;
             iter.set_snapshot_in(paths, snapshot);
         }
         Ok(())

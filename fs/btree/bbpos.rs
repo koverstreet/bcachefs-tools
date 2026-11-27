@@ -1,9 +1,17 @@
-#![allow(non_camel_case_types)]
+// SPDX-License-Identifier: GPL-2.0
 
 use core::cmp::Ordering;
-use cstruct_macros::{MaybeZeroable, Plain, bitfield, BitfieldMembers};
-use nestify::nest;
+#[cfg(feature = "std")]
+use core::str::FromStr;
+use crate::btree::bkey::{POS_MIN, SPOS_MAX};
+#[cfg(feature = "std")]
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Bpos, Btree};
+use crate::prt;
+use crate::util::projections::TearSafe;
+use crate::util::{Printbuf, ToText};
+use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable, Plain};
+use nestify::nest;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, MaybeZeroable, Plain)]
@@ -14,7 +22,7 @@ pub struct Bbpos {
 
 // Torn, a mix of two positions - not necessarily between them: harmless in
 // what reads one racily, a walk's progress, shown
-impl crate::util::projections::TearSafe for Bbpos {}
+impl TearSafe for Bbpos {}
 
 /*
  * Layout is padding-free (bpos is __packed __aligned(4)), so a Blbpos can be
@@ -33,11 +41,6 @@ nest! {
         pub pos: Bpos,
     }
 }
-
-#[cfg(feature = "std")]
-use crate::errcode::{Errcode, BchError};
-#[cfg(feature = "std")]
-use core::str::FromStr;
 
 impl PartialEq for Bbpos {
     fn eq(&self, other: &Self) -> bool {
@@ -61,28 +64,28 @@ impl Ord for Bbpos {
 }
 
 impl Bbpos {
-    pub const MIN: Self = Bbpos { btree: Btree(0), pos: crate::btree::bkey::POS_MIN };
+    pub const MIN: Self = Bbpos { btree: Btree(0), pos: POS_MIN };
     /// The last of Btree::NR - 1.
     pub const MAX: Self = Bbpos {
         btree: Btree(Btree::NR - 1),
-        pos:   crate::btree::bkey::SPOS_MAX,
+        pos:   SPOS_MAX,
     };
 
     /// Past the last btree's last, panics.
     pub fn successor(self) -> Self {
-        if self.pos != crate::btree::bkey::SPOS_MAX {
+        if self.pos != SPOS_MAX {
             return Bbpos { pos: self.pos.successor(), ..self };
         }
 
         assert!(self.btree.0 != Btree::NR, "no position after the last btree's last");
-        Bbpos { btree: Btree(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
+        Bbpos { btree: Btree(self.btree.0 + 1), pos: POS_MIN }
     }
 }
 
 /// btree:pos.
-impl crate::util::ToText for Bbpos {
-    fn to_text(&self, out: &mut crate::util::Printbuf) {
-        crate::prt!(out, "{}:{}", self.btree, self.pos);
+impl ToText for Bbpos {
+    fn to_text(&self, out: &mut Printbuf) {
+        prt!(out, "{}:{}", self.btree, self.pos);
     }
 }
 crate::display_via_to_text!(Bbpos);

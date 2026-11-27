@@ -23,19 +23,20 @@
 //! they're spilled; what's grown out of is freed as its elements say, a grace
 //! period on if they aren't FreeAnytime.
 
-use crate::data_structures::array_vec::LenUint;
-use crate::data_structures::dst_vec::DstVec;
-use crate::util::alloc::{Alloc, AllocError, Global};
-use crate::util::maybe_rcu_alloc::RcuFreeing;
-use crate::util::rcu;
 use core::mem::{offset_of, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Release}};
+use crate::data_structures::array_vec::LenUint;
+use crate::data_structures::dst_vec::DstVec;
+use crate::util::alloc::{Alloc, AllocError, Global};
+use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::rcu;
+use pin_init::Zeroable;
 
 #[repr(C)]
-pub struct InlineVec<T, const N: usize, L: LenUint = u32, A: Alloc + Copy = crate::os::alloc::Global> {
+pub struct InlineVec<T, const N: usize, L: LenUint = u32, A: Alloc + Copy = Global> {
     repr:  Repr<T, N, L, A>,
     alloc: A,
 }
@@ -67,7 +68,7 @@ impl<T, const N: usize, L: LenUint> InlineVec<T, N, L> {
     /// an element.
     pub const fn new_zeroed() -> Self
     where
-        T: ::pin_init::Zeroable,
+        T: Zeroable,
     {
         const { assert!(N <= L::MAX >> 1, "InlineVec: its inline capacity doesn't fit its length type") };
 

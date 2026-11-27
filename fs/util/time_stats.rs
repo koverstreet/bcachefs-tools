@@ -30,24 +30,23 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c;
-use crate::util::mean_and_variance::MeanAndVariance;
-use crate::util::alloc::flags;
-use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
-use crate::data_structures::eytzinger::Eytzinger0;
-use crate::os::kernel::{local_clock, time_after64};
-use crate::os::percpu::{free_percpu, PerCpu, PerCpuRef, CpuShared};
-use crate::util::{Nsecs, Printbuf, ToText};
-use crate::{percpu_field, warn_on_once, new_lock};
 use core::pin::Pin;
-use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use cstruct_macros::{bch_enum, MaybeZeroable, Init};
-use pin_init::{pinned_drop, pin_data, PinInit};
+use core::sync::atomic::{AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
+use crate::c;
+use crate::data_structures::eytzinger::Eytzinger0;
 use crate::errcode::BchError;
+use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
+use crate::os::kernel::{local_clock, time_after64};
+use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
 use crate::types::CacheAligned;
+use crate::util::alloc::flags;
 use crate::util::ffi::Opaque;
+use crate::util::mean_and_variance::MeanAndVariance;
 use crate::util::projections::Volatile;
-use core::sync::atomic::AtomicUsize;
+use crate::util::{Nsecs, Printbuf, ToText};
+use crate::{new_lock, percpu_field, warn_on_once};
+use cstruct_macros::{bch_enum, Init, MaybeZeroable};
+use pin_init::{pin_data, pin_init, pin_init_array_from_fn, pinned_drop, PinInit, Zeroable};
 
 #[bch_enum(closed)]
 #[nr]
@@ -158,7 +157,6 @@ pub enum TimeStat {
     /// rewind_seq and release buckets
     blocked_discard_journal_flush,
 }
-
 
 /* a TimeStatsQuantiles' - a device's IO latency */
 pub const NR_QUANTILES: u32 = 15;
@@ -570,14 +568,14 @@ pub struct TimeStatsArray<T, const N: usize> {
 }
 
 /* by hand: MaybeZeroable takes no const generics */
-unsafe impl<T: pin_init::Zeroable, const N: usize> pin_init::Zeroable for TimeStatsArray<T, N> {}
+unsafe impl<T: Zeroable, const N: usize> Zeroable for TimeStatsArray<T, N> {}
 
 impl<T: TimeStatsKind, const N: usize> TimeStatsArray<T, N> {
     pub fn new() -> impl PinInit<Self, BchError> {
-        pin_init::pin_init!(Self {
+        pin_init!(Self {
             buffers: [const { AtomicUsize::new(0) }; N],
             _align: CacheAligned::default(),
-            stats <- pin_init::pin_init_array_from_fn(|_| T::init()),
+            stats <- pin_init_array_from_fn(|_| T::init()),
         }? BchError)
     }
 
@@ -856,7 +854,6 @@ fn mean_and_stddev(out: &mut Printbuf, all: &MeanAndVariance, recent: &MeanAndVa
     nsecs_aligned(out, u64::from(recent.stddev()));
     out.newline();
 }
-
 
 #[cfg(test)]
 mod tests {

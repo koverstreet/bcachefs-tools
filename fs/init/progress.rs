@@ -18,17 +18,18 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::{iter::{BtreeIter, BtreeNodeRef, TransAttempt}, bbpos::Bbpos};
+use core::ffi::CStr;
+use crate::alloc::accounting;
 use crate::bcachefs_ioctl::ProgressUnit;
+use crate::btree::{bbpos::Bbpos, iter::{BtreeIter, BtreeNodeRef, TransAttempt}};
 use crate::errcode::BchError;
+use crate::format::Btree;
 use crate::fs::Fs;
 use crate::init::passes;
-use crate::os::kernel::local_clock;
-use crate::util::{Printbuf, ToText};
-use core::ffi::CStr;
-use cstruct_macros::MaybeZeroable;
 use crate::locking::SeqLock;
-use crate::format::Btree;
+use crate::os::kernel::{local_clock, msleep};
+use crate::util::{Printbuf, ToText};
+use cstruct_macros::MaybeZeroable;
 
 /*
  * Lame progress indicators
@@ -47,7 +48,7 @@ use crate::format::Btree;
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct ProgressIndicator {
-    pub(crate) state: SeqLock<crate::init::progress::ProgressState>,
+    pub(crate) state: SeqLock<ProgressState>,
 }
 
 crate::module_param! {
@@ -67,7 +68,7 @@ crate::module_param! {
 fn maybe_delay() {
     let ms = recovery_progress_delay_ms.get();
     if ms != 0 {
-        crate::os::kernel::msleep(ms);
+        msleep(ms);
     }
 }
 
@@ -165,7 +166,7 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
             continue;
         }
 
-        let v = crate::alloc::accounting::read(fs, crate::alloc::accounting::Btree { id: i });
+        let v = accounting::read(fs, accounting::Btree { id: i });
 
         // Better to estimate as 0 than the total node count
         if inner_mask & bit != 0 {

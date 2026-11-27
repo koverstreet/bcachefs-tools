@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! Keys: their types, the forms they're held in, and narrowing between them.
 //! types.rs is the types and traits - key types and families, the forms
 //! they're held in, the macros generating them; bpos.rs, cmp.rs and text.rs
@@ -100,7 +102,8 @@ pub use self::packed::*;
 pub use self::text::*;
 pub use self::types::*;
 
-use crate::format::{Bpos, BkeyType, Bkey, BkeyFormatBits, KEY_FORMAT_CURRENT};
+use crate::data::ptrs::BtreePtrs;
+use crate::format::{Bkey, BkeyFormatBits, BkeyType, Bpos, KEY_FORMAT_CURRENT};
 
 /* DOC_LATEX(bkey-structures)
  *
@@ -248,7 +251,7 @@ impl Bkey {
     }
 
     pub fn is_btree_ptr(&self) -> bool {
-        <crate::data::ptrs::BtreePtrs as BkeyFamily>::contains(self)
+        <BtreePtrs as BkeyFamily>::contains(self)
     }
 }
 

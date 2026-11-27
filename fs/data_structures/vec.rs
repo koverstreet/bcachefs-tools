@@ -4,17 +4,18 @@
 //! L, laid out as C's darray - nr, size, data - with data NULL until it
 //! allocates. The same in both builds.
 
-use crate::data_structures::array_vec::LenUint;
-use crate::util::alloc::{flags, stateless, AllocError, AllocGfp, Flags};
 use core::alloc::Layout;
 use core::marker::PhantomData;
-use core::mem::{size_of, ManuallyDrop, MaybeUninit};
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::slice;
+use crate::data_structures::array_vec::LenUint;
+use crate::util::alloc::{flags, stateless, AllocError, AllocGfp, Box, Flags, Global};
+use pin_init::Zeroable;
 
 #[repr(C)]
-pub struct Vec<T, A: AllocGfp = crate::os::alloc::Global, L: LenUint = usize> {
+pub struct Vec<T, A: AllocGfp = Global, L: LenUint = usize> {
     nr:   L,
     size: L,
     data: Option<NonNull<T>>,
@@ -28,7 +29,7 @@ unsafe impl<T: Sync, A: AllocGfp, L: LenUint> Sync for Vec<T, A, L> {}
 impl<T, A: AllocGfp, L: LenUint> Unpin for Vec<T, A, L> {}
 
 // zeroed is empty: nr and size 0, data NULL - as a kzalloc()'d darray
-unsafe impl<T, A: AllocGfp, L: LenUint> ::pin_init::Zeroable for Vec<T, A, L> {}
+unsafe impl<T, A: AllocGfp, L: LenUint> Zeroable for Vec<T, A, L> {}
 
 /// push_within_capacity()'s, with what wasn't pushed.
 pub struct PushError<T>(pub T);
@@ -39,7 +40,7 @@ impl<T> Vec<T> {
     }
 
     pub fn with_capacity(capacity: usize) -> Result<Self, AllocError> {
-        Self::with_capacity_in(capacity, crate::os::alloc::Global)
+        Self::with_capacity_in(capacity, Global)
     }
 
     pub fn from_elem(value: T, n: usize) -> Result<Self, AllocError>
@@ -191,7 +192,7 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
     /// if there isn't.
     pub fn extend_zeroed_within_capacity(&mut self, n: usize) -> Option<&mut [T]>
     where
-        T: ::pin_init::Zeroable,
+        T: Zeroable,
     {
         let len = self.len();
         if n > self.capacity() - len {
@@ -315,7 +316,7 @@ impl<T, A: AllocGfp, L: LenUint> Vec<T, A, L> {
         Vec { nr: L::from_usize(length), size: L::from_usize(capacity), data, _p: PhantomData }
     }
 
-    pub fn into_boxed_slice(self) -> crate::util::alloc::Box<[T], A> {
+    pub fn into_boxed_slice(self) -> Box<[T], A> {
         self.into()
     }
 

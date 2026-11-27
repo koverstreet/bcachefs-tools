@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::types::{Le32, Le64};
-use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, bitfield, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
 #[bch_enum(flags)]
 #[repr(u32)]

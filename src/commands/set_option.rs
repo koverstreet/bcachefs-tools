@@ -2,7 +2,7 @@
 use anyhow::{bail, Result};
 use bcachefs_kernel::opts::{Opts, OptFlags};
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::util::{printbuf::Printbuf, rcu};
+use bcachefs_kernel::util::{rcu, Printbuf};
 use clap::{Arg, ArgAction, Command};
 
 use crate::commands::opts::{find_opt, option_args, options_from_matches};

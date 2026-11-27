@@ -27,7 +27,7 @@ use crate::format::{CompressionType, BkeyType, MetadataVersion, REPLICAS_MAX, Bk
 use crate::fs::Fs;
 use crate::posix::inode_opts::get_io_opts;
 use crate::os::kernel::unlikely;
-use crate::util::{printbuf::Msg, rcu::read_lock, vstructs::Validated, Printbuf};
+use crate::util::{rcu::read_lock, vstructs::Validated, Msg, Printbuf};
 use core::mem::size_of;
 
 /// Option @o's need_rb bit.

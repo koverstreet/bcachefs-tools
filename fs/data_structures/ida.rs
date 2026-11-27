@@ -20,6 +20,7 @@
 //! it - kvmalloc() and kvfree() may sleep.
 
 use crate::locking::{Locked, SpinLockIrq};
+use crate::new_lock;
 use crate::util::alloc::{AllocError, Vec};
 use pin_init::{pin_data, pin_init, PinInit, Zeroable};
 
@@ -256,7 +257,7 @@ unsafe impl Zeroable for Ida {}
 
 impl Ida {
     pub fn new() -> impl PinInit<Self> {
-        pin_init!(Self { tree <- crate::new_lock!(Tree { depth: 0, nodes: Vec::new() }, "&ida->lock") })
+        pin_init!(Self { tree <- new_lock!(Tree { depth: 0, nodes: Vec::new() }, "&ida->lock") })
     }
 
     /// The lowest free id in [@min, @max] - @max no more than INT_MAX, as the

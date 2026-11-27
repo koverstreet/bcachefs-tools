@@ -7,62 +7,59 @@
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-
-use cstruct_macros::in_place;
-use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
-
+use crate::alloc::dev_select::DevStripeState;
 use crate::alloc::disk_groups::Target;
-use crate::util::alloc::{flags, init_with, AllocError, AllocGfp, Box, Flags, Global};
+use crate::alloc::foreground::{DevAllocList, Watermark};
 use crate::alloc::replicas::DevlistEntry;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeySC, ValidateFlags, BkeyI, BKEY_U64S};
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeySC, ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::btree::write_buffer;
 use crate::c;
-use crate::alloc::dev_select::DevStripeState;
-use crate::alloc::foreground::{DevAllocList, Watermark};
-use crate::data::ptrs::IoFailures;
-use crate::data::extents_format::ExtentPtr;
-use crate::init::dev::{DevsList, DevsMask, DevFlag};
-use crate::sb::{members_format::MEMBERS_MAX, members::{DevIoRef, DevWriteRefKind}};
-use crate::util::time_stats::TimeStat;
-use crate::journal::buckets::JournalBucketStage::JOURNAL_BUCKET_cur;
-use crate::journal::journal::{JournalFlag, JournalGuard, Journal, JournalBuf,
-    JournalCycleFlags};
-use crate::journal::reclaim::JournalSpaceFrom::journal_space_discarded;
-use crate::journal::flush_wait::{buf_waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT, JOURNAL_BUF_NOFLUSH,
-                                 JOURNAL_BUF_NOT_IN_FLIGHT};
-use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::data_structures::{array_vec::ArrayVec, fifo::FifoRead, dst_room::DstRoom};
-use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{DataType, REPLICAS_MAX, Bkey, Jset, JsetEntryDatetime,
-    JsetEntryRewindLimit, MetadataVersion, JsetEntryType, BkeyType};
-use crate::fs::{Dev, Fs};
-use crate::journal::entries::{entry_u64s, EntryWriter};
-use crate::journal::pins::PinsRead;
-use crate::journal::validate::jset_validate;
-use crate::locking::{Guard as _, LockedBy, MemallocFlags, ExclusiveGuard, Mutex, Noio};
-use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
-use crate::data::write::DevWriteRef;
-use crate::os::workqueue::{Own, Queue};
 use crate::data::dev_bio::{DevBio, DevErrs};
+use crate::data::extents::bkey_append_ptr;
+use crate::data::extents_format::ExtentPtr;
+use crate::data::ptrs::{BkeyVPtrs, IoFailures, Ptrs};
+use crate::data::write::DevWriteRef;
 use crate::data::write_replicas::{InFlight, Refs};
-use crate::util::gather::Gather;
-use crate::util::printbuf::{Printbuf, ToText, HumanReadable};
-use crate::util::task::{requeue, waiter, Resume, Spawn, Task, TaskInPlace};
-use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies, time_after_eq, unlikely,
-                          WRITE};
-use crate::util::rcu::read_lock;
-use crate::util::refcount::{TryRefcount, AtomicRef, RefGuard};
-use crate::util::vstructs::{cast_plain_slice_mut, SelfSized, ValidatedEntriesMut, cast_plain,
-    cast_plain_mut, plain_bytes, plain_bytes_mut, Head, Unvalidated};
-use crate::prt;
+use crate::data_structures::{array_vec::ArrayVec, dst_room::DstRoom, fifo::FifoRead};
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, BkeyType, DataType, Jset, JsetEntryDatetime, JsetEntryRewindLimit,
+    JsetEntryType, MetadataVersion, REPLICAS_MAX};
+use crate::fs::{Dev, Fs};
+use crate::init::dev::{DevFlag, DevsList, DevsMask};
+use crate::journal::buckets::JournalBucketStage::JOURNAL_BUCKET_cur;
+use crate::journal::entries::{entry_u64s, EntryWriter};
+use crate::journal::flush_wait::{buf_waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
+    JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
+use crate::journal::journal::{Journal, JournalBuf, JournalCycleFlags, JournalFlag, JournalGuard,
+    JournalLockAt, WritesInFlightAt};
+use crate::journal::pins::PinsRead;
+use crate::journal::reclaim::JournalSpaceFrom::journal_space_discarded;
+use crate::journal::validate::jset_validate;
+use crate::locking::{ExclusiveGuard, Guard as _, LockedBy, MemallocFlags, Mutex, Noio};
 use crate::os::bio::{BioRange, MappedPages};
+use crate::os::kernel::{jiffies, ktime_get_real_seconds, local_clock, msecs_to_jiffies,
+    time_after_eq, unlikely, WRITE};
+use crate::os::workqueue::{Own, Queue};
+use crate::sb::clean::{super_entries_add_common, COMMON_U64S};
+use crate::sb::{members::{DevIoRef, DevWriteRefKind}, members_format::MEMBERS_MAX};
+use crate::util::alloc::{flags, init_with, AllocError, AllocGfp, Box, Flags, Global};
+use crate::util::gather::Gather;
+use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::Placed;
-use core::mem;
-use cstruct_macros::bitfield;
-use super::journal::{JournalLockAt, WritesInFlightAt};
+use crate::util::ratelimit::Ratelimit;
+use crate::util::rcu::read_lock;
+use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount};
+use crate::util::task::{requeue, waiter, Resume, Spawn, Task, TaskInPlace};
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, plain_bytes,
+    plain_bytes_mut, Head, SelfSized, Unvalidated, ValidatedEntriesMut};
+use crate::util::{HumanReadable, Printbuf, ToText};
+use crate::{fs_fatal_error, prt, warn_on, warn_once};
+use cstruct_macros::{bitfield, in_place};
+use pin_init::{pin_data, pin_init, stack_pin_init, zeroed, PinInit, Zeroable};
 
 /// A journal entry's buffer, freed with it. Its pages a bio's own, in high
 /// order allocations, which the CPU sees as one buffer: up to 4M, written by
@@ -111,7 +108,7 @@ impl JsetBuf {
     /// Where the body's first @u64s are, the entries, without the header: for
     /// the write buffer's flush, which has them by buf_lock.
     pub(crate) fn entries_ptr(&self, u64s: usize) -> NonNull<[u8]> {
-        let hdr = mem::size_of::<Head<Jset>>();
+        let hdr = size_of::<Head<Jset>>();
         let d = self.storage().as_non_null();
         assert!(hdr + u64s * 8 <= d.len(), "journal entries of {u64s} u64s past a buffer of {} bytes", d.len());
         let entries = d.cast::<u8>().map_addr(|a| a.checked_add(hdr).expect("a journal buffer's entries, within it"));
@@ -148,7 +145,7 @@ pub fn jset_buf_alloc(size: u32, gfp: Flags) -> Result<(JsetBuf, MaybeRcuAlloc<J
 /// each reservation has its own range, through ring_data
 /// (res_append_entries()). The JsetBuf itself is only put in, as the entry's
 /// opened, and taken out, into its write as it starts.
-#[derive(pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct BufJset(BufLocked<Option<JsetBuf>>);
 
 impl BufJset {
@@ -214,7 +211,7 @@ impl JournalKey {
     }
 }
 
-#[derive(::pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct WriteAlloc {
     /* The round robin over devices journal writes take: */
     pub stripe: DevStripeState,
@@ -226,7 +223,6 @@ pub struct WriteAlloc {
 
 /// A journal write's ref on the journal, held to the end of write_done().
 pub type JournalWriteRef = RefGuard<Placed<AtomicRef<()>, WritesInFlightAt>>;
-
 
 /* IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0) */
 const IOPRIO_RT: u16 = 1 << 13;
@@ -423,7 +419,7 @@ fn __write_alloc(j: &Journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64
          * one pick per sort, since each pick changes the occupancy
          * the next should avoid:
          */
-        let mut devs_sorted = ::pin_init::zeroed::<DevAllocList>();
+        let mut devs_sorted = zeroed::<DevAllocList>();
         fs.dev_alloc_list_devs(&mut a.stripe, devs, &chosen, &mut a.wp_domain_keys, &mut devs_sorted);
 
         /* The lowest score in the best failure domain, ties in sort order: */
@@ -471,10 +467,10 @@ fn __write_alloc(j: &Journal, a: &mut WriteAlloc, key: &mut JournalKey, seq: u64
          * submissions aren't in allocation order, and a ring lap can
          * make two consecutive ones the same sector, legitimately:
          */
-        crate::warn_once!(offset == ca.prev_journal_sector.get(), fs, "journal write to {}:{offset} again", ca.dev_idx);
+        warn_once!(offset == ca.prev_journal_sector.get(), fs, "journal write to {}:{offset} again", ca.dev_idx);
         ca.prev_journal_sector.set(offset);
 
-        crate::data::extents::bkey_append_ptr(key, ExtentPtr::new().with_offset(offset).with_dev(ca.dev_idx))
+        bkey_append_ptr(key, ExtentPtr::new().with_offset(offset).with_dev(ca.dev_idx))
             .expect("a journal key's pointers fit in key_pad");
         chosen.set(ca.dev_idx.into());
 
@@ -613,7 +609,7 @@ fn update_last_seq_ondisk(j: &Journal, pins: &PinsRead<'_>, g: &mut JournalGuard
         }
 
         let mut bytes = pins.seq_take_bytes(seq) as usize;
-        if crate::warn_on!(g.dirty_entry_bytes < bytes) {
+        if warn_on!(g.dirty_entry_bytes < bytes) {
             bytes = g.dirty_entry_bytes;
         }
 
@@ -721,8 +717,7 @@ fn write_done(w: &JournalBuf, written: Written) {
             msg
         } else {
             /* Separate ratelimit_states for hard and soft errors */
-            static RATELIMIT: [crate::util::ratelimit::Ratelimit; 2] =
-                [const { crate::util::ratelimit::Ratelimit::new() }; 2];
+            static RATELIMIT: [Ratelimit; 2] = [const { Ratelimit::new() }; 2];
             fs.log().ratelimited(&RATELIMIT[err.is_err() as usize]).msg()
         };
 
@@ -1004,7 +999,7 @@ fn write_preflush(w: &JournalBuf, devs: &DevsList, g: &Gather<PreflushErrs, wait
 /// roots - the datetime, and super_entries_add_common()'s: what
 /// super_entries_journal_res reserves.
 pub(crate) const PREP_ENTRIES_U64S: usize =
-    entry_u64s::<JsetEntryDatetime>() + crate::sb::clean::COMMON_U64S;
+    entry_u64s::<JsetEntryDatetime>() + COMMON_U64S;
 
 /// The entry compacted, and whether it's empty.
 fn write_prep(j: &Journal, w: &JournalBuf, data: &mut JsetBuf, closed: &Closed) -> Result<bool, BchError> {
@@ -1082,7 +1077,7 @@ fn write_prep(j: &Journal, w: &JournalBuf, data: &mut JsetBuf, closed: &Closed) 
         } else if ty == JsetEntryType::write_buffer_keys {
             let intake = wb.as_mut().expect("write buffer keys in a journal entry not flushing to the write buffer");
             if let Err(e) = intake.entry(i) {
-                crate::fs_fatal_error!(fs, "flushing journal keys to btree write buffer: {}", e.msg());
+                fs_fatal_error!(fs, "flushing journal keys to btree write buffer: {}", e.msg());
                 let _ = wb.take().map(write_buffer::Intake::end);
                 return Err(e);
             }
@@ -1091,7 +1086,7 @@ fn write_prep(j: &Journal, w: &JournalBuf, data: &mut JsetBuf, closed: &Closed) 
 
     if let Some(wb) = wb {
         if let Err(e) = wb.end() {
-            crate::fs_fatal_error!(fs, "error flushing journal keys to btree write buffer: {}", e.msg());
+            fs_fatal_error!(fs, "error flushing journal keys to btree write buffer: {}", e.msg());
             return Err(e);
         }
     }
@@ -1103,17 +1098,17 @@ fn write_prep(j: &Journal, w: &JournalBuf, data: &mut JsetBuf, closed: &Closed) 
         d.seconds.set(ktime_get_real_seconds() as u64);
         ew.push_entry(0, 0, d).expect("super_entries_journal_res's room");
 
-        crate::sb::clean::super_entries_add_common(fs, ew).expect("super_entries_journal_res's room");
+        super_entries_add_common(fs, ew).expect("super_entries_journal_res's room");
     });
 
-    crate::warn_on!(u64s > j.lock.entry_u64s_reserved.get() as usize);
+    warn_on!(u64s > j.lock.entry_u64s_reserved.get() as usize);
 
     let sectors = data.jset().sectors(fs.block_bits()) as u32;
 
     if sectors > closed.sectors {
-        crate::fs_fatal_error!(fs, ": journal write overran available space, {} > {} (extra {u64s} reserved {}/{})",
-                               data.jset().bytes(), closed.sectors << 9, closed.u64s_reserved,
-                               j.lock.entry_u64s_reserved.get());
+        fs_fatal_error!(fs, ": journal write overran available space, {} > {} (extra {u64s} reserved {}/{})",
+                        data.jset().bytes(), closed.sectors << 9, closed.u64s_reserved,
+                        j.lock.entry_u64s_reserved.get());
         return Err(fs.err(Errcode::EINVAL_journal_write_overran_available_space));
     }
 
@@ -1147,7 +1142,7 @@ fn write_checksum(j: &Journal, data: &mut JsetBuf, closed: &Closed) -> Result<()
     }
 
     if let Err(e) = data.jset_mut().encrypt(fs) {
-        crate::fs_fatal_error!(fs, "encrypting journal entry: {}", e.msg());
+        fs_fatal_error!(fs, "encrypting journal entry: {}", e.msg());
         return Err(e);
     }
 

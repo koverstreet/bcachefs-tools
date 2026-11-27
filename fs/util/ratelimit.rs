@@ -6,9 +6,10 @@
 //! up to INTERVAL_MAX, so a flood that doesn't stop doesn't fill the log at a
 //! steady BURST per INTERVAL. One quiet interval and it's INTERVAL again.
 
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
+use crate::message;
 use crate::os::kernel::{jiffies, time_after, HZ};
 use crate::util::log::Log;
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 
 const INTERVAL: usize = 5 * HZ;
 const INTERVAL_MAX: usize = 5 * 60 * HZ;
@@ -94,7 +95,7 @@ impl Ratelimit {
                 self.interval.store(next as usize, Relaxed);
 
                 if m != 0 {
-                    Log::NO_FS.warn(crate::message!("{func}: {m} callbacks suppressed"));
+                    Log::NO_FS.warn(message!("{func}: {m} callbacks suppressed"));
                 }
             }
 

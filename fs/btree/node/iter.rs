@@ -2,18 +2,17 @@
 
 /* Btree node iterator */
 
-use super::bset::BsetTree;
-use super::keys::Keys;
-use super::{check_lookups, BtreeNode, NodeContents};
-use crate::btree::bkey::{BkeyP, BkeySC, BkeyV, BkeyPackedPadded, BkeyPackPosRet};
-use crate::btree::node::bset::MAX_BSETS;
-use crate::format::{Bpos, Bkey};
-use crate::fs::Fs;
-use crate::prt;
-use crate::debug::trace::events;
-use crate::os::kernel::unlikely;
-use crate::util::{log::Log, Printbuf};
 use core::cmp::Ordering;
+use crate::btree::bkey::{BkeyP, BkeyPackPosRet, BkeyPackedPadded, BkeySC, BkeyV};
+use crate::btree::node::bset::{BsetTree, MAX_BSETS};
+use crate::btree::node::keys::Keys;
+use crate::btree::node::{check_lookups, BtreeNode, NodeContents};
+use crate::debug::trace::events;
+use crate::format::{Bkey, Bpos};
+use crate::fs::Fs;
+use crate::os::kernel::unlikely;
+use crate::prt;
+use crate::util::{log::Log, Printbuf};
 use cstruct_macros::MaybeZeroable;
 
 #[repr(C)]

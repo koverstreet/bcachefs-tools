@@ -2,18 +2,19 @@
 
 /* Filesystem init / exit */
 
-use super::{node_mem_alloc, node_mem_free, OwnedNode, BtreeCacheGuard};
-use crate::btree::{node::BtreeNode, cache::{FsBtreeCache, BtreeNodeCacheState as State}};
-use crate::data_structures::list::Walk;
-use crate::errcode::{Errcode, BchError};
-use crate::fs::Fs;
-use crate::locking::six::six_lock_counts;
-use crate::prt;
-use crate::os::kernel::cond_resched;
-use crate::util::{place::{Contained, PlacedDrop}};
-use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
+use crate::btree::cache::{node_mem_alloc, node_mem_free, BtreeCacheGuard,
+    BtreeNodeCacheState as State, FsBtreeCache, OwnedNode};
+use crate::btree::node::BtreeNode;
+use crate::data_structures::list::Walk;
+use crate::errcode::{BchError, Errcode};
+use crate::fs::Fs;
+use crate::locking::six::six_lock_counts;
+use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
+use crate::os::kernel::cond_resched;
+use crate::prt;
+use crate::util::place::{Contained, PlacedDrop};
 
 /*
  * Diagnostic for the cache_exit teardown trylocks: if the trylock fails

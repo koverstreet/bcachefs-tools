@@ -20,20 +20,18 @@
 //! release, which items_from()'s acquire pairs with; remove() is a plain
 //! store of NULL.
 
-#![allow(non_camel_case_types)]
-
-use crate::errcode::BchError;
-use crate::util::{alloc::AllocError, rcu::ReadGuard};
-use crate::os::percpu::{IrqGuard, PerCpu};
-use crate::data_structures::{array_vec::ArrayVec, genradix::SharedGenRadix, ida::Ida};
 use core::iter;
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
-use core::sync::atomic::AtomicPtr;
-use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Relaxed, Release}};
+use crate::data_structures::{array_vec::ArrayVec, genradix::{self, SharedGenRadix}, ida::Ida};
+use crate::errcode::BchError;
+use crate::os::percpu::{IrqGuard, PerCpu};
+use crate::util::{alloc::AllocError, rcu::ReadGuard};
+use crate::warn_on;
 use cstruct_macros::MaybeZeroable;
-use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
+use pin_init::{pin_data, pin_init, pinned_drop, PinInit, Zeroable};
 
 #[repr(C)]
 #[pin_data(PinnedDrop)]
@@ -51,11 +49,11 @@ pub struct FastList<T> {
 pub struct Item<T>(AtomicPtr<T>);
 
 // SAFETY: zeroed is null, no item
-unsafe impl<T> ::pin_init::Zeroable for Item<T> {}
+unsafe impl<T> Zeroable for Item<T> {}
 
 // genradix_entry!()'s, which can't size a generic leaf: every Item is a pointer
-impl<T> crate::data_structures::genradix::Entry for Item<T> {
-    type Leaf = [Item<T>; crate::data_structures::genradix::NODE_SIZE / size_of::<AtomicPtr<()>>()];
+impl<T> genradix::Entry for Item<T> {
+    type Leaf = [Item<T>; genradix::NODE_SIZE / size_of::<AtomicPtr<()>>()];
 }
 
 /// What a refill gets, and a full cache spills: half of it.
@@ -66,7 +64,7 @@ struct Cache(ArrayVec<u32, 31>);
 
 // SAFETY: zeroed is empty - an ArrayVec is its length and its elements'
 // MaybeUninits
-unsafe impl ::pin_init::Zeroable for Cache {}
+unsafe impl Zeroable for Cache {}
 
 impl<T> FastList<T> {
     /// @f on this CPU's cache, interrupts off.
@@ -191,7 +189,7 @@ impl<T> PinnedDrop for FastList<T> {
         }
 
         // a slot still allocated is an item still on the list
-        crate::warn_on!(self.slots_allocated.find_first().is_some());
+        warn_on!(self.slots_allocated.find_first().is_some());
 
         unsafe { self.items.free() };
     }

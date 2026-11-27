@@ -4,7 +4,6 @@
 //! changes, is replaced or is freed, the paths at it are fixed up to match.
 
 use core::ptr;
-
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::journal_overlay::peek_slot;
 use crate::btree::locking::BtreeNodeLockedType::*;
@@ -14,7 +13,7 @@ use crate::btree::path::{KeyVal, LockedNode, NodePtr, PathIdx, Paths, PathsUpdat
 use crate::btree::traverse::level_init_iter;
 use crate::btree::update::BtreeInsertEntry;
 use crate::errcode::Errcode;
-use crate::format::{Btree, BTREE_MAX_DEPTH};
+use crate::format::{BTREE_MAX_DEPTH, Btree};
 use crate::locking::six::SixHold;
 use crate::prt;
 use crate::util::Printbuf;

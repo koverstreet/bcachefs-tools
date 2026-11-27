@@ -2,15 +2,17 @@
 
 /* Auxiliary search trees */
 
-use super::bset::{AuxTreeType, BsetTree, BSET_CACHELINE, BSET_NO_AUX_TREE_VAL, BSET_RW_AUX_TREE_VAL};
-use super::keys::{bkey_p_next, key_at, keys_between, set_keys, Keys, KeysMut};
-use super::{check_lookups, NodeContents};
-use crate::btree::bkey::{BkeyP, HIGH_BIT_OFFSET, BkeyPackedPadded};
-use crate::format::{Bpos, Bkey, BkeyPacked, KEY_PACKED_BITS_START};
-use crate::types::{L1_CACHE_BYTES, SMP_CACHE_BYTES};
+use crate::btree::bkey::{BkeyP, BkeyPackedPadded, HIGH_BIT_OFFSET};
+use crate::btree::node::bset::{AuxTreeType, BSET_CACHELINE, BSET_NO_AUX_TREE_VAL,
+    BSET_RW_AUX_TREE_VAL, BsetTree};
+use crate::btree::node::keys::{bkey_p_next, key_at, keys_between, set_keys, Keys, KeysMut};
+use crate::btree::node::{check_lookups, NodeContents};
 use crate::data_structures::eytzinger::Eytzinger1;
+use crate::format::{Bkey, BkeyPacked, Bpos, KEY_PACKED_BITS_START};
 use crate::os::kernel::{likely, prefetch, unlikely};
-use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Plain};
+use crate::types::{L1_CACHE_BYTES, SMP_CACHE_BYTES};
+use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut,
+    Plain};
 use cstruct_macros::Plain;
 
 const BFLOAT_FAILED_UNPACKED: u8 = u8::MAX;

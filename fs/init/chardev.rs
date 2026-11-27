@@ -33,59 +33,58 @@
 //! index or by path (IoctlFlags::BY_INDEX); a handler that takes state_lock holds
 //! only an outer ref on it, as device removal drains ca->ref under that lock.
 
-use crate::init::passes::RecoveryPass;
-use crate::c;
-use crate::posix::dev::dev_t;
-use crate::bcachefs_ioctl::{IoctlFlags, IoctlDataProgress, IoctlDevUsage,
-    IoctlDevUsageType, IoctlDevUsageV2, IoctlDisk, IoctlDiskGetIdx,
-    IoctlDiskResize, IoctlDiskResizeJournal, IoctlDiskResizeJournalV2,
-    IoctlDiskResizeV2, IoctlDiskSetState, IoctlDiskSetStateV2,
-    IoctlDiskV2, IoctlErrMsg, IoctlFsUsage, IoctlQueryAccounting,
-    QUERY_ACCOUNTING_FREE_NR, IoctlQueryAccountingV2, IoctlQueryBtreeKeys,
-    QueryBtreeKeysFlags, IoctlQueryUuid,
-    IoctlReadSuper, DataEvent, DataOp, DataProgressDataTypeSpecial,
-    IoctlDataEventRet, IoctlData, BCH_IOCTL_DATA, IoctlDataEvent, BCH_IOCTL_DEV_USAGE,
-    BCH_IOCTL_DEV_USAGE_V2, BCH_IOCTL_DISK_ADD, BCH_IOCTL_DISK_ADD_v2, BCH_IOCTL_DISK_GET_IDX,
-    BCH_IOCTL_DISK_OFFLINE, BCH_IOCTL_DISK_OFFLINE_v2, BCH_IOCTL_DISK_ONLINE,
-    BCH_IOCTL_DISK_ONLINE_v2, BCH_IOCTL_DISK_REMOVE, BCH_IOCTL_DISK_REMOVE_v2,
-    BCH_IOCTL_DISK_RESIZE, BCH_IOCTL_DISK_RESIZE_JOURNAL, BCH_IOCTL_DISK_RESIZE_JOURNAL_v2,
-    BCH_IOCTL_DISK_RESIZE_v2, BCH_IOCTL_DISK_SET_STATE, BCH_IOCTL_DISK_SET_STATE_v2,
-    BCH_IOCTL_FS_USAGE, BCH_IOCTL_FSCK_OFFLINE, BCH_IOCTL_FSCK_ONLINE, BCH_IOCTL_QUERY_ACCOUNTING,
-    BCH_IOCTL_QUERY_ACCOUNTING_v2, BCH_IOCTL_QUERY_BTREE_KEYS, BCH_IOCTL_QUERY_COUNTERS,
-    BCH_IOCTL_QUERY_UUID, BCH_IOCTL_READ_SUPER};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, WriteRef, FsFlag};
-use crate::locking::{ByteLock, Locked};
-use crate::util::backref::BackRef;
-use crate::util::ffi::Opaque;
-use crate::util::place::Placed;
-use crate::os::chrdev::{self, Chrdev, Class, Device};
-use crate::os::file::{Any, File, FileOps, UserBuf};
-use crate::os::kobject::Kobject;
-use crate::os::module::{ModuleExit, ThisModule};
-use crate::os::ioctl::{arg, inout, input, output, vstruct, UserArg, UserStr, UserVstruct};
-use crate::util::ioctl::Ioctl;
-use crate::util::alloc::{KBox, Vec};
-use kernel::alloc::flags::GFP_KERNEL;
-use crate::util::rcu::read_lock;
-use crate::util::refcount::{RefGuard, TryRefcount};
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::alloc::{accounting, accounting_mem};
-use crate::btree::iter::{btree_iter_params_valid, BtreeIter, BtreeIterFlags};
-use crate::{btree_trans, message, prt};
-use core::mem::{offset_of, size_of};
+use core::ffi::CStr;
+use core::mem::offset_of;
 use core::ops::ControlFlow;
-use crate::util::Printbuf;
-use crate::sb::members::{DevOuterRef, DevRef};
-use crate::os::kernel::{capable, Capability};
-use crate::util::thread_with_file::{Inner, ThreadFile, ThreadWithFile};
-use crate::data::moving::MoveStats;
 use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
-use core::ffi::CStr;
+use crate::alloc::{accounting, accounting_mem};
+use crate::bcachefs_ioctl::{BCH_IOCTL_DATA, BCH_IOCTL_DEV_USAGE, BCH_IOCTL_DEV_USAGE_V2,
+    BCH_IOCTL_DISK_ADD, BCH_IOCTL_DISK_ADD_v2, BCH_IOCTL_DISK_GET_IDX, BCH_IOCTL_DISK_OFFLINE,
+    BCH_IOCTL_DISK_OFFLINE_v2, BCH_IOCTL_DISK_ONLINE, BCH_IOCTL_DISK_ONLINE_v2,
+    BCH_IOCTL_DISK_REMOVE, BCH_IOCTL_DISK_REMOVE_v2, BCH_IOCTL_DISK_RESIZE,
+    BCH_IOCTL_DISK_RESIZE_JOURNAL, BCH_IOCTL_DISK_RESIZE_JOURNAL_v2, BCH_IOCTL_DISK_RESIZE_v2,
+    BCH_IOCTL_DISK_SET_STATE, BCH_IOCTL_DISK_SET_STATE_v2, BCH_IOCTL_FSCK_OFFLINE,
+    BCH_IOCTL_FSCK_ONLINE, BCH_IOCTL_FS_USAGE, BCH_IOCTL_QUERY_ACCOUNTING,
+    BCH_IOCTL_QUERY_ACCOUNTING_v2, BCH_IOCTL_QUERY_BTREE_KEYS, BCH_IOCTL_QUERY_COUNTERS,
+    BCH_IOCTL_QUERY_UUID, BCH_IOCTL_READ_SUPER, DataEvent, DataOp, DataProgressDataTypeSpecial,
+    IoctlData, IoctlDataEvent, IoctlDataEventRet, IoctlDataProgress, IoctlDevUsage,
+    IoctlDevUsageType, IoctlDevUsageV2, IoctlDisk, IoctlDiskGetIdx, IoctlDiskResize,
+    IoctlDiskResizeJournal, IoctlDiskResizeJournalV2, IoctlDiskResizeV2, IoctlDiskSetState,
+    IoctlDiskSetStateV2, IoctlDiskV2, IoctlErrMsg, IoctlFlags, IoctlFsUsage, IoctlQueryAccounting,
+    IoctlQueryAccountingV2, IoctlQueryBtreeKeys, IoctlQueryUuid, IoctlReadSuper,
+    QUERY_ACCOUNTING_FREE_NR, QueryBtreeKeysFlags};
+use crate::btree::iter::{btree_iter_params_valid, BtreeIter, BtreeIterFlags};
+use crate::c;
+use crate::data::moving::MoveStats;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{__uuid_t, Btree, DataType, MemberState, REPLICAS_MAX, SbCompat};
+use crate::fs::{Fs, FsFlag, WriteRef};
+use crate::init::passes::RecoveryPass;
+use crate::journal::buckets::set_nr_journal_buckets;
+use crate::locking::{ByteLock, Locked};
+use crate::os::chrdev::{self, Chrdev, Class, Device};
+use crate::os::file::{Any, File, FileOps, UserBuf};
+use crate::os::ioctl::{arg, inout, input, output, vstruct, UserArg, UserStr, UserVstruct};
+use crate::os::kernel::{capable, Capability};
+use crate::os::kobject::Kobject;
+use crate::os::module::{ModuleExit, ThisModule};
+use crate::posix::dev::dev_t;
+use crate::sb::members::{DevOuterRef, DevRef};
+use crate::util::alloc::{KBox, Vec};
+use crate::util::backref::BackRef;
+use crate::util::ffi::Opaque;
+use crate::util::ioctl::Ioctl;
+use crate::util::place::Placed;
+use crate::util::rcu::read_lock;
+use crate::util::refcount::{RefGuard, TryRefcount};
+use crate::util::thread_with_file::{Inner, ThreadFile, ThreadWithFile};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
+use crate::util::Printbuf;
+use crate::{btree_trans, message, prt};
 use cstruct_macros::vtable;
+use kernel::alloc::flags::GFP_KERNEL;
 use kernel::uaccess::{UserPtr, UserSlice};
-use crate::format::{Btree, DataType, MemberState, __uuid_t, REPLICAS_MAX, SbCompat};
 
 /* The dispatch */
 
@@ -659,7 +658,7 @@ fn disk_resize_journal(fs: &Fs, a: IoctlDiskResizeJournal, msg: ErrMsg,
     }
     let ca = dev_lookup_outer(fs, a.dev, flags)?;
 
-    let ret = crate::journal::buckets::set_nr_journal_buckets(fs, &ca, a.nbuckets as u32);
+    let ret = set_nr_journal_buckets(fs, &ca, a.nbuckets as u32);
     msg.report(&mut Printbuf::new(), ret, |ret, _| ret)
 }
 

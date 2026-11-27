@@ -35,19 +35,19 @@
 //! and drops every one it didn't, before it returns - as std::thread::scope()
 //! joins its threads.
 
-use crate::errcode::BchError;
-use core::ffi::CStr;
-use crate::util::alloc::Vec;
-use crate::util::gather::{Gather, GatherRef};
-use crate::os::kthread::Kthread;
-use crate::util::sleep::Sleep;
-use crate::util::task::{waiter, Spawn, TaskBox, TaskList, TaskSlot, WaitSync};
-use crate::os::workqueue::Queue;
-use crate::util::Printbuf;
 use core::cell::{RefCell, UnsafeCell};
+use core::ffi::CStr;
 use core::fmt;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
+use crate::errcode::BchError;
+use crate::os::kthread::Kthread;
+use crate::os::workqueue::{set_worker_desc, Queue};
+use crate::util::alloc::Vec;
+use crate::util::gather::{Gather, GatherRef};
+use crate::util::sleep::Sleep;
+use crate::util::task::{waiter, Spawn, TaskBox, TaskList, TaskSlot, WaitSync};
+use crate::util::Printbuf;
 use pin_init::{init, stack_pin_init};
 
 /// Where a scope's jobs run.
@@ -169,7 +169,7 @@ impl<'scope, 'env> Scope<'scope, 'env> {
                 Kthread::set_freezable();
             }
             if let Some(desc) = desc {
-                crate::os::workqueue::set_worker_desc(CStr::from_bytes_until_nul(&desc).unwrap_or_default());
+                set_worker_desc(CStr::from_bytes_until_nul(&desc).unwrap_or_default());
             }
             unsafe { *home.ret.get() = Some(f()) };
         }, Some(job_done))?;

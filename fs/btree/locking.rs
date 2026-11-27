@@ -6,36 +6,42 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{BtreeTrans, TransAttempt};
-use crate::util::alloc::Flags;
-use crate::btree::lock_graph::six_check_for_deadlock;
-use crate::btree::node::BtreeNode;
-use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathNode, PathSnapshot, Paths};
-use crate::c;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
 use crate::btree::bbpos::Bbpos;
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::key_cache::BkeyCached;
+use crate::btree::lock_graph::six_check_for_deadlock;
+use crate::btree::node::{BtreeNode, BtreeNodeFlags};
+use crate::btree::path::{btree_path_poison, BtreePath, NodePtr, PathIdx, PathNode, PathSnapshot,
+    Paths};
 #[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
 use crate::btree::trans::TRANSACTIONS_NR;
-#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::util::time_stats::TimeStats;
-use crate::btree::node::BtreeNodeFlags;
+use crate::c;
 use crate::debug::{params::debug_check_btree_locking, trace::{events, TraceEvent}};
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BTREE_MAX_DEPTH, Bpos, Btree};
 use crate::fs::Fs;
 use crate::locking::six::{__six_lock_init, six_lock_counts, SixHold, SixLock, SixLockCount,
-    SixLockWaiter, SixLockInitFlags, SixLockType};
-use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive, ExclusiveGuard, Locked, Mutex, RawTimedLock, PF_MEMALLOC_NOIO};
-use crate::util::place::Placed;
-use crate::prt;
-use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
-use crate::util::futex::EventCount;
+    SixLockInitFlags, SixLockType, SixLockWaiter};
+use crate::locking::{memalloc_flags_restore, memalloc_flags_save, AsLocked, Exclusive,
+    ExclusiveGuard, Locked, Mutex, PF_MEMALLOC_NOIO, RawTimedLock};
+#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+use crate::os::kernel::local_clock;
 use crate::os::kernel::{jiffies, likely, msecs_to_jiffies, race_fault, time_after, HZ, READ};
 use crate::os::percpu::{migrate_disable, migrate_enable, raw_smp_processor_id};
+use crate::prt;
+use crate::util::alloc::Flags;
+use crate::util::backtrace::{prt_current_backtrace, prt_symbol};
+use crate::util::futex::EventCount;
+use crate::util::place::Placed;
+use crate::util::projections::Volatile;
 use crate::util::rcu::SrcuReadGuard;
 use crate::util::sleep::Sleep;
-use crate::util::projections::Volatile;
-use cstruct_macros::MaybeZeroable;
+#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
+use crate::util::time_stats::{TimeStats, TimeStatsArray, TimeStatsRef};
+use crate::util::Printbuf;
+use cstruct_macros::{bch_enum, MaybeZeroable};
 
 #[repr(C)]
 #[derive(MaybeZeroable)]
@@ -46,15 +52,6 @@ pub struct BtreeBkeyCachedCommon {
     pub btree_id: Volatile<u8>,
     pub cached: bool,
 }
-
-#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::os::kernel::local_clock;
-#[cfg(CONFIG_BCACHEFS_LOCK_TIME_STATS)]
-use crate::util::time_stats::{TimeStatsArray, TimeStatsRef};
-use crate::util::Printbuf;
-use core::sync::atomic::{fence, Ordering::{Acquire, Relaxed}};
-use core::ptr::{self, NonNull};
-use cstruct_macros::bch_enum;
 
 /* DOC_LATEX(btree-locking)
  *
@@ -161,9 +158,9 @@ use cstruct_macros::bch_enum;
 #[repr(i32)]
 pub enum BtreeNodeLockedType {
     BTREE_NODE_UNLOCKED = -1,
-    BTREE_NODE_READ_LOCKED = crate::locking::six::SixLockType::SIX_LOCK_read as i32,
-    BTREE_NODE_INTENT_LOCKED = crate::locking::six::SixLockType::SIX_LOCK_intent as i32,
-    BTREE_NODE_WRITE_LOCKED = crate::locking::six::SixLockType::SIX_LOCK_write as i32,
+    BTREE_NODE_READ_LOCKED = SixLockType::SIX_LOCK_read as i32,
+    BTREE_NODE_INTENT_LOCKED = SixLockType::SIX_LOCK_intent as i32,
+    BTREE_NODE_WRITE_LOCKED = SixLockType::SIX_LOCK_write as i32,
 }
 
 /* trans locked state */

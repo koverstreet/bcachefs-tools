@@ -1,11 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
+
 use super::*;
 use crate::alloc::lru_format::Lru;
 use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkV};
+use crate::format::{Bkey, BkeyType};
 use crate::posix::inode_format::InodeGeneration;
 use crate::snapshots::format::{Snapshot, Subvolume};
-use crate::format::{BkeyType, Bkey};
-use crate::util::vstructs::{len_at, plain_bytes, plain_bytes_mut, ArmRef, VStructError};
 use crate::types::Le32;
+use crate::util::vstructs::{len_at, plain_bytes, plain_bytes_mut, ArmRef, VStructError, Validated};
 
 /// A snapshot key from before depth, skip and btime - 24 bytes of its 64 -
 /// reads as a snapshot: the fields it has as they are, the rest zero, not
@@ -57,8 +59,7 @@ fn bkey_typed_short_values() {
 #[test]
 fn bkey_unfloored() {
     let b = [0u64; 3];
-    let b = crate::util::vstructs::plain_bytes(&b);
-    use crate::util::vstructs::Validated;
+    let b = plain_bytes(&b);
     assert!(<Snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
     assert!(<Snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());
 }

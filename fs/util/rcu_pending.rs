@@ -16,24 +16,24 @@ use core::marker::{PhantomData, PhantomPinned};
 use core::mem::{offset_of, MaybeUninit};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use pin_init::{pin_init_from_closure, PinInit, Zeroable};
-
-use crate::c;
-use crate::c::rcu_head;
+use crate::c::{self, rcu_head};
+use crate::data_structures::genradix::NewNode;
 use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
-use crate::new_lock;
+use crate::os::percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef};
+use crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
+use crate::os::workqueue::{Queue, RawWork};
 use crate::types::GenRadix;
-use crate::os::alloc::Global;
-use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, AtOnce, Flags, Vec, WithAlloc};
-use crate::util::mempool::Mempool;
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, AtOnce, Flags,
+    Global, Vec, WithAlloc};
 use crate::util::ffi::Opaque;
-use crate::data_structures::genradix::NewNode;
-use crate::os::{percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef}, workqueue::{Queue, RawWork}};
 use crate::util::maybe_rcu_alloc::RcuFreeing;
+use crate::util::mempool::Mempool;
 use crate::util::rcu::{Flavor, GpCookie, HasRcuHead, RcuHead, RcuOwned};
+use crate::{genradix_entry, new_lock, new_work, warn_on};
+use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
-const ACTIVE: usize = crate::os::rcu::NUM_ACTIVE_POLL_OLDSTATE;
+const ACTIVE: usize = NUM_ACTIVE_POLL_OLDSTATE;
 
 /// A T that may be handed out again - as a T, by RcuPending - while readers
 /// from before its free may still be in it.
@@ -189,7 +189,7 @@ struct Seq {
     nr:     usize,
     seq:    GpCookie,
 }
-crate::genradix_entry!(Option<Raw>);
+genradix_entry!(Option<Raw>);
 
 impl Seq {
     fn new(seq: GpCookie) -> Self {
@@ -654,7 +654,7 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
             lists:    Default::default(),
             cb_armed: false,
         }, "rcu_pending_pcpu.lock");
-        let work = crate::new_work!(Self::work_fn, "rcu_pending_pcpu.work");
+        let work = new_work!(Self::work_fn, "rcu_pending_pcpu.work");
         unsafe {
             (&raw mut (*slot).parent).write(this);
             (&raw mut (*slot).nr).write(AtomicUsize::new(0));
@@ -703,9 +703,9 @@ impl<'f, T: RcuRealloc, A: Alloc> RcuPending<'f, T, A> {
             {
                 let s = unsafe { (*p).lock.lock() };
                 for i in &s.lists {
-                    crate::warn_on!(i.head.is_some());
+                    warn_on!(i.head.is_some());
                 }
-                crate::warn_on!(s.objs.iter().any(|o| o.nr != 0));
+                warn_on!(s.objs.iter().any(|o| o.nr != 0));
             }
             unsafe { ptr::drop_in_place(p) };
         }

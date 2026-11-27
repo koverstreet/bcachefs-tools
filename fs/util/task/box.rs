@@ -19,12 +19,6 @@
 //! put to the scope once its future and home are dropped: so they may borrow
 //! what the scope's body lends, and the start is safe.
 
-use crate::errcode::BchError;
-use crate::util::alloc::{init_at, init_with, Alloc, Global};
-use crate::util::gather::{Fold, GatherRef, Scope, Width};
-use crate::util::rcu::{DropAnytime, DropAtomic, Flavor, HasRcuHead, RcuHead, RcuOwned};
-use crate::os::workqueue::Queue;
-use super::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef, Waiter};
 use core::alloc::Layout;
 use core::future::Future;
 use core::marker::PhantomData;
@@ -32,6 +26,12 @@ use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::AsyncFnOnce;
 use core::pin::Pin;
 use core::ptr::NonNull;
+use crate::errcode::BchError;
+use crate::os::workqueue::Queue;
+use crate::util::alloc::{init_at, init_with, kvfree_rcu, Alloc, Global};
+use crate::util::gather::{Fold, GatherRef, Scope, Width};
+use crate::util::rcu::{DropAnytime, DropAtomic, Flavor, HasRcuHead, RcuHead, RcuOwned};
+use crate::util::task::{waiter, CompletionReturn, DoneWith, Spawn, Task, TaskList, TaskRef, Waiter};
 use pin_init::PinInit;
 
 /// The future @M makes, for a home of @H: its borrow of the home erased, as
@@ -325,7 +325,7 @@ unsafe fn free_slot<H, F: Future, A: Alloc + Copy>(home: NonNull<H>) {
         core::ptr::drop_in_place(home.as_ptr());
         if A::KVFREE {
             let layout = Layout::from_size_align_unchecked((*w.as_ptr()).given, align_of::<WithTask<'_, H, F, A>>());
-            return crate::util::alloc::kvfree_rcu::<WithTask<'_, H, F, A>>(w.cast(), layout);
+            return kvfree_rcu::<WithTask<'_, H, F, A>>(w.cast(), layout);
         }
         Flavor::RCU.call(SlotMem::<H, F, A>(w.cast()), SlotMem::free);
     }

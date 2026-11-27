@@ -7,28 +7,25 @@
 //! The section is a list of journal entries, stored exactly as they would be
 //! in the journal, after a header saying which journal seq they're as of.
 
-use core::mem::{size_of, size_of_val};
 use core::sync::atomic::Ordering::Relaxed;
-
-use zerocopy::IntoBytes;
-
-use crate::btree::bkey::{AnyKey, BkeySCToText, ValidateFlags, BkeyValidateContext,
-    BkeyValidateFrom};
+use crate::btree::bkey::{AnyKey, BkeySCToText, BkeyValidateContext, BkeyValidateFrom,
+    ValidateFlags};
 use crate::btree::interior::btree_roots_to_journal_entries;
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, SbLockGuard, btree_id_is_alloc};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Btree, FsUsageType, Jset, JsetEntry, JsetEntryClock, JsetEntryRef,
+    JsetEntryType, JsetEntryUsage, MetadataVersion, Sb, SbCompats, SbFeatures, SbFieldClean,
+    SbFieldType};
+use crate::fs::{btree_id_is_alloc, Fs, SbLockGuard};
 use crate::journal::entries::{entry_u64s, EntryWriter, NoRoom};
+use crate::journal::read::journal_pos_from_member_info_set;
 use crate::journal::validate::{journal_entry_to_text, journal_entry_validate};
 use crate::sb::io::{entries_end, SbFieldOps, SbResize};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::Vec;
-use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, Head, Unsized, Unvalidated, Validated,
-                            ValidatedEntriesMut};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Head,
+    Unsized, Unvalidated, Validated, ValidatedEntriesMut};
 use crate::util::{Printbuf, ToText};
-use crate::{message, fsck_err, mustfix_fsck_err_on, prt};
-use crate::format::{Btree, MetadataVersion, SbFeatures, Sb, SbFieldClean, FsUsageType,
-    Jset, JsetEntry, JsetEntryClock, JsetEntryUsage, JsetEntryRef, JsetEntryType, SbCompats,
-    SbFieldType};
+use crate::{fsck_err, message, mustfix_fsck_err_on, prt};
 
 type Section = SbFieldClean<Validated>;
 
@@ -84,7 +81,7 @@ impl core::ops::Deref for CleanSection {
     type Target = Section;
 
     fn deref(&self) -> &Section {
-        let b = self.0.as_bytes();
+        let b = plain_bytes(&self.0[..]);
         unsafe { &*Section::from_raw(b.as_ptr(), b.len()) }
     }
 }
@@ -106,10 +103,8 @@ impl Fs {
         let bytes = f.as_bytes();
         let mut copy = Vec::from_elem(0u64, bytes.len() / size_of::<u64>())
             .map_err(|_| BchError::from(Errcode::ENOMEM_read_superblock_clean))?;
-        copy.as_mut_bytes().copy_from_slice(bytes);
-
-        // SAFETY: a copy of a validated section, all of it
-        let b = copy.as_mut_bytes();
+        let b = plain_bytes_mut(&mut copy[..]);
+        b.copy_from_slice(bytes);
         let clean = unsafe { &mut *Section::from_raw_mut(b.as_mut_ptr(), b.len()) };
         validate_late(self, version, big_endian, clean, false)?;
 
@@ -249,7 +244,7 @@ pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
     }
     sb.sb_mut().set_clean(true);
 
-    crate::journal::read::journal_pos_from_member_info_set(fs, guard);
+    journal_pos_from_member_info_set(fs, guard);
 }
 
 /// Strip alloc info from a clean filesystem: removes alloc btree roots

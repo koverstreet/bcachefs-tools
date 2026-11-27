@@ -1,33 +1,34 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::{bkey::ValidateFlags, journal_overlay::{JournalPtr, JournalReplay}};
-use crate::format::{Btree, MemberState, Nonce, Csum, REPLICAS_MAX, Jset, JsetEntry,
-    ScrubJournalOpt, JsetHead, JsetEntryRef};
-use crate::c;
+use core::mem::offset_of;
+use core::ops::Range;
 use crate::alloc::accounting_format::DataTypes;
-use crate::init::{dev::DevsList, error::id};
-use crate::journal::init::JournalStartInfo;
-use crate::journal::journal::{JournalRewindRange, JournalFlag};
-use crate::sb::{members_format::MemberErrorType, members::{DevIoRef, DevReadRefKind}};
-use crate::util::{Printbuf, ToText};
+use crate::btree::{bkey::ValidateFlags, journal_overlay::{JournalPtr, JournalReplay}};
+use crate::c;
 use crate::data::checksum::{csum_vstruct, NONCE_JOURNAL};
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Dev, Fs};
-use crate::journal::buckets::{JournalRing, JournalBucketStage};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Btree, Csum, Jset, JsetEntry, JsetEntryRef, JsetHead, MemberState, Nonce,
+    REPLICAS_MAX, ScrubJournalOpt};
+use crate::fs::{Dev, Fs, SbLockGuard};
+use crate::init::{dev::DevsList, error::{id, sb_error_count}};
+use crate::journal::buckets::{JournalBucketStage, JournalRing};
+use crate::journal::init::JournalStartInfo;
+use crate::journal::journal::{JournalFlag, JournalRewindRange};
+use crate::journal::validate::{self, JsetCheck};
 use crate::locking::{Guard as _, Locked, Mut, Mutex, Ref};
-use crate::types::{GenRadix, Le32};
-use crate::util::alloc::{kvzalloc, AllocError, Flags, Vec};
-use crate::util::thin::ThinBox;
 use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
-use crate::util::par::{self, Backend};
-use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized,
-                            Unvalidated};
 use crate::os::workqueue::Queue;
-use crate::{message, field, fs_fatal_error, fsck_err, fsck_err_on, new_lock, prt};
-use core::ops::Range;
-use pin_init::stack_pin_init;
-use super::validate::{self, JsetCheck};
+use crate::sb::{members::{sb_member, DevIoRef, DevReadRefKind}, members_format::MemberErrorType};
+use crate::types::{GenRadix, Le32};
+use crate::util::alloc::{kvzalloc, AllocError, Flags, Vec};
+use crate::util::par::{self, Backend};
+use crate::util::thin::ThinBox;
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized, Unvalidated};
+use crate::util::{DateTime, Printbuf, ToText};
+use crate::{field, fs_fatal_error, fsck_err, fsck_err_on, genradix_entry, message, new_lock, prt,
+    ratelimit, warn_on};
+use pin_init::{stack_pin_init, zeroed, Zeroable};
 
 pub use crate::format::JsetEntryType;
 
@@ -58,7 +59,7 @@ impl Jset<Unvalidated> {
     /// Or decrypted: ChaCha20 is its own inverse.
     pub fn encrypt(&mut self, fs: &Fs) -> Result<(), BchError> {
         let (ty, nonce) = (self.csum_type(), self.nonce());
-        let start = core::mem::offset_of!(Head<Jset>, encrypted_start);
+        let start = offset_of!(Head<Jset>, encrypted_start);
         fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[start..])
     }
 
@@ -141,11 +142,11 @@ pub fn replay_devs(fs: &Fs, i: &JournalReplay) -> DevsList {
 /// kvmalloc()'d, its jset in it: C's journal_replay *, null for an empty slot.
 pub type Replay = ThinBox<JournalReplay>;
 
-crate::genradix_entry!(Option<Replay>);
+genradix_entry!(Option<Replay>);
 
 /// By seq, from journal_entries_base_seq - the fs's, not ours: C reads it too.
 #[repr(transparent)]
-#[derive(pin_init::Zeroable)]
+#[derive(Zeroable)]
 pub struct JournalEntries(GenRadix<Option<Replay>>);
 
 impl JournalEntries {
@@ -203,7 +204,7 @@ impl Drop for JournalEntries {
     }
 }
 
-pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut crate::fs::SbLockGuard<'_>) {
+pub fn journal_pos_from_member_info_set(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     for ca in fs.members() {
         let ja = &ca.journal;
         let m = sb.fs_member_mut(ca.dev_idx.into());
@@ -219,7 +220,7 @@ pub fn journal_pos_from_member_info_resume(fs: &Fs) {
     let _not_rw = fs.not_rw();
 
     for ca in fs.members() {
-        let m = crate::sb::members::sb_member(sb.sb(), ca.dev_idx.into()).unwrap_or_else(::pin_init::zeroed);
+        let m = sb_member(sb.sb(), ca.dev_idx.into()).unwrap_or_else(zeroed);
 
         let idx = m.last_journal_bucket.get();
         if idx < ca.journal.nr() {
@@ -253,7 +254,7 @@ pub fn journal_ptrs_to_text(out: &mut Printbuf, fs: &Fs, j: &JournalReplay) {
 fn journal_datetime_to_text(out: &mut Printbuf, j: &Jset<Unvalidated>) {
     let t = j.datetime();
     if t != 0 {
-        crate::util::printbuf::DateTime(t as i64).to_text(out);
+        DateTime(t as i64).to_text(out);
     }
 }
 
@@ -437,7 +438,7 @@ impl ReadState<'_> {
             if seq != dup.seq() {
                 fs.log().err(message!(
                     "seq {} != dup {} base {}", seq, dup.seq(), fs.journal_entries_base_seq.get()));
-                crate::warn_on!(true);
+                warn_on!(true);
             }
 
             let identical = dup.j.as_bytes() == bytes;
@@ -783,7 +784,7 @@ impl<'a> DevReader<'a> {
         ca.account_io_completion(MemberErrorType::read, submit_time, ret.is_ok());
 
         let Ok(buf) = ret else {
-            crate::ratelimit!(ca.log()).err(crate::message!(
+            ratelimit!(ca.log()).err(message!(
                 "journal read error: sector {}", offset));
             /*
              * We don't error out of the recovery process
@@ -941,7 +942,7 @@ impl<'a> DevReader<'a> {
                             last_seq bucket {} write head bucket {} seq {}:\n",
                  &**self.ca, last_seq_idx, max_bucket, bucket_seq[max_bucket]);
             violations.to_text(&mut msg);
-            crate::init::error::sb_error_count(self.fs, id::journal_bucket_seq_not_monotonic);
+            sb_error_count(self.fs, id::journal_bucket_seq_not_monotonic);
         }
 
         if self.fs.opts.verbose.get() != 0 {

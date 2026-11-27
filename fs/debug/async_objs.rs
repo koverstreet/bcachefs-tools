@@ -20,11 +20,13 @@
 
 #![allow(non_camel_case_types)]
 
+use core::ffi::c_void;
+use core::ptr::NonNull;
 use crate::data_structures::fast_list::FastList;
 use crate::errcode::Errcode;
 use crate::fs::Fs;
-use crate::util::{task::TaskList, Printbuf};
-use cstruct_macros::{bch_enum, placed, MaybeZeroable, Init};
+use crate::util::{alloc::init_or, task::TaskList, Printbuf};
+use cstruct_macros::{bch_enum, placed, Init, MaybeZeroable};
 use pin_init::pin_data;
 
 #[bch_enum(closed)]
@@ -42,12 +44,9 @@ pub enum AsyncObjKind {
 #[derive(MaybeZeroable, Init)]
 pub struct AsyncObjList {
     #[pin]
-    #[init(crate::util::alloc::init_or(FastList::new(), Errcode::ENOMEM_async_obj_init))]
+    #[init(init_or(FastList::new(), Errcode::ENOMEM_async_obj_init))]
     pub list: FastList<c_void>,
 }
-
-use core::ffi::c_void;
-use core::ptr::NonNull;
 
 // ── Listing an object ────────────────────────────────────────────────────
 
@@ -129,13 +128,12 @@ pub(crate) use lists::debugfs_init;
 pub mod lists {
 use core::ffi::{c_void, CStr};
 use core::ptr::NonNull;
-
-use super::{AsyncObjList, AsyncObj};
 use crate::data::{read::Rbio, update_task::Update};
+use crate::debug::async_objs::{AsyncObj, AsyncObjList};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::os::debugfs::{DebugFile, DebugOut, Dir};
-use crate::util::{place::Contained, rcu, Printbuf, task::TaskRef};
+use crate::util::{place::Contained, rcu, task::TaskRef, Printbuf};
 
 /// How a list's objects are shown: of the list's kind, read under RCU.
 type ObjToText = unsafe fn(&mut Printbuf, &Fs, NonNull<c_void>);

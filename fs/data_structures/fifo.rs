@@ -18,10 +18,10 @@
 //! An empty Fifo has no buffer, as C's before init_fifo(); one C has freed
 //! has none again (free_fifo() NULLs it), so dropping it frees nothing.
 
+use core::mem::{needs_drop, MaybeUninit};
+use core::ptr::NonNull;
 use crate::types::Fifo;
 use crate::util::alloc::{flags, kvfree_sized, kvrealloc, AllocError, Flags};
-use core::mem::{needs_drop, size_of, MaybeUninit};
-use core::ptr::NonNull;
 use num_traits::{AsPrimitive, ConstZero, One, PrimInt, Unsigned, WrappingAdd, WrappingSub};
 
 pub trait FifoIdx: PrimInt + Unsigned + ConstZero + WrappingAdd + WrappingSub + AsPrimitive<usize> {

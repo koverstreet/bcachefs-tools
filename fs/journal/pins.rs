@@ -10,32 +10,31 @@
 //! entry's lists are its own lock's, two taken the older first; its devs are
 //! the write path's.
 
+use core::cell::Cell;
 use core::ffi::c_void;
 use core::mem::offset_of;
 use core::ptr;
 use core::sync::atomic::{AtomicI32, Ordering::{Relaxed, Release, SeqCst}};
-
-use pin_init::{pin_data, PinInit, Zeroable};
-use cstruct_macros::NoUninit;
-
-use crate::init::dev::DevsList;
-use crate::journal::journal::{Journal, JournalFlag};
-use self::JournalPinType as PinType;
 use crate::alloc::replicas::SbEntry;
 use crate::data_structures::list::{List, ListLinks};
-use crate::errcode::{Errcode, BchError};
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
 use crate::format::{DataType, REPLICAS_MAX};
 use crate::fs::Fs;
-use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard, SpinLockIrq};
+use crate::init::dev::DevsList;
+use crate::journal::journal::{Journal, JournalFlag};
+use crate::locking::{ExclusiveGuard, Locked, LockedBy, MemallocFlags, PercpuRwSem, SharedGuard,
+    SpinLockIrq};
 use crate::os::kernel::unlikely;
-use crate::debug::trace::events;
 use crate::util::alloc::{init_at, AllocError, Vec};
+use crate::util::backtrace::prt_fn_name;
 use crate::util::place::{up, FieldPath};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{message, new_lock, prt, warn_once};
-use core::cell::Cell;
-use cstruct_macros::{bch_enum, MaybeZeroable};
+use cstruct_macros::{bch_enum, MaybeZeroable, NoUninit};
+use pin_init::{pin_data, pin_init, PinInit, Zeroable};
+use self::JournalPinType as PinType;
 
 /*
  * Something that makes a journal entry dirty - i.e. a btree node that has to be
@@ -53,7 +52,7 @@ pub enum JournalPinType {
     JOURNAL_PIN_TYPE_NR,
 }
 
-pub type PinFlushFn = fn(&Fs, &JournalEntryPin, u64) -> Result<(), crate::errcode::BchError>;
+pub type PinFlushFn = fn(&Fs, &JournalEntryPin, u64) -> Result<(), BchError>;
 
 /* A pin's, its seq's pin list lock's: the list it's on, and what it's on it as */
 pub struct PinLocked {
@@ -62,7 +61,7 @@ pub struct PinLocked {
 }
 
 // Zeroed, it's a pin never set: on no list, JOURNAL_PIN_TYPE_btree3
-unsafe impl ::pin_init::Zeroable for PinLocked {}
+unsafe impl Zeroable for PinLocked {}
 
 pub type PinLockedBy = LockedBy<PinLocked>;
 
@@ -78,7 +77,7 @@ pub struct JournalEntryPin {
 #[repr(C)]
 #[derive(MaybeZeroable)]
 pub struct PinBuf {
-    pub entries: Vec<crate::journal::pins::PinList>,
+    pub entries: Vec<PinList>,
 }
 
 /*
@@ -92,7 +91,6 @@ pub struct PinRange {
     pub pin_back:  Volatile<u64>,
     pub pin_size:  Volatile<u64>,
 }
-
 
 const JOURNAL_PIN: u64 = 32 * 1024;
 
@@ -132,7 +130,7 @@ fn noflush(_: &Fs, _: &Pin, _: u64) -> Result<(), BchError> {
 
 impl Pin {
     fn with_flush(flush: PinFlushFn) -> Self {
-        Self { locked: LockedBy::new(pin_init::zeroed(), ()), seq: Volatile::new(0), flush }
+        Self { locked: LockedBy::new(Zeroable::zeroed(), ()), seq: Volatile::new(0), flush }
     }
 
     /// A pin on nothing, flushed by its H's journal_flush(). Only H's
@@ -171,7 +169,7 @@ struct Symbol(*const c_void);
 impl core::fmt::Display for Symbol {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = Printbuf::new();
-        crate::util::backtrace::prt_fn_name(&mut out, self.0 as usize);
+        prt_fn_name(&mut out, self.0 as usize);
         f.write_str(out.as_str())
     }
 }
@@ -247,7 +245,7 @@ pub struct PinList {
 
 impl PinList {
     fn new() -> impl PinInit<Self> {
-        pin_init::pin_init!(PinList {
+        pin_init!(PinList {
             lists <- new_lock!(Zeroable::zeroed(), (), "&pin_list->lock"),
             count: AtomicI32::new(0),
             unreplayed: Zeroable::zeroed(),

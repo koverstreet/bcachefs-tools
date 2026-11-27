@@ -22,7 +22,7 @@ pub mod par;
 pub mod place;
 #[cfg(not(kernel))]
 pub mod plymouth;
-pub mod printbuf;
+mod printbuf;
 pub mod projections;
 pub mod prompt;
 pub mod raid;
@@ -43,7 +43,8 @@ pub mod varint;
 pub mod volatile;
 pub mod vstructs;
 
-pub use printbuf::{Bytes, DateTime, HumanReadable, Join, Nsecs, Printbuf, Sectors, ToText};
+pub use printbuf::{parse_human_u64, prt_arg, text_fmt, Bytes, DateTime, HumanReadable, Join, Msg, Nsecs,
+    Printbuf, Sectors, ToText};
 
 /// The largest value @_x's type holds: a field's, without naming its type -
 /// `max_of(&k.size)`, C's KEY_SIZE_MAX.
@@ -57,7 +58,7 @@ pub fn max_of<T: num_traits::Bounded>(_x: &T) -> T {
 // has no `zeroize`; and in both builds, key material that isn't a Key.
 #[cfg(not(feature = "std"))]
 pub(crate) fn wipe<T: ?Sized>(v: &mut T) {
-    let len = core::mem::size_of_val(v);
+    let len = size_of_val(v);
     let p = (v as *mut T).cast::<u8>();
     for i in 0..len {
         unsafe { core::ptr::write_volatile(p.add(i), 0) };

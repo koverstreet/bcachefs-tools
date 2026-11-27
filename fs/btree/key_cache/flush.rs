@@ -1,26 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::LockedEntry;
-use crate::btree::bkey::BkeySC;
-use crate::btree::trans_attempt::TransAttempt;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
-use crate::btree::path::{LockedNode, NodePtr, PathIdx, PathNode, Paths};
-use crate::btree::trans::BtreeTrans;
-use crate::c;
-use crate::btree::key_cache::{BkeyCached, BKEY_CACHED_DIRTY, BkeyCachedKey};
-use crate::btree::update::BtreeInsertEntry;
-use crate::journal::journal::JournalFlag;
-use crate::data_structures::sort::heapsort_by;
-use crate::errcode::{Errcode, BchError};
-use crate::format::Btree;
-use crate::fs::{Fs, FsFlag};
-use crate::journal::pins::PinHolder;
-use crate::util::{alloc::{flags, Vec}, rcu::read_lock};
-use crate::{fs_fatal_error, prt};
-use crate::journal::pins::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
-use crate::locking::six::SixLockType::SIX_LOCK_intent;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
+use crate::btree::bkey::BkeySC;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
+    UpdateTriggerFlags, Watermark};
+use crate::btree::key_cache::{BKEY_CACHED_DIRTY, BkeyCached, BkeyCachedKey, LockedEntry};
+use crate::btree::path::{LockedNode, NodePtr, PathIdx, PathNode, Paths};
+use crate::btree::trans::BtreeTrans;
+use crate::btree::update::BtreeInsertEntry;
+use crate::c;
+use crate::data_structures::sort::heapsort_by;
+use crate::errcode::{BchError, Errcode};
+use crate::format::Btree;
+use crate::fs::{Fs, FsFlag};
+use crate::journal::journal::JournalFlag;
+use crate::journal::pins::{JournalPinType::JOURNAL_PIN_TYPE_key_cache, PinHolder};
+use crate::locking::six::SixLockType::SIX_LOCK_intent;
+use crate::util::{alloc::{flags, Vec}, rcu::read_lock};
+use crate::{fs_fatal_error, prt};
 
 /*
  * A dirty cached key holds a journal pin on the oldest entry its updates are

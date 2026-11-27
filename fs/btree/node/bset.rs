@@ -2,25 +2,25 @@
 
 #![allow(non_camel_case_types)]
 
-use super::aux_tree::{bset_search_tree, bset_search_write_set, rw_aux_tree_bsearch, AuxTree, BFLOAT_FAILED};
-use super::keys::{key_at, Keys, KeysMut};
-use super::{check_lookups, BtreeNode, BtreeNrKeys, NodeContents};
-use crate::btree::bkey::{BkeyI, BkeyP, BkeyV, BKEY_U64S};
-use crate::debug::params::debug_check_btree_accounting;
-use crate::format::{Bpos, Bkey, BkeyFormat, BkeyPacked, Bset, btree_node, BtreeNodeEntry};
-use crate::fs::Fs;
-use crate::prt;
-use crate::types::Le64;
-use crate::os::kernel::{likely, random_u64};
-use crate::util::log::Log;
-use crate::util::printbuf::Msg;
-use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Head};
-use crate::util::Printbuf;
 use core::cmp::Ordering;
 use core::fmt;
 use core::mem::offset_of;
-use cstruct_macros::{MaybeZeroable, bch_enum};
-
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeyP, BkeyV};
+use crate::btree::node::aux_tree::{bset_search_tree, bset_search_write_set, rw_aux_tree_bsearch,
+    AuxTree, BFLOAT_FAILED};
+use crate::btree::node::keys::{key_at, Keys, KeysMut};
+use crate::btree::node::{check_lookups, BtreeNode, BtreeNrKeys, NodeContents};
+use crate::debug::params::debug_check_btree_accounting;
+use crate::format::{btree_node, Bkey, BkeyFormat, BkeyPacked, Bpos, Bset, BtreeNodeEntry};
+use crate::fs::Fs;
+use crate::os::kernel::{likely, random_u64};
+use crate::prt;
+use crate::types::Le64;
+use crate::util::log::Log;
+use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
+    plain_bytes_mut, Head};
+use crate::util::{Msg, Printbuf};
+use cstruct_macros::{bch_enum, MaybeZeroable};
 /*
  * BKEYS:
  *

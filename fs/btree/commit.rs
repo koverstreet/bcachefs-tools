@@ -1,52 +1,48 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::marker::PhantomData;
-use core::mem::size_of;
 use core::ptr;
 use core::sync::atomic::Ordering::Relaxed;
-
-use zerocopy::IntoBytes;
-
 use crate::alloc::accounting::Accounting;
 use crate::alloc::accounting_mem::{self, mem_add, Delta, MarkRead};
+use crate::alloc::buckets::ReservationFlags;
 use crate::alloc::capacity::account_disk_usage_change;
+use crate::alloc::foreground::Watermark;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_validate, BkeyI, BkeySC, ValidateFlags, BKEY_U64S,
-    BkeyValidateContext, BkeyValidateFrom};
+use crate::btree::bkey::{bkey_validate, BKEY_U64S, BkeyI, BkeySC, BkeyValidateContext,
+    BkeyValidateFrom, ValidateFlags};
 use crate::btree::cache::BTREE_WRITE_IO_LIMIT;
 use crate::btree::interior::{merge, split_leaf};
-use crate::btree::iter::{BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
-    BtreeIterUpdateTriggerFlags};
-use crate::btree::{journal_overlay, BtreeNodeType};
+use crate::btree::iter::{BtreeIterUpdateTriggerFlags, BtreeTrans, CommitFlags, CommitOpts,
+    TransAttempt};
+use crate::btree::journal_overlay::{self, JournalKeys};
 use crate::btree::key_cache::{btree_insert_key_cached, btree_key_cache_drop, key_buf};
+use crate::btree::locking::BtreeBkeyCachedCommon;
 use crate::btree::node::BtreeNode;
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, Paths, PathsUpdates};
 use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_old_key};
-use crate::c;
-use crate::btree::locking::BtreeBkeyCachedCommon;
-use crate::alloc::buckets::ReservationFlags;
-use crate::alloc::foreground::Watermark;
-use crate::btree::journal_overlay::JournalKeys;
 use crate::btree::update::BtreeInsertEntry;
+use crate::btree::BtreeNodeType;
+use crate::c;
+use crate::debug::{params::{inject_invalid_keys, journal_seq_verify}, trace::events};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BkeyType, Btree, Bversion, JSET_KEYS_U64s, JsetEntry, JsetEntryRef,
+    JsetEntryType, MetadataVersion};
 use crate::fs::FsFlag;
-use crate::journal::journal::{JournalRes, JOURNAL_RES_GET_CHECK, JOURNAL_RES_GET_NONBLOCK,
-    JournalFlag};
-use crate::journal::pins::JournalPinType;
-use crate::sb::errors_format::SbErrorId;
-use crate::util::time_stats::TimeStat;
-use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{BkeyType, Btree, Bversion, JsetEntry, JSET_KEYS_U64s, MetadataVersion,
-    JsetEntryRef, JsetEntryType};
 use crate::init::{error::BkeyValidate, recovery::NotRw};
 use crate::journal::entries::NoRoom;
+use crate::journal::journal::{JOURNAL_RES_GET_CHECK, JOURNAL_RES_GET_NONBLOCK, JournalFlag,
+    JournalRes};
+use crate::journal::pins::JournalPinType;
 use crate::journal::validate::journal_entry_validate;
 use crate::locking::MemallocFlags;
-use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::os::{kernel::{likely, prefetch, unlikely}, sched};
+use crate::sb::errors_format::SbErrorId;
+use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::util::refcount::TryRefcount;
-use crate::util::vstructs::{plain_bytes, EntryWalk, Validated};
-use crate::{message, fs_fatal_error, fs_inconsistent, prt};
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, EntryWalk, Validated};
+use crate::{fs_fatal_error, fs_inconsistent, message, prt};
 
 const JSET_ENTRY_LOG_U64S: usize = 4;
 
@@ -684,7 +680,7 @@ impl BtreeTrans<'_> {
         self.fs().journal.res_append_entries(res, |w| {
             if names {
                 invariant!(w.room() >= jset_u64s(JSET_ENTRY_LOG_U64S));
-                let log = w.add_entry(JsetEntryType::log, 0, 0, JSET_ENTRY_LOG_U64S)?.as_mut_bytes();
+                let log = plain_bytes_mut(w.add_entry(JsetEntryType::log, 0, 0, JSET_ENTRY_LOG_U64S)?);
                 let name = self.fn_name().as_bytes();
                 let (n, pad) = log.split_at_mut(name.len().min(log.len()));
                 n.copy_from_slice(&name[..n.len()]);
@@ -708,13 +704,13 @@ impl BtreeTrans<'_> {
                     invariant!(w.room() >= jset_u64s(i.old_k.u64s.into()));
                     let e = w.add_entry(JsetEntryType::overwrite, btree, level, i.old_k.u64s.into())?;
                     let (ek, ev) = e.split_at_mut(BKEY_U64S);
-                    ek.as_mut_bytes().copy_from_slice(plain_bytes(&i.old_k));
+                    plain_bytes_mut(ek).copy_from_slice(plain_bytes(&i.old_k));
                     ev.copy_from_slice(val);
                 }
 
                 invariant!(w.room() >= jset_u64s(k.k.u64s.into()));
-                w.add_entry(JsetEntryType::btree_keys, btree, level, k.k.u64s.into())?
-                    .as_mut_bytes().copy_from_slice(k.as_bytes());
+                plain_bytes_mut(w.add_entry(JsetEntryType::btree_keys, btree, level, k.k.u64s.into())?)
+                    .copy_from_slice(k.as_bytes());
             }
 
             self.journal_entries.get().with(self, |e| {
@@ -812,9 +808,9 @@ impl BtreeTrans<'_> {
             let seq = res.seq;
             for i in paths.updates() {
                 let k = unsafe { &mut (*i.key_ptr()).k };
-                if crate::debug::params::journal_seq_verify() {
+                if journal_seq_verify() {
                     k.bversion.lo = seq;
-                } else if crate::debug::params::inject_invalid_keys() {
+                } else if inject_invalid_keys() {
                     k.bversion = Bversion::MAX;
                 }
             }

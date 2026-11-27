@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use core::ops::{ControlFlow, RangeInclusive};
+use crate::btree::bbpos::Bbpos;
 use crate::btree::bkey::{POS_MIN, SPOS_MAX};
+use crate::btree::cache::BtreeNodeCacheState;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
 use crate::btree::node::BtreeNode;
-use crate::btree::bbpos::Bbpos;
-use crate::btree::cache::BtreeNodeCacheState;
 use crate::errcode::BchError;
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::os::kernel::totalram_bytes;
-use core::ops::{ControlFlow, RangeInclusive};
 
 /// What's pinned stays in memory, shrinker-exempt, until this drops. There's one
 /// set of pins, the filesystem's: pin() replaces what was.

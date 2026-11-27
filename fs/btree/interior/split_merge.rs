@@ -4,38 +4,39 @@
 
 use core::ptr;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, ValidateFlags,
-                         BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX, BkeyFormatState};
-use crate::btree::cache::btree_ptr_hash_val;
+use crate::btree::bkey::{self, bkey_validate, BKEY_FORMAT_CURRENT, BkeyFormatState, BkeyI, BkeyP,
+    BkeySC, BkeyV, POS_MIN, SPOS_MAX, ValidateFlags};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitFlags,
-                         CommitOpts, TransAttempt, Watermark};
-use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal, BtreeAndJournalIter};
-use crate::btree::node::{BtreeNode, NodeContents, BtreeWriteType};
+use crate::btree::cache::btree_ptr_hash_val;
+use crate::btree::interior::{reserve, InteriorUpdate, NewNode, ParentKeys, StartOpts, TakenNode};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans,
+    CommitFlags, CommitOpts, TransAttempt, Watermark};
+use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal,
+    BtreeAndJournalIter};
+use crate::btree::locking::BtreeBkeyCachedCommon;
 use crate::btree::node::insert::KeyInsert;
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::sort::{btree_sort_into, build_aux_trees, maybe_compact_whiteouts};
+use crate::btree::node::{BtreeNode, BtreeWriteType, NodeContents};
 use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::shard::key_is_shard_boundary;
 use crate::btree::validate::{bkey_in_btree_node, validate_from};
-use crate::btree::locking::BtreeBkeyCachedCommon;
-use crate::data::{extents_format::BtreePtrV2, write::WriteFlags, keylist::{keys, keys_mut}};
-use crate::util::time_stats::TimeStat;
+use crate::data::{extents_format::BtreePtrV2, keylist::{keys, keys_mut}, write::WriteFlags};
 use crate::data_structures::array_vec::ArrayVec;
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
-use crate::format::{Bpos, Btree, BkeyFormat, BTREE_MAX_DEPTH, btree_node, KEY_FORMAT_LOCAL_BTREE};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{btree_node, BTREE_MAX_DEPTH, Bkey, BkeyFormat, Bpos, Btree,
+    KEY_FORMAT_LOCAL_BTREE};
 use crate::fs::Fs;
 use crate::init::{error::{count_fsck_err, BkeyValidate}, progress::Progress};
 use crate::locking::MemallocFlags;
-use crate::{message, btree_trans, prt};
-use crate::sb::errors::SbErrorId;
-use crate::util::Printbuf;
-use crate::util::backtrace::prt_task_backtrace;
 use crate::os::{kernel::{dump_stack, local_clock}, sched};
+use crate::sb::errors::SbErrorId;
+use crate::util::backtrace::prt_task_backtrace;
+use crate::util::time_stats::TimeStat;
 use crate::util::vstructs::Head;
-
-use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts, TakenNode};
+use crate::util::Printbuf;
+use crate::{btree_trans, message, prt};
 use cstruct_macros::bch_enum;
 
 #[bch_enum(closed)]
@@ -44,7 +45,6 @@ pub enum BtreeNodeSibling {
     btree_prev_sib,
     btree_next_sib,
 }
-
 
 /// A btree node held locked: by a path, or new from the update's reserve.
 type Node<'n> = LockedNode<'n, BtreeNode>;
@@ -484,7 +484,7 @@ fn alloc_dst<'u>(update: &'u InteriorUpdate<'_>, srcs: &[Node<'_>],
     let (node, contents) = (v.node(), v.contents_mut());
     assert!(contents.nsets == 1, "packing into a node with {} bsets", contents.nsets);
 
-    super::reserve::set_range(node, contents, min_key, max_key);
+    reserve::set_range(node, contents, min_key, max_key);
 
     let data = contents.data_mut();
     data.set_seq(seq);
@@ -1041,7 +1041,7 @@ fn merge_sibling(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, path: PathIdx,
             let sib_parent = paths[path].locked_btree_node(level + 1).expect("a sibling's parent, relocked");
             let hash = paths[path].l[level + 1].iter.peek_all().map(|i| {
                 let keys = sib_parent.keys(sib_parent.contents());
-                let mut u = crate::format::Bkey::new();
+                let mut u = Bkey::new();
                 btree_ptr_hash_val(keys.disassemble(i, &mut u))
             });
 

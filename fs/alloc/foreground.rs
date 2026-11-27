@@ -56,46 +56,48 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::fs::{Dev, FsFlag, Fs};
-use crate::alloc::discard::fast_discard_bucket_add;
-use crate::alloc::disk_groups::Target;
-use crate::data::ec::stripe_new::{IoRef, StripeNew};
-use crate::btree::iter::TransAttempt;
-use crate::alloc::buckets::DevUsage;
-use crate::data::ptrs::IoFailures;
-use crate::data::extents_format::ExtentPtr;
-use crate::data::write::WriteFlags;
-use crate::init::dev::{AtomicDevsMask, DevsList, DevsMask};
-use crate::sb::members_format::{MEMBER_INVALID, MEMBERS_MAX};
-use crate::util::time_stats::TimeStat;
-use crate::errcode::{Errcode, BchError};
-use crate::data::copygc::can_make_progress;
-use crate::format::{DataType, BKEY_PTRS_MAX};
-use crate::locking::{ExclusiveGuard, SpinLockIrq, ByteLock, Locked, Lockdep};
-use crate::opts::data_type_str;
-use crate::{percpu_field, new_lock, published};
-use crate::debug::trace::events;
-use crate::sb::members::data_types_to_text;
-use crate::util::alloc::init_at;
-use crate::util::futex::EventCount;
-use crate::util::hash::{hash_64, Fold};
-use crate::data_structures::inline_vec::InlineVec;
-use crate::os::kernel::{jiffies, time_after, unlikely, HZ};
-use crate::util::place::Contained;
-use crate::util::projections::Volatile;
-use crate::util::rcu::read_lock;
-use crate::util::refcount::{RefBorrow, RefGuard, Refcount, RefSlot};
-use crate::util::task::Resume;
-use crate::util::{Printbuf, ToText};
 use core::convert::Infallible;
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
-use cstruct_macros::{bitfield, bch_enum, MaybeZeroable, BitfieldMembers, placed, Init, NonZeroWord,
+use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8};
+use crate::alloc::buckets::DevUsage;
+use crate::alloc::discard::fast_discard_bucket_add;
+use crate::alloc::disk_groups::Target;
+use crate::alloc::write_point::{WRITE_POINT_MAX, WritePoint, WritePointsHash};
+use crate::btree::iter::TransAttempt;
+use crate::data::copygc::can_make_progress;
+use crate::data::ec::stripe_new::{IoRef, StripeNew};
+use crate::data::extents_format::ExtentPtr;
+use crate::data::ptrs::IoFailures;
+use crate::data::write::WriteFlags;
+use crate::data_structures::bitmap::AtomicULong;
+use crate::data_structures::inline_vec::InlineVec;
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BKEY_PTRS_MAX, DataType};
+use crate::fs::{Dev, Fs, FsFlag};
+use crate::init::dev::{AtomicDevsMask, DevsList, DevsMask};
+use crate::locking::{ByteLock, ExclusiveGuard, Lockdep, Locked, SpinLockIrq};
+use crate::opts::data_type_str;
+use crate::os::kernel::{jiffies, time_after, unlikely, HZ};
+use crate::sb::members::data_types_to_text;
+use crate::sb::members_format::{MEMBERS_MAX, MEMBER_INVALID};
+use crate::util::alloc::init_at;
+use crate::util::futex::EventCount;
+use crate::util::hash::{hash_64, Fold};
+use crate::util::place::Contained;
+use crate::util::projections::Volatile;
+use crate::util::rcu::read_lock;
+use crate::util::refcount::{RefBorrow, RefGuard, RefSlot, Refcount};
+use crate::util::task::Resume;
+use crate::util::time_stats::TimeStat;
+use crate::util::vstructs::Plain;
+use crate::util::{Printbuf, ToText};
+use crate::{new_lock, percpu_field, published};
+use cstruct_macros::{bch_enum, bitfield, placed, BitfieldMembers, Init, MaybeZeroable, NonZeroWord,
     TypeInfo};
 use nestify::nest;
-use crate::alloc::write_point::{WritePointsHash, WritePoint, WRITE_POINT_MAX};
-use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8};
 use pin_init::pin_data;
 
 /// How deep into the reserves an allocation - or a commit, its flags word's low
@@ -131,7 +133,7 @@ pub struct OpenBucketIdx(core::num::NonZero<u16>);
 unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
 
 // SAFETY: a u16, any of which is an Option of one - 0 None
-unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
+unsafe impl Plain for Option<OpenBucketIdx> {}
 
 impl OpenBucketIdx {
     /// Slot @idx's index - None for 0, the sentinel's.
@@ -224,8 +226,8 @@ nest! {
         pub lock: Locked<SpinLockIrq, (), OpenBucketIdentity>,
         pub pin: AtomicI32,
         pub sectors_free: Volatile<u32>,
-        pub ec: AtomicPtr<crate::data::ec::stripe_new::StripeNew>,
-        pub ec_io: RefSlot<crate::data::ec::stripe_new::IoRef>,
+        pub ec: AtomicPtr<StripeNew>,
+        pub ec_io: RefSlot<IoRef>,
 
         pub freelist: Volatile<Option<OpenBucketIdx>>,
         pub hash: Volatile<Option<OpenBucketIdx>>,
@@ -278,7 +280,7 @@ pub struct FsAllocator {
     pub rw_devs: [AtomicDevsMask; DataType::NR as usize],
     /* bumped as a device goes read-write or read-only, under state_lock;
      * read without it */
-    pub rw_devs_change_count: crate::util::projections::Volatile<usize>,
+    pub rw_devs_change_count: Volatile<usize>,
 
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
     pub wake_all_counter: AtomicI32,
@@ -289,7 +291,7 @@ pub struct FsAllocator {
     pub freelist_lock: Locked<SpinLockIrq, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_events: EventCount,
     /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
-    pub last_stuck: crate::data_structures::bitmap::AtomicULong,
+    pub last_stuck: AtomicULong,
 
     pub open_buckets_events: EventCount,
     #[pin]

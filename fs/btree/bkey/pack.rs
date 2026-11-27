@@ -1,20 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! Packing keys into a format and back: a packed key's fields are a bit
 //! stream from its high word down, each its bits above the format's offset.
 //! A key is taken here as its words, from its header on.
 
 use core::cmp::Ordering;
 use core::mem::offset_of;
-
-use super::format::{bkey_fields, fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
-use super::packed::BkeyPHead;
-use super::{spos, BkeyP, BKEY_U64S};
+use crate::btree::bkey::format::{bkey_fields, fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS,
+    NR_FIELDS};
+use crate::btree::bkey::packed::BkeyPHead;
+use crate::btree::bkey::{spos, BKEY_U64S, BkeyP};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::debug::params::debug_check_bkey_unpack;
 use crate::format::BkeyField::{self, *};
-use crate::format::{BkeyFormat, Bpos, BkeyType, Bkey, BkeyFormatBits, BkeyPacked,
+use crate::format::{Bkey, BkeyFormat, BkeyFormatBits, BkeyPacked, BkeyType, Bpos,
     KEY_FORMAT_CURRENT, KEY_FORMAT_LOCAL_BTREE, KEY_PACKED_BITS_START};
 use crate::os::kernel::unlikely;
-use crate::util::{vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut, State}, Printbuf, ToText};
+use crate::util::vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut, State};
+use crate::util::{Printbuf, ToText};
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
 
 /*

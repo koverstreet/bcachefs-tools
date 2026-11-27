@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::os::lockdep::LockClass;
-use crate::util::place::{name, Contained, Field, FieldOf, Here, Path, PathField, Place, Placed, RefValue};
-use crate::util::refcount::AtomicRef;
-use crate::util::projections::Publish;
-use crate::util::sharing::{self, Sharing};
 use core::cell::UnsafeCell;
 use core::ffi::CStr;
 use core::marker::{PhantomData, PhantomPinned};
-use core::mem::ManuallyDrop;
+use core::mem::{offset_of, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
+use crate::os::lockdep::LockClass;
+use crate::typeinfo::{Shape, StructInfo, TypeInfo};
+use crate::util::alloc::init_at;
+use crate::util::place::{name, Contained, Field, FieldOf, Here, Path, PathField, Place, Placed,
+    RefValue, Wrapper};
+use crate::util::projections::Publish;
+use crate::util::refcount::AtomicRef;
+use crate::util::sharing::{self, Sharing};
 
 /// A lock's state, and how it's initialized and torn down - whatever kind of
 /// lock it is, which the traits over this one say. All of its state is
@@ -122,9 +125,9 @@ pub struct Locked<R: RawLockBase, G = (), P = ()> {
     _pin:      PhantomData<PhantomPinned>,
 }
 
-unsafe impl<R: RawLockBase, G, P> crate::util::place::Wrapper for Locked<R, G, P> {
+unsafe impl<R: RawLockBase, G, P> Wrapper for Locked<R, G, P> {
     type Inner = G;
-    const INNER_OFFSET: usize = core::mem::offset_of!(Self, protected);
+    const INNER_OFFSET: usize = offset_of!(Self, protected);
 }
 
 // G is had by one thread at a time, as a std Mutex's; P is every thread's.
@@ -162,7 +165,7 @@ impl<R: RawLockBase, G, P> Locked<R, G, P> {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
                 let Ok(()) = R::init(&raw mut (*slot).raw, name, key);
                 // UnsafeCell<G> is laid out as G
-                crate::util::alloc::init_at(g, (&raw mut (*slot).protected).cast::<G>())?;
+                init_at(g, (&raw mut (*slot).protected).cast::<G>())?;
                 (&raw mut (*slot).published).write(p);
                 Ok(())
             })
@@ -878,7 +881,7 @@ impl<G, P, L> LockedBy<G, P, L, sharing::Unshared> {
 
 impl<G, P, L> LockedBy<G, P, L> {
     /// Where the G is in a LockedBy.
-    pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
+    pub const PROTECTED_OFFSET: usize = offset_of!(Self, protected);
 
     /// What it protects, unlocked: for a racy peek, as Locked::data_ptr().
     pub fn data_ptr(&self) -> *const G {
@@ -900,7 +903,7 @@ impl<G, P, L> LockedBy<G, P, L> {
     }
 }
 
-impl<G, P: crate::util::projections::Publish, L> LockedBy<G, P, L> {
+impl<G, P: Publish, L> LockedBy<G, P, L> {
     /// @P as its writer has it: the owner's to hand out, to whoever shows it
     /// holds the lock.
     ///
@@ -949,11 +952,11 @@ impl<G, P, L> AsLockedBy for LockedBy<G, P, L> {
 }
 
 // Opaque to TypeInfo, size only: G is the owner's to read.
-impl<G, P, L, S: Sharing> crate::typeinfo::TypeInfo for LockedBy<G, P, L, S> {
-    const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {
+impl<G, P, L, S: Sharing> TypeInfo for LockedBy<G, P, L, S> {
+    const INFO: &'static StructInfo = &StructInfo {
         name:   "LockedBy",
         size:   core::mem::size_of::<Self>(),
-        shape:  crate::typeinfo::Shape::Struct,
+        shape:  Shape::Struct,
         fields: &[],
     };
 }

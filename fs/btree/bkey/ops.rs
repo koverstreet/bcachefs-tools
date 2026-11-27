@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use core::fmt;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, BkeyS, BkeySC, BkeyVal};
+use crate::btree::bkey::{AnyKeySC, BKEY_U64S, BkeyS, BkeySC, BkeyVal, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::btree::trigger::Trigger;
+use crate::debug::params::key_merging_disabled;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, ErrorKeyReason, BkeyType, BkeyTypeFlags, MetadataVersion, Bkey,
-    Cookie, Deleted, Error, ExtentWhiteout, HashWhiteout, Set, Whiteout};
+use crate::format::{Bkey, BkeyType, BkeyTypeFlags, Bpos, Btree, Cookie, Deleted, Error,
+    ErrorKeyReason, ExtentWhiteout, HashWhiteout, MetadataVersion, Set, Whiteout};
 use crate::fs::{Fs, FsFlag};
 use crate::init::error::BkeyValidate;
 use crate::prt;
-use crate::util::{Printbuf, vstructs::Unvalidated};
-use core::fmt;
+use crate::util::{vstructs::Unvalidated, Printbuf, ToText};
 use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
 
@@ -117,14 +118,14 @@ impl BkeyOps for Error {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
         let err = k.val_bytes().get(core::mem::offset_of!(Error, repr.err)).copied().unwrap_or(0);
-        crate::util::ToText::to_text(&ErrorKeyReason(err.into()), out)
+        ToText::to_text(&ErrorKeyReason(err.into()), out)
     }
 }
 
 impl BkeyOps for Cookie {
     #[cold]
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        crate::prt!(out, "{}", k.arm::<Cookie>().expect("a cookie").v().cookie.get());
+        prt!(out, "{}", k.arm::<Cookie>().expect("a cookie").v().cookie.get());
     }
 }
 
@@ -147,8 +148,6 @@ impl BkeyOps for Set {
 
 #[cold]
 pub fn bpos_to_text(out: &mut Printbuf, p: Bpos) {
-    use crate::btree::bkey::{POS_MAX, POS_MIN, SPOS_MAX};
-
     if p == POS_MIN {
         prt!(out, "POS_MIN");
     } else if p == POS_MAX {
@@ -197,7 +196,7 @@ pub fn val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: 
      * bch2_bkey_val_to_text()'s "does it have a value?" test is then
      * satisfied by precisely the corruption it ought to be catching.
      */
-    if usize::from(k.k.u64s) < crate::btree::bkey::BKEY_U64S {
+    if usize::from(k.k.u64s) < BKEY_U64S {
         prt!(out, "(truncated key header: {} u64s)", k.k.u64s);
         return;
     }
@@ -215,8 +214,8 @@ pub fn val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: 
 #[cold]
 pub fn bkey_val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_, V>) {
     let k = k.as_read();
-    if usize::from(k.k.u64s) < crate::btree::bkey::BKEY_U64S {
-        prt!(out, "(invalid, u64s {} < {})", k.k.u64s, crate::btree::bkey::BKEY_U64S);
+    if usize::from(k.k.u64s) < BKEY_U64S {
+        prt!(out, "(invalid, u64s {} < {})", k.k.u64s, BKEY_U64S);
         return;
     }
 
@@ -265,8 +264,8 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    bkey_fsck_err_on!(v, usize::from(k.u64s) < crate::btree::bkey::BKEY_U64S, bkey_u64s_too_small,
-                      "u64s too small ({} < {})", k.u64s, crate::btree::bkey::BKEY_U64S)?;
+    bkey_fsck_err_on!(v, usize::from(k.u64s) < BKEY_U64S, bkey_u64s_too_small,
+                      "u64s too small ({} < {})", k.u64s, BKEY_U64S)?;
 
     // a leaf's btree, None for an interior node; past the btrees this code
     // knows, nothing's known of its keys
@@ -310,7 +309,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
              */
         }
 
-        bkey_fsck_err_on!(v, k.p == crate::btree::bkey::POS_MAX, bkey_at_pos_max, "key at POS_MAX")?;
+        bkey_fsck_err_on!(v, k.p == POS_MAX, bkey_at_pos_max, "key at POS_MAX")?;
     }
     Ok(())
 }
@@ -332,7 +331,7 @@ pub fn bkey_maybe_mergable(l: &Bkey, r: &Bkey) -> bool {
 pub fn bkey_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     bkey_maybe_mergable(l.k, r.k) &&
         u64::from(l.k.size) + u64::from(r.k.size) <= u64::from(u32::MAX) &&
-        !crate::debug::params::key_merging_disabled() &&
+        !key_merging_disabled() &&
         (l.k.key_type().ops().merge)(fs, l, r)
 }
 

@@ -20,10 +20,10 @@
 //! fails.
 
 use crate::c;
+use crate::os::sched;
 use crate::prt;
 use crate::util::alloc::{AllocError, Vec};
 use crate::util::demangle::prt_demangled;
-use crate::os::sched;
 use crate::util::Printbuf;
 
 /// @sym, a symbol "name..." as the symbolizer printed it, to @out: the name

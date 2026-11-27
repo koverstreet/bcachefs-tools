@@ -4,34 +4,35 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::alloc::capacity::DiskReservation;
-use crate::btree::{BtreeNodeType, journal_overlay};
-use crate::btree::bkey::{BkeyV, bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt,
-    bkey_merge, BkeyI, BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
-use crate::btree::iter::{btree_id_cached, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
-                         CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
-use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
-use crate::btree::write_buffer::insert_checks;
-use crate::journal::journal::JournalFlag;
-use crate::data::{durability::BkeyVDurability, extents::{cut_back_s, cut_front_s}};
-use crate::debug::trace::events;
-use crate::prt;
-use crate::snapshots::snapshot::{has_overwrites, is_ancestor};
-use core::cmp::Ordering;
-use crate::errcode::{Errcode, BchError};
-use crate::fs::{Fs, FsFlag};
-use crate::os::kernel::unlikely;
-use crate::util::vstructs::{plain_bytes, Container, DstHead, EntryWalk, Head, Plain, SelfSized, Unsized,
-                            Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries, ViewEntriesMut};
-use crate::util::{Printbuf, ToText};
 use core::cell::Cell;
+use core::cmp::Ordering;
 use core::marker::PhantomData;
-use core::mem::size_of;
 use core::ops::Range;
 use core::ptr::NonNull;
-use cstruct_macros::{bch_enum, MaybeZeroable, bitfield, BitfieldMembers};
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, Val, Bkey, Deleted, JsetEntry, Set, JsetEntryType, BtreeFlags};
-use zerocopy::IntoBytes;
+use crate::alloc::capacity::DiskReservation;
+use crate::btree::bkey::{bkey_eq, bkey_gt, bkey_le, bkey_lt, bkey_maybe_mergable, bkey_merge,
+    bkey_val_to_text, BKEY_U64S, BkeyI, BkeyS, BkeySC, BkeyV, BkeyWhole, MutBkey, ValidatedVal};
+use crate::btree::iter::{btree_id_cached, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+    CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
+use crate::btree::journal_overlay;
+use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
+use crate::btree::write_buffer::insert_checks;
+use crate::btree::BtreeNodeType;
+use crate::data::{durability::BkeyVDurability, extents::{cut_back_s, cut_front_s}};
+use crate::debug::trace::events;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, BkeyType, Bpos, Btree, BtreeFlags, Deleted, JsetEntry, JsetEntryType,
+    MetadataVersion, Set, Val};
+use crate::fs::{Fs, FsFlag};
+use crate::journal::journal::JournalFlag;
+use crate::os::kernel::unlikely;
+use crate::prt;
+use crate::snapshots::snapshot::{has_overwrites, is_ancestor, overwrites};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Container, DstHead, EntryWalk, Head,
+    Plain, SelfSized, Unsized, Validated, ValidatedEntries, ValidatedEntriesMut, ViewEntries,
+    ViewEntriesMut};
+use crate::util::{Printbuf, ToText};
+use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
 
 /* Transaction types: */
@@ -172,7 +173,6 @@ impl BtreeInsertEntry {
         node_type_in(self.bkey_type, TRANS_TRIGGERS | ATOMIC_TRIGGERS)
     }
 }
-
 
 #[bch_enum(closed)]
 #[mask(TransCommitFlags: u32)]
@@ -393,11 +393,11 @@ unsafe impl<T: ?Sized> Container for Subbuf<T> {
     type Entry = T;
 
     fn entry_bytes(&self) -> &[u8] {
-        self.u64s.as_bytes()
+        plain_bytes(&self.u64s)
     }
 
     fn entry_bytes_mut(&mut self) -> &mut [u8] {
-        self.u64s.as_mut_bytes()
+        plain_bytes_mut(&mut self.u64s)
     }
 }
 
@@ -446,9 +446,9 @@ impl TransAttempt<'_, '_> {
         let mut p = self.subbuf_alloc(cell, head_u64s + tail_u64s)?;
         let e = unsafe { p.as_mut() };
         let (h, t) = e.split_at_mut(head_u64s);
-        h.as_mut_bytes().copy_from_slice(plain_bytes(head));
+        plain_bytes_mut(h).copy_from_slice(plain_bytes(head));
         tail(t);
-        assert!(T::len_in(e.as_bytes()).is_ok_and(|n| n == size_of_val(e)),
+        assert!(T::len_in(plain_bytes(e)).is_ok_and(|n| n == size_of_val(e)),
                 "a sub-buffer entry of {tail_u64s} u64s past its header, which says otherwise");
         Ok(())
     }
@@ -530,7 +530,7 @@ impl TransAttempt<'_, '_> {
         h.set_u64s(u64s);
 
         self.subbuf_push(&self.trans().journal_entries, &h, u64s, |v| {
-            let (d, pad) = v.as_mut_bytes().split_at_mut(data.len());
+            let (d, pad) = plain_bytes_mut(v).split_at_mut(data.len());
             d.copy_from_slice(data);
             pad.fill(0);
         })
@@ -1085,7 +1085,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         fs.event_trace(events::update_by_path, |out| {
             prt!(out, "{} overwrite {}\n", t.fn_name(), overwrite as u32);
             t.path_to_text_short(out, paths, path_idx);
-            crate::btree::bkey::bkey_val_to_text(out, Some(fs), BkeySC::from(n.key()));
+            bkey_val_to_text(out, Some(fs), BkeySC::from(n.key()));
         });
 
         i
@@ -1212,7 +1212,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
         let u = paths.update_mut(i);
         let old = u.key().as_bytes();
-        new.as_mut_u64s().as_mut_bytes()[..old.len()].copy_from_slice(old);
+        plain_bytes_mut(new.as_mut_u64s())[..old.len()].copy_from_slice(old);
         let new = QueuedKey::from(&mut new);
         u.set_key(new);
         Ok(new.as_ptr())
@@ -1238,7 +1238,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return Ok(());
         }
 
-        let ids = crate::snapshots::snapshot::overwrites(self, btree, old_pos)?;
+        let ids = overwrites(self, btree, old_pos)?;
 
         for &id in ids.iter() {
             /*

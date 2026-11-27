@@ -472,33 +472,33 @@
 
 #![allow(non_camel_case_types)]
 
-
-use crate::fs::{Dev, FsFlag, Fs};
-use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
+use core::mem::offset_of;
+use core::sync::atomic::Ordering;
 use crate::alloc::accounting;
+use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::alloc::check::need_discard_or_freespace_err;
+use crate::alloc::discard::fast_discard_bucket_add;
+use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BCH_ALLOC_FIELDS_V1,
+    BCH_ALLOC_FIELDS_V2, BucketGens};
 use crate::alloc::lru::{dev_remove_lrus, lru_change, LruId};
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
-                         UpdateTriggerFlags};
-use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BucketGens,
-    BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
 use crate::alloc::lru_format::{LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
-use crate::errcode::{Errcode, BchError};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyOps, BkeyS, BkeySC, BkeyVal, BkeyWhole, POS_MIN};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
+    UpdateTriggerFlags};
+use crate::btree::trigger::{Trigger, TriggerOp};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BKEY_U64s, Backpointer, Bkey, Bpos, Btree, DataType, JSET_KEYS_U64s,
+    MetadataVersion};
+use crate::fs::{Dev, Fs, FsFlag};
 use crate::init::error::BkeyValidate;
 use crate::opts::data_type_str;
 use crate::os::kernel::{unlikely, READ, WRITE};
-use crate::util::rcu::read_lock;
-use crate::util::{varint, Join, Printbuf, ToText};
-use crate::util::vstructs::{ArmRef, Unvalidated};
 use crate::util::backtrace::prt_current_backtrace;
+use crate::util::rcu::read_lock;
+use crate::util::vstructs::{ArmRef, Unvalidated};
+use crate::util::{varint, Join, Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
-use core::mem::{offset_of, size_of};
-use core::sync::atomic::Ordering;
-use crate::format::{Bpos, Btree, DataType, MetadataVersion, Backpointer, Bkey, BKEY_U64s,
-    JSET_KEYS_U64s};
 
 /// How far a bucket's generation may get past its oldest pointer's before
 /// it has to be gc'd: the gen is a u8, compared wrapping.
@@ -1638,7 +1638,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
                 new_a.journal_seq_empty = 0;
 
                 if !fs.bucket_set_discard_fast(dev, b) {
-                    crate::alloc::discard::fast_discard_bucket_add(&ca, b);
+                    fast_discard_bucket_add(&ca, b);
                 }
             }
         }

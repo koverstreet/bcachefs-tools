@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
+use core::marker::PhantomData;
+use crate::alloc::buckets::trigger_snapshot_nr_keys;
 use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{bkey_to_text, BKEY_U64S, BkeyI, BkeySC};
+use crate::btree::check_allocations::{GcPhase, GcPos};
 use crate::btree::iter::{TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::journal_overlay;
 use crate::btree::path::Paths;
 use crate::btree::update::{peek_slot_exact, BtreeInsertEntry};
-use crate::btree::check_allocations::{GcPos, GcPhase};
 use crate::data_structures::dst_room::DstRoom;
 use crate::errcode::BchError;
-use crate::format::{Bpos, Btree, BkeyType, Bkey, Deleted};
+use crate::format::{Bkey, BkeyType, Bpos, Btree, Deleted};
 use crate::prt;
 use crate::util::Printbuf;
-use core::marker::PhantomData;
 
 /// What a key type's trigger is called with. @new is mutable: an atomic
 /// trigger can edit the key going in, in place.
@@ -119,7 +120,7 @@ pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) 
      * carry a snapshot in their bpos but must not be counted.
      */
     if op.btree.has_snapshots() {
-        crate::alloc::buckets::trigger_snapshot_nr_keys(t, op)?;
+        trigger_snapshot_nr_keys(t, op)?;
     }
     Ok(())
 }
@@ -146,9 +147,9 @@ pub(crate) fn verify_update_old_key(t: &TransAttempt<'_, '_>, paths: &Paths<'_>,
     if !k.fields_eq(&i.old_k) || v != i.old_v {
         let mut out = Printbuf::new();
         prt!(&mut out, "updated cached old key doesn't match\ncached: ");
-        crate::btree::bkey::bkey_to_text(&mut out, &i.old_k);
+        bkey_to_text(&mut out, &i.old_k);
         prt!(&mut out, " {:p}\nreal:   ", i.old_v);
-        crate::btree::bkey::bkey_to_text(&mut out, k);
+        bkey_to_text(&mut out, k);
         prt!(&mut out, " {:p}", v);
         panic!("{out}");
     }
@@ -195,7 +196,7 @@ fn run_one_mem_trigger(t: &TransAttempt<'_, '_>, paths: &Paths<'_>, i: &BtreeIns
 
     // a net count, old to new: before the split below rewrites @op
     if op.btree.has_snapshots() {
-        crate::alloc::buckets::trigger_snapshot_nr_keys(t, &op)?;
+        trigger_snapshot_nr_keys(t, &op)?;
     }
 
     if old_ops.trigger.is_some() && same_trigger(old_ops.trigger, new_ops.trigger) {
@@ -253,7 +254,7 @@ fn run_one_trans_trigger(t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, idx: u
     paths.lend(|| {
         run_trigger(t, trigger, &mut op)?;
         if op.btree.has_snapshots() {
-            crate::alloc::buckets::trigger_snapshot_nr_keys(t, &op)?;
+            trigger_snapshot_nr_keys(t, &op)?;
         }
         Ok(())
     })

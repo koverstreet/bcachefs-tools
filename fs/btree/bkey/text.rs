@@ -1,17 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! Keys and positions to and from text: Debug and FromStr for positions,
 //! ToText for a key's header, and BkeySCToText for a key with its value.
 
-use super::{AllTypes, BkeySC, BkeyVal, FamilyVal};
-use crate::fs::Fs;
-use crate::util::{Printbuf, ToText};
 use core::fmt;
 #[cfg(feature = "std")]
 use core::str::FromStr;
+use crate::btree::bkey::{bkey_to_text, bkey_val_to_text, AllTypes, BkeySC, BkeyVal, FamilyVal};
 #[cfg(feature = "std")]
-use crate::errcode::{Errcode, BchError};
+use crate::btree::bkey::{POS_MAX, POS_MIN, SPOS_MAX};
 #[cfg(feature = "std")]
-use super::{POS_MAX, POS_MIN, SPOS_MAX};
-use crate::format::{Bpos, Bkey};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Bkey, Bpos};
+use crate::fs::Fs;
+use crate::util::{Printbuf, ToText};
 
 /// As Display.
 impl fmt::Debug for Bpos {
@@ -87,7 +89,7 @@ pub struct BkeySCToText<'a, 'f, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
 /// A key in any state: printed as read.
 impl<V: ?Sized + BkeyVal> ToText for BkeySCToText<'_, '_, V> {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::bkey::bkey_val_to_text(out, Some(self.fs), self.k)
+        bkey_val_to_text(out, Some(self.fs), self.k)
     }
 }
 
@@ -96,7 +98,7 @@ crate::display_via_to_text!(impl[V: ?Sized + BkeyVal] BkeySCToText<'_, '_, V>);
 /// Without its value.
 impl ToText for Bkey {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::bkey::bkey_to_text(out, self)
+        bkey_to_text(out, self)
     }
 }
 crate::display_via_to_text!(Bkey);

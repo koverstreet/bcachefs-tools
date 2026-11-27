@@ -9,13 +9,13 @@
 //! and a repair that made its own mutable copy from the original key dropped
 //! every repair before it.
 
+use core::marker::PhantomData;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeySC, BkeySCToText, MutBkey, BkeyWhole};
+use crate::btree::bkey::{BkeySC, BkeySCToText, BkeyWhole, MutBkey};
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::errcode::BchError;
-use crate::fs::Fs;
-use core::marker::PhantomData;
 use crate::format::Bpos;
+use crate::fs::Fs;
 
 /// Key @k, of the type whose value is @K, at @iter.
 pub struct CowKey<'i, 'k, 'a, 't, K: BkeyWhole> {

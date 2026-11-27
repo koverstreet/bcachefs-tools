@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #![allow(non_camel_case_types)]
 
 /*
@@ -48,35 +50,33 @@
  * them durable.
  */
 
-use crate::fs::{Dev, Fs};
-use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, Delta, MarkHeld};
-use crate::alloc::buckets::FsUsageBase;
-use crate::alloc::replicas::{replicas_acct, SbEntry};
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
-use crate::alloc::replicas_format::ReplicasEntryV1;
-use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::BchError;
-use crate::format::{self, Bpos};
-use crate::init::error::BkeyValidate;
-use crate::types::ArmOf;
-use crate::util::{rcu, Printbuf};
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, Head, Unvalidated, VStructError};
-use crate::util::log::Log;
-use crate::os::percpu::Counters as _;
-use crate::util::printbuf::Join;
-use crate::{bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
-use core::mem::size_of;
-use core::ops::Range;
-use zerocopy::{FromBytes, IntoBytes};
-
 pub use crate::alloc::accounting_format::*;
 pub use crate::format::CompressionType;
 pub use crate::data::reconcile::format::ReconcileType;
 
+use core::ops::Range;
+use crate::alloc::accounting_mem::{self, mem_read, mem_read_locked, usage_of, Delta, MarkHeld};
+use crate::alloc::buckets::FsUsageBase;
+use crate::alloc::replicas::{replicas_acct, SbEntry};
+use crate::alloc::replicas_format::ReplicasEntryV1;
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyOps, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
+use crate::errcode::BchError;
+use crate::format::{self, Bpos};
+use crate::fs::{Dev, Fs};
+use crate::init::error::BkeyValidate;
+use crate::os::percpu::Counters as _;
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::types::ArmOf;
+use crate::util::log::Log;
+use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, ArmError, Head,
+    Unvalidated, VStructError};
+use crate::util::{rcu, Join, Printbuf};
+use crate::{bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
+
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
-const BPOS_SIZE: usize = core::mem::size_of::<Bpos>();
+const BPOS_SIZE: usize = size_of::<Bpos>();
 
 /// A bpos is one integer in native byte order, and a disk_accounting_pos the
 /// same integer big-endian - so its first byte, the inode's top one, is the
@@ -387,7 +387,7 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
     assert!(d.len() <= MAX_COUNTERS && ty < TYPE_NR, "accounting update of type {ty} with {} counters", d.len());
     debug_assert_eq!(d.len(), pos.nr_counters());
 
-    let d = <[u64]>::ref_from_bytes(d.as_bytes()).expect("i64s are u64s");
+    let d = cast_plain_slice::<u64>(plain_bytes(d)).expect("i64s are u64s");
     if gc { mod_gc(t, pos, d) } else { mod_normal(t, pos, d) }
 }
 

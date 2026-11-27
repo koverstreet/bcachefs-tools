@@ -14,21 +14,19 @@
 //! An error id is a permanent on-disk number, never reused or renumbered:
 //! the ids are checked at build time to be exactly 0..=MAX.
 
-#![allow(non_camel_case_types)]
-
 use core::cmp::{Ordering, Reverse};
-use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use crate::btree::bkey::ValidateFlags;
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Sb, SbFieldType};
-use crate::sb::errors_format::{SbFieldErrorEntry, SbFieldErrors, SbFieldErrorsV2,
-    SbFieldErrorEntryV2};
-pub use crate::sb::errors_format::{FsckFlags, SbErrorId};
-use crate::util::{vstructs::{Unvalidated, Validated}, alloc::Vec, DateTime, Printbuf};
-use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::{prt, sb_err_on};
-use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
 use crate::os::kernel::ktime_get_real_seconds;
+use crate::sb::errors_format::{SbFieldErrorEntry, SbFieldErrorEntryV2, SbFieldErrors,
+    SbFieldErrorsV2};
+pub use crate::sb::errors_format::{FsckFlags, SbErrorId};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
+use crate::util::{alloc::Vec, vstructs::{Unvalidated, Validated}, DateTime, Printbuf};
+use crate::{prt, sb_err_on};
+use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable, TypeInfo};
 use nestify::nest;
 
 nest! {

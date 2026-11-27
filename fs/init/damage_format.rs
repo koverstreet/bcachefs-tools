@@ -2,8 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::sb::errors_format::SbFieldErrorEntryV2;
 use crate::format::Val;
+use crate::sb::errors_format::SbFieldErrorEntryV2;
 use cstruct_macros::{whole, MaybeZeroable, Plain, TypeInfo};
 
 /*

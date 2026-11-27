@@ -19,13 +19,12 @@
 //! each hold a &mut T. SharedGenRadix, for one allocated from several threads
 //! at once, has its entries shared.
 
+use core::iter::Enumerate;
+use core::marker::PhantomData;
+use core::slice;
 use crate::data_structures::array_vec::ArrayVec;
 use crate::util::alloc::{AllocError, AllocGfp, Box, Flags, Global};
 use crate::util::once_either::{Either, OnceEither};
-use core::iter::Enumerate;
-use core::marker::PhantomData;
-use core::mem::size_of;
-use core::slice;
 use pin_init::{init_zeroed, Zeroable};
 
 pub const NODE_SIZE: usize = 512;

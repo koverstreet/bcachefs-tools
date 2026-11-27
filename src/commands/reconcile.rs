@@ -15,7 +15,7 @@ use crate::util::run_tui;
 use crate::wrappers::accounting::{DiskAccountingType, ReconcileType};
 use bcachefs_kernel::alloc::accounting_format::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
-use bcachefs_kernel::util::{printbuf::Printbuf, names::{self, Names}, Sectors, ToText};
+use bcachefs_kernel::util::{names::{self, Names}, Printbuf, Sectors, ToText};
 use crate::wrappers::sysfs;
 
 /// The reconcile types by name, as they print - and as --help lists them.

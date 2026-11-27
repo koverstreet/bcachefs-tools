@@ -1,13 +1,15 @@
 use core::ffi::CStr;
 use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
+use crate::btree::bkey::bpos_to_text;
 use crate::data_structures::{array_vec::ArrayVec, dst_array::DstArray};
 use crate::errcode::{BchError, Errcode};
-use crate::os::alloc::Global;
-use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, thin::ThinBox};
+use crate::format::{__uuid_t, Bpos};
+use crate::os::blkdev::BlockDevice;
+use crate::util::{alloc::{Global, Vec}, os_str::{OsStr, OsStrExt}, thin::ThinBox};
+use crate::{warn_on, warn_on_once};
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable};
 use nestify::nest;
-use crate::format::{Bpos, __uuid_t};
 
 /// A printbuf's buffer: its capacity the array's count.
 type Buf = ThinBox<DstArray<(), u8, u32>>;
@@ -111,7 +113,7 @@ impl Printbuf {
     pub fn tabstop_push(&mut self, spaces: u32) -> bool {
         let prev_tabstop = self.tabstops.last().copied().map_or(0, u32::from);
 
-        if crate::warn_on_once!(self.tabstops.is_full()) {
+        if warn_on_once!(self.tabstops.is_full()) {
             return false;
         }
 
@@ -145,7 +147,7 @@ impl Printbuf {
      * of the current line, will be indented by @spaces less spaces.
      */
     pub fn indent_sub(&mut self, spaces: u32) {
-        let spaces = if crate::warn_on_once!(spaces > self.indent) { self.indent } else { spaces };
+        let spaces = if warn_on_once!(spaces > self.indent) { self.indent } else { spaces };
 
         if self.last_newline.wrapping_add(self.indent) == self.pos {
             self.rewind(self.pos() - spaces as usize);
@@ -165,7 +167,7 @@ impl Printbuf {
      * spaces.
      */
     pub fn indent_add_nextline(&mut self, spaces: u32) {
-        let spaces = if crate::warn_on_once!(self.indent.checked_add(spaces).is_none()) { 0 } else { spaces };
+        let spaces = if warn_on_once!(self.indent.checked_add(spaces).is_none()) { 0 } else { spaces };
 
         self.indent += spaces;
     }
@@ -561,7 +563,7 @@ impl Printbuf {
     /// Back inside the buffer, a nul's room left, with a warning.
     fn clamp_pos(&mut self) {
         let size = self.capacity();
-        if crate::warn_on!(size != 0 && self.pos() >= size) {
+        if warn_on!(size != 0 && self.pos() >= size) {
             self.pos = size as u32 - 1;
         }
     }
@@ -692,7 +694,7 @@ impl Printbuf {
 
 /// None is "(null)", as %pg printed it: a filesystem's superblock's device,
 /// which has none.
-impl ToText for Option<&crate::os::blkdev::BlockDevice> {
+impl ToText for Option<&BlockDevice> {
     fn to_text(&self, out: &mut Printbuf) {
         match self {
             Some(bdev) => bdev.to_text(out),
@@ -734,10 +736,9 @@ impl fmt::Display for Printbuf {
     }
 }
 
-
 impl ToText for Bpos {
     fn to_text(&self, out: &mut Printbuf) {
-        crate::btree::bkey::bpos_to_text(out, *self)
+        bpos_to_text(out, *self)
     }
 }
 crate::display_via_to_text!(Bpos);
@@ -939,7 +940,7 @@ macro_rules! display_via_to_text {
     (impl[$($g:tt)*] $t:ty) => {
         impl<$($g)*> ::core::fmt::Display for $t {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                $crate::util::printbuf::text_fmt(self, f)
+                $crate::util::text_fmt(self, f)
             }
         }
     };
@@ -1102,7 +1103,7 @@ macro_rules! prt {
 #[macro_export]
 macro_rules! message {
     ($fmt:literal $($args:tt)*) => {
-        &$crate::util::printbuf::Msg(|out: &mut $crate::util::Printbuf| {
+        &$crate::util::Msg(|out: &mut $crate::util::Printbuf| {
             $crate::__prt!($crate, out, $fmt $($args)*)
         }) as &dyn $crate::util::ToText
     };

@@ -10,8 +10,8 @@
 //! fold() adds a data block to the parity made so far; recover() rebuilds
 //! the blocks it's told failed from the rest.
 
-use crate::format::BKEY_PTRS_MAX;
 use crate::data_structures::array_vec::ArrayVec;
+use crate::format::BKEY_PTRS_MAX;
 use crate::os::simd;
 use g2p::bulk::{self, MulTable};
 use g2p::{GaloisField, GaloisField8, Matrix};

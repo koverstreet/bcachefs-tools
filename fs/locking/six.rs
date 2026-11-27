@@ -2,26 +2,29 @@
 
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
-use crate::os::lockdep::{trace_contention_begin, trace_contention_end, LockClass};
-use super::{ExclusiveGuard, Locked, LockdepMap, RawLockBase, RawReadLock, RawSixLock, RawSpinLock, Shared, SharedGuard,
-            SixIntent, SixWriteIntent};
-use crate::c;
-use crate::data_structures::{dst_vec::DstVec, inline_vec::InlineVec};
-#[cfg(CONFIG_SMP)]
-use crate::debug::params::six_optimistic_spin_disabled;
-use crate::errcode::BchError;
-use crate::util::alloc::{Flags, init_at};
-use crate::util::ffi::c_char;
-use crate::os::{kernel::time_after64, percpu::{CpuGuard, PerCpu}, sched};
-use crate::util::projections::Volatile;
-use crate::util::rcu::{self, FreeAnytime};
-use crate::util::sleep::{sleep_until, Sleep};
 use core::convert::Infallible;
 use core::ffi::CStr;
 use core::mem::ManuallyDrop;
 use core::ptr::{self, null_mut, NonNull};
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicPtr};
+use crate::c;
+use crate::data_structures::{dst_vec::DstVec, inline_vec::InlineVec};
+#[cfg(CONFIG_SMP)]
+use crate::debug::params::six_optimistic_spin_disabled;
+use crate::errcode::BchError;
+use crate::locking::{ExclusiveGuard, LockdepMap, Locked, RawLockBase, RawReadLock, RawSixLock,
+    RawSpinLock, Shared, SharedGuard, SixIntent, SixWriteIntent};
+use crate::os::kernel::time_after64;
+use crate::os::lockdep::{debug_check_no_locks_freed, trace_contention_begin, trace_contention_end,
+    LockClass};
+use crate::os::percpu::{CpuGuard, PerCpu, SIX_PERCPU_READERS};
+use crate::os::sched;
+use crate::util::alloc::{init_at, Flags};
+use crate::util::ffi::c_char;
+use crate::util::projections::Volatile;
+use crate::util::rcu::{self, FreeAnytime};
+use crate::util::sleep::{sleep_until, Sleep};
 use cstruct_macros::{bch_enum, MaybeZeroable};
 
 #[bch_enum(closed)]
@@ -202,7 +205,7 @@ fn six_lock_record_acquire(lock: &SixLock, ty: SixLockType) {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if ty == SixLockType::SIX_LOCK_intent {
         // a trylock's caller may hold a C spinlock, which isn't a scope
-        let _noreclaim = super::MemallocFlags::noreclaim();
+        let _noreclaim = crate::locking::MemallocFlags::noreclaim();
         let _ = unsafe {
             crate::util::backtrace::save_backtrace(&mut *lock.owner_stack.get(), sched::current(), 1)
         };
@@ -1499,10 +1502,10 @@ pub unsafe fn __six_lock_init(lock: *mut SixLock, name: *const c_char, key: Lock
     unsafe {
         (*lock).state.store(0, Relaxed);
         let Ok(()) = init_at(wait_lock, &raw mut (*lock).wait_lock);
-        crate::os::lockdep::debug_check_no_locks_freed(lock.cast(), size_of::<SixLock>());
+        debug_check_no_locks_freed(lock.cast(), size_of::<SixLock>());
         LockdepMap::init(&raw mut (*lock).dep_map, name, key);
 
-        if crate::os::percpu::SIX_PERCPU_READERS && flags.contains(SixLockInitFlags::pcpu) {
+        if SIX_PERCPU_READERS && flags.contains(SixLockInitFlags::pcpu) {
             /*
              * We don't return an error here on memory allocation failure
              * since percpu is an optimization, and locks will work with the

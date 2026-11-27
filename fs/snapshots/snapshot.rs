@@ -293,34 +293,35 @@
  * mount by re-scanning for snapshots still marked for deletion.
  */
 
-use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, error::BkeyValidate, passes};
-use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, BkeyVal, BkeyWhole, POS_MAX, POS_MIN,
-                         BkeyOps, BkeyValidateFrom};
-use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::{prt, message, bkey_fsck_err_on, fs_inconsistent};
-use crate::util::vstructs::{Unvalidated, Validated, Whole};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags,
-                         TransAttempt, TransBkey, UpdateTriggerFlags};
-use crate::btree::trans::TransGuard;
-use crate::locking::{ExclusiveGuard, Mutex};
-use crate::c;
-use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree};
-use crate::snapshots::subvolume::SubvolInum;
-use crate::errcode::{Errcode, BchError, Found};
-use crate::fs::{Fs, FsFlag};
-use crate::snapshots::{check_snapshots, delete, subvolume, FsSnapshots};
-use crate::util::alloc::{AllocError, Vec};
-use crate::data_structures::bitmap::{BitArray, AtomicBitArray};
-use crate::util::projections::Publish;
-use crate::util::rcu::{RcuArray, RcuArrayWriter};
-use crate::os::kernel::{cold_path, likely, unlikely};
-use crate::util::place::Contained;
-use crate::util::{HumanReadable, Printbuf};
 use core::fmt;
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
+use crate::alloc::accounting;
+use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeyOps, BkeySC, BkeyVal,
+    BkeyValidateFrom, BkeyWhole, POS_MAX, POS_MIN};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::trans::TransGuard;
+use crate::btree::trigger::{Trigger, TriggerOp};
+use crate::c;
+use crate::data_structures::bitmap::{AtomicBitArray, BitArray};
+use crate::errcode::{BchError, Errcode, Found};
 use crate::format::{Bpos, Btree, MetadataVersion};
+use crate::fs::{Fs, FsFlag};
+use crate::init::{error::BkeyValidate, passes::{self, RecoveryPass, RunRecoveryPassFlags}};
+use crate::locking::{ExclusiveGuard, Mutex};
+use crate::os::kernel::{cold_path, likely, random_u64, random_u64_below, unlikely};
+use crate::posix::namei::inum_to_path;
+use crate::snapshots::format::{Snapshot, SnapshotState, SnapshotTree};
+use crate::snapshots::subvolume::{self, SubvolInum};
+use crate::snapshots::{check_snapshots, delete, FsSnapshots};
 use crate::types::bits_to_longs;
+use crate::util::alloc::{AllocError, Vec};
+use crate::util::place::Contained;
+use crate::util::projections::Publish;
+use crate::util::rcu::{RcuArray, RcuArrayWriter};
+use crate::util::vstructs::{Unvalidated, Validated, Whole};
+use crate::util::{HumanReadable, Printbuf};
+use crate::{bkey_fsck_err_on, fs_inconsistent, message, prt};
 use cstruct_macros::{bch_enum, MaybeZeroable};
 
 pub const IS_ANCESTOR_BITMAP: u32 = 128;
@@ -368,7 +369,7 @@ pub struct snapshot_t {
 }
 
 /// c->snapshots.table, published under RCU.
-pub type SnapshotTable = crate::util::rcu::RcuArray<snapshot_t>;
+pub type SnapshotTable = RcuArray<snapshot_t>;
 
 // ── The table ────────────────────────────────────────────────────────────
 
@@ -769,8 +770,8 @@ impl FsSnapshots {
             // depth 0 under a parent is damage, check_depth()'s: C's
             // get_random_u32_below(0) is any u32, and the walk runs off the root
             let n = match s.depth() {
-                0     => crate::os::kernel::random_u64() as u32,
-                depth => crate::os::kernel::random_u64_below(depth as u64) as u32,
+                0     => random_u64() as u32,
+                depth => random_u64_below(depth as u64) as u32,
             };
             t.nth_parent(id, n)
         })
@@ -839,7 +840,7 @@ impl FsSnapshots {
         SnapshotAccounting(core::array::from_fn(|_| {
             let btree = btrees.next().expect("NR_SNAPSHOT_BTREES is the mask's popcount");
 
-            let v = crate::alloc::accounting::read(fs, crate::alloc::accounting::Snapshot { id, btree: btree.0 });
+            let v = accounting::read(fs, accounting::Snapshot { id, btree: btree.0 });
 
             BtreeAccounting {
                 btree,
@@ -1602,7 +1603,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
                 match subvolume::get(t, subvol, false) {
                     Err(e) if e.is_restart() => return Err(e),
                     Err(e) => { let _ = write!(out, "{}", e.msg()); }
-                    Ok(sv) => crate::posix::namei::inum_to_path(
+                    Ok(sv) => inum_to_path(
                         t, SubvolInum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
                 }
             }
@@ -1610,7 +1611,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
 
             // only the extents btree (btree 0, the default here) carries
             // sectors - so this one read is the snapshot's total on-disk usage.
-            let v = crate::alloc::accounting::read(t.fs(), crate::alloc::accounting::Snapshot { id, btree: 0 });
+            let v = accounting::read(t.fs(), accounting::Snapshot { id, btree: 0 });
             prt!(out, "{}\r", HumanReadable(v.sectors << 9));
         }
     }

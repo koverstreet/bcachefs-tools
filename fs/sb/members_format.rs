@@ -2,11 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::c;
 use crate::alloc::accounting_format::DataTypes;
 use crate::format::__uuid_t;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, bch_enum, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
+use cstruct_macros::{bch_enum, bitfield, whole, BitfieldMembers, MaybeZeroable, Plain, TypeInfo};
 
 /*
  * We refer to members with bitmasks in various places - but we need to get rid
@@ -92,7 +91,7 @@ impl Member {
      * This limit comes from the bucket_gens array - it's a single allocation, and
      * kernel allocation are limited to INT_MAX
      */
-    pub const NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
+    pub const NBUCKETS_MAX: u32 = i32::MAX as u32 - 64;
 
     pub const V1_BYTES: u32 = 56;
 }

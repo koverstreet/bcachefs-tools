@@ -9,6 +9,7 @@
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomPinned;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 
 /// A C object as an entry point's argument: `&Opaque<Fs>` where C
 /// passes a `struct bch_fs *`. Same ABI; transparent. A transaction is
@@ -88,12 +89,12 @@ pub const fn c_str(s: &'static str) -> &'static core::ffi::CStr {
 
 /// The string in C char array @buf: up to its NUL, or empty if it has none.
 pub fn cstr_in(buf: &[c_char]) -> &core::ffi::CStr {
-    core::ffi::CStr::from_bytes_until_nul(crate::util::vstructs::plain_bytes(buf)).unwrap_or(c"")
+    core::ffi::CStr::from_bytes_until_nul(plain_bytes(buf)).unwrap_or(c"")
 }
 
 /// C char array @buf, as the bytes it holds: to read into.
 pub fn bytes_in(buf: &mut [c_char]) -> &mut [u8] {
-    crate::util::vstructs::plain_bytes_mut(buf)
+    plain_bytes_mut(buf)
 }
 
 /// @s, up to a NUL in it, into C char array @buf - truncated to leave room

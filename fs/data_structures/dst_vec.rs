@@ -5,17 +5,17 @@
 //! bit clear: InlineVec tags it. Its allocator is kept before its buffer, so
 //! one with state - a bio's BioAlloc - is what it grows from and frees to.
 
-use crate::data_structures::array_vec::LenUint;
-use crate::data_structures::dst_array::DstArray;
-use crate::util::alloc::{Alloc, AllocError, Global};
-use crate::util::thin::ThinBox;
-use crate::util::vstructs::{FlexArray, SelfSized};
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::slice;
 use core::sync::atomic::{AtomicPtr, Ordering::Release};
+use crate::data_structures::array_vec::LenUint;
+use crate::data_structures::dst_array::DstArray;
+use crate::util::alloc::{Alloc, AllocError, Global};
+use crate::util::thin::ThinBox;
+use crate::util::vstructs::{FlexArray, SelfSized};
 
 #[repr(C)]
 pub struct DstVecHead<L> {
@@ -25,7 +25,7 @@ pub struct DstVecHead<L> {
 type Buf<T, L> = DstArray<DstVecHead<L>, MaybeUninit<T>, L>;
 
 #[repr(transparent)]
-pub struct DstVec<T, L: LenUint = u32, A: Alloc + Copy = crate::os::alloc::Global> {
+pub struct DstVec<T, L: LenUint = u32, A: Alloc + Copy = Global> {
     buf: ThinBox<Buf<T, L>, A>,
     _t:  PhantomData<T>,
 }

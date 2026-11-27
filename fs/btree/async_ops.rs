@@ -5,19 +5,19 @@
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering::{AcqRel, Acquire}};
-use cstruct_macros::{Init, Late};
-use pin_init::pin_data;
+use crate::btree::interior::foreground_maybe_merge;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts, TransAttempt};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::data::write::WriteFlags;
-use crate::fs::{FsFlag as Flag, Fs, WriteRef};
 use crate::data_structures::cuckoo::{Cuckoo, Entry, Registration};
 use crate::errcode::{BchError, Errcode};
-use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
+use crate::format::{BTREE_MAX_DEPTH, Bpos, Btree};
+use crate::fs::{Fs, FsFlag as Flag, WriteRef};
 use crate::init::passes::RecoveryPass;
 use crate::locking::{Locked, MemallocFlags, Mutex};
 use crate::new_lock;
+use crate::os::workqueue::{Workqueue, WqFlags};
 use crate::util::alloc::{AllocError, Vec};
 use crate::util::futex::EventCount;
 use crate::util::late::Late;
@@ -26,7 +26,8 @@ use crate::util::rcu::Detach;
 use crate::util::refcount::TryRefcount;
 use crate::util::sleep::Sleep;
 use crate::util::task::spawn;
-use crate::os::workqueue::{Workqueue, WqFlags};
+use cstruct_macros::{Init, Late};
+use pin_init::pin_data;
 
 /*
  * Ops are small and deduped, but a large fsck can touch millions of nodes -
@@ -98,8 +99,8 @@ impl Op {
             t.btree_node_rewrite(iter.iter(), b, 0, CommitOpts::new(), WriteFlags::empty())
         } else {
             let trans = t.trans();
-            super::interior::foreground_maybe_merge(t, &mut trans.paths(), iter.iter().path, level as usize,
-                                                    CommitOpts::new(), None)
+            foreground_maybe_merge(t, &mut trans.paths(), iter.iter().path, level as usize,
+                                   CommitOpts::new(), None)
         }
     }
 }

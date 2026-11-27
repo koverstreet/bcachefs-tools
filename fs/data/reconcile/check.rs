@@ -39,7 +39,7 @@ use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_
 use crate::errcode::BchError;
 use crate::data::reconcile::trigger::PerSnapshotIoOpts;
 use crate::posix::inode_opts::get_io_opts;
-use crate::util::{log::LogLevel, printbuf::Msg, vstructs::plain_bytes, Printbuf};
+use crate::util::{log::LogLevel, vstructs::plain_bytes, Msg, Printbuf};
 use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::mem::size_of;
 use crate::format::{Bpos, Btree, BkeyType, Backpointer, BTREE_MAX_DEPTH, Deleted};

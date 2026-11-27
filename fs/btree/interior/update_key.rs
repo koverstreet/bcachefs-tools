@@ -6,13 +6,13 @@
 use core::ptr;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeySC, BkeyV, BkeyVMut, BkeyVal};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts,
-                         TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::interior::NodeKey;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags,
+    CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::path::Paths;
 use crate::btree::trigger::{key_trigger, TriggerOp};
-use super::NodeKey;
 use crate::data::reconcile::needs_reconcile::strip_reconcile;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Btree, JsetEntryType};
 use crate::util::vstructs::Validated;
 

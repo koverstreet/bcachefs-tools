@@ -9,11 +9,9 @@
 //! no with() is still using it - before lend() returns.
 
 use core::ptr::NonNull;
-
-use pin_init::{pin_data, pin_init, PinInit};
-
 use crate::locking::{Locked, Mutex};
 use crate::new_lock;
+use pin_init::{pin_data, pin_init, PinInit};
 
 #[pin_data]
 pub struct Loan<T> {

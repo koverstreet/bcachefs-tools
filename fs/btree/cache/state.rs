@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use super::{btree_ptr_hash_val, cached_node, node_key_hash_val, BtreeCacheGuard, BtreeCacheLists,
-    BtreeNodeList};
-use crate::btree::bkey::{BkeyI, BkeySC};
-use crate::btree::node::BtreeNode;
+use core::ptr::NonNull;
+use core::sync::atomic::{fence, Ordering::SeqCst};
 use crate::btree::bbpos::Bbpos;
+use crate::btree::bkey::{BkeyI, BkeySC};
+use crate::btree::cache::{btree_ptr_hash_val, cached_node, node_key_hash_val, BtreeCacheGuard,
+    BtreeCacheLists, BtreeNodeCacheState as State, BtreeNodeList};
+use crate::btree::node::BtreeNode;
 use crate::data_structures::cuckoo::{Cuckoo, Entry};
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{BchError, Errcode};
 use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::{six::{six_lock_counts, six_lock_wakeup_all, SixLockType}, Guard as _};
+use crate::os::kernel::is_vmalloc_addr;
 use crate::prt;
 use crate::util::{hash::GoldenRatio, rcu::read_lock};
-use crate::os::kernel::is_vmalloc_addr;
-use crate::btree::cache::BtreeNodeCacheState as State;
-use core::ptr::NonNull;
-use core::sync::atomic::{fence, Ordering::SeqCst};
 
 pub(crate) type NodeTable = Cuckoo<Entry<BtreeNode>, GoldenRatio>;
 

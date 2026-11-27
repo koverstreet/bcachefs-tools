@@ -15,18 +15,18 @@ use core::ops::Deref;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering::{Acquire, Relaxed, Release}};
-
-use pin_init::{pin_init_from_closure, PinInit};
-
 use crate::c;
-use crate::util::alloc::{flags, init_at, stateless, with_alloc_layout, Alloc, AllocError, AllocGfp, Flags, Global};
-use crate::util::futex::{futex_wait, futex_wake};
-use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind, NothingToDetach,
-                       RcuHead, RcuOwned, RcuWorkHead};
-use crate::util::sleep::Sleep;
-use crate::util::vstructs::SelfSized;
+use crate::new_work;
 use crate::os::module::Quiesced;
 use crate::os::workqueue::{Queue, RawWork, Workqueue, WqFlags};
+use crate::util::alloc::{flags, init_at, kvfree_rcu, stateless, with_alloc_layout, Alloc,
+    AllocError, AllocGfp, Flags, Global};
+use crate::util::futex::{futex_wait, futex_wake};
+use crate::util::rcu::{Detach, DropAnytime, DropAtomic, Flavor, FreeAnytime, HasRcuHead, HeadKind,
+    NothingToDetach, RcuHead, RcuOwned, RcuWorkHead};
+use crate::util::sleep::Sleep;
+use crate::util::vstructs::SelfSized;
+use pin_init::{pin_init_from_closure, PinInit, ZeroableOption};
 
 pub(crate) fn alloc_at<T, A: AllocGfp, E: From<AllocError>>(init: impl PinInit<T, E>, gfp: Flags)
     -> Result<NonNull<T>, E>
@@ -61,7 +61,7 @@ unsafe impl<T, A: Alloc> DropAtomic for MaybeRcuAlloc<T, A> {}
 unsafe impl<T, A: Alloc> NothingToDetach for MaybeRcuAlloc<T, A> {}
 
 // None is its pointer null - zeroed
-unsafe impl<T, A: Alloc> ::pin_init::ZeroableOption for MaybeRcuAlloc<T, A> {}
+unsafe impl<T, A: Alloc> ZeroableOption for MaybeRcuAlloc<T, A> {}
 
 impl<T, A: Alloc> MaybeRcuAlloc<T, A> {
     /// @init's T, in memory that starts zeroed - padding too. Fails with
@@ -190,7 +190,7 @@ impl<T, H: HeadKind> RcuHeadAt<H> for T {
     default fn free_mem_rcu<A: Alloc>(f: Freeing<T, H, A>) {
         if A::KVFREE {
             let h = <T as RcuHeadAt<H>>::head(&f);
-            return unsafe { crate::util::alloc::kvfree_rcu::<H>(h.cast(), Layout::new::<Headed<T, H>>()) };
+            return unsafe { kvfree_rcu::<H>(h.cast(), Layout::new::<Headed<T, H>>()) };
         }
         Flavor::RCU.call(f, Freeing::free_mem);
     }
@@ -258,7 +258,7 @@ impl<T: ?Sized + SelfSized, H: HeadKind> RcuHeadAt<H> for T {
         const { assert!(A::KVFREE, "a DST freed a grace period on with no rcu_head of its own: by kvfree_rcu(), \
                                     and kvfree() doesn't free its allocator's memory") };
         let (base, layout) = allocation::<T, H>(f.0);
-        unsafe { crate::util::alloc::kvfree_rcu::<H>(base, layout) }
+        unsafe { kvfree_rcu::<H>(base, layout) }
     }
 }
 
@@ -340,7 +340,7 @@ fn allocation<T: ?Sized + RcuHeadAt<H>, H: HeadKind>(p: NonNull<T>) -> (NonNull<
 fn own_head_free_mem_rcu<T: ?Sized + HasRcuHead + RcuHeadAt<H>, H: HeadKind, A: Alloc>(f: Freeing<T, H, A>) {
     if A::KVFREE {
         let (base, layout) = allocation::<T, H>(f.0);
-        return unsafe { crate::util::alloc::kvfree_rcu::<T>(base, layout) };
+        return unsafe { kvfree_rcu::<T>(base, layout) };
     }
     Flavor::RCU.call(f, Freeing::free_mem);
 }
@@ -563,7 +563,7 @@ impl<T: ?Sized + RcuHeadAt<RcuWorkHead>, A: Alloc> Freeing<T, RcuWorkHead, A> {
     /// room become the work's.
     fn queue(self) {
         let work = <T as RcuHeadAt<RcuWorkHead>>::head(&self).cast::<RawWork>().as_ptr();
-        let init = crate::new_work!(work_fn::<T, A>, "rcu_free");
+        let init = new_work!(work_fn::<T, A>, "rcu_free");
         let Ok(()) = unsafe { init_at(init, work) };
         let wq = FREE_WQ.load(Acquire);
         assert!(!wq.is_null(), "an RcuDropWorkMember's freed outside module init and exit");

@@ -3,23 +3,24 @@
 //! The journal's startup and shutdown, and what it allocates going rw.
 
 use core::sync::atomic::Ordering::Relaxed;
-
+use crate::alloc::replicas::DevlistEntry;
+use crate::btree::bkey::prelude::*;
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::c;
-use crate::alloc::replicas::DevlistEntry;
-use crate::util::{alloc::Flags, sleep::Sleep};
-use crate::btree::bkey::prelude::*;
-use crate::journal::journal::{Journal, JOURNAL_ENTRY_SIZE_MIN, JournalResStateBits,
-    JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK, JOURNAL_STATE_BUF_NR, JournalFlag};
-use crate::journal::write::jset_buf_alloc;
 use crate::data::ptrs::Ptrs;
 use crate::data_structures::fifo::FifoRead;
-use crate::locking::Guard as _;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{BchError, Errcode};
 use crate::format::DataType;
 use crate::fs::{Dev, StateLockWrite};
+use crate::journal::journal::{JOURNAL_ENTRY_SIZE_MIN, JOURNAL_SEQ_MAX, JOURNAL_STATE_BUF_MASK,
+    JOURNAL_STATE_BUF_NR, Journal, JournalFlag, JournalResStateBits};
+use crate::journal::pins;
+use crate::journal::read::replay_devs;
+use crate::journal::write::jset_buf_alloc;
+use crate::locking::Guard as _;
 use crate::os::{bio::BioSet, kernel::jiffies};
-use crate::{message, fsck_err_on, warn_on};
+use crate::util::{alloc::Flags, sleep::Sleep};
+use crate::{fsck_err_on, message, warn_on};
 use cstruct_macros::MaybeZeroable;
 
 /*
@@ -56,7 +57,6 @@ pub struct JournalStartInfo {
     pub cur_seq: u64,
     pub clean: bool,
 }
-
 
 impl Journal {
     /* startup/shutdown: */
@@ -145,7 +145,7 @@ impl Journal {
         /* Clean filesystem? */
         let last_seq = if info.last_seq != 0 { info.last_seq } else { cur_seq };
 
-        crate::journal::pins::start(self, last_seq, cur_seq)?;
+        pins::start(self, last_seq, cur_seq)?;
 
         self.replay_journal_seq.set(last_seq);
         {
@@ -186,7 +186,7 @@ impl Journal {
                 self.lock.lock().last_empty_seq = seq;
             }
 
-            let seq_devs = if !info.clean { crate::journal::read::replay_devs(fs, i) } else { Default::default() };
+            let seq_devs = if !info.clean { replay_devs(fs, i) } else { Default::default() };
 
             if seq_devs.nr != 0 {
                 let r = DevlistEntry::new(DataType::journal, seq_devs);

@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::{bkey::{BkeyI, BKEY_U64S}, write_buffer::{BtreeWriteBufferedKey, WbKeyRef}};
-use crate::data::keylist;
-use crate::data_structures::dst_room::DstRoom;
-use crate::util::alloc::{Flags, AllocError, Vec};
-use crate::os::kernel::prefetch;
-use crate::util::projections::Volatile;
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
-use crate::format::{Bpos, Bkey};
-use super::{REF_HI_MI_LO, REF_IDX, REF_POS, SEQ_U64S};
 use core::marker::PhantomData;
 use core::ops::{Deref, Range};
 use core::ptr::NonNull;
+use crate::btree::bkey::{BKEY_U64S, BkeyI};
+use crate::btree::write_buffer::{resize_gfp, BtreeWriteBufferedKey, REF_HI_MI_LO, REF_IDX, REF_POS,
+    SEQ_U64S, WbKeyRef};
+use crate::data::keylist;
+use crate::data_structures::dst_room::DstRoom;
+use crate::format::{Bkey, Bpos};
+use crate::os::kernel::prefetch;
+use crate::util::alloc::{AllocError, Flags, Vec};
+use crate::util::projections::Volatile;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 
 /// A key in the write buffer, over its u64s.
 type KeyRoom = DstRoom<BtreeWriteBufferedKey>;
@@ -67,7 +68,7 @@ impl WbKeys {
     pub(super) fn resize(&mut self, live: &KeysLiveWriter, new_size: usize, gfp: Flags)
         -> Result<(), AllocError>
     {
-        let ret = super::resize_gfp(&mut self.0, new_size, gfp);
+        let ret = resize_gfp(&mut self.0, new_size, gfp);
         self.publish(live);
         ret
     }
@@ -132,7 +133,7 @@ impl WbKeys {
 
         let _ = self.0.push_within_capacity(seq);
         let dst = self.0.extend_zeroed_within_capacity(usize::from(k.k.u64s)).expect("room checked");
-        plain_bytes_mut(dst).copy_from_slice(plain_bytes(k.as_bytes()));
+        plain_bytes_mut(dst).copy_from_slice(k.as_bytes());
         self.publish(live);
     }
 

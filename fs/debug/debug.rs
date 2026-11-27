@@ -11,19 +11,20 @@
 use core::convert::Infallible;
 use core::ffi::CStr;
 use core::ops::ControlFlow;
-
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
-use crate::btree::BtreeIter;
+use crate::btree::bkey::SPOS_MAX;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::btree::node::BtreeNode;
 use crate::btree::trans::transaction_fn;
-use crate::errcode::BchError;
-use crate::fs::{Fs, FsFlag};
-use crate::os::{debugfs::{DebugFile, DebugOut, DebugRoot}, module::ModuleExit};
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::{place::Contained, task::{TaskList, TASKS}, rcu, Printbuf};
-use crate::{btree_trans, prt, SPOS_MAX};
-use crate::format::{Bpos, Btree, BTREE_MAX_DEPTH};
+use crate::debug::async_objs;
+use crate::errcode::BchError;
+use crate::format::{BTREE_MAX_DEPTH, Bpos, Btree};
+use crate::fs::{Fs, FsFlag};
+use crate::init::error::damaged_path_to_text;
+use crate::os::{debugfs::{DebugFile, DebugOut, DebugRoot}, module::ModuleExit};
+use crate::util::{place::Contained, rcu, task::{TaskList, TASKS}, Printbuf};
+use crate::{btree_trans, prt};
 use cstruct_macros::{placed, Init, MaybeZeroable};
 use pin_init::pin_data;
 
@@ -32,7 +33,6 @@ use pin_init::pin_data;
 #[repr(C)]
 #[derive(MaybeZeroable, Init)]
 pub struct BtreeDebug {}
-
 
 fn may_iterate(fs: &Fs) -> bool {
     fs.flags.get(FsFlag::may_go_rw)
@@ -170,7 +170,6 @@ impl DebugFile for BfloatFailed {
 /* The filesystem's */
 
 enum CachedBtreeNodes {}
-
 
 fn cached_btree_node_to_text(out: &mut Printbuf, fs: &Fs, b: &BtreeNode) {
     if out.nr_tabstops() == 0 {
@@ -356,7 +355,7 @@ impl DebugFile for FsckDamagedPaths {
                     return Ok(false);
                 };
 
-                crate::init::error::damaged_path_to_text(out, &trans, &entry);
+                damaged_path_to_text(out, &trans, &entry);
                 next += 1;
 
                 // Before the flush: it relocks, via lockrestart_do()
@@ -465,7 +464,7 @@ pub fn debug_init(fs: &Fs) {
         dir.file::<WritePoints>(c"write_points", fs);
     }
 
-    crate::debug::async_objs::debugfs_init(fs, dir);
+    async_objs::debugfs_init(fs, dir);
 
     if let Some(btrees) = dir.subdir(c"btrees") {
         static NAMES: &[&CStr] = &crate::cstr_names!(Btree);

@@ -5,9 +5,9 @@
 //! userspace's constructor - is the port's module.rs.
 
 use crate::errcode::BchError;
-use crate::os::{kobject::{fs_kobj, StaticKobject}, module::{ModuleExit, ThisModule}};
 #[cfg(kernel)]
 use crate::format::MetadataVersion;
+use crate::os::{kobject::{fs_kobj, StaticKobject}, module::{ModuleExit, ThisModule}};
 
 #[cfg(kernel)]
 crate::module_info!("license" = "GPL");

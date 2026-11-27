@@ -12,18 +12,18 @@
 //! points, ->swab and ->compat, should take Unvalidated keys. XXX: they don't
 //! yet - Rust has no unvalidated keys to give them.
 
-use crate::btree::bkey::BkeyI;
-use crate::btree::bkey::{BkeyP, BkeyS};
+use core::mem::offset_of;
+use crate::btree::bkey::{BKEY_FORMAT_CURRENT, BkeyI, BkeyP, BkeyS};
+use crate::format::{BkeyFormat, BkeyPacked, BkeyType, Bpos, Btree, MetadataVersion, Val};
 use crate::fs::Fs;
-use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, Val, BkeyFormat, BkeyPacked};
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{plain_bytes_mut, Unvalidated};
 
 impl Bpos {
     /// Byte-swapped, as written by a machine of the other endianness: every
     /// byte reversed - a bpos's fields are in reverse order on big endian, so
     /// that's each field swapped and the order flipped.
     pub fn swab(&mut self) {
-        crate::util::vstructs::plain_bytes_mut(self).reverse();
+        plain_bytes_mut(self).reverse();
     }
 }
 
@@ -31,11 +31,11 @@ unsafe fn bkey_swab_key(f: Option<&BkeyFormat>, k: *mut BkeyPacked) {
     let f = if unsafe { (*BkeyP::from_raw(k)).is_packed() } {
         f.expect("a packed key to swab, with no format")
     } else {
-        &crate::btree::bkey::BKEY_FORMAT_CURRENT
+        &BKEY_FORMAT_CURRENT
     };
 
     let words = unsafe { core::slice::from_raw_parts_mut(k.cast::<u64>(), f.key_u64s as usize) };
-    crate::util::vstructs::plain_bytes_mut(words)[core::mem::offset_of!(BkeyPacked, key_start)..].reverse();
+    plain_bytes_mut(words)[offset_of!(BkeyPacked, key_start)..].reverse();
 }
 
 /// @k, in a node of @btree that @version on a machine @big_endian or not
@@ -54,7 +54,7 @@ pub unsafe fn bkey_compat(fs: Option<&Fs>, btree: Btree, version: MetadataVersio
     let fmt = || f.expect("a packed key, with no format");
 
     /* on read, before it's validated: too short to be a key isn't one */
-    if !unsafe { (*BkeyP::from_raw(k)).u64s_valid(f.unwrap_or(&crate::btree::bkey::BKEY_FORMAT_CURRENT)) } {
+    if !unsafe { (*BkeyP::from_raw(k)).u64s_valid(f.unwrap_or(&BKEY_FORMAT_CURRENT)) } {
         return;
     }
 

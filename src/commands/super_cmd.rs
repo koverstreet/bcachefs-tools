@@ -15,7 +15,7 @@ use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::sb::{members_format::SbFieldMembersV2, SbFieldType};
 use clap::Parser;
 
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::Printbuf;
 
 /// Print superblock information to stdout
 #[derive(Parser, Debug)]

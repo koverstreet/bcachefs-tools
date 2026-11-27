@@ -17,7 +17,7 @@ use bcachefs_kernel::posix::inode::InodeUnpacked;
 use bcachefs_kernel::snapshots::subvolume::SubvolInum;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::Printbuf;
 
 use crate::wrappers::io::{self, WriteResult};
 

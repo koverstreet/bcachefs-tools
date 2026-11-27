@@ -3,14 +3,13 @@
 use core::cell::UnsafeCell;
 use core::mem::ManuallyDrop;
 use core::sync::atomic::{fence, AtomicU32, Ordering::{Acquire, Relaxed, Release}};
-
-use pin_init::{pin_init_from_closure, PinInit};
-
-use super::{RefGuard, Refcount, TryRefcount, WaitableRef};
+use crate::util::alloc::init_at;
 use crate::util::atomic::try_update;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::place::Placed;
+use crate::util::refcount::{RefGuard, Refcount, TryRefcount, WaitableRef};
 use crate::util::sleep::Sleep;
+use pin_init::{pin_init_from_closure, PinInit};
 
 /// A count and its value, as an Arc's, but not owning its memory: it starts
 /// at one, the owner's ref. The value is had only through a ref, and the put
@@ -44,7 +43,7 @@ impl<T> AtomicRef<T> {
         unsafe {
             pin_init_from_closure(move |slot: *mut Self| {
                 (&raw mut (*slot).count).write(AtomicU32::new(1));
-                crate::util::alloc::init_at(value, (&raw mut (*slot).value).cast::<T>())
+                init_at(value, (&raw mut (*slot).value).cast::<T>())
             })
         }
     }

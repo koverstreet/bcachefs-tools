@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+
 //! Keys' types and traits - mod.rs has how they fit together; this is what
 //! each is.
 //!
@@ -51,13 +53,14 @@
 //! kind is at a value's definition: #[whole(bkey)], #[grown(.., bkey)],
 //! #[derive(SizedVal)].
 
-use crate::btree::{bkey::{ops, BkeyOps, Ops}, iter::{BtreeIter, TransBkey}};
-use crate::format::{BkeyType, BkeyTypeFlags, Bpos, Val, Bkey, BkeyType_arms};
+use core::marker::PhantomData;
+use crate::btree::{bkey::{ops, BkeyOps, BkeySCToText, Ops}, iter::{BtreeIter, TransBkey}};
+use crate::format::{Bkey, BkeyType, BkeyTypeFlags, BkeyType_arms, Bpos, Val};
+use crate::fs::Fs;
 use crate::typeinfo::{StructInfo, TypeInfo};
 use crate::util::projections::Floored;
 use crate::util::vstructs::{len_at, ArmRef, DstHead, InState, SelfSized, SizedArm, State, Unsized,
-                            Unvalidated, UnvalidatedSized, VStruct, VStructError, Validated, Whole};
-use core::marker::PhantomData;
+    Unvalidated, UnvalidatedSized, VStruct, VStructError, Validated, Whole};
 
 #[repr(C)]
 pub struct BkeySC<'a, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
@@ -328,8 +331,8 @@ pub trait BkeyV: Sized {
         self.as_sc().v()
     }
 
-    fn to_text<'f>(&self, fs: &'f crate::fs::Fs) -> super::BkeySCToText<'_, 'f, Self::V> {
-        super::BkeySCToText { k: self.as_sc(), fs }
+    fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'_, 'f, Self::V> {
+        BkeySCToText { k: self.as_sc(), fs }
     }
 
     fn typed(self) -> <Self::V as BkeyTyped>::Typed<Self>

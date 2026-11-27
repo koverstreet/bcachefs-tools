@@ -11,7 +11,7 @@ use crate::errcode::BchError;
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
 use crate::util::refcount::TryRefcount;
-use crate::{message, btree_trans, prt};
+use crate::{btree_trans, message, prt};
 
 /*
  * Inode-number sharding (shard_inode_numbers_bits) splits concurrent

@@ -5,12 +5,12 @@
 //! pointer's low bit. What it points to doesn't move while it's borrowed, and
 //! is freed with it.
 
-use crate::util::alloc::{stateless, Alloc, Box, Global};
-use crate::util::rcu::rcu_dereference;
 use core::marker::PhantomData;
-use core::mem::align_of;
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering::{Acquire, Relaxed, Release}};
+use crate::util::alloc::{stateless, Alloc, Box, Global};
+use crate::util::rcu::rcu_dereference;
+use pin_init::Zeroable;
 
 pub enum Either<L, R> {
     Left(L),
@@ -30,7 +30,7 @@ unsafe impl<L: Send, R: Send, A: Alloc> Send for OnceEither<L, R, A> {}
 unsafe impl<L: Send + Sync, R: Send + Sync, A: Alloc> Sync for OnceEither<L, R, A> {}
 
 // null: empty
-unsafe impl<L, R, A: Alloc> pin_init::Zeroable for OnceEither<L, R, A> {}
+unsafe impl<L, R, A: Alloc> Zeroable for OnceEither<L, R, A> {}
 
 impl<L, R, A: Alloc> OnceEither<L, R, A> {
     const TAGGABLE: () = assert!(align_of::<L>() > 1 && align_of::<R>() > 1,

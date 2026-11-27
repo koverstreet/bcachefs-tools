@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::{bail, Result};
 use bcachefs_kernel::errcode::Errcode;
 use bcachefs_kernel::opts::{Opt, OptType, OptFlags, OptId};
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
 
 /// Leak a String to get a &'static str. Used for Clap args built at

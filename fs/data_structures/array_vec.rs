@@ -6,18 +6,17 @@
 // the impl trait it shares with ArrayString, in one file; the crate's
 // optional std, serde, borsh and zeroize support left out.
 
+use core::borrow::{Borrow, BorrowMut};
+use core::cmp;
 use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::iter;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
+use core::mem::{self, ManuallyDrop, MaybeUninit};
+use core::ops::{Bound, Deref, DerefMut, RangeBounds};
 use core::ptr;
 use core::slice;
-use core::cmp;
-use core::iter;
-use core::mem;
-use core::ops::{Bound, Deref, DerefMut, RangeBounds};
-use core::borrow::{Borrow, BorrowMut};
-use core::hash::{Hash, Hasher};
-use core::mem::ManuallyDrop;
+use pin_init::Zeroable;
 
 mod sealed {
     pub trait Sealed {}
@@ -234,7 +233,7 @@ pub struct ArrayVec<T, const CAP: usize, L: LenUint = u32> {
 }
 
 // zeroed is empty
-unsafe impl<T, const CAP: usize, L: LenUint + ::pin_init::Zeroable> ::pin_init::Zeroable for ArrayVec<T, CAP, L> {}
+unsafe impl<T, const CAP: usize, L: LenUint + Zeroable> Zeroable for ArrayVec<T, CAP, L> {}
 
 impl<T, const CAP: usize, L: LenUint> Drop for ArrayVec<T, CAP, L> {
     fn drop(&mut self) {

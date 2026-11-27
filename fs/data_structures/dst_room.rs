@@ -12,10 +12,11 @@
 //! The storage is its own element type, not T's: a T's tail may be bytes
 //! under a header of words, as a typed key's value is under its bkey.
 
-use crate::util::alloc::{flags, AlignedBox, Alloc, AllocError, AllocGfp, Box, Flags, Global};
-use crate::util::vstructs::{plain_bytes, plain_bytes_mut, DstHead, Plain, SelfSized};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
+use crate::util::alloc::{flags, AlignedBox, Alloc, AllocError, AllocGfp, Box, Flags, Global};
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut, DstHead, Plain, SelfSized};
+use pin_init::{init, init_zeroed, zeroed, Init, Zeroable, ZeroableOption};
 
 #[repr(transparent)]
 pub struct DstRoom<T: ?Sized, B: ?Sized = [u64]> {
@@ -74,7 +75,7 @@ impl<E: Plain, const A: usize> Storage for AlignedBox<[E], A> {
     }
 }
 
-impl<T: ?Sized, E: Plain + Copy + ::pin_init::Zeroable, const A: usize> DstRoom<T, AlignedBox<[E], A>> {
+impl<T: ?Sized, E: Plain + Copy + Zeroable, const A: usize> DstRoom<T, AlignedBox<[E], A>> {
     /// Its room made @n elements, grown or shrunk: as much of its storage as
     /// fits copied, zeroes past it. The storage, not the T: a T read in parts
     /// - a superblock's header, before the rest - can say it's longer than
@@ -115,10 +116,9 @@ pub enum InlineOrBoxed<E, const N: usize, const B: usize> {
 }
 
 // zeroed, the tag is Inline's, and its elements zeroes
-unsafe impl<E: ::pin_init::Zeroable, const N: usize, const B: usize> ::pin_init::Zeroable
-    for InlineOrBoxed<E, N, B> {}
+unsafe impl<E: Zeroable, const N: usize, const B: usize> Zeroable for InlineOrBoxed<E, N, B> {}
 
-impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> Storage for InlineOrBoxed<E, N, B> {
+impl<E: Plain + Copy + Zeroable, const N: usize, const B: usize> Storage for InlineOrBoxed<E, N, B> {
     type Elem = E;
 
     fn elems(&self) -> &[E] {
@@ -147,7 +147,7 @@ impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> Sto
     }
 }
 
-impl<E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> InlineOrBoxed<E, N, B> {
+impl<E: Plain + Copy + Zeroable, const N: usize, const B: usize> InlineOrBoxed<E, N, B> {
     #[cold]
     #[inline(never)]
     fn grow_slow(&mut self, n: usize) -> &mut [E] {
@@ -191,14 +191,13 @@ where
     }
 }
 
-impl<T: ?Sized + SelfSized + DstHead, B: Storage + ::pin_init::Zeroable> DstRoom<T, B>
+impl<T: ?Sized + SelfSized + DstHead, B: Storage + Zeroable> DstRoom<T, B>
 where
     T::Head: Default + Plain,
 {
     /// Default's, made in place: for a room too big for the stack.
-    pub fn init_default() -> impl ::pin_init::Init<Self> {
-        use ::pin_init::Init as _;
-        ::pin_init::init!(Self { _t: PhantomData, buf <- ::pin_init::init_zeroed() }).chain(|r: &mut Self| {
+    pub fn init_default() -> impl Init<Self> {
+        init!(Self { _t: PhantomData, buf <- init_zeroed() }).chain(|r: &mut Self| {
             r.set_head(T::Head::default());
             Ok(())
         })
@@ -206,13 +205,13 @@ where
 }
 
 /// As the array's: T's empty value in its @N inline elements.
-impl<T: ?Sized + SelfSized + DstHead, E: Plain + Copy + ::pin_init::Zeroable, const N: usize, const B: usize> Default
+impl<T: ?Sized + SelfSized + DstHead, E: Plain + Copy + Zeroable, const N: usize, const B: usize> Default
     for DstRoom<T, InlineOrBoxed<E, N, B>>
 where
     T::Head: Default + Plain,
 {
     fn default() -> Self {
-        let mut r: Self = DstRoom { _t: PhantomData, buf: InlineOrBoxed::Inline(::pin_init::zeroed()) };
+        let mut r: Self = DstRoom { _t: PhantomData, buf: InlineOrBoxed::Inline(zeroed()) };
         r.set_head(T::Head::default());
         r
     }
@@ -287,10 +286,10 @@ impl<T: ?Sized, E: Plain + Copy, const N: usize> Copy for DstRoom<T, [E; N]> {}
 
 // #[repr(transparent)] over B: zeroed, it's zeroed storage, which holds a T
 // if zeroes are one
-unsafe impl<T: ?Sized + ::pin_init::Zeroable, B: ::pin_init::Zeroable> ::pin_init::Zeroable for DstRoom<T, B> {}
+unsafe impl<T: ?Sized + Zeroable, B: Zeroable> Zeroable for DstRoom<T, B> {}
 
 // #[repr(transparent)] over B: None is its None
-unsafe impl<T: ?Sized, B: ::pin_init::ZeroableOption> ::pin_init::ZeroableOption for DstRoom<T, B> {}
+unsafe impl<T: ?Sized, B: ZeroableOption> ZeroableOption for DstRoom<T, B> {}
 
 impl<T: ?Sized, B: Storage> DstRoom<T, B> {
     /// @buf as a room, holding what it holds.

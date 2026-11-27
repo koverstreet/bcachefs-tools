@@ -32,19 +32,18 @@
 //! sorted and not overlapping.
 
 use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
-
 use crate::btree::bkey::ValidateFlags;
-use crate::format::{SbFeatures, Sb, SbFieldType};
-use crate::locking::Guard as _;
-use crate::{sb_err_on, message};
-use crate::journal::seq_blacklist_format::{SbFieldJournalSeqBlacklist,
-    JournalSeqBlacklistEntry};
-use crate::util::{vstructs::{Unvalidated, Validated}, rcu::RcuArray, Printbuf};
-use crate::errcode::{Errcode, BchError};
+use crate::data_structures::eytzinger::Eytzinger0;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Sb, SbFeatures, SbFieldType};
 use crate::fs::{Fs, SbLockGuard};
+use crate::journal::seq_blacklist_format::{JournalSeqBlacklistEntry,
+    SbFieldJournalSeqBlacklist};
+use crate::locking::Guard as _;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize};
 use crate::types::Le64;
-use crate::data_structures::eytzinger::Eytzinger0;
+use crate::util::{rcu::RcuArray, vstructs::{Unvalidated, Validated}, Printbuf};
+use crate::{field, message, sb_err_on};
 
 type Section = SbFieldJournalSeqBlacklist<Validated>;
 
@@ -80,7 +79,7 @@ impl SbFieldOps for Section {
     fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let Some(bl) = sb.field::<Section>() else { return Ok(()) };
 
-        sb.writer::<crate::field!(journal_seq_blacklist)>().rebuild(bl.start.len(), |t| {
+        sb.writer::<field!(journal_seq_blacklist)>().rebuild(bl.start.len(), |t| {
             for (t, e) in t.iter_mut().zip(&bl.start) {
                 t.start = e.start.get();
                 t.end   = e.end.get();

@@ -64,22 +64,24 @@
  * what a future rewrite pass would need to move.
  */
 
+use crate::alloc::disk_groups_format::{bch_disk_group, DiskGroupFlags, LABEL_SIZE,
+    SbFieldDiskGroups};
 use crate::btree::bkey::ValidateFlags;
-use crate::alloc::disk_groups_format::{bch_disk_group, DiskGroupFlags,
-    SbFieldDiskGroups, LABEL_SIZE};
-use crate::init::dev::{DevsMask, bch_sb_buf};
-#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
-use crate::init::dev::CONGESTED_MAX;
-use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{DataType, Sb};
 use crate::fs::{Fs, SbLockGuard};
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+use crate::init::dev::CONGESTED_MAX;
+use crate::init::dev::{bch_sb_buf, DevsMask};
 use crate::locking::Guard as _;
 use crate::opts::OptFn;
-use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState, SbResize};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, SbResize, SbState};
 use crate::sb::members;
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::util::rcu::{read_lock, RcuArray, ReadGuard};
+use crate::util::vstructs::{Unvalidated, Validated};
+use crate::util::Printbuf;
 use crate::{prt, sb_err_on};
-use crate::util::{rcu::{read_lock, ReadGuard}, vstructs::{Unvalidated, Validated}, Printbuf};
 use cstruct_macros::TypeInfo;
 
 /* a target is 0 for none, then a device's index, then a disk group's */
@@ -97,7 +99,7 @@ pub struct DiskGroup {
 }
 
 /// c->disk_groups, published under RCU.
-pub type DiskGroups = crate::util::rcu::RcuArray<DiskGroup>;
+pub type DiskGroups = RcuArray<DiskGroup>;
 
 // ── Targets ──────────────────────────────────────────────────────────────
 

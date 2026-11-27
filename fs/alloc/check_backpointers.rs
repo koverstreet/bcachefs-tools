@@ -21,49 +21,48 @@
 //! Before calling a key missing, a pass flushes the write buffer and looks
 //! again - see backpointers.rs.
 
-
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::fs::{Dev, Fs};
+use core::ops::{ControlFlow, RangeInclusive};
+use core::sync::atomic::Ordering;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
-                                 bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
-                                 BpScanIter};
+    bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos, BpScanIter};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_data::{bkey_drop_device_and_update, kill_replica_if_checksum_bad};
+use crate::alloc::format::AllocV4;
+use crate::btree::bbpos::Bbpos;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::BtreeCachePins;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
-                         TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
+    UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
-use crate::alloc::format::AllocV4;
-use crate::btree::bbpos::Bbpos;
-use crate::data::extents_format::BtreePtrV2;
-use crate::data::reflink_format::ReflinkP;
-use crate::sb::members_format::MEMBER_INVALID;
 use crate::data::extents::Extents;
+use crate::data::extents_format::BtreePtrV2;
 use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
-use crate::errcode::{Errcode, BchError};
-use crate::init::{damage, passes};
-use crate::init::error::id;
-use crate::init::progress::Progress;
-use crate::types::bits_to_longs;
+use crate::data::reflink_format::ReflinkP;
 use crate::data_structures::bitmap::{AtomicBitmap, AtomicULong};
-use crate::util::rcu::{read_lock, ReadGuard};
+use crate::errcode::{BchError, Errcode};
+use crate::format::{Backpointer, BkeyType, Bpos, Btree, DataType, ErrorKeyReason, MetadataVersion};
+use crate::fs::{Dev, Fs};
+use crate::init::damage;
+use crate::init::error::id;
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
+use crate::init::progress::Progress;
+use crate::locking::{Locked, Mutex};
+use crate::sb::members_format::MEMBER_INVALID;
+use crate::types::bits_to_longs;
+use crate::util::projections::Volatile;
+use crate::util::rcu::{read_lock, RcuArray, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
-use crate::locking::{Locked, Mutex};
-use core::ops::{ControlFlow, RangeInclusive};
-use core::sync::atomic::Ordering;
 use cstruct_macros::{Init, MaybeZeroable};
 use pin_init::pin_data;
-use crate::format::{Bpos, Btree, DataType, ErrorKeyReason, BkeyType, MetadataVersion, Backpointer};
 
 /// A BucketBitmap's words: replaced by a copy when the device grows.
-pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::data_structures::bitmap::AtomicULong>;
+pub type BucketBitmapWords = RcuArray<AtomicULong>;
 
 crate::published! {
     /// A BucketBitmap's bits: read without its lock - by copygc, while a
@@ -72,7 +71,7 @@ crate::published! {
     pub struct BucketBits {
         pub buckets: BucketBitmapWords,
         /// Bits set
-        pub nr:      crate::util::projections::Volatile<u64>,
+        pub nr:      Volatile<u64>,
     }
 }
 
@@ -88,7 +87,6 @@ pub struct BucketBitmap {
     #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
     pub bits: Locked<Mutex, (), BucketBits>,
 }
-
 
 // ── fsck: check_btree_backpointers ───────────────────────────────────────
 

@@ -2,46 +2,45 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
-use crate::format::Sb;
-use crate::fs::{Dev, StateLockWrite, Fs};
-use crate::alloc::accounting::{self, mod_dev_cached_sectors};
-use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
-use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
-use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeySC};
-use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitOpts, TransAttempt,
-                         UpdateTriggerFlags, Watermark};
-use crate::btree::trans::TransGuard;
-use crate::data::ec::format::Stripe;
-use crate::alloc::background::BUCKET_GC_GEN_MAX;
-use crate::alloc::format::AllocV4;
-use crate::data::extents::ExtentPtrDecoded;
-use crate::data::extents_format::{ExtentPtr, Extent, Reservation};
-use crate::sb::{members_format::MEMBER_INVALID, errors::SbErrorId};
-use crate::errcode::{Errcode, BchError};
-use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
-use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
-use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
-use crate::data::reconcile::trigger::trigger_extent_reconcile;
-use crate::init::error::{count_fsck_err, fs_inconsistent, id};
-use crate::init::passes;
-use crate::opts::data_type_str;
-use crate::locking::{ByteLock, Guard as _, Locked};
-use crate::types::bits_to_longs;
-use crate::os::{kernel::unlikely, percpu::{Counters, PerCpu}};
-use crate::util::{rcu::{read_lock, RcuArrayWriter, ReadGuard}, Printbuf, ToText};
-use crate::data_structures::bitmap::AtomicBitmap;
-use crate::{btree_trans, fsck_err_on, ratelimit, message, percpu_field, prt};
+use core::cell::Cell;
 use core::convert::Infallible;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU8, Ordering};
-use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_enum, BitfieldMembers};
-use core::cell::Cell;
+use crate::alloc::accounting::{self, mod_dev_cached_sectors};
+use crate::alloc::background::BUCKET_GC_GEN_MAX;
+use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
+use crate::alloc::format::AllocV4;
+use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, BkeySC};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitOpts, TransAttempt, UpdateTriggerFlags,
+    Watermark};
+use crate::btree::trans::TransGuard;
+use crate::btree::trigger::{Trigger, TriggerOp};
+use crate::data::ec::format::Stripe;
+use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
+use crate::data::extents::ExtentPtrDecoded;
+use crate::data::extents_format::{Extent, ExtentPtr, Reservation};
+use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
+use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
+use crate::data::reconcile::trigger::trigger_extent_reconcile;
+use crate::data_structures::bitmap::AtomicBitmap;
+use crate::errcode::{BchError, Errcode};
+use crate::format::{BKEY_PTRS_MAX, Bkey, BkeyType, Bpos, Btree, CompressionType, DataType,
+    REPLICAS_MAX, Sb, SbCompat, SbCompats};
+use crate::fs::{Dev, Fs, StateLockWrite};
+use crate::init::error::{count_fsck_err, fs_inconsistent, id};
+use crate::init::passes::{self, RecoveryPass, RunRecoveryPassFlags};
+use crate::locking::{ByteLock, Guard as _, Locked};
+use crate::opts::data_type_str;
+use crate::os::{kernel::unlikely, percpu::{Counters, PerCpu}};
+use crate::sb::{errors::SbErrorId, members_format::MEMBER_INVALID};
+use crate::types::bits_to_longs;
+use crate::util::{rcu::{read_lock, RcuArray, RcuArrayWriter, ReadGuard}, Printbuf, ToText};
+use crate::{btree_trans, fsck_err_on, message, percpu_field, prt, ratelimit};
+use cstruct_macros::{bch_enum, bitfield, BitfieldMembers, Fieldwise, MaybeZeroable, Plain,
+    TypeInfo};
 use nestify::nest;
-use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType, BKEY_PTRS_MAX,
-    REPLICAS_MAX, Bkey, SbCompat, SbCompats};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -96,7 +95,7 @@ pub struct BucketGensHead {
 
 /// ca->bucket_gens: a device's bucket generations, published under RCU -
 /// atomics, written in place with readers looking.
-pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::AtomicU8, BucketGensHead>;
+pub type BucketGensArray = RcuArray<AtomicU8, BucketGensHead>;
 
 /* Only info on bucket countns: */
 #[repr(C)]
@@ -140,7 +139,6 @@ pub struct FsUsageBase {
 
 impl FsUsageBase {
     pub fn add_data_type(&mut self, data_type: DataType, sectors: u64) {
-
         let to = match data_type {
             DataType::btree => &mut self.btree,
             DataType::user | DataType::parity => &mut self.data,
@@ -1050,17 +1048,16 @@ impl Dev {
     /// The buckets held back from allocations at @watermark - for those at
     /// the watermarks under it.
     pub fn buckets_reserved(&self, watermark: Watermark) -> u64 {
-        use crate::alloc::foreground::Watermark as w;
         let (some, btree) = (self.mi.get().nbuckets >> 6, u64::from(self.nr_btree_reserve));
 
         match watermark {
-            w::stripe => 2 * some + 2 * btree,
-            w::normal => some + 2 * btree,
-            w::copygc => 2 * btree,
-            w::btree  => btree,
-            w::btree_copygc |
-            w::reclaim |
-            w::interior_updates => 0,
+            Watermark::stripe => 2 * some + 2 * btree,
+            Watermark::normal => some + 2 * btree,
+            Watermark::copygc => 2 * btree,
+            Watermark::btree  => btree,
+            Watermark::btree_copygc |
+            Watermark::reclaim |
+            Watermark::interior_updates => 0,
         }
     }
 

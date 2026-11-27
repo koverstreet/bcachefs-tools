@@ -14,17 +14,15 @@
 //! work, which run()s it, on the RunQueue's queue: always the same one, as a
 //! work item is non-reentrant only on one.
 
-use super::{Header, TaskRef};
+use core::pin::Pin;
+use core::ptr::NonNull;
 use crate::data_structures::llist::{Llist, LlistOwned};
+use crate::llist;
+use crate::os::kernel::SetOnce;
 use crate::os::workqueue::{CancelledWork, Queue};
 use crate::util::futex::EventCount;
 use crate::util::rcu;
-use core::pin::Pin;
-use core::ptr::NonNull;
-#[cfg(kernel)]
-use kernel::sync::SetOnce;
-#[cfg(not(kernel))]
-use bcachefs_shim::sync::SetOnce;
+use crate::util::task::{Header, TaskRef};
 use cstruct_macros::Init;
 use pin_init::{pin_data, pinned_drop};
 
@@ -37,7 +35,7 @@ pub struct RunQueue {
     #[pin]
     work:    CancelledWork<run_queue_work>,
     #[init(Llist::new())]
-    ready:   crate::llist!(Dispatched, runq_next),
+    ready:   llist!(Dispatched, runq_next),
     events:  EventCount,
     /// A worked one's: where its work is queued, from set_queue()
     #[init(SetOnce::new())]

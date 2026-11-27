@@ -27,18 +27,18 @@
 //! now is read and added to Relaxed: the lock orders a waiter's add against
 //! an increment, and the task state and the wake order its recheck after one.
 
+use core::panic::Location;
+use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
 use crate::c;
 use crate::locking::{Locked, SpinLockIrq};
-use crate::{new_lock, prt};
-use crate::util::alloc::{AllocError, Vec};
 use crate::os::kernel::HZ;
 use crate::os::percpu::{CpuGuard, PerCpu};
 use crate::os::sched;
+use crate::util::alloc::{AllocError, Vec};
 use crate::util::sleep::{sleep_until, Sleep, SleepEnd, SleepError};
 use crate::util::{Printbuf, ToText};
-use core::panic::Location;
-use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
-use cstruct_macros::{MaybeZeroable, Init};
+use crate::{new_lock, prt};
+use cstruct_macros::{Init, MaybeZeroable};
 use pin_init::pin_data;
 
 /* Amount to buffer up on a percpu counter */
