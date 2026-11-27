@@ -430,7 +430,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut IoctlQueryBtreeKeys) -> Result<(), BchErr
     let mut out = Vec::<u8>::new();
     let full = {
         let trans = btree_trans!(fs);
-        let mut iter = BtreeIter::new_level(&*trans, arg.btree, arg.start, arg.level, flags);
+        let mut iter = BtreeIter::new_ll(&*trans, arg.btree, arg.start, arg.level, flags);
         iter.for_each_max(&trans, arg.end, |_, iter, k| {
             /* if the buffer fills before this key, resume at it: */
             arg.start = iter.pos();

@@ -2231,6 +2231,23 @@ impl<'t> BtreeIter<'t> {
                                      pos, 0, level, flags, crate::ret_ip!())
     }
 
+    /// Keys at @level with exactly @flags - none of new_level()'s node
+    /// iterator defaults, so it filters snapshots and walks extents unless
+    /// @flags say otherwise. C's CLASS(btree_iter_ll); untrusted parameters
+    /// go through bch2_btree_iter_params_valid() first.
+    pub fn new_ll(
+        trans: impl TransRef<'t>,
+        btree: impl Into<u32>,
+        pos: Bpos,
+        level: u32,
+        flags: BtreeIterFlags,
+    ) -> BtreeIter<'t> {
+        let trans = trans.trans();
+
+        BtreeIter::init_ll_in(trans, &mut trans.paths(), alive_btree(trans, btree.into()),
+                              pos, 0, level, flags, crate::ret_ip!())
+    }
+
     // ── Peeking ──────────────────────────────────────────────────────────
     //
     // A key peeked borrows the iterator - its header is in it, iter->k, and
