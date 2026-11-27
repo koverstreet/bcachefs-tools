@@ -506,9 +506,8 @@ fn vfs_inodes_from<'g>(fs: &'g Fs, pos: usize, g: &'g ReadGuard)
     fs.vfs.inodes.items_from(pos, g).map(|(i, p)| (i, unsafe { p.as_ref() }))
 }
 
-/// @inodes in address order, each once, with its lockdep subclass - as C's
-/// bch2_lock_inodes() takes them, so two lockers of the same inodes can't
-/// deadlock.
+/// @inodes in address order, each once, with its lockdep subclass - so two
+/// lockers of the same inodes can't deadlock.
 fn lock_order<const N: usize>(mut inodes: [&InodeInfo; N]) -> impl Iterator<Item = (u32, &InodeInfo)> {
     inodes.sort_unstable_by_key(|i| core::ptr::from_ref(*i));
 

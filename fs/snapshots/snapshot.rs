@@ -561,7 +561,7 @@ impl TableWrite<'_> {
         Table(unsafe { self.writer().get_locked() })
     }
 
-    /// Room for @id's entry: as bch2_snapshot_t_mut().
+    /// Room for @id's entry.
     fn make_room(&mut self, id: u32) -> Result<(), AllocError> {
         self.writer().grow_to(table_idx(id) + 1)
     }
@@ -613,7 +613,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
 
     // Readers read the entry under RCU, without table_lock, so one being
     // rewritten here can read as a mix of old and new - and
-    // __bch2_snapshot_is_ancestor()'s fast path answers from is_ancestor
+    // is_ancestor()'s fast path answers from is_ancestor
     // directly: a torn bitmap is a wrong answer, not a slow one.
     //
     // What makes that safe is when entries change. A new node's is written
@@ -736,7 +736,7 @@ impl FsSnapshots {
         self.with_table(|t| t.id_state(id))
     }
 
-    /// @id is a live node: as bch2_snapshot_exists().
+    /// @id is a live node.
     pub fn exists(&self, id: u32) -> bool {
         self.id_state(id) == SnapshotIdState::SNAPSHOT_ID_live
     }
@@ -845,7 +845,7 @@ impl FsSnapshots {
 
     /// What's accounted to snapshot @id.
     ///
-    /// In-mem: bch2_accounting_is_mem() covers everything but
+    /// In-mem: accounting::is_mem() covers everything but
     /// BCH_DISK_ACCOUNTING_inum, so the counters are current as deltas are
     /// applied. No btree read, no transaction, and no write buffer flush to
     /// make the values trustworthy.

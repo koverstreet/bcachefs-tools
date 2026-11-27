@@ -132,7 +132,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: SubvolInum, iter: &m
 
 /// For fsck: delete the extents from @start to @end in @start's snapshot, in a
 /// commit loop of its own. Called through TransAttempt::close(), which does
-/// C's bch2_fpunch_snapshot()'s bookends: commits what the caller queued first
+/// the bookends: commits what the caller queued first
 /// - an fsck_err()'s log of the repair, which the repair won't re-trigger to
 /// queue again once the extents are gone - and returns
 /// transaction_restart_nested after.

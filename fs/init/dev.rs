@@ -323,10 +323,10 @@ pub struct Dev {
     #[init(crate::util::refcount::PercpuRef::new_dead::<()>())]
     pub io_ref_write: Placed<crate::util::refcount::PercpuRef, crate::at!(Dev.io_ref_write)>,
 
-    /// Its filesystem, from the start, attached or not: bch2_dev_add()
+    /// Its filesystem, from the start, attached or not: dev_add()
     /// writes its superblock before it has a slot, and what fails before then
     /// reaches the filesystem through it. A device is freed before its
-    /// filesystem - bch2_dev_free(), in the filesystem's teardown, drains
+    /// filesystem - dev_free(), in the filesystem's teardown, drains
     /// ref_outer's holders first - so the filesystem outlives every use.
     #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
     pub fs: crate::util::backref::BackRef<crate::fs::Fs>,
@@ -558,7 +558,7 @@ crate::published! {
     }
 }
 
-/// A superblock read from a device and held alone: bch2_read_super()'s. A
+/// A superblock read from a device and held alone: read_super()'s. A
 /// device's is Dev.disk_sb, the same LockedBy, Shared.
 pub struct SbHandle(LockedBy<SbIo, SbBdev, (), Unshared>);
 
@@ -1815,7 +1815,7 @@ impl Dev {
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 impl Dev {
     /// The device's congestion at @now (local_clock()), out of CONGESTED_MAX:
-    /// what bch2_latency_acct() added for IO over the latency threshold,
+    /// what latency_acct() added for IO over the latency threshold,
     /// decayed by the time since.
     pub fn congested_read(&self, now: u64) -> u32 {
         let mut congested = i64::from(self.congested.load(Relaxed));
@@ -1902,7 +1902,7 @@ impl Dev {
         write!(out, "raw:\t{}/{}\n", self.congested.load(Relaxed), CONGESTED_MAX);
         prt!(out, "last io over threshold:\t{}\n", Nsecs(now.wrapping_sub(self.congested_last.load(Relaxed))));
 
-        // the thresholds are bch2_latency_acct()'s
+        // the thresholds are latency_acct()'s
         for (what, rw, shift) in [("read", READ, 2), ("write", WRITE, 3)] {
             let q = &self.io_latency.get(rw).stats().quantiles;
             prt!(out, "{what} latency threshold:\t{}\n", Nsecs(q.at(1) << shift));
@@ -1917,7 +1917,7 @@ impl Dev {
 pub(crate) static HOLDER_OPS: c::blk_holder_ops = crate::os::blkdev::holder_ops::<Holder>();
 
 /// @r's filesystem, once it's started - or none, if it stopped first: our ref
-/// is what bch2_fs_stop() waits for.
+/// is what the filesystem's stop() waits for.
 #[cfg(kernel)]
 fn holder_started(r: RoRef) -> Option<RoRef> {
     let fs: &Fs = &r;

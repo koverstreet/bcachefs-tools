@@ -579,10 +579,10 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     let mut checked_bad = POS_MAX;
     let had_mismatch = lockrestart_do(trans, |t| {
         // Not BTREE_ITER_cached: scrub calls this once per bucket for a whole
-        // device (bch2_move_data_phys() fills in the gaps between
+        // device (move_data_phys() fills in the gaps between
         // backpointers), and a cached iterator would leave a key cache entry
         // behind for every one of them. Uncached still sees a dirty cached key
-        // - alloc is a cached btree, so bch2_btree_iter_flags() gives us
+        // - alloc is a cached btree, so btree_iter_flags() gives us
         // BTREE_ITER_with_key_cache, which consults an existing entry without
         // creating one.
         let mut alloc_iter = BtreeIter::new(t, Btree::alloc, pos(ca.dev_idx.into(), bucket),

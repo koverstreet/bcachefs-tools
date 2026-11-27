@@ -232,7 +232,7 @@ impl BtreeTrans<'_> {
     }
 
     /// @ret_ip is C's _RET_IP_ - ret_ip!() in the entry point - for
-    /// bch2_trans_unlocked_or_in_restart_error().
+    /// unlocked_or_in_restart_error().
     pub(crate) fn mark_unlocked(&self, ret_ip: usize) {
         if !self.locked() {
             return;
@@ -457,7 +457,6 @@ impl BtreeTrans<'_> {
     }
 
     /// Path @idx's node at @level, which it holds for intent, for write too:
-    /// bch2_btree_node_lock_write().
     #[inline]
     pub(crate) fn node_lock_write(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize)
         -> Result<(), BchError>
@@ -466,7 +465,7 @@ impl BtreeTrans<'_> {
     }
 
     /// node_lock_write(), for a caller that can't take a restart: the cycle
-    /// detector waits rather than fail it - bch2_btree_node_lock_write_nofail().
+    /// detector waits rather than fail it.
     pub(crate) fn node_lock_write_nofail(&self, paths: &mut Paths<'_>, idx: PathIdx, level: usize) {
         self.node_lock_write_may_fail(paths, idx, level, true).expect("a write lock that may not fail, failed");
     }
@@ -1061,8 +1060,7 @@ impl BtreeTrans<'_> {
         self.relock_traced(paths, true, crate::ret_ip!())
     }
 
-    /// relock(), always attempted and without the tracepoint: as
-    /// bch2_trans_relock_notrace().
+    /// relock(), always attempted and without the tracepoint.
     pub fn relock_notrace(&self) -> Result<(), BchError> {
         self.relock_traced(&mut self.paths(), false, 0)
     }
@@ -1271,7 +1269,7 @@ impl BtreeTrans<'_> {
         }
     }
 
-    /// @l locked, not slept on with the btree locks held: bch2_trans_mutex_lock().
+    /// @l locked, not slept on with the btree locks held.
     pub(crate) fn mutex_lock<'l, L: AsLocked<R = Mutex>, A>(&self, paths: &mut Paths<'_>, l: &'l Placed<L, A>)
         -> Result<ExclusiveGuard<'l, Mutex, L::G, L::P, Exclusive, A>, BchError>
     {
@@ -1373,9 +1371,8 @@ impl BtreeBkeyCachedCommon {
 
 impl<R: RawTimedLock, G, P> Locked<R, G, P> {
     /// lock(), in attempt @t: if it isn't free, the btree locks are dropped
-    /// to wait for it - bch2_trans_mutex_lock() - and past a short wait, the
-    /// SRCU lock: lock_timed(). An error is drop_locks_do()'s relock, the
-    /// lock not held: a restart.
+    /// to wait for it - and past a short wait, the SRCU lock: lock_timed().
+    /// An error is drop_locks_do()'s relock, the lock not held: a restart.
     pub fn lock_trans(&self, t: &TransAttempt<'_, '_>) -> Result<ExclusiveGuard<'_, R, G, P>, BchError> {
         match self.try_lock() {
             Some(g) => Ok(g),
@@ -1384,8 +1381,7 @@ impl<R: RawTimedLock, G, P> Locked<R, G, P> {
     }
 
     /// lock_trans(), the btree locks left dropped if they were: for a caller
-    /// taking more than one, and relocking once after -
-    /// bch2_trans_mutex_lock_norelock().
+    /// taking more than one, and relocking once after.
     pub fn lock_trans_norelock(&self, t: &TransAttempt<'_, '_>) -> ExclusiveGuard<'_, R, G, P> {
         self.try_lock().unwrap_or_else(|| {
             t.unlock();

@@ -339,7 +339,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
                 #define;
             }
 
-            /// Those @src defines, set: bch2_opts_apply().
+            /// Those @src defines, set.
             pub fn apply(#recv, src: &#name) {
                 #(#apply)*
             }

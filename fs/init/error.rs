@@ -134,7 +134,7 @@ pub struct FsErrors {
 pub type id = SbErrorId;
 
 /// What an fsck error is reported against. A transaction is passed down so
-/// __bch2_fsck_err() can drop its locks while it waits on a question; an error
+/// fsck_err() can drop its locks while it waits on a question; an error
 /// reported against just the filesystem must not have one held.
 pub trait FsckErrCtx {
     fn fsck_err_ctx(&self) -> (&Fs, Option<&TransAttempt<'_, '_>>);
@@ -191,7 +191,7 @@ pub fn mustfix_fsck_err(
     __fsck_err(ctx, POS_MIN, FsckFlags::CAN_FIX, err, msg)
 }
 
-/// Against an inode: @pos, its (0, inum, snapshot), is where __bch2_fsck_err()
+/// Against an inode: @pos, its (0, inum, snapshot), is where fsck_err()
 /// records the damage - which takes a transaction.
 pub fn inode_fsck_err(
     t:   &TransAttempt<'_, '_>,

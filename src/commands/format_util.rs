@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Rust implementation of bch2_format and bch2_format_for_device_add.
+//! format() and format_for_device_add().
 
 use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};

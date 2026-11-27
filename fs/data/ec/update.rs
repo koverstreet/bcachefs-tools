@@ -45,8 +45,8 @@ pub(crate) type Extent<'k, 'a> = Option<(&'k BtreeIter<'a>, BkeySC<'k>)>;
 fn block_bps(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, block: u32) -> (Btree, RangeInclusive<Bpos>) {
     let ptr = &s.v().block_ptrs()[block as usize];
 
-    // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair of
-    // a missing device it reports
+    // The error of scheduling the repair of a missing device dev_bkey_tryget()
+    // reports is dropped, as C dropped it
     match fs.dev_bkey_tryget(s.untyped(), ptr.dev().into()).unwrap_or(None) {
         Some(ca) => (Btree::backpointers, BackpointerPos::bucket_range(&ca, ca.ptr_bucket_pos(ptr))),
         None => {

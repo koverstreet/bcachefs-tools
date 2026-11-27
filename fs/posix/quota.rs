@@ -437,7 +437,7 @@ mod vfs {
         }
 
         /// Whether @idx may have @v more of @counter, and the warnings that
-        /// go with it: as bch2_quota_check_limit().
+        /// go with it.
         fn check_limit(
             &mut self,
             idx:     usize,
@@ -520,7 +520,7 @@ mod vfs {
     }
 
     /// Charge @v of @counter to @qid, in each quota type accounted - all or
-    /// none of them: as bch2_quota_acct(). Its warnings are @w's to send.
+    /// none of them. Its warnings are @w's to send.
     pub fn acct(
         fs:      &Fs,
         qid:     Qid,
@@ -546,8 +546,8 @@ mod vfs {
     }
 
     /// Move an inode's charges - @space and the inode itself - from @src's
-    /// ids to @dst's, in the quota types @qtypes that are accounted: as
-    /// bch2_quota_transfer(). Its warnings are @w's to send.
+    /// ids to @dst's, in the quota types @qtypes that are accounted. Its
+    /// warnings are @w's to send.
     pub fn transfer(
         fs:     &Fs,
         qtypes: u32,
@@ -569,7 +569,7 @@ mod vfs {
                 l.check_limit(d, Q_INO, 1, mode, w)?;
             }
 
-            // __bch2_quota_transfer(): from src, then to dst - the same
+            // From src, then to dst - the same
             // entry, if the ids are
             for l in locked.iter_mut().flatten() {
                 let (s, d) = (src.q[l.qtype] as usize, dst.q[l.qtype] as usize);
@@ -587,7 +587,7 @@ mod vfs {
     }
 
     /// The limits in quota key @k, into memory; and from quotactl, @qdq's
-    /// timers and warning counts - as __bch2_quota_set().
+    /// timers and warning counts.
     fn set(fs: &Fs, k: BkeySC<'_>, qdq: Option<&c::qc_dqblk>) -> Result<(), BchError> {
         let ty = k.k.p.inode as usize;
         assert!(ty < QTYP_NR);
@@ -670,9 +670,8 @@ mod vfs {
         }
     }
 
-    /// Charge inode @k to its tree's master subvolume's ids - as
-    /// bch2_fs_quota_read_inode(). Its other snapshot versions are the
-    /// caller's to skip.
+    /// Charge inode @k to its tree's master subvolume's ids. Its other
+    /// snapshot versions are the caller's to skip.
     fn read_inode(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
         let fs = t.fs();
         let tree = fs.snapshots.tree(k.k.p.snapshot);
@@ -942,7 +941,7 @@ mod vfs {
     }
 
     /// The new limits in @qdq onto @new_quota - the key there is, if there is
-    /// one - and the update: as bch2_set_quota_trans().
+    /// one - and the update.
     fn set_quota_trans(t: &TransAttempt<'_, '_>, new_quota: &mut BkeyI<Quota>, qdq: &c::qc_dqblk)
         -> Result<(), BchError>
     {

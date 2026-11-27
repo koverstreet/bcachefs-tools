@@ -577,10 +577,9 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
 pub type InitCopy<T, C> = unsafe extern "C" fn(copy: *mut T, ctx: *mut C, cpu: c_uint);
 
 impl<T> PerCpu<T> {
-    /// Every possible CPU's copy, initialized by @init: bch2_alloc_percpu_init().
-    /// In userspace a CPU is a thread's slot, and a thread that starts later
-    /// is a CPU coming online - @init runs on its copy then, until the PerCpu
-    /// is freed.
+    /// Every possible CPU's copy, initialized by @init. In userspace a CPU is
+    /// a thread's slot, and a thread that starts later is a CPU coming
+    /// online - @init runs on its copy then, until the PerCpu is freed.
     ///
     /// # Safety
     /// @init only initializes the copy it's given, from zeroes; @ctx lives

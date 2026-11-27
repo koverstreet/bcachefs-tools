@@ -365,7 +365,7 @@ fn check_inode<'t>(
     inode_opts::check_propagated(t, &u)?;
 
     // Only flag set, xattr missing: a lookup per flagged inode, which are
-    // rare. Flag clear with an xattr - which breaks bch2_get_acl()'s short
+    // rare. Flag clear with an xattr - which breaks get_acl()'s short
     // circuit - is check_xattrs'.
     for acl in AclType::ALL {
         if u.flag(acl.inode_flag()) &&

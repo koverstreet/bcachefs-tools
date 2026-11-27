@@ -186,9 +186,8 @@ pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
     t.update(&iter, t.bkey_copy(k)?, UpdateTriggerFlags::empty())
 }
 
-/// Fails once if logged_op_fail_next is armed for @ty, standing in for a crash
-/// at this point: as bch2_logged_op_inject_fail(), logged_ops.h's - a copy,
-/// while C calls that.
+/// Fails once if logged_op_fail_next is armed for @ty, standing in for a
+/// crash at this point.
 ///
 /// compare_exchange: arming is by type, so two ops of that type in flight
 /// would both fire.
@@ -203,8 +202,7 @@ pub fn inject_fail(fs: &Fs, ty: BkeyType) -> Result<(), BchError> {
 }
 
 /// Every op with a cursor advances it through here, so it's the one place to
-/// interrupt one: the op is then left at a cursor the real code produced. As
-/// bch2_logged_op_update(), logged_ops.h's - a copy, while C calls that.
+/// interrupt one: the op is then left at a cursor the real code produced.
 pub fn update(t: &TransAttempt<'_, '_>, op: &BkeyI) -> Result<(), BchError> {
     inject_fail(t.fs(), op.k.key_type())?;
 

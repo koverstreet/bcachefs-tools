@@ -56,9 +56,9 @@ crate::module_param! {
     /// small one instead. Zero, and inert, unless set.
     ///
     /// This sleeps with btree locks held. That is survivable only because
-    /// bch2_trans_begin() takes them back off us on the next iteration - past
-    /// 10ms of srcu it calls bch2_trans_unlock_long(), and past
-    /// BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS it calls bch2_trans_unlock() and
+    /// begin() takes them back off us on the next iteration - past
+    /// 10ms of srcu it calls unlock_long(), and past
+    /// BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS it calls unlock() and
     /// reschedules. Nothing here is a model for real code.
     pub(crate) static recovery_progress_delay_ms: u32 = 0;
     perm = 0o644, desc = "testing only: sleep this long in every recovery progress update";
@@ -121,7 +121,7 @@ impl ProgressState {
     }
 }
 
-/// How far it's got: as bch2_progress_to_text().
+/// How far it's got.
 impl ToText for ProgressState {
     fn to_text(&self, out: &mut Printbuf) {
         let percent = if self.total != 0 {
@@ -202,8 +202,7 @@ impl ProgressIndicator {
     }
 
     /// Start reporting a walk of @leaf_btrees' keys (and @inner_btrees'
-    /// interior nodes), as @msg: as bch2_progress_init(). C passes __func__
-    /// as @msg.
+    /// interior nodes), as @msg. C passes __func__ as @msg.
     pub fn init(
         &self,
         fs:           &Fs,
@@ -243,7 +242,7 @@ impl ProgressIndicator {
         self.state.write(|s| *s = ::pin_init::Zeroable::zeroed());
     }
 
-    /// Report the walk reaching @iter's position: as bch2_progress_update_iter().
+    /// Report the walk reaching @iter's position.
     pub fn update<'a, 't>(&self, t: &TransAttempt<'a, 't>, iter: &BtreeIter<'t>) -> Result<(), BchError> {
         let fs = t.fs();
 
@@ -267,8 +266,7 @@ impl ProgressIndicator {
         Ok(())
     }
 
-    /// Count one of an init_count() indicator's units: as
-    /// bch2_progress_update_count().
+    /// Count one of an init_count() indicator's units.
     pub fn update_count(&self, fs: &Fs) {
         maybe_delay();
 
@@ -296,7 +294,7 @@ impl ProgressIndicator {
     }
 }
 
-/// How far the work has got: as bch2_progress_to_text().
+/// How far the work has got.
 impl ToText for ProgressIndicator {
     fn to_text(&self, out: &mut Printbuf) {
         self.state.read().to_text(out)

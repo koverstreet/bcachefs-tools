@@ -92,8 +92,7 @@ fn inodes_32bit(fs: &Fs, dir: &InodeUnpacked) -> bool {
 /// subvolume @snapshot_src, its root found if @snapshot_src.inum is 0.
 /// BCH_CREATE_SUBVOL makes the new directory a subvolume's root,
 /// BCH_CREATE_SNAPSHOT_RO the snapshot read-only, and BCH_CREATE_TMPFILE
-/// gives the inode no name - @name is None then, and only then. As
-/// bch2_create_trans().
+/// gives the inode no name - @name is None then, and only then.
 ///
 /// @dir_u and @new_inode are read and returned; @new_subvol is @dir's
 /// subvolume, or the new one if one's created. The new inode gets @acl and
@@ -385,7 +384,7 @@ pub fn unlink_trans(
 
         // No dirent will ever point at this inode again - deletion belongs
         // to the subvolume path, though: the inode reaper keys off
-        // bch2_inode_is_subvolume_root() to leave it alone.
+        // is_subvolume_root() to leave it alone.
         inode_u.set_flag(InodeFlags::unlinked, true);
 
         // If we're deleting a subvolume, we need to really delete the
@@ -630,9 +629,9 @@ pub fn rename_trans(
 
 // ── From an inode to its path ────────────────────────────────────────────
 
-/// The dirent naming @inode, looked up through @iter: as
-/// bch2_inode_get_dirent(). @snapshot is where to look, and on return where
-/// the lookup looked - a subvolume root is named in its parent subvolume.
+/// The dirent naming @inode, looked up through @iter. @snapshot is where to
+/// look, and on return where the lookup looked - a subvolume root is named in
+/// its parent subvolume.
 pub fn inode_get_dirent<'i, 'a>(
     t:        &'i TransAttempt<'a, '_>,
     iter:     &'i mut BtreeIter<'a>,
@@ -805,7 +804,7 @@ fn __inum_to_path(
 }
 
 /// Print @inum's path - its names through its dirents, from the root - to
-/// @out: as bch2_inum_to_path(). In the caller's transaction attempt.
+/// @out. In the caller's transaction attempt.
 pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: SubvolInum, out: &mut Printbuf)
     -> Result<(), BchError>
 {
@@ -819,8 +818,8 @@ pub fn inum_to_path_in_subvol(t: &TransAttempt<'_, '_>, inum: SubvolInum, stop_s
     __inum_to_path(t, inum.subvol as u32, inum.inum, 0, stop_subvol, true, out)
 }
 
-/// Print the path of inode @inum as seen in @snapshot: as
-/// bch2_inum_snapshot_to_path(). In the caller's transaction attempt.
+/// Print the path of inode @inum as seen in @snapshot. In the caller's
+/// transaction attempt.
 pub fn inum_snapshot_to_path(
     t:        &TransAttempt<'_, '_>,
     inum:     u64,
@@ -924,10 +923,10 @@ fn dirent_is_subvol_root_name(d: Dirent<'_>, target: &InodeUnpacked) -> bool {
     d.d_type() as u32 == DT_SUBVOL && dirent_points_to_inode(d, target)
 }
 
-/// @d names @target: check that @target's backpointer is @d, or failing
-/// that another dirent naming it, repairing whichever is wrong - as fsck
-/// with @in_fsck; otherwise, for a directory or subvolume with two names,
-/// the filesystem is inconsistent. As bch2_check_dirent_inode_dirent().
+/// @d names @target: check that @target's backpointer is @d, or failing that
+/// another dirent naming it, repairing whichever is wrong - as fsck with
+/// @in_fsck; otherwise, for a directory or subvolume with two names, the
+/// filesystem is inconsistent.
 fn check_dirent_inode_dirent(
     t:       &TransAttempt<'_, '_>,
     d:       Dirent<'_>,
@@ -998,7 +997,7 @@ fn check_dirent_inode_dirent(
         // connectivity of the other dirent up to the root before removing
         // this one is still to do.
         //
-        // Additionally, bch2_lookup would need to cope with the dirent it
+        // Additionally, lookup() would need to cope with the dirent it
         // found being removed - or should we remove the other one, even
         // though the inode points to it?
         let mut remove = d_pos;
@@ -1133,8 +1132,7 @@ fn propagate_has_case_insensitive(t: &TransAttempt<'_, '_>, mut inum: SubvolInum
 }
 
 /// Directory @inode, which is @inum, was made or moved: if it's casefolded,
-/// or has a casefolded directory below it, its parents have to say so - as
-/// bch2_maybe_propagate_has_case_insensitive().
+/// or has a casefolded directory below it, its parents have to say so.
 pub fn maybe_propagate_has_case_insensitive(
     t:     &TransAttempt<'_, '_>,
     inum:  SubvolInum,
@@ -1152,10 +1150,8 @@ pub fn maybe_propagate_has_case_insensitive(
 }
 
 /// Check BCH_INODE_has_case_insensitive on @inode against the casefolded
-/// directories on its path, as fsck: as
-/// bch2_check_inode_has_case_insensitive(). Sets @do_update if @inode was
-/// repaired; ENOENT for an inode that's not connected, which a later pass
-/// fixes.
+/// directories on its path, as fsck. Sets @do_update if @inode was repaired;
+/// ENOENT for an inode that's not connected, which a later pass fixes.
 ///
 /// Only the first parent is checked, unless it was wrong: then the walk goes
 /// on up, repairing as it goes, and commits - restarting the caller, to see

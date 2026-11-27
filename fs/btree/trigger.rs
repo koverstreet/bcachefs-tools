@@ -21,7 +21,7 @@ use core::marker::PhantomData;
 /// grown to MutBkey::MIN_BYTES before any trigger runs, as
 /// bkey_make_mut_noupdate()'s copy is, the fields an older value lacks
 /// zeroed - so a trigger only ever edits fields in place. Today one can grow the key:
-/// bch2_trigger_get_mutable_new() moves the queued update to a bigger buffer
+/// get_mutable_new() moves the queued update to a bigger buffer
 /// mid-commit, and refuses in the atomic phase. That isn't necessarily safe,
 /// and a trigger shouldn't have to.
 pub struct TriggerOp<'a, 't> {
@@ -53,8 +53,8 @@ impl<'a, 't> TriggerOp<'a, 't> {
         Ok(self.new.reborrow())
     }
 
-    /// The queued update moved to a buffer with @needed_u64s of room -
-    /// bch2_trigger_get_mutable_new() - and @new repointed there. Not in the
+    /// The queued update moved to a buffer with @needed_u64s of room,
+    /// and @new repointed there. Not in the
     /// atomic phase.
     #[cold]
     #[inline(never)]
@@ -104,8 +104,8 @@ fn run_trigger(t: &TransAttempt<'_, '_>, trigger: Option<&'static Trigger>, op: 
     trigger.map_or(Ok(()), |trigger| (trigger.0)(t, op))
 }
 
-/// bch2_key_trigger(): @op's key's trigger - the old key's type's, the new
-/// key's if it's a deletion - then its snapshot's count of keys.
+/// @op's key's trigger - the old key's type's, the new key's if it's a
+/// deletion - then its snapshot's count of keys.
 pub(crate) fn key_trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     let ty = match op.old.k.key_type() {
         BkeyType::deleted => op.new.k().key_type(),

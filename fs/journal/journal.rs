@@ -701,7 +701,7 @@ impl Journal {
         self.reservations().cur_entry_offset() == JOURNAL_ENTRY_ERROR_VAL
     }
 
-    /// journal_shutdown if it's halted: bch2_journal_error().
+    /// journal_shutdown if it's halted.
     pub fn error(&self) -> Result<(), BchError> {
         if self.halted() {
             Err(crate::errcode::Errcode::journal_shutdown.into())

@@ -508,7 +508,7 @@ fn check_stripe_can_widen(trans: &TransGuard<'_>) -> Result<(), BchError> {
     })
 }
 
-/// The check_reconcile_work recovery pass: bch2_check_reconcile_work().
+/// The check_reconcile_work recovery pass.
 fn check_reconcile_work(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     check_reconcile_work_data_btrees(&trans)?;

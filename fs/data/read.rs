@@ -1890,7 +1890,7 @@ pub(crate) fn start_task(t: &TransAttempt<'_, '_>, reconstruct: bool, start: imp
     }
     // submit_bio() can block for an unbounded time on a congested
     // device; flag it so the long srcu hold that results doesn't trip
-    // the warning in bch2_trans_unlock_long() — it's legitimate IO,
+    // the warning in unlock_long() — it's legitimate IO,
     // not a stuck codepath.
     t.trans().set_srcu_io_submitted(true);
     start(Spawn::Inline);

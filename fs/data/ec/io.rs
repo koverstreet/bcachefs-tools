@@ -210,7 +210,7 @@ where
 
     /// Block @idx of stripe @s, @sectors from @sector_offset - into the
     /// stripe, within what the buffer has - read into its buffer, or written
-    /// from it: bch2_ec_block_io_range(). A block's IO is once a round. Its
+    /// from it. A block's IO is once a round. Its
     /// device offline, or its pointer stale, is the block's error at once.
     pub(crate) fn submit_range(&mut self, s: BkeySC<'_, Stripe<Validated>>, idx: usize,
                                sector_offset: u32, sectors: u32) {

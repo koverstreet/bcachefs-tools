@@ -79,7 +79,7 @@ impl Bbpos {
     }
 }
 
-/// btree:pos, as bch2_bbpos_to_text().
+/// btree:pos.
 impl crate::util::ToText for Bbpos {
     fn to_text(&self, out: &mut crate::util::Printbuf) {
         crate::prt!(out, "{}:{}", self.btree, self.pos);

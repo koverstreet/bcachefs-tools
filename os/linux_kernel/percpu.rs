@@ -736,7 +736,7 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
 pub type InitCopy<T, C> = unsafe extern "C" fn(copy: *mut T, ctx: *mut C, cpu: c_uint);
 
 impl<T> PerCpu<T> {
-    /// Every possible CPU's copy, initialized by @init: bch2_alloc_percpu_init().
+    /// Every possible CPU's copy, initialized by @init.
     ///
     /// # Safety
     /// @init only initializes the copy it's given, from zeroes; @ctx lives

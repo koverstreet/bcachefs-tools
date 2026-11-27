@@ -32,7 +32,7 @@ use crate::format::{Btree, MemberState, BCH_BKEY_PTRS_MAX};
 
 impl Fs {
     /// What a copy already on @dev is worth: nothing if the device is gone or
-    /// being evacuated. bch2_dev_durability().
+    /// being evacuated.
     pub fn dev_durability(&self, dev: u32, rcu: &ReadGuard) -> u32 {
         self.dev_rcu(dev, rcu)
             .filter(|ca| ca.mi.get().state != MemberState::evacuating)
@@ -40,7 +40,7 @@ impl Fs {
     }
 
     /// What a copy on @dev will be worth once it's back: its durability,
-    /// evacuating or not - bch2_dev_durability_desired().
+    /// evacuating or not.
     pub fn dev_durability_desired(&self, dev: u32, rcu: &ReadGuard) -> u32 {
         self.dev_rcu(dev, rcu).map_or(0, |ca| ca.mi.get().durability.into())
     }
@@ -68,7 +68,7 @@ struct StripeDev {
 }
 
 /// What erasure coded pointer @p's stripe adds to @ret, @seen the devices
-/// already counted, and to @desired_total: bch2_stripe_durability().
+/// already counted, and to @desired_total.
 ///
 /// The data survives losing nr_redundant of the stripe's nr_blocks devices,
 /// so its total durability is the sum of the nr_redundant + 1 least durable
@@ -168,7 +168,7 @@ fn stripe_devs_durability(devs: &mut [StripeDev], nr_blocks: u8, nr_redundant: u
 }
 
 /// A pointer's durability: none for a cached one, its stripe's for an
-/// erasure coded one. bch2_extent_ptr_durability().
+/// erasure coded one.
 pub fn extent_ptr_durability(t: &TransAttempt<'_, '_>, p: &ExtentPtrDecoded) -> Result<u32, BchError> {
     if p.ptr.cached() != 0 {
         return Ok(0);
@@ -220,7 +220,7 @@ pub trait BkeyVDurability: BkeyV {
     /// Its durability, total and online - each device counted once - with its
     /// replica and pointer counts, the per-pointer sum of desired durability
     /// (acct) and the least of it (min_durability, an evacuating device's
-    /// none): bch2_bkey_durability(). Its stripes are looked up in @t.
+    /// none). Its stripes are looked up in @t.
     fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<BkeyDurability, BchError>
     where Self::V: BkeyVal<State = Validated>
     {
@@ -269,8 +269,8 @@ pub trait BkeyVDurability: BkeyV {
 
     /// durability() without the stripe lookups, so without a transaction: an
     /// erasure coded pointer counts as its redundancy plus one, and online
-    /// isn't counted. bch2_bkey_durability_safe(), for reserving space to
-    /// rewrite a key: tolerates bad pointers.
+    /// isn't counted. For reserving space to rewrite a key: tolerates
+    /// bad pointers.
     fn durability_safe(&self, fs: &Fs) -> BkeyDurability {
         let key = self.as_sc().as_read();
         if let Some(r) = reservation_durability(key) {
@@ -301,7 +301,6 @@ pub trait BkeyVDurability: BkeyV {
 
     /// A btree node pointer's durability, total and online - each pointer's
     /// device counted, unlike a data key's, as often as it's pointed to:
-    /// bch2_btree_ptr_durability().
     fn btree_ptr_durability(&self, fs: &Fs) -> BkeyDurability
     where Self: BkeyV<V = BtreePtrs>
     {
@@ -322,7 +321,7 @@ pub trait BkeyVDurability: BkeyV {
     }
 
     /// Whether any of it can be read: a pointer not cached, to a device or
-    /// with a stripe - bch2_bkey_can_read().
+    /// with a stripe.
     fn can_read(&self, fs: &Fs) -> bool
     where Self::V: BkeyVal<State = Validated>
     {

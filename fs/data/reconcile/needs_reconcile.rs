@@ -60,8 +60,8 @@ struct NeedsReconcile {
 
 /// What @k's reconcile entry should be for options @opts - the work its
 /// pointers need, and which are moving - and the padding pointers it should
-/// gain or lose; None if it has them already: bch2_bkey_needs_reconcile().
-/// A stripe goes by its needs_reconcile bit: data_replicas work, or none.
+/// gain or lose; None if it has them already. A stripe goes by its
+/// needs_reconcile bit: data_replicas work, or none.
 fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &InodeOpts)
     -> Result<Option<NeedsReconcile>, BchError>
 {
@@ -93,7 +93,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &InodeOp
             unwritten      |= p.ptr.unwritten() != 0;
 
             // A stripe block counts for nothing on a device of durability 0 -
-            // missing, evacuating, or set to 0: bch2_stripe_block_dev_bad().
+            // missing, evacuating, or set to 0.
             // An extent's pointer there is legitimate - a cache device - but a
             // stripe block there leaves every extent in the stripe short.
             let evacuating = if stripe {
@@ -324,7 +324,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
     /// needs_reconcile bit; a data key's reconcile entry set, or dropped if
     /// it needs none, and its padding pointers to BCH_SB_MEMBER_INVALID added
     /// or dropped. New work must be allowed - new_needs_rb_allowed().
-    /// bch2_bkey_set_needs_reconcile(); its room is what it's grown into.
+    /// Its room is what it's grown into.
     pub fn set_needs_reconcile(&mut self, t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>,
                                opts: &InodeOpts, ctx: SetNeedsReconcileCtx,
                                opt_change_cookie: u32) -> Result<(), BchError> {
@@ -404,7 +404,6 @@ const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + BCH_REPLICAS_MAX;
 /// so callers needn't - its room made here, as callers like extent split
 /// fragments don't reserve it - @op's @new repointed, if the key was grown.
 /// Its io options are looked up each time:
-/// bch2_extent_trigger_set_needs_reconcile().
 pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     let opts = get_io_opts(t, None, BkeySC::from(&op.new).untyped())?;
     let needed = u32::from(op.new.k().u64s) + SET_NEEDS_RECONCILE_ROOM;
@@ -416,7 +415,6 @@ pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &
 /// update - or for a btree node pointer, @level the level it's at, the
 /// pointer to the node below, updated in place: committed, and the
 /// transaction restarted. Nothing if it's right already:
-/// bch2_update_reconcile_opts().
 pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut PerSnapshotIoOpts>,
                              opts: &InodeOpts, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>,
                              ctx: SetNeedsReconcileCtx) -> Result<(), BchError> {

@@ -56,7 +56,6 @@ enum KeyOrHole<'k> {
 /// The key at @iter, or the hole there - as far as @end, the end of @iter's
 /// leaf node, and U32_MAX positions on, whichever comes first: as
 /// BTREE_ITER_slots does for an extents btree, on a btree that isn't one.
-/// bch2_get_key_or_hole().
 fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>, mut end: Bpos)
     -> Result<KeyOrHole<'k>, BchError>
 {
@@ -113,7 +112,7 @@ fn next_bucket(fs: &Fs, ca: &mut Option<DevRef>, bucket: &mut Bpos) -> bool {
 /// bucket, unless a key comes first, a key for a bucket that doesn't exist -
 /// and one that runs past its device's last bucket cut there. None at the
 /// end; @iter back shared, for updates at the key. @ca: the device of a hole
-/// returned. bch2_get_key_or_real_bucket_hole().
+/// returned.
 fn get_key_or_real_bucket_hole<'k, 't>(
     t:    &'k TransAttempt<'_, 't>,
     iter: &'k mut BtreeIter<'t>,
@@ -188,7 +187,7 @@ pub(crate) fn need_discard_or_freespace_err(
 }
 
 /// Alloc key @alloc_k, at @alloc_iter, against need_discard, freespace,
-/// bucket_gens and the stripes btree: bch2_check_alloc_key().
+/// bucket_gens and the stripes btree.
 fn check_alloc_key<'t>(
     t:            &TransAttempt<'_, 't>,
     alloc_k:      BkeySC<'_>,
@@ -270,7 +269,7 @@ fn check_alloc_key<'t>(
 }
 
 /// The alloc btree's hole from @start, buckets of @ca, against the freespace
-/// btree - @end cut to the freespace key there: bch2_check_alloc_hole_freespace().
+/// btree - @end cut to the freespace key there.
 fn check_alloc_hole_freespace<'t>(
     t:              &TransAttempt<'_, 't>,
     ca:             &Dev,
@@ -302,7 +301,6 @@ fn check_alloc_hole_freespace<'t>(
 
 /// The alloc btree's hole from @start against the bucket_gens btree: gens
 /// there zero - @end cut to the bucket_gens key there:
-/// bch2_check_alloc_hole_bucket_gens().
 fn check_alloc_hole_bucket_gens<'t>(
     t:                &TransAttempt<'_, 't>,
     start:            Bpos,
@@ -420,7 +418,6 @@ fn check_btree_alloc(fs: &Fs, trans: &TransGuard<'_>) -> Result<(), BchError> {
 // ── need_discard, freespace, bucket_gens ─────────────────────────────────
 
 /// Need_discard entry @iter against the bucket's alloc key:
-/// bch2_check_discard_key().
 fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushed: &mut WbMaybeFlush)
     -> Result<(), BchError>
 {
@@ -570,7 +567,6 @@ fn recheck_freespace_key(fs: &Fs, pos: Bbpos) -> Result<(), BchError> {
 
 /// Bucket_gens key @k, at @iter, against the device's buckets - gens for
 /// buckets that exist were checked against their alloc keys:
-/// bch2_check_bucket_gens_key().
 fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>)
     -> Result<(), BchError>
 {
@@ -665,7 +661,6 @@ crate::recovery_pass!(check_alloc_info => check_alloc_info);
 
 /// Alloc key @alloc_k, at @alloc_iter, against the lrus it should be in - its
 /// device's fragmentation lru, and for cached data, its read lru:
-/// bch2_check_alloc_to_lru_ref().
 fn check_alloc_to_lru_ref<'t>(
     t:            &TransAttempt<'_, 't>,
     alloc_iter:   &BtreeIter<'t>,
@@ -787,7 +782,7 @@ pub(crate) fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_en
 }
 
 /// Every device whose freespace isn't initialized - checked on every mount,
-/// for a crash in the middle of adding a device: bch2_fs_freespace_init().
+/// for a crash in the middle of adding a device.
 pub(crate) fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
     if fs.feature(SbFeature::small_image) {
         return Ok(());

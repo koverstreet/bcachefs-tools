@@ -268,7 +268,7 @@ impl<V: BkeyWhole> BkeyI<V> {
         k
     }
 
-    /// u64s clamped to V, as __bch2_bkey_get_i_typed() does: a newer version's
+    /// u64s clamped to V: a newer version's
     /// fields are dropped - this one couldn't have kept them consistent with
     /// its update. An older value's stay short, so to_text() doesn't print
     /// fields it hasn't.

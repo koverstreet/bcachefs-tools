@@ -29,7 +29,7 @@ const HEAP_U64S: usize = 256;
 pub type BkeyBuf = DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S, HEAP_U64S>>;
 
 impl DstRoom<BkeyI, InlineOrBoxed<u64, ONSTACK_U64S, HEAP_U64S>> {
-    /// Holding a deleted key, as bch2_bkey_buf_init() leaves it. Out of line:
+    /// Holding a deleted key. Out of line:
     /// it zeroes the whole room, and no hot path makes one.
     #[inline(never)]
     pub fn new() -> Self {

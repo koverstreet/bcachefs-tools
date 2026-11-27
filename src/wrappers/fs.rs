@@ -40,7 +40,7 @@ impl FsExt for Fs {
 
     /// @user_key: the passphrase-derived key, for a passphrase-protected
     /// filesystem. Without it the open looks in the keyring, and failing
-    /// that prompts for the passphrase on stdin itself (bch2_request_key()).
+    /// that prompts for the passphrase on stdin itself (request_key()).
     fn open_with_key(devs: &[PathBuf], mut opts: Opts, user_key: Option<&Key>)
         -> Result<OpenFs, BchError>
     {

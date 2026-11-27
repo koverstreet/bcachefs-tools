@@ -193,7 +193,7 @@ impl EntrySizes {
 }
 
 /// Why a walk can't step past an entry, whose bytes are then the rest of the
-/// value - in C's order of checking: bch2_bkey_ptrs_validate()'s.
+/// value - in C's order of checking.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stop {
     /// A type the filesystem doesn't know - so not its length either.
@@ -454,15 +454,14 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// Whether it has data that didn't compress - a crc of compression type
-    /// incompressible: bch2_bkey_is_incompressible().
+    /// incompressible.
     fn is_incompressible(&self, fs: &Fs) -> bool {
         self.crcs(fs).any(|crc| crc.compression_type == CompressionType::incompressible)
     }
 
     /// If @src has data that didn't compress, so does this, copied from it:
-    /// its uncompressed crcs made incompressible, in place -
-    /// bch2_bkey_propagate_incompressible(). @src of any type; one without
-    /// pointers has no such data.
+    /// its uncompressed crcs made incompressible, in place. @src of any type;
+    /// one without pointers has no such data.
     ///
     /// XXX (C's): if some data actually is compressed, we want
     /// ExtentReconcile.wont_recompress_smaller
@@ -485,7 +484,6 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// Its extent flags - its flags entry's, which comes first, if it has one:
-    /// bch2_bkey_extent_flags().
     fn extent_flags(&self, fs: &Fs) -> ExtentFlags {
         match self.extent_entries(fs).next() {
             Some(ExtentEntry::flags(f)) => f.flags(),
@@ -497,25 +495,23 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         self.extent_flags(fs).contains(ExtentFlags::poisoned)
     }
 
-    /// Its pointer to device @dev, if it has one: bch2_bkey_has_device_c().
+    /// Its pointer to device @dev, if it has one.
     fn has_device(&self, fs: &Fs, dev: u32) -> Option<&ExtentPtr> {
         self.ptrs(fs).find(|p| u32::from(p.dev()) == dev)
     }
 
-    /// Its pointer to device @dev, decoded: bch2_bkey_has_device_decode().
+    /// Its pointer to device @dev, decoded.
     fn has_device_decode(&self, fs: &Fs, dev: u32) -> Option<DecodedPtr<'_>> {
         self.ptrs_decoded(fs).find(|d| u32::from(d.ptr.dev()) == dev)
     }
 
     /// Whether the allocator writes to every device it points to:
-    /// bch2_bkey_devs_rw().
     fn devs_rw(&self, fs: &Fs) -> bool {
         let rcu = read_lock();
         self.ptrs(fs).all(|p| fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.is_rw()))
     }
 
     /// The devices it points to, BCH_SB_MEMBER_INVALID placeholders skipped:
-    /// bch2_bkey_devs().
     fn devs(&self, fs: &Fs) -> DevsList {
         let mut d = DevsList::default();
         for p in self.ptrs(fs).filter(|p| u32::from(p.dev()) != BCH_SB_MEMBER_INVALID) {
@@ -526,7 +522,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// Whether it has its data in target @target - a pointer there that isn't
-    /// cached, or is and isn't stale: bch2_bkey_has_target().
+    /// cached, or is and isn't stale.
     fn has_target(&self, fs: &Fs, target: Target) -> bool {
         let rcu = read_lock();
         self.ptrs(fs).any(|p| {
@@ -536,7 +532,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         })
     }
 
-    /// Whether every pointer is in target @target: bch2_bkey_in_target().
+    /// Whether every pointer is in target @target.
     fn in_target(&self, fs: &Fs, target: Target) -> bool {
         let rcu = read_lock();
         self.ptrs(fs).all(|p| fs.dev_in_target(p.dev().into(), target, &rcu))
@@ -544,7 +540,6 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
     /// Whether it has pointer @m, to data @offset sectors into its extent -
     /// the device, gen and place on disk, given where each extent starts:
-    /// bch2_bkey_matches_ptr().
     fn matches_ptr(&self, fs: &Fs, m: &ExtentPtr, offset: u64) -> bool {
         let start = self.k().start_offset();
         self.ptrs_decoded(fs).any(|d| {
@@ -590,8 +585,8 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         })
     }
 
-    /// Drop the pointer at @at, as its type does - a stripe's can't be, and is
-    /// made to point nowhere: bch2_bkey_drop_ptr_noerror().
+    /// Drop the pointer at @at, as its type does - a stripe's can't be, and
+    /// is made to point nowhere.
     fn drop_ptr_noerror(&mut self, fs: &Fs, at: EntryPos)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -600,7 +595,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
     /// drop_ptr_noerror() - unless a pointer to its device has a stripe,
     /// whose redundancy it keeps: then it's made to point nowhere, its dev
-    /// BCH_SB_MEMBER_INVALID. bch2_bkey_drop_ptr().
+    /// BCH_SB_MEMBER_INVALID.
     fn drop_ptr(&mut self, fs: &Fs, at: EntryPos)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -615,7 +610,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     }
 
     /// drop_ptr_noerror() each pointer @cond picks, the walk restarted after
-    /// each: bch2_bkey_drop_ptrs_noerror().
+    /// each.
     fn drop_ptrs_noerror(&mut self, fs: &Fs, mut cond: impl FnMut(&DecodedPtr<'_>) -> bool)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -624,7 +619,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         }
     }
 
-    /// drop_ptrs_noerror(), with drop_ptr(): bch2_bkey_drop_ptrs().
+    /// drop_ptrs_noerror(), with drop_ptr().
     fn drop_ptrs(&mut self, fs: &Fs, mut cond: impl FnMut(&DecodedPtr<'_>) -> bool)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -633,14 +628,14 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         }
     }
 
-    /// Its pointers to @dev: bch2_bkey_drop_device_noerror().
+    /// Its pointers to @dev.
     fn drop_device_noerror(&mut self, fs: &Fs, dev: u32)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
         self.drop_ptrs_noerror(fs, |p| u32::from(p.p.ptr.dev()) == dev);
     }
 
-    /// Its pointers to @dev, with drop_ptr(): bch2_bkey_drop_device().
+    /// Its pointers to @dev, with drop_ptr().
     fn drop_device(&mut self, fs: &Fs, dev: u32)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -692,7 +687,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
     /// Its pointer to @dev made cached, after its cached pointers that
     /// shouldn't be are dropped - and dropped itself if it shouldn't be, or
-    /// if the first walk finds it erasure coded: bch2_extent_ptr_set_cached().
+    /// if the first walk finds it erasure coded.
     ///
     /// XXX: C's - if a walk dropped the pointer itself, C dereferences NULL
     /// where this panics; only cached pointers are dropped, and the callers
@@ -748,7 +743,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         }
     }
 
-    /// Whether it has a cached pointer that's stale: bch2_bkey_has_stale_ptrs().
+    /// Whether it has a cached pointer that's stale.
     fn has_stale_ptrs(&self, fs: &Fs) -> bool {
         let rcu = read_lock();
         self.ptrs(fs).any(|p| {
@@ -760,7 +755,6 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
     /// Its stale cached pointers dropped - and its cached pointers to devices
     /// that aren't there, which has_stale_ptrs() doesn't count:
-    /// __bch2_bkey_drop_stale_ptrs().
     fn drop_stale_ptrs(&mut self, fs: &Fs)
     where Self: BkeyVMut, Self::V: PtrsBkey
     {
@@ -856,7 +850,7 @@ pub struct EntryPos(usize);
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
 /// checksum's bytes where Csum has them.
 /// The crc of @k's pointers before any crc entry - none, the data as it is,
-/// all of it live: bch2_extent_crc_unpack(k, NULL).
+/// all of it live: crc_unpack() with no entry.
 pub(crate) fn crc_none(k: &Bkey) -> ExtentCrcUnpacked {
     ExtentCrcUnpacked {
         compressed_size:   k.size,
@@ -909,7 +903,7 @@ pub(crate) fn crc_unpack(k: &Bkey, entry: ExtentEntry<'_>) -> Option<ExtentCrcUn
     })
 }
 
-// Packing, bch2_extent_crc_pack(): each entry type's pack() is None unless
+// Packing, pack(): each entry type's pack() is None unless
 // @crc fits it exactly, where C truncates.
 
 /// A size as a crc entry has it, biased by 1.
@@ -1011,9 +1005,8 @@ impl ExtentCrc128 {
 }
 
 impl ExtentEntryMut<'_> {
-    /// Packs @crc into this crc entry, as its own type: bch2_extent_crc_pack()
-    /// with the entry's type. None if it isn't a crc entry, or @crc doesn't
-    /// fit it.
+    /// Packs @crc into this crc entry, as its own type. None if it isn't a crc
+    /// entry, or @crc doesn't fit it.
     pub fn set_crc(&mut self, crc: &ExtentCrcUnpacked) -> Option<()> {
         match self {
             Self::crc32(e)  => **e = ExtentCrc32::pack(crc)?,
@@ -1055,7 +1048,6 @@ pub fn crc_is_encoded(crc: &ExtentCrcUnpacked) -> bool {
 }
 
 /// Drop @k's stale cached pointers, if it has any, as an update through @iter:
-/// bch2_bkey_drop_stale_ptrs().
 pub fn drop_stale_ptrs<'a, 't>(
     t:    &TransAttempt<'a, 't>,
     iter: &BtreeIter<'t>,
@@ -1079,7 +1071,7 @@ fn ptr_data_start(p: &ExtentPtrDecoded, start: u64) -> u64 {
     p.ptr.offset().wrapping_add(p.crc.offset.into()).wrapping_sub(start)
 }
 
-/// The same pointer, as bch2_extent_ptr_eq(): all of it but its entry type.
+/// The same pointer: all of it but its entry type.
 pub fn ptr_eq(a: &ExtentPtr, b: &ExtentPtr) -> bool {
     a.cached() == b.cached() && a.unwritten() == b.unwritten() && a.offset() == b.offset() &&
         a.dev() == b.dev() && a.generation() == b.generation()
@@ -1088,7 +1080,7 @@ pub fn ptr_eq(a: &ExtentPtr, b: &ExtentPtr) -> bool {
 /// Whether @p1 of @k1 and @p2 of @k2 point to the same data: the same
 /// device - or the same block of the same stripe - and gen, the same place
 /// given where each extent starts (one may have been trimmed), and
-/// overlapping on disk: bch2_bkey_ptrs_match().
+/// overlapping on disk.
 pub fn ptrs_match(k1: &Bkey, p1: &ExtentPtrDecoded, k2: &Bkey, p2: &ExtentPtrDecoded) -> bool {
     let overlaps = |a: &ExtentPtrDecoded, b: &ExtentPtrDecoded| {
         a.ptr.offset() >= b.ptr.offset() && a.ptr.offset() < b.ptr.offset() + u64::from(b.crc.compressed_size)
@@ -1110,7 +1102,7 @@ pub fn ptrs_match(k1: &Bkey, p1: &ExtentPtrDecoded, k2: &Bkey, p2: &ExtentPtrDec
 /// Whether @k1 and @k2 refer to the same data: of the same type, and for a
 /// type with its data's pointers, both unwritten or neither, with a pointer
 /// pair that ptrs_match(). Any other type - KEY_TYPE_deleted, say - always
-/// does: bch2_extents_match().
+/// does.
 pub fn extents_match(fs: &Fs, k1: BkeySC<'_>, k2: BkeySC<'_>) -> bool {
     if k1.k.key_type() != k2.k.key_type() {
         return false;

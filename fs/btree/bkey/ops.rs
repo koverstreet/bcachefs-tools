@@ -145,7 +145,6 @@ impl BkeyOps for Set {
     }
 }
 
-/// bch2_bpos_to_text().
 #[cold]
 pub fn bpos_to_text(out: &mut Printbuf, p: Bpos) {
     use crate::btree::bkey::{POS_MAX, POS_MIN, SPOS_MAX};
@@ -212,7 +211,7 @@ pub fn val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: 
     (k.k.key_type().ops().to_text)(out, fs, k)
 }
 
-/// bch2_bkey_val_to_text(): the header, and the value.
+/// the header, and the value.
 #[cold]
 pub fn bkey_val_to_text<V: ?Sized + BkeyVal>(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_, V>) {
     let k = k.as_read();
@@ -244,7 +243,7 @@ pub fn bkey_val_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     (v.k.k.key_type().ops().validate)(v)
 }
 
-/// bch2_btree_node_type_str(): an interior node's, or a leaf's btree's.
+/// A node's type: an interior node's, or a leaf's btree's.
 struct NodeType(Option<Btree>);
 
 impl fmt::Display for NodeType {
@@ -317,7 +316,7 @@ pub fn bkey_header_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     Ok(())
 }
 
-/// bch2_bkey_validate(): the header, then the value.
+/// the header, then the value.
 pub fn bkey_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_header_validate(v)?;
     bkey_val_validate(v)

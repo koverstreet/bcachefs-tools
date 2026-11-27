@@ -245,7 +245,7 @@ impl BtreeTrans<'_> {
         self.bits.set(self.bits.get().with_notrace_relock_fail(true))
     }
 
-    /// For the next attempt: bch2_trans_begin()'s, after a restart.
+    /// For the next attempt: begin()'s, after a restart.
     pub fn clear_notrace_relock_fail(&self) {
         self.bits.set(self.bits.get().with_notrace_relock_fail(false))
     }
@@ -269,7 +269,7 @@ pub struct TransStatsLocked {
 
 crate::published! {
     /// Its high water marks: raised under the lock, read without it - by
-    /// bch2_trans_get(), sizing the transaction it gets.
+    /// btree_trans!(), sizing the transaction it gets.
     #[derive(MaybeZeroable)]
     pub struct TransStatsMax {
         pub nr_max_paths: Volatile<u32>,
@@ -466,7 +466,7 @@ impl<'f> BtreeTrans<'f> {
         self.extra_journal_u64s.set(self.extra_journal_u64s.get() + u64s)
     }
 
-    /// bch2_trans_begin(), for a loop that tracks restarts itself: the new
+    /// begin(), for a loop that tracks restarts itself: the new
     /// restart count. Inlined, so that last_begin_ip is the caller's address.
     /// Beginning is trans_attempt.rs's, which holds the key.
     #[inline(always)]
@@ -493,8 +493,8 @@ impl<'f> BtreeTrans<'f> {
             self.accounting.get().u64s() != 0
     }
 
-    /// Drop everything queued for the next commit: as C's
-    /// bch2_trans_reset_updates(), which every commit and begin runs.
+    /// Drop everything queued for the next commit, as every commit and
+    /// begin does.
     pub(crate) fn reset_updates(&self, paths: &mut Paths<'_>) {
         for i in 0..paths.updates().len() {
             let path = paths.updates()[i].path;
@@ -593,10 +593,9 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    /// The static inline bch2_trans_commit_flush(), with
-    /// __bch2_trans_commit()'s @lazy. journal_seq and flush are set, as C's
-    /// every commit does: a C commit before ours, in the same transaction, may
-    /// have left a pointer to its stack there.
+    /// commit_flush(), with commit()'s @lazy. journal_seq and flush are set
+    /// every commit, as C set them: a commit before ours, in the same
+    /// transaction, may have left a pointer to its stack there.
     pub(super) fn commit_inner<R>(
         &self,
         t:         &TransAttempt<'_, '_>,
@@ -754,7 +753,7 @@ fn trans_alloc(c: &Fs) -> NonNull<BtreeTrans<'_>> {
 }
 
 /// A transaction, owned: got by new_fn(), put when dropped. btree_trans!()'s,
-/// and C's from __bch2_trans_get() to bch2_trans_put(); used as the
+/// used as the
 /// &BtreeTrans it derefs to.
 pub struct TransGuard<'f> {
     trans: NonNull<BtreeTrans<'f>>,
@@ -769,7 +768,7 @@ impl<'f> core::ops::Deref for TransGuard<'f> {
 }
 
 impl<'f> TransGuard<'f> {
-    /// For C, which holds it until bch2_trans_put().
+    /// For C, which holds it until it puts it.
     pub fn into_raw(self) -> *mut BtreeTrans<'f> {
         core::mem::ManuallyDrop::new(self).trans.as_ptr()
     }

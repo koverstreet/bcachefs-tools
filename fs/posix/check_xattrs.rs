@@ -5,7 +5,7 @@
 //! POSIX ACL xattr has the matching BCH_INODE_has_*_acl flag.
 //!
 //! The flag check is one direction only: flag clear with an ACL xattr present
-//! breaks the bch2_get_acl() short circuit, hiding the ACL. The other way - a
+//! breaks the get_acl() short circuit, hiding the ACL. The other way - a
 //! flag with no xattr - costs only a lookup, and check_inode() checks it.
 //!
 //! An xattr is visible from every snapshot version of its inode descending

@@ -253,7 +253,7 @@ fn gc_idx(
     Ok(())
 }
 
-/// Check @k's refcount against gc's count: as bch2_gc_write_reflink_key().
+/// Check @k's refcount against gc's count.
 fn gc_write_reflink_key(
     t:    &TransAttempt<'_, '_>,
     iter: &BtreeIter<'_>,

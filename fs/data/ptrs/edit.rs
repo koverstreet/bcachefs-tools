@@ -20,8 +20,8 @@ pub trait BkeyVPtrsMut: BkeyVMut<V = PtrsMut> {
     }
 
     /// Drop the entry at @at, whatever it is, the entries after it moving
-    /// down: bch2_bkey_extent_entry_drop(). Panics if no entry starts at @at,
-    /// or the one that does is where the walk stopped.
+    /// down. Panics if no entry starts at @at, or the one that does is where
+    /// the walk stopped.
     fn drop_entry(&mut self, fs: &Fs, at: EntryPos) {
         let len = match self.extent_entries_at(fs).find(|(p, _)| *p == at) {
             None => panic!("no entry of the key at u64 {} to drop", at.0),
@@ -36,8 +36,7 @@ pub trait BkeyVPtrsMut: BkeyVMut<V = PtrsMut> {
 
     /// Drop the pointer at @at and what was only its: the stripe_ptr before
     /// it, and the crc before it unless a pointer after it, before another
-    /// crc, still has it. bch2_bkey_drop_ptr_noerror(), of a key whose
-    /// pointers can be edited.
+    /// crc, still has it. Of a key whose pointers can be edited.
     fn drop_ptr_entries(&mut self, fs: &Fs, at: EntryPos) {
         assert_eq!(self.extent_entries_at(fs).find(|(p, _)| *p == at).map(|(_, e)| EntryKind::of(e)),
                    Some(EntryKind::Ptr), "dropping the pointer at u64 {}, where there isn't one", at.0);
@@ -63,7 +62,7 @@ pub trait BkeyVPtrsMut: BkeyVMut<V = PtrsMut> {
     }
 
     /// Drop the stripe_ptr of the first pointer to @dev - the last one
-    /// before it, as C's bch2_bkey_drop_ec() had it.
+    /// before it, as C had it.
     ///
     /// XXX: C's - the stripe_ptr isn't forgotten at each pointer, so a
     /// pointer to @dev without its own would drop an earlier pointer's; and
@@ -136,7 +135,7 @@ impl TransBkey<'_, '_, PtrsMut> {
 
     /// Its extent flags made @flags: its flags entry's, which comes first, or
     /// one inserted first - NoRoom if the buffer can't hold it. The caller
-    /// requests the extent_flags incompat feature. bch2_bkey_extent_flags_set().
+    /// requests the extent_flags incompat feature.
     pub fn extent_flags_set(&mut self, fs: &Fs, flags: ExtentFlags) -> Result<(), NoRoom> {
         // the field's 57 bits, as C's bitfield assignment truncates to
         let flags = ExtentFlags::from_bits_retain(flags.bits() & ((1 << 57) - 1));
@@ -225,9 +224,8 @@ impl TransBkey<'_, '_, PtrsMut> {
     }
 }
 
-/// @crc appended to @k's entries, as the smallest entry it packs into:
-/// bch2_extent_crc_append(). @k is a key with pointers, its entries running
-/// to its value's end.
+/// @crc appended to @k's entries, as the smallest entry it packs into. @k is
+/// a key with pointers, its entries running to its value's end.
 pub(crate) fn extent_crc_append(k: &mut DstRoom<BkeyI>, crc: &ExtentCrcUnpacked) -> Result<(), NoRoom> {
     let e = crc_entry(crc, ExtentEntryType::crc32);
     let val_u64s = k.k.val_u64s();

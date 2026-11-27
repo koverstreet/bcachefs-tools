@@ -22,7 +22,7 @@ use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_
 
 const SYSFS_BASE: &str = "/sys/fs/bcachefs";
 
-// JSON structs matching kernel output from bch2_time_stats_to_json()
+// JSON structs matching the kernel's time stats, from json_to_text()
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct DurationStats {

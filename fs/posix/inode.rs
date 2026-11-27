@@ -522,7 +522,7 @@ fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
 
 /// Peek inode @inum as seen in @snapshot, through @iter: ENOENT_inode if it
 /// isn't there. With @warn - C passes its __func__ - an error is logged,
-/// naming it. As __bch2_inode_peek_snapshot().
+/// naming it.
 fn __peek_snapshot<'a>(
     t:        &TransAttempt<'a, '_>,
     iter:     &mut BtreeIter<'a>,
@@ -542,8 +542,7 @@ fn __peek_snapshot<'a>(
     }
 }
 
-/// As __peek_snapshot(), in @inum's subvolume's snapshot: as
-/// __bch2_inode_peek().
+/// As __peek_snapshot(), in @inum's subvolume's snapshot.
 pub(crate) fn __peek<'a>(
     t:     &TransAttempt<'a, '_>,
     iter:  &mut BtreeIter<'a>,
@@ -559,8 +558,8 @@ pub(crate) fn __peek<'a>(
     __peek_snapshot(t, iter, inum, snapshot, flags, warn)
 }
 
-/// Peek inode @inum through @iter - for updating it through @iter: as
-/// bch2_inode_peek_nowarn(). ENOENT_inode if it isn't there.
+/// Peek inode @inum through @iter - for updating it through @iter.
+/// ENOENT_inode if it isn't there.
 pub fn peek<'a>(
     t:     &TransAttempt<'a, '_>,
     iter:  &mut BtreeIter<'a>,
@@ -570,8 +569,7 @@ pub fn peek<'a>(
     __peek(t, iter, inum, flags, None)
 }
 
-/// As peek(), as seen in @snapshot: as bch2_inode_peek_snapshot(), without
-/// the warning.
+/// As peek(), as seen in @snapshot, without the warning.
 pub fn peek_snapshot<'a>(
     t:        &TransAttempt<'a, '_>,
     iter:     &mut BtreeIter<'a>,
@@ -595,7 +593,7 @@ pub fn find_by_inum_snapshot(
 }
 
 /// Inode @inum, in its subvolume, as seen in @snapshot: an error logged,
-/// naming @warn, if it isn't there - bch2_inode_find_by_inum_snapshot2(). In
+/// naming @warn, if it isn't there. In
 /// the caller's transaction attempt.
 pub fn find_by_inum_in_snapshot(
     t:        &TransAttempt<'_, '_>,
@@ -607,9 +605,8 @@ pub fn find_by_inum_in_snapshot(
     __peek_snapshot(t, &mut iter, inum, snapshot, BtreeIterFlags::empty(), warn)
 }
 
-/// The inode @inum, in a transaction: as bch2_inode_find_by_inum_trans(). An
-/// error is logged, naming @warn - pass here!(), as C passes
-/// __func__. In the caller's transaction attempt.
+/// The inode @inum, in a transaction. An error is logged, naming @warn - pass
+/// here!(), as C passes __func__. In the caller's transaction attempt.
 pub fn find_by_inum_trans(
     t:    &TransAttempt<'_, '_>,
     inum: SubvolInum,
@@ -619,8 +616,7 @@ pub fn find_by_inum_trans(
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), Some(warn))
 }
 
-/// find_by_inum_trans(), logging nothing: as
-/// bch2_inode_find_by_inum_nowarn_trans().
+/// find_by_inum_trans(), logging nothing.
 pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum)
     -> Result<InodeUnpacked, BchError>
 {
@@ -628,15 +624,14 @@ pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum)
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), None)
 }
 
-/// The inode @inum, in its own transaction: as bch2_inode_find_by_inum().
+/// The inode @inum, in its own transaction.
 pub fn find_by_inum(fs: &Fs, inum: SubvolInum) -> Result<InodeUnpacked, BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| find_by_inum_trans(t, inum, c"find_by_inum"))
 }
 
-/// The oldest version of @inum that a key in @snapshot sees - the version
-/// all the others take their hash info from: as
-/// bch2_inode_find_oldest_snapshot(). In the caller's transaction attempt.
+/// The oldest version of @inum that a key in @snapshot sees - the version all
+/// the others take their hash info from. In the caller's transaction attempt.
 ///
 /// Ancestors have higher snapshot IDs: walking up from @snapshot, the last
 /// version that's an ancestor is the oldest. The first is the nearest -
@@ -666,8 +661,7 @@ pub fn find_oldest_snapshot(
 }
 
 /// Any surviving version of @inum, in any snapshot - ancestor, descendant or
-/// sibling: as bch2_inode_find_any_snapshot(). In the caller's transaction
-/// attempt.
+/// sibling. In the caller's transaction attempt.
 ///
 /// Only for recovering the fields that are snapshot-invariant by
 /// construction, i.e. hash info: every version of an inode must agree on
@@ -701,8 +695,7 @@ fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &InodeUnpacked)
     t.bkey_copy(&pack(inode))
 }
 
-/// Queue writing @inode back through @iter, which peeked it, with @flags: as
-/// bch2_inode_write_flags().
+/// Queue writing @inode back through @iter, which peeked it, with @flags.
 pub fn write_flags<'t>(
     t:     &TransAttempt<'_, 't>,
     iter:  &mut BtreeIter<'t>,
@@ -714,8 +707,7 @@ pub fn write_flags<'t>(
     t.update(iter, k, flags)
 }
 
-/// Queue writing @inode back through @iter, which peeked it: as
-/// bch2_inode_write().
+/// Queue writing @inode back through @iter, which peeked it.
 pub fn write<'t>(
     t:     &TransAttempt<'_, 't>,
     iter:  &mut BtreeIter<'t>,
@@ -725,7 +717,7 @@ pub fn write<'t>(
 }
 
 /// Queue writing back @inode, at its own snapshot, for fsck repair - the
-/// caller commits: as __bch2_fsck_write_inode().
+/// caller commits.
 pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
@@ -735,7 +727,7 @@ pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
                   UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
-/// As fsck_write(), committed: as bch2_fsck_write_inode().
+/// As fsck_write(), committed.
 pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
@@ -759,8 +751,7 @@ pub fn write_cached(fs: &Fs, inode: &InodeUnpacked) -> Result<(), BchError> {
 }
 
 /// @k, an inode of any version, as an inode_v3 - at no snapshot, as packing
-/// leaves it - in transaction memory: as bch2_inode_to_v3(). ENOENT if it
-/// isn't an inode.
+/// leaves it - in transaction memory. ENOENT if it isn't an inode.
 pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
     let Some(k) = BkeySC::from(k).arm::<Inodes>() else {
         return t.fs().throw(Errcode::ENOENT_inode_to_v3_not_inode);
@@ -891,8 +882,7 @@ fn fields_to_text(out: &mut Printbuf, inode: &InodeUnpacked) {
 }
 
 impl ToText for InodeUnpacked {
-    /// By number and snapshot, then its fields: as
-    /// bch2_inode_unpacked_to_text().
+    /// By number and snapshot, then its fields.
     fn to_text(&self, out: &mut Printbuf) {
         write!(out, "inum: {}:{} ", self.bi_inum, self.bi_snapshot);
         let mut out = out.indent(2);
@@ -910,8 +900,8 @@ impl ToText for InodeUnpacked {
 // which new inodes take - so a reused inode number gets a new generation.
 
 /// Give each inode number shard a CPU, spread across the online CPUs, NUMA
-/// nodes first - for the scheduler to keep a shard's allocations together:
-/// as bch2_fs_inode_shard_cpu_init(). Kernel only.
+/// nodes first - for the scheduler to keep a shard's allocations together.
+/// Kernel only.
 pub fn shard_cpu_init(fs: &Fs) {
     #[cfg(kernel)]
     {
@@ -1009,8 +999,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
 }
 
 /// Give @inode a free inode number in @snapshot, below 2^31 with @is_32bit,
-/// and its generation, and leave @iter there, for creating it: as
-/// bch2_inode_create().
+/// and its generation, and leave @iter there, for creating it.
 ///
 /// Free is no key, or an inode_generation key - left by a deleted inode -
 /// visible in @snapshot; the new inode takes the higher of its generation
@@ -1105,9 +1094,8 @@ fn is_unlinked(flags: InodeFlags) -> bool {
 }
 
 /// The version of the inode at @p that @p's snapshot inherited - the oldest
-/// ancestor's - through @iter, left at it; None if there's none, as
-/// bch2_inode_get_iter_snapshot_parent(). Skips non-inode keys, going on up
-/// from each.
+/// ancestor's - through @iter, left at it; None if there's none. Skips
+/// non-inode keys, going on up from each.
 fn snapshot_parent<'i, 'a>(
     t:     &'i TransAttempt<'a, '_>,
     iter:  &'i mut BtreeIter<'a>,
@@ -1133,8 +1121,8 @@ fn snapshot_parent<'i, 'a>(
 }
 
 /// Whether the inode at @pos has versions in descendant snapshots - only
-/// looked for if @pos's snapshot has any: as
-/// bch2_inode_has_child_snapshots(). In the caller's transaction attempt.
+/// looked for if @pos's snapshot has any. In the caller's transaction
+/// attempt.
 pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: Bpos) -> Result<bool, BchError> {
     // As C: if leafness can't be told, look.
     if let Ok(true) = t.fs().snapshots.is_leaf(p.snapshot) {
@@ -1183,7 +1171,7 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: boo
 
     let mut f = k.flags();
     if have_child != f.contains(InodeFlags::has_child_snapshot) {
-        // As bch2_bkey_make_mut(): a copy, queued as the update.
+        // As bkey_make_mut(): a copy, queued as the update.
         let mut u = t.bkey_make_mut_noupdate(k)?;
         f.set(InodeFlags::has_child_snapshot, have_child);
         BkeyS::from(&mut u).set_flags(f);
@@ -1192,7 +1180,7 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: Bpos, have_child: boo
     Ok(())
 }
 
-/// The inode keys' trigger: as bch2_trigger_inode().
+/// The inode keys' trigger.
 ///
 ///  - Atomic, on insert: the key going in is stamped with the journal
 ///    sequence number it's committed in.
@@ -1367,8 +1355,8 @@ fn may_delete_deleted_inum(t: &TransAttempt<'_, '_>, inum: SubvolInum,
     may_delete_deleted_inode(t, spos(0, inum.inum, snapshot), inode, false)
 }
 
-/// Delete inode @inum's keys in @btree, a commit each: as
-/// bch2_inode_delete_keys(). An extent is deleted whole.
+/// Delete inode @inum's keys in @btree, a commit each. An extent is deleted
+/// whole.
 fn delete_keys(trans: &TransGuard<'_>, inum: SubvolInum, btree: Btree)
     -> Result<(), BchError>
 {
@@ -1394,8 +1382,8 @@ fn delete_keys(trans: &TransGuard<'_>, inum: SubvolInum, btree: Btree)
     })
 }
 
-/// Delete the inode @inum's key, and its damage record; its snapshot. As
-/// bch2_inode_rm_trans(). It not being there is an inconsistency.
+/// Delete the inode @inum's key, and its damage record; its snapshot. It not
+/// being there is an inconsistency.
 fn rm_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<u32, BchError> {
     let fs = t.fs();
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
@@ -1415,9 +1403,9 @@ fn rm_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum) -> Result<u32, BchError>
 }
 
 /// Delete inode @inum, which the VFS is done with - its keys, then it, then
-/// the versions in ancestor snapshots nothing else sees: as bch2_inode_rm().
-/// The VFS asking for an inode that may not be deleted is a bug, logged
-/// with the inode, and counted.
+/// the versions in ancestor snapshots nothing else sees. The VFS asking for
+/// an inode that may not be deleted is a bug, logged with the inode, and
+/// counted.
 pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
 
@@ -1463,11 +1451,10 @@ pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
 }
 
 /// Delete inode @inum in @snapshot and its contents there - each content
-/// btree's in its own loop - then the inode, and its damage record: as
-/// __bch2_inode_rm_snapshot(). If content couldn't all be deleted, the inode
-/// is whited out instead - so the ancestor's version doesn't resurface
-/// here, and deletion or fsck can still find this position - and the error
-/// returned.
+/// btree's in its own loop - then the inode, and its damage record. If
+/// content couldn't all be deleted, the inode is whited out instead - so the
+/// ancestor's version doesn't resurface here, and deletion or fsck can still
+/// find this position - and the error returned.
 fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(), BchError> {
     let fs = trans.fs();
     let mut ret = Ok(());
@@ -1540,17 +1527,16 @@ fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: Bpos) -> Resul
 }
 
 /// Delete inode @inum in @snapshot, its contents, and the ancestors' versions
-/// nothing else sees - committing as it goes, in iterations of its own: as
-/// bch2_inode_rm_snapshot(). From inside an attempt, through
-/// TransAttempt::close(), which returns the transaction_restart_nested C's
-/// returned itself.
+/// nothing else sees - committing as it goes, in iterations of its own. From
+/// inside an attempt, through TransAttempt::close(), which returns the
+/// transaction_restart_nested C's returned itself.
 pub fn rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(), BchError> {
     __rm_snapshot(trans, inum, snapshot)?;
     delete_ancestor_snapshot_inodes(trans, spos(0, inum, snapshot))
 }
 
 /// Delete the inodes on the deleted_inodes list that may be deleted, a
-/// recovery pass: as bch2_delete_dead_inodes().
+/// recovery pass.
 ///
 /// If check_inodes ran, unlinked inodes will have already been cleaned up
 /// but the write buffer will be out of sync; therefore we always need a
@@ -1600,8 +1586,7 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
 
 crate::recovery_pass!(delete_dead_inodes => delete_dead_inodes);
 
-/// Delete the inode_generation keys in the inodes btree, a recovery pass: as
-/// bch2_kill_i_generation_keys().
+/// Delete the inode_generation keys in the inodes btree, a recovery pass.
 fn kill_i_generation_keys(fs: &Fs) -> Result<(), BchError> {
     let progress = Progress::recovery(fs, c"kill_i_generation_keys",
                                       &[Btree::inodes], &[]);
@@ -1627,7 +1612,7 @@ crate::recovery_pass!(kill_i_generation_keys => kill_i_generation_keys);
 // does, once the transaction has read the parent (namei::create_trans()).
 
 /// Start a new inode: zeroed, but for its hash type - per the str_hash
-/// option - and a random hash seed. As bch2_inode_init_early().
+/// option - and a random hash seed.
 pub fn init_early(fs: &Fs, inode: &mut InodeUnpacked) {
     *inode = InodeUnpacked::default();
     inode.set_str_hash(crate::posix::str_hash::new_inode_type(fs));
@@ -1635,10 +1620,9 @@ pub fn init_early(fs: &Fs, inode: &mut InodeUnpacked) {
 }
 
 /// Finish a new inode, made at @now, in directory @parent: it inherits
-/// @parent's inode options, and from a setgid @parent its group - and
-/// setgid itself, for a directory. Only a directory is casefolded; if it is,
-/// it has a case insensitive directory below it - itself. As
-/// bch2_inode_init_late().
+/// @parent's inode options, and from a setgid @parent its group - and setgid
+/// itself, for a directory. Only a directory is casefolded; if it is, it has
+/// a case insensitive directory below it - itself.
 #[allow(clippy::too_many_arguments)]
 pub fn init_late(
     fs:     &Fs,
@@ -1759,8 +1743,7 @@ pub fn reconcile_opts_get(fs: &Fs, inode: &InodeUnpacked) -> ExtentReconcile {
 
 impl InodeUnpacked {
     /// The link count as the VFS counts it - bi_nlink leaves out the links
-    /// every inode has, two for a directory - and 0 if it's unlinked: as
-    /// bch2_inode_nlink_get().
+    /// every inode has, two for a directory - and 0 if it's unlinked.
     pub fn nlink(&self) -> u32 {
         if self.flag(InodeFlags::unlinked) {
             0
@@ -1780,8 +1763,8 @@ impl InodeUnpacked {
         }
     }
 
-    /// Whether it's casefolded - set on it, or the filesystem's option: as
-    /// bch2_inode_casefold(). Options are stored +1, 0 for unset.
+    /// Whether it's casefolded - set on it, or the filesystem's option.
+    /// Options are stored +1, 0 for unset.
     pub fn casefold(&self, fs: &Fs) -> bool {
         match self.bi_casefold {
             0 => fs.opts().casefold.get() != 0,
@@ -1825,7 +1808,7 @@ impl InodeUnpacked {
     }
 
     /// Whether it's a subvolume's root: deleting it is subvolume deletion's
-    /// job - see bch2_inode_is_subvolume_root().
+    /// job.
     pub fn is_subvolume_root(&self) -> bool {
         self.bi_subvol != 0
     }
@@ -1871,8 +1854,8 @@ impl InodeUnpacked {
 /// The most links an inode can have, as the VFS counts them.
 const BCH_LINK_MAX: u32 = u32::MAX;
 
-/// One more link to @inode - or none less, for an unlinked inode coming
-/// back: as bch2_inode_nlink_inc(). too_many_links at BCH_LINK_MAX.
+/// One more link to @inode - or none less, for an unlinked inode coming back.
+/// too_many_links at BCH_LINK_MAX.
 pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
@@ -1929,9 +1912,8 @@ fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked, delta
     passes::run_explicit(fs, &mut msg, pass, RunRecoveryPassFlags::from_bits_retain(0))
 }
 
-/// One link fewer to @inode - unlinked, when it had none left: as
-/// bch2_inode_nlink_dec(). An unlinked inode losing a link is a transaction
-/// inconsistency, and changes nothing.
+/// One link fewer to @inode - unlinked, when it had none left. An unlinked
+/// inode losing a link is a transaction inconsistency, and changes nothing.
 pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked) {
     let unlinked = inode.flag(InodeFlags::unlinked);
 

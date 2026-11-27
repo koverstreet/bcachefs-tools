@@ -513,7 +513,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// The transaction has to know: it's marked restarted and its restart_count
-    /// bumped, which bch2_trans_begin() and verify_not_restarted() go by.
+    /// bumped, which begin() and verify_not_restarted() go by.
     pub fn restart(&self, error: Errcode) -> BchError {
         self.trans.restart(error)
     }
@@ -678,7 +678,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// is freed when the transaction next begins, without running
     /// destructors, so @T has none.
     pub fn alloc_zeroed<T: ::pin_init::Zeroable>(&self) -> Result<&'a mut T, BchError> {
-        // bch2_trans_kmalloc() gives 8 byte alignment:
+        // kmalloc() gives 8 byte alignment:
         const { assert!(core::mem::align_of::<T>() <= 8 && !core::mem::needs_drop::<T>()) };
 
         let p = self.kmalloc_raw(size_of::<T>())? as *mut T;
@@ -688,7 +688,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @init's T, in the attempt's memory. Never dropped: a T owning anything
     /// is emptied by whoever's done with it.
     pub fn alloc_init<T, E: Into<BchError>>(&self, init: impl ::pin_init::Init<T, E>) -> Result<&'a mut T, BchError> {
-        // bch2_trans_kmalloc() gives 8 byte alignment:
+        // kmalloc() gives 8 byte alignment:
         const { assert!(core::mem::align_of::<T>() <= 8) };
 
         let p = self.kmalloc_raw(size_of::<T>())?.cast::<T>();

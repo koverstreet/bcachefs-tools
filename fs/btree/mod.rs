@@ -198,7 +198,7 @@ impl Btree {
 
 impl Btree {
     /// The key types it may hold, a bit each - deleted, which every btree
-    /// may, and its own: bch2_key_types_allowed[]. 0 for a btree this code
+    /// may, and its own. 0 for a btree this code
     /// doesn't know.
     pub const fn key_types(self) -> u64 {
         if self.0 < Self::NR {

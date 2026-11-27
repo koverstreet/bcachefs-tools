@@ -3,8 +3,8 @@
 // This uses manual argument parsing (~225 lines) rather than clap because:
 // - Per-device options (--label, --discard, etc.) must apply to the next
 //   device on the command line, not globally — clap can't express this.
-// - The C opts table (bch_opts) is dynamic and parsed via bch2_parse_one_opt,
-//   so duplicating it in clap would create a maintenance burden.
+// - The opts table is dynamic and parsed via opt_parse(), so duplicating it
+//   in clap would create a maintenance burden.
 // - Several options (--encrypted, --replicas, --label) have special handling
 //   that maps to multiple underlying C opts.
 //

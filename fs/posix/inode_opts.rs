@@ -93,8 +93,7 @@ impl InodeOpt {
         (0..InodeOptId::NR).map(|i| InodeOpt(InodeOptId(i)))
     }
 
-    /// The inode option filesystem option @id is, if it's one: as
-    /// bch2_opt_to_inode_opt().
+    /// The inode option filesystem option @id is, if it's one.
     pub fn from_opt_id(id: OptId) -> Option<InodeOpt> {
         Self::all().find(|opt| opt.opt_id() == id)
     }
@@ -186,8 +185,7 @@ pub fn inode_opts_to_opts(inode: &InodeUnpacked) -> Opts {
 }
 
 impl InodeOpts {
-    /// The options that follow from others, and what doesn't combine: as
-    /// bch2_io_opts_fixups(), opts.h's - a copy, until opts.c is Rust.
+    /// The options that follow from others, and what doesn't combine.
     pub fn fixups(&mut self) {
         /*
          * A derived value comes from wherever its source did: shared data's
@@ -259,7 +257,7 @@ pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &InodeOpts) {
 }
 
 /// @inode's io options: its own where it sets them, the filesystem's where it
-/// doesn't, and for each which - as bch2_inode_opts_get_inode().
+/// doesn't, and for each which.
 pub fn get_inode(fs: &Fs, inode: &InodeUnpacked) -> InodeOpts {
     let mut ret = InodeOpts::default();
 
@@ -308,7 +306,7 @@ pub fn get_inode(fs: &Fs, inode: &InodeUnpacked) -> InodeOpts {
 /// The io options @k's data is written with: a btree node pointer's, the
 /// filesystem's metadata options; a file's data, its inode's, as of its
 /// snapshot; reflinked data, the filesystem's, with those its reconcile entry
-/// has from an inode; anything else, the filesystem's: bch2_bkey_get_io_opts().
+/// has from an inode; anything else, the filesystem's.
 ///
 /// @s caches them across a scan in key order: the filesystem's, and every
 /// snapshot version of the inode it's on.
@@ -615,8 +613,7 @@ fn needs_scan(t: &TransAttempt<'_, '_>, inum: u64) -> Result<(), BchError> {
     t.request_scan(ReconcileScan::inum(inum))
 }
 
-/// Climb from the op's cursor to the root, a commit per level: as
-/// bch2_resume_logged_op_inode_opt_propagate().
+/// Climb from the op's cursor to the root, a commit per level.
 pub fn resume_propagate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), BchError> {
     let fs = trans.fs();
     let op = op_k.arm::<LoggedOpInodeOptPropagate>().expect("an inode_opt_propagate op");
@@ -734,7 +731,7 @@ impl InodeOptChange {
 }
 
 /// Check that @inode's options have been pushed up to its ancestor snapshots,
-/// repairing if not: as bch2_check_inode_opts_propagated().
+/// repairing if not.
 ///
 /// An invariant, not a one-off migration: deleting one of two disagreeing
 /// branches leaves the survivor's value uncontested but never propagated, and

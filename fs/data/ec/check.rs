@@ -110,8 +110,8 @@ fn check_bucket_to_stripe_ref(t: &TransAttempt<'_, '_>, r: Bpos) -> Result<(), B
     Ok(())
 }
 
-/// Every stripe's refs, then every bucket_to_stripe entry's stripe:
-/// bch2_check_stripe_refs(), in check_alloc_to_lru_refs.
+/// Every stripe's refs, then every bucket_to_stripe entry's stripe, in
+/// check_alloc_to_lru_refs.
 pub fn check_stripe_refs(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new();
 

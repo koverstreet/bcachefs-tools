@@ -855,13 +855,13 @@ fn cmd_set(
             }
 
             // Deletion has two meanings. Raw (the default): remove this
-            // exact key - a filtered iter would have bch2_trans_update()
+            // exact key - a filtered iter would have update()
             // convert the deletion into a whiteout whenever the key is
             // visible in an ancestor snapshot, so deleting a whiteout
             // silently rewrites it as itself. -s: delete within pos's
             // snapshot - the filtered iter gets exactly that conversion,
             // the same semantics as a runtime delete. The peek is just
-            // the traverse bch2_trans_update() requires.
+            // the traverse update() requires.
             let (iter_flags, update_flags) = if in_snapshot {
                 (BtreeIterFlags::INTENT, UpdateTriggerFlags::empty())
             } else {
@@ -900,7 +900,7 @@ fn cmd_set(
 // ---------------------------------------------------------------------------
 // superblock fields — same field engine as keys, anchored on Sb::INFO
 // (which carries the BCH_SB_* flag words, #[bitfield]s), written back via
-// bch2_write_super so the csum is recomputed and every sb copy updated.
+// write_super() so the csum is recomputed and every sb copy updated.
 
 fn sb_field(field: &str) -> Result<typeinfo::FieldRef> {
     typeinfo::resolve_with_bits(<Head<Sb> as typeinfo::TypeInfo>::INFO, field)
@@ -908,7 +908,7 @@ fn sb_field(field: &str) -> Result<typeinfo::FieldRef> {
 }
 
 // With a device, its own superblock (ca->disk_sb) rather than the filesystem's:
-// bch2_write_super() copies the filesystem's over each device's, all but the
+// write_super() copies the filesystem's over each device's, all but the
 // per-device parts - the layout, the offset and dev_idx - so those are the
 // fields worth setting this way; anything else is overwritten by the write.
 fn sb_dev(fs: &Fs, dev: u32) -> Result<bcachefs_kernel::fs::DevRef> {
@@ -1378,7 +1378,7 @@ fn h_sb(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), Str
         "set" => {
             let [assign] = rest else { bail!("usage: sb set [-d <dev>] <field=val>"); };
             // Under the default norecovery open, nochanges makes
-            // bch2_write_super() a silent no-op - refuse rather than claim
+            // write_super() a silent no-op - refuse rather than claim
             // success. (Not table-gated needs_rw: sb get is fine read-only,
             // and --nostart is the sb-editing mode and never sets nochanges.)
             if !repl.rw && !repl.nostart {
@@ -1501,7 +1501,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     } else {
         // Go read-write, and stop there. Everything through journal_replay is
         // what makes the filesystem writable and consistent to write to -
-        // bch2_fs_read_write() refuses to go rw with recovery_pass_last below
+        // read_write() refuses to go rw with recovery_pass_last below
         // it. Everything after is repair, and repair is the one thing an
         // injection must not have: the passes run at open, before the first
         // command, so they rewrite the state we were about to construct. (A

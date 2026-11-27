@@ -451,7 +451,7 @@ impl FsType for Bcachefs {
                 state.read_only();
                 sb.set_rdonly(true);
             } else {
-                // __bch2_fs_read_write() gates reconcile on this:
+                // read_write() gates reconcile on this:
                 set_ro(0);
 
                 if let Err(e) = state.read_write() {

@@ -143,9 +143,9 @@ impl DevDrop<'_> {
 
     /// Stripe @k, at @iter, intent locked, without its blocks on the device -
     /// their pointers to BCH_SB_MEMBER_INVALID - and marked for reconcile to
-    /// rebuild them: bch2_invalidate_stripe_to_dev(). Not if it's open, which
-    /// @had_open says: the stripe being made, or repaired, is rewritten
-    /// without the device anyway, and the scan goes again until it's empty.
+    /// rebuild them. Not if it's open, which @had_open says: the stripe being
+    /// made, or repaired, is rewritten without the device anyway, and the
+    /// scan goes again until it's empty.
     ///
     /// If more of its blocks are gone than it can rebuild from, their
     /// extents are recorded lost first, in transactions of their own -

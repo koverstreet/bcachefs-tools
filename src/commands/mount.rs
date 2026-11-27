@@ -93,7 +93,7 @@ fn report_log(msgs: Vec<Message>) -> Vec<String> {
 
 /// A mount that didn't happen, and both halves of what the kernel said about it.
 ///
-/// The code is the half we can act on. bch2_fs_get_tree() hands back bcachefs's
+/// The code is the half we can act on. get_tree() hands back bcachefs's
 /// own error codes rather than flattening them to an errno, so
 /// device_splitbrain and the two missing-device refusals arrive as distinct
 /// values instead of three EINVALs that could only be told apart by reading
@@ -163,7 +163,7 @@ fn mount_fs_context(
     // strndup_user(_value, 256), which returns -EINVAL rather than truncating,
     // so the whole colon-separated list doesn't fit past ~25 devices - and that
     // -EINVAL arrives with an empty fs_context log, since it happens in the
-    // syscall wrapper before the VFS sees the parameter. bch2_fs_parse_param()
+    // syscall wrapper before the VFS sees the parameter. parse_param()
     // splits each "source" value on ':' and appends, so there is no ceiling on
     // the list, and a device the kernel refuses is named on its own.
     for dev in src.split(':') {
@@ -254,9 +254,9 @@ fn mount_fs_context(
 ///
 /// There is a window nothing else covers. scan_waiting_for_devices() drops its
 /// udev monitor when it returns, and the udev rule won't act until
-/// /sys/fs/bcachefs/<uuid> exists, which is bch2_fs_online() partway through
-/// the mount. Everything between is nobody's: too late for one, too early for
-/// the other.
+/// /sys/fs/bcachefs/<uuid> exists, which is the filesystem's online() partway
+/// through the mount. Everything between is nobody's: too late for one, too
+/// early for the other.
 ///
 /// That window contains the degraded prompt, so it can be a minute long - and
 /// it is exactly when a slow disk is most likely to finish coming up, since we
@@ -265,7 +265,7 @@ fn mount_fs_context(
 /// So look once more, now that the mount is done. This tests state rather than
 /// waiting for an event, which is what lets it overlap the udev rule instead of
 /// abutting it: by the time this runs the rule is already live, both may try,
-/// and __bch2_dev_attach_bdev() turns the loser away with device_already_online
+/// and dev_attach_bdev() turns the loser away with device_already_online
 /// rather than doing anything to it.
 ///
 /// Best effort. The filesystem is mounted; failing to pick up a straggler is
@@ -355,7 +355,7 @@ fn mount_inner(
     }
 
     // mount(2) from here: no parameters, so a key we are holding has to go
-    // into a keyring after all, for bch2_request_key() to find. Failing to
+    // into a keyring after all, for request_key() to find. Failing to
     // place it is not fatal here - the mount below will say ENOKEY, which is
     // the better error to report.
     if let Some(unlocked) = unlocked {

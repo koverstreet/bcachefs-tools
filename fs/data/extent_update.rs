@@ -136,7 +136,7 @@ impl<'t> TransAttempt<'_, 't> {
         copy.traverse(self)?;
 
         // Whiteouts aren't filtered, but the walk still needs an end, for
-        // bch2_snapshot_is_ancestor()'s assert. A key at a time, with none of
+        // is_ancestor()'s assert. A key at a time, with none of
         // the iterator's peek flags - its slots, say - as C's walk is
         let end = pos(ins.p.inode, u64::MAX);
         while let Some(k) = copy.peek_max(self, end)? {
@@ -185,7 +185,7 @@ impl<'t> TransAttempt<'_, 't> {
 }
 
 /// What writing @new over what it overwrites does to the inode and the disk:
-/// bch2_sum_sector_overwrites().
+/// sum_sector_overwrites().
 pub struct SectorOverwrites {
     /// Whether it takes space the overwritten keys don't give back: a
     /// snapshot's overwrite, more replicas, or uncompressed over compressed.

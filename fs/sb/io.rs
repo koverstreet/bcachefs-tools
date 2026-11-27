@@ -456,7 +456,7 @@ fn field_validate(sb: &mut Sb<Unvalidated>, off: usize,
             .expect("a section, its extent checked");
         field_to_text(err, None, sb, f);
     } else if !field_err.as_str().is_empty() {
-        // repaired as read: bch2_read_super() prints it
+        // repaired as read: read_super() prints it
         write!(err, "Superblock section {name}: {}", field_err.as_str());
         err.newline();
     }
@@ -678,8 +678,8 @@ impl MetadataVersion {
         self.0 & !(!0 << 10)
     }
 
-    /// Whether this version reads it: its major, and no older than the
-    /// oldest it knows - bch2_version_compatible().
+    /// Whether this version reads it: its major, and no older than the oldest
+    /// it knows.
     pub fn compatible(self) -> bool {
         self.major() <= Self::CURRENT.major() &&
             self >= Self::MIN
@@ -690,8 +690,8 @@ impl MetadataVersion {
         crate::util::names::name_of(VERSIONS, self.0.into())
     }
 
-    /// The newest version this one knows of the same major - itself at
-    /// major 0: bch2_latest_compatible_version().
+    /// The newest version this one knows of the same major - itself at major
+    /// 0.
     pub fn latest_compatible(self) -> Self {
         if self.major() == 0 {
             return self;
@@ -710,7 +710,6 @@ crate::display_via_to_text!(MetadataVersion);
 
 impl Fs {
     /// Whether features of @version may be used, without asking:
-    /// bch2_incompat_feature_allowed().
     pub(crate) fn incompat_feature_allowed(&self, version: MetadataVersion) -> bool {
         version <= self.sb.version_incompat.get() ||
             (self.feature(SbFeature::incompat_version_field) &&
@@ -718,8 +717,8 @@ impl Fs {
     }
 
     /// Make the filesystem incompatible with versions before @version, if
-    /// that's allowed, writing the superblock: bch2_set_version_incompat().
-    /// If it isn't, the first request for each version says so.
+    /// that's allowed, writing the superblock. If it isn't, the first request
+    /// for each version says so.
     pub fn set_version_incompat(&self, version: MetadataVersion) -> Result<(), BchError> {
         if self.incompat_feature_allowed(version) {
             let mut sb = self.sb_lock();
@@ -743,7 +742,7 @@ impl Fs {
     }
 
     /// Mark the filesystem as using @feature, writing the superblock if it
-    /// didn't - checked again under sb_lock: __bch2_check_set_feature().
+    /// didn't - checked again under sb_lock.
     pub(crate) fn set_feature(&self, feature: SbFeature) {
         let mut sb = self.sb_lock();
         if !self.feature(feature) {
@@ -754,7 +753,7 @@ impl Fs {
 
     /// Allow incompatible features up to the filesystem's version, as an
     /// upgrade to it would have: version_upgrade=incompatible, set at
-    /// runtime - bch2_sb_upgrade_incompat().
+    /// runtime.
     pub(crate) fn upgrade_incompat(&self) {
         let mut sb = self.sb_lock();
         let (v, allowed) = (self.sb.version.get(), self.sb.version_incompat_allowed.get());
@@ -1180,7 +1179,7 @@ impl SbHandle {
         Ok(())
     }
 
-    /// What it holds released, and it zeroed: bch2_free_super().
+    /// What it holds released, and it zeroed.
     pub fn free(&mut self) {
         *self = Self::default();
     }
@@ -1436,7 +1435,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Hold
     }
 
     let file = file.inspect_err(|e| {
-        // Detail only - bch2_read_super() has already printed the path and
+        // Detail only - read_super() has already printed the path and
         // the errno, and repeating them here just gets the same words
         // twice. The errno alone is not actionable: what the user needs is
         // what we asked the block layer for, since that - not the device -
@@ -1524,8 +1523,8 @@ fn read_super_err(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>,
 }
 
 /// The superblock of the device at @path, opened as @opts says - why not
-/// printed, and what reading a backup instead took: bch2_read_super(). An
-/// exclusive open claims the device for @holder.
+/// printed, and what reading a backup instead took. An exclusive open claims
+/// the device for @holder.
 pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
     -> Result<SbHandle, BchError>
 {
@@ -2247,7 +2246,7 @@ struct Copies {
 /// Written to every online device - or just @devs - copy by copy: each
 /// layout slot to all of them at once, and waited on before the next.
 /// Read back first, to catch a write that was silently dropped, or another
-/// writer. __bch2_write_super().
+/// writer.
 #[track_caller]
 fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>,
                       flags: SbWriteFlags) -> Result<(), BchError> {
@@ -2568,9 +2567,9 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
 }
 
 /// write_super_locked(), then the new options made visible - after they're
-/// persistent - and timed: bch2_write_super_devs(). And what memory has of
-/// each section edited since the last write, by to_cpu() - not of what the
-/// write's from_cpu()s edited, which is memory's already.
+/// persistent - and timed. And what memory has of each section edited since
+/// the last write, by to_cpu() - not of what the write's from_cpu()s edited,
+/// which is memory's already.
 #[track_caller]
 fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>,
                     flags: SbWriteFlags) -> Result<(), BchError> {
@@ -2582,7 +2581,7 @@ fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&DevsMask>,
     sb_update(fs, sb);
 
     // XXX enable after all sb access in Rust: C edits sections through raw
-    // pointers, which mark nothing - bch2_members_v2_get_mut(), all over -
+    // pointers, which mark nothing, all over -
     // so sb_update() reads members back after every write. Then the explicit
     // rebuilds go - sb_update()'s members, dev_group_set()'s disk groups,
     // journal_seq_blacklist_add()'s - and the replicas table's writes, and
@@ -2655,7 +2654,7 @@ impl Fs {
     /// This is the *only* caller allowed to write to a subset, which is why
     /// it's named for the caller rather than for the mechanism: every other
     /// superblock section stays fleet wide, so nothing else can go stale
-    /// behind us. bch2_write_super_replicas().
+    /// behind us.
     #[track_caller]
     pub fn write_super_replicas_ret(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let mut m = Vec::new();
@@ -2735,7 +2734,7 @@ impl SbCpu {
     }
 }
 
-/// c->sb, from the superblock: bch2_sb_update(). And ca->mi, each member's.
+/// c->sb, from the superblock. And ca->mi, each member's.
 pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     let (handle, cpu) = sb.parts();
     let src = handle.sb();
@@ -2846,7 +2845,6 @@ fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &Sb) -> Result<(), BchErro
 }
 
 /// The filesystem's superblock from @src, and what it derives from it:
-/// bch2_sb_to_fs().
 pub fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &Sb) -> Result<(), BchError> {
     let mut disk_sb = fs.sb_resize(sb);
     disk_sb.sb_realloc(0)?;

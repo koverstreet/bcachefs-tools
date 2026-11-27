@@ -39,10 +39,10 @@
 //   stat() still reports the inode number, as the kernel driver does.
 // - Unmount: a plain fuse mount never sends FUSE_DESTROY - the daemon only
 //   finds out when /dev/fuse goes dead - so umount returns while destroy()
-//   and bch2_fs_exit() are still running, and an fsck or remount straight
-//   after gets EBUSY. A fuseblk mount (block device source) sends DESTROY
-//   and waits for the reply, so umount returns once the filesystem is shut
-//   down. fuser only mounts plain fuse, so for block devices we mount
+//   and the filesystem's exit() are still running, and an fsck or remount
+//   straight after gets EBUSY. A fuseblk mount (block device source) sends
+//   DESTROY and waits for the reply, so umount returns once the filesystem
+//   is shut down. fuser only mounts plain fuse, so for block devices we mount
 //   fuseblk ourselves and hand fuser the /dev/fuse fd. The kernel claims the
 //   source device exclusively for fuseblk, so we open with noexcl and claim
 //   the other devices ourselves. Image files can't be fuseblk sources and
@@ -189,7 +189,7 @@ impl dirent::DirEmit for FuseDir<'_> {
     fn emit(&mut self, name: &[u8], pos: u64, ino: u64, d_type: u32) -> bool {
         // A fuse dirent's offset field is the cookie to resume the listing
         // *after* that entry; pos is the entry's own dirent offset
-        // (bch2_dir_emit() sets ctx->pos before emitting). If we reject on a
+        // (dir_emit() sets ctx->pos before emitting). If we reject on a
         // full reply buffer, ctx->pos never advances past this entry and the
         // next readdir re-reads it.
         let full = self.reply.add(INodeNo(ino), pos + 1, dtype_to_filetype(d_type), OsStr::from_bytes(name));
@@ -309,7 +309,7 @@ fn bch_err(e: &BchError) -> Errno {
 }
 
 /// @req supplies the owner: the caller's fsuid and fsgid, which is what the
-/// kernel gives a new inode. bch2_inode_init_late() then applies a setgid
+/// kernel gives a new inode. inode::init_late() then applies a setgid
 /// parent's group, and the kernel has already applied the umask and stripped
 /// setgid where the caller isn't entitled to it.
 fn fuse_create_inode(
@@ -546,10 +546,10 @@ fn fuse_truncate(fs: &Fs, inum: SubvolInum, new_size: u64) -> Result<(), BchErro
     fs.truncate(inum, new_size)
 }
 
-/// What bch2_fsync() does once the page cache is written back, which here it
-/// already is - writes complete before we reply to them. The kernel flushes
-/// the journal only as far as the inode's last update; we don't track that,
-/// so we flush all of it: more than the minimum, never less.
+/// What the kernel's fsync() does once the page cache is written back, which
+/// here it already is - writes complete before we reply to them. The kernel
+/// flushes the journal only as far as the inode's last update; we don't track
+/// that, so we flush all of it: more than the minimum, never less.
 fn fuse_fsync(fs: &Fs) -> Result<(), BchError> {
     if fs.opts().journal_flush_disabled.get() != 0 {
         return Ok(());
@@ -792,7 +792,7 @@ impl NodeMap {
 
     /// Claims the deletion of @inum, which has no links left: false if it's
     /// still open, or if a racing unlink or release claimed it first - two
-    /// bch2_inode_rm()s of one inode, run together, both find it and the
+    /// inode::rm()s of one inode, run together, both find it and the
     /// second finds it gone, which is an inconsistency.
     ///
     /// The node is marked deleted, as the kernel may still hold it: forget
@@ -827,7 +827,7 @@ macro_rules! resolve {
 }
 
 struct BcachefsFs {
-    /// Shut down (OpenFs's Drop: bch2_fs_exit()) exactly once on every path:
+    /// Shut down (OpenFs's Drop: exit()) exactly once on every path:
     /// destroy() takes it, and if the mount fails before fuser hands us to a
     /// FilesystemHolder - whose Drop calls destroy() - it goes down with us.
     fs: Option<OpenFs>,
@@ -865,7 +865,7 @@ impl BcachefsFs {
 
     /// EROFS in a read-only subvolume. The core refuses creates, unlinks and
     /// xattr changes there itself; opening for write, setattr, link and rename
-    /// the kernel driver refuses in its VFS ops (bch2_open() and friends),
+    /// the kernel driver refuses in its VFS ops (open() and friends),
     /// which our handlers stand in for.
     fn subvol_writable(&self, subvol: u64) -> Result<(), Errno> {
         subvolume::is_ro(self.fs(), subvol as u32).map_err(|e| bch_err(&e))
@@ -1027,7 +1027,7 @@ impl Filesystem for BcachefsFs {
         let lookup = match name_bytes {
             // Only sent to resolve a file handle (FUSE_EXPORT_SUPPORT, see
             // init()); there are no dirents for them. The parent is
-            // bch2_get_parent()'s: a subvolume root's is in its parent
+            // get_parent()'s: a subvolume root's is in its parent
             // subvolume.
             b"." => inode::find_by_inum(fs, dir).map(|bi| (dir, bi)),
             b".." => inode::find_by_inum(fs, dir).and_then(|dir_u| {
@@ -1341,11 +1341,11 @@ impl Filesystem for BcachefsFs {
 
         let fs = self.fs();
 
-        // The mode, chosen as bch2_rename2() chooses it. BCH_RENAME means
-        // "there is no target" and isn't checked: renaming onto an existing
-        // name with it inserts a second dirent of that name. The kernel holds
-        // both directories locked for the whole request, so the target can't
-        // appear or vanish between this lookup and the rename.
+        // The mode, chosen as the kernel's rename() chooses it. BCH_RENAME
+        // means "there is no target" and isn't checked: renaming onto an
+        // existing name with it inserts a second dirent of that name. The
+        // kernel holds both directories locked for the whole request, so the
+        // target can't appear or vanish between this lookup and the rename.
         let dst_exists = match dirent_exists(fs, dst_dir, newname) {
             Ok(v)  => v,
             Err(e) => { reply.error(bch_err(&e)); return; }
@@ -1611,7 +1611,7 @@ impl Filesystem for BcachefsFs {
         }
     }
 
-    /// sync(2), syncfs(2): bch2_sync_fs(). Answering ENOSYS here - fuser's
+    /// sync(2), syncfs(2): sync_fs(). Answering ENOSYS here - fuser's
     /// default - would make the kernel stop asking for the rest of the mount.
     fn syncfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyEmpty) {
         ensure_thread_init();
@@ -1739,12 +1739,12 @@ impl Filesystem for BcachefsFs {
         let fs = self.fs();
         let usage = fs.usage_read_short();
         let block_size = fs.block_bytes();
-        // usage is in 512 byte sectors - as bch2_statfs():
+        // usage is in 512 byte sectors - as the kernel's statfs():
         let shift = block_size.trailing_zeros() as u64 - 9;
 
         let nr_inodes = accounting::nr_inodes(fs);
-        // As bch2_statfs(): inodes have no fixed limit, so count the free
-        // space as room for ~256 byte inodes. (u64::MAX here read as -1,
+        // As the kernel's statfs(): inodes have no fixed limit, so count the
+        // free space as room for ~256 byte inodes. (u64::MAX here read as -1,
         // "unknown", and df -i showed "-" - which xfstests generic/273 then
         // fed to arithmetic.)
         let avail_inodes = (usage.capacity - usage.used) << 1;
@@ -2282,8 +2282,8 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     // The child signals readiness from the FUSE init() callback, which
     // fires after the kernel has acknowledged the mount.
     //
-    // fork() must happen before spawning threads (linux_shrinkers_init,
-    // bch2_fs_start) because only the calling thread survives fork().
+    // fork() must happen before spawning threads (linux_shrinkers_init, the
+    // filesystem's start()) because only the calling thread survives fork().
     let (read_fd, write_fd) = rustix::pipe::pipe()?;
 
     let pid = unsafe { libc::fork() };

@@ -419,19 +419,17 @@ fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
 
 // ── Btrees checked clean ─────────────────────────────────────────────────────
 
-/// Whether btree @btree has been checked consistent and not changed since: as
-/// bch2_btree_is_clean().
+/// Whether btree @btree has been checked consistent and not changed since.
 pub fn btree_is_clean(fs: &Fs, btree: Btree) -> bool {
     fs.sb.btrees_clean.get() & (1u64 << btree.0) != 0
 }
 
-/// Record btree @btree as checked consistent: as bch2_set_btree_clean().
+/// Record btree @btree as checked consistent.
 pub fn set_btree_clean(fs: &Fs, btree: Btree) {
     set_btree_clean_to(fs, btree, true)
 }
 
-/// Btree @btree is being changed, so no longer known consistent: as
-/// bch2_clear_btree_clean().
+/// Btree @btree is being changed, so no longer known consistent.
 pub fn clear_btree_clean(fs: &Fs, btree: Btree) {
     set_btree_clean_to(fs, btree, false)
 }
@@ -940,7 +938,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
             break;
         }
 
-        // the point it waits for - see bch2_reconcile_thread()
+        // the point it waits for - see reconcile's thread()
         if prev <= Pass::resume_logged_ops_early && pass > Pass::resume_logged_ops_early {
             fs.reconcile_wakeup();
         }

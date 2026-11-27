@@ -1062,8 +1062,8 @@ impl core::error::Error for BchError {}
 
 /// A failed syscall, typed. bcachefs's errcodes reach userspace intact -
 /// Errcode::START plus a pinned number, below MAX_ERRNO - so an io::Error off a
-/// bcachefs syscall is worth converting: bch2_fs_get_tree() deliberately
-/// doesn't bch2_err_class(). No errno behind it, and it wasn't a syscall: EIO,
+/// bcachefs syscall is worth converting: get_tree() deliberately
+/// doesn't class() it. No errno behind it, and it wasn't a syscall: EIO,
 /// which nothing matches by accident.
 #[cfg(feature = "std")]
 impl From<std::io::Error> for BchError {

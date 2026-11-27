@@ -225,7 +225,7 @@ pub(crate) fn promote_alloc<'r>(t: &TransAttempt<'_, '_>, fs: &'r Fs, k: BkeySC<
             Ok(Some(Promoted { task, whole: self_healing || fs.opts().promote_whole_extents.get() != 0 }))
         }
         // not swallowed: it'd leave the transaction poisoned, for a panic at
-        // bch2_trans_put()
+        // the transaction's drop
         Err(e) if is_restart(&e) => Err(e),
         Err(e) => {
             fs.event_inc_trace(events::data_read_nopromote, |out| {

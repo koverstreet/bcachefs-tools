@@ -337,7 +337,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
             // hold up every other head's writers behind it.
             drop(heads);
             let g = h.lock.lock_trans(t)?;
-            // bch2_fs_ec_stop() may have been through this head while we
+            // The filesystem's ec stop may have been through this head while we
             // waited: it sets going_ro before it starts, so anything we
             // started now would be missed
             if fs.flags.get(FsFlag::going_ro) {

@@ -129,9 +129,8 @@ impl HashTable for Dirents {
     }
 }
 
-/// @name's hash under @info, its offset in its directory: as
-/// bch2_dirent_hash(). Offsets 0 and 1 are kept for . and .., which aren't
-/// stored.
+/// @name's hash under @info, its offset in its directory. Offsets 0 and 1 are
+/// kept for . and .., which aren't stored.
 pub fn hash(info: &HashInfo, name: &OsStr) -> u64 {
     str_hash::hash_parts(info, &[name.as_bytes()], true).max(2)
 }
@@ -153,10 +152,9 @@ pub fn copy_target(dst: &mut TransBkey<'_, '_, dirent_format::Dirent>, src: Dire
     d.set_d_type(src.d_type());
 }
 
-/// Give @k, sized to the room it has, the name @name, and size it to fit: as
-/// bch2_dirent_init_name(). In a casefolded directory - per @hash_info - the
-/// casefolded name follows it: @cf_name if the caller has it, otherwise made
-/// here.
+/// Give @k, sized to the room it has, the name @name, and size it to fit. In
+/// a casefolded directory - per @hash_info - the casefolded name follows it:
+/// @cf_name if the caller has it, otherwise made here.
 pub fn init_name(
     fs:        &Fs,
     k:         &mut BkeyI<dirent_format::Dirent>,
@@ -239,8 +237,7 @@ fn casefold_name(
 
 /// A new dirent in directory @dir named @name, of type @d_type, pointing at
 /// @target - an inode, or for DT_SUBVOL a subvolume - its casefolded name
-/// @cf_name if the caller has it: as bch2_dirent_create_key(). Its position
-/// is for the caller to fill in.
+/// @cf_name if the caller has it. Its position is for the caller to fill in.
 pub fn create_key<'a, 't>(
     t:         &TransAttempt<'a, 't>,
     hash_info: &HashInfo,
@@ -268,8 +265,7 @@ pub fn create_key<'a, 't>(
 }
 
 /// Create dirent @name in directory @dir, in subvolume @subvol at @snapshot,
-/// pointing at @target: as bch2_dirent_create_snapshot(). Where it went is
-/// returned in @dir_offset.
+/// pointing at @target. Where it went is returned in @dir_offset.
 #[allow(clippy::too_many_arguments)]
 pub fn create_snapshot(
     t:            &TransAttempt<'_, '_>,
@@ -299,8 +295,7 @@ pub fn create_snapshot(
 }
 
 /// Create dirent @name in directory @dir, pointing at @target - for
-/// DT_SUBVOL, a subvolume: as bch2_dirent_create(). Where it went is returned
-/// in @dir_offset.
+/// DT_SUBVOL, a subvolume. Where it went is returned in @dir_offset.
 #[allow(clippy::too_many_arguments)]
 pub fn create(
     t:            &TransAttempt<'_, '_>,
@@ -322,7 +317,7 @@ pub fn create(
 
 // ── Casefolding ──────────────────────────────────────────────────────────
 
-/// @name casefolded with @map, in transaction memory: as bch2_casefold().
+/// @name casefolded with @map, in transaction memory.
 #[cfg(CONFIG_UNICODE)]
 pub fn casefold<'a>(
     t:    &TransAttempt<'a, '_>,
@@ -346,7 +341,7 @@ pub fn casefold<'a>(
 }
 
 /// The name @name is hashed and looked up by in a directory with @info -
-/// casefolded, if the directory is: as bch2_maybe_casefold().
+/// casefolded, if the directory is.
 pub fn maybe_casefold<'a>(
     t:    &TransAttempt<'a, '_>,
     info: &HashInfo,
@@ -388,8 +383,8 @@ pub fn lookup_target(
         .ok_or_else(|| t.fs().err(Errcode::ENOENT_dirent_target))
 }
 
-/// What @name in directory @dir points at, as seen in @snapshot: as
-/// bch2_dirent_lookup_snapshot(). @iter is left at the dirent.
+/// What @name in directory @dir points at, as seen in @snapshot. @iter is
+/// left at the dirent.
 #[allow(clippy::too_many_arguments)]
 pub fn lookup_snapshot<'a>(
     t:         &TransAttempt<'a, '_>,
@@ -420,8 +415,7 @@ pub fn lookup_key<'i, 'a>(
     str_hash::lookup::<Dirents>(t, iter, hash_info, dir, lookup_name, flags)
 }
 
-/// What @name in directory @dir points at: as bch2_dirent_lookup_trans().
-/// @iter is left at the dirent.
+/// What @name in directory @dir points at. @iter is left at the dirent.
 pub fn lookup_trans<'a>(
     t:         &TransAttempt<'a, '_>,
     iter:      &mut BtreeIter<'a>,
@@ -448,9 +442,8 @@ pub fn lookup(
     })
 }
 
-/// Whether directory @dir is empty as seen in @snapshot - subvolume
-/// dirents count only in their parent, @subvol: as bch2_empty_dir_snapshot().
-/// ENOTEMPTY_dir_not_empty if it isn't.
+/// Whether directory @dir is empty as seen in @snapshot - subvolume dirents
+/// count only in their parent, @subvol. ENOTEMPTY_dir_not_empty if it isn't.
 pub fn empty_dir_snapshot(
     t:        &TransAttempt<'_, '_>,
     dir:      u64,
@@ -468,8 +461,8 @@ pub fn empty_dir_snapshot(
     })
 }
 
-/// Whether directory @dir is empty, as its subvolume sees it: as
-/// bch2_empty_dir_trans(). ENOTEMPTY_dir_not_empty if it isn't.
+/// Whether directory @dir is empty, as its subvolume sees it.
+/// ENOTEMPTY_dir_not_empty if it isn't.
 pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: SubvolInum) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, dir.subvol as u32)?;
     empty_dir_snapshot(t, dir.inum, dir.subvol as u32, snapshot)
@@ -534,7 +527,7 @@ fn dir_emit(ctx: &mut impl DirEmit, t: &TransAttempt<'_, '_>, d: Dirent<'_>, tar
     emitted
 }
 
-/// Emit directory @dir's entries to @ctx, from ctx->pos: as bch2_readdir().
+/// Emit directory @dir's entries to @ctx, from ctx->pos.
 ///
 /// Each dirent is checked against its hash first - one in the wrong place is
 /// repaired, as fsck would, and skipped. Emitting unlocks - the walk relocks
@@ -622,7 +615,7 @@ pub struct Renamed {
 
 /// Rename @src_name in @src_dir to @dst_name in @dst_dir - for
 /// BCH_RENAME_OVERWRITE replacing what's there, for BCH_RENAME_EXCHANGE
-/// swapping the two: as bch2_dirent_rename().
+/// swapping the two.
 ///
 /// Whether dst exists isn't checked for a plain rename: the VFS has.
 #[allow(clippy::too_many_arguments)]
@@ -776,7 +769,7 @@ fn lookup_first_inode(t: &TransAttempt<'_, '_>, inum: u64)
     crate::bch_err_msg!(fs, ret, "fetching inode {inum}")
 }
 
-/// Delete the dirent at @pos, as fsck repair: as bch2_fsck_remove_dirent().
+/// Delete the dirent at @pos, as fsck repair.
 pub fn fsck_remove(t: &TransAttempt<'_, '_>, pos: Bpos) -> Result<(), BchError> {
     let dir = lookup_first_inode(t, pos.inode)?;
     let hash_info = str_hash::hash_info_init_unchecked(t.fs(), &dir);

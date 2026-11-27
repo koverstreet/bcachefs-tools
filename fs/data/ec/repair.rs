@@ -245,7 +245,7 @@ impl StripeBlocks {
             if i < v.nr_data() && n.get() != 0 {
                 b.live |= 1 << i;
             }
-            // bch2_stripe_block_dev_bad()
+            // a block on a device of durability 0 is bad
             if fs.dev_durability(ptr.dev().into(), &rcu) == 0 {
                 b.bad |= 1 << i;
             }

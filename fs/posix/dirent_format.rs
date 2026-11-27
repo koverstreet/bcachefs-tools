@@ -165,8 +165,7 @@ impl<'k> DirentName<'k> {
         }
     }
 
-    /// The name the dirent is hashed and looked up by: as
-    /// bch2_dirent_get_lookup_name().
+    /// The name the dirent is hashed and looked up by.
     pub fn lookup_name(&self) -> &'k OsStr {
         match *self {
             DirentName::Plain(name)            => name,
@@ -187,8 +186,7 @@ pub(super) const D_NAMES_OFFSET: usize = D_NAME_OFFSET +
 pub struct RawNames<'k> {
     /// The value from the start of the name block to its end.
     block:        &'k [u8],
-    /// The block short of the NUL padding at the end of the value: as
-    /// bch2_dirent_name_bytes().
+    /// The block short of the NUL padding at the end of the value.
     pub block_len: usize,
     pub casefold:  bool,
     pub name_len:  usize,
@@ -250,8 +248,8 @@ impl<'k> RawNames<'k> {
 
 // ── to_text ──────────────────────────────────────────────────────────────
 
-/// @k, a dirent, as text: as bch2_dirent_to_text(). @k may not have passed
-/// validate - a name that overruns the value is said to, not printed.
+/// @k, a dirent, as text. @k may not have passed validate - a name that
+/// overruns the value is said to, not printed.
 pub fn to_text(out: &mut Printbuf, k: AnyKeySC<'_, Unvalidated>) {
     let d = k.arm::<Dirent>().expect("a dirent").v();
     let raw = RawNames::new(k);
@@ -279,7 +277,7 @@ pub fn to_text(out: &mut Printbuf, k: AnyKeySC<'_, Unvalidated>) {
     write!(out, " type {}", d_type_str(d.d_type()));
 }
 
-/// @d_type's name: as bch2_d_type_str().
+/// @d_type's name.
 pub fn d_type_str(d_type: u8) -> &'static str {
     match crate::opts::D_TYPES.get(d_type as usize) {
         Some(&name) if !name.is_empty() => name,

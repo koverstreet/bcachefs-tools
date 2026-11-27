@@ -178,8 +178,8 @@ nest! {
     ///
     /// What protects what:
     ///
-    /// - @pin: atomic. The last put closes it - __bch2_open_bucket_put() -
-    ///   unless @ec is set: then it stays open for that stripe, which closes it.
+    /// - @pin: atomic. The last put closes it - unless @ec is set: then it
+    ///   stays open for that stripe, which closes it.
     /// - @lock: publishes its identity, OpenBucketId - valid, dev, generation
     ///   and bucket, one word - set under it at the open, valid cleared under
     ///   it at the close: fixed from the one to the other, and read whole
@@ -192,7 +192,7 @@ nest! {
     ///   lock of the write point that has it: alloc_sectors_wp()'s alignment,
     ///   append_ptrs(), retire_short(). Fixed once the writer's pin is put.
     /// - @data_type: its holder's - set when it's handed out, and by
-    ///   bch2_open_bucket_get() under the write point's lock; cleared at the
+    ///   open_buckets_get() under the write point's lock; cleared at the
     ///   close.
     /// - @freelist, ON_PARTIAL_LIST, @hash: the allocator's, under
     ///   freelist_lock - @hash also read without it, by bucket_is_open(), and
@@ -205,7 +205,7 @@ nest! {
     ///   bucket as one of its blocks - OpenBucket::claim(), under the stripe
     ///   head's lock and the stripe's - before the writer has it; @ec cleared
     ///   when the stripe closes it, EcOpenBucket's drop. Read by its pin
-    ///   holders, and by bch2_open_bucket_to_text() under @lock.
+    ///   holders, and by its to_text() under @lock.
     /// - @ec_io: the claiming writer's io ref on the stripe, set by the claim,
     ///   taken by its last pin's put.
     ///

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A mounted filesystem's file ioctls, and their dispatch,
-//! bch2_fs_file_ioctl() - the filesystem's file_operations'. Here are those
+//! fs_file_ioctl() - the filesystem's file_operations'. Here are those
 //! tied to the VFS: to the file, its inode, the mount. Those that only need
 //! the filesystem are posix/ioctl.rs's, and the rest go to the filesystem's
 //! dispatch, fs_ioctl().

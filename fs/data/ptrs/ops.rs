@@ -59,7 +59,6 @@ fn btree_ptr_entry_type_allowed(ty: u32) -> bool {
 }
 
 /// Each entry against the ones before it, then all of them together:
-/// bch2_bkey_ptrs_validate().
 pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
     let (fs, k) = (v.fs, v.k);
@@ -238,10 +237,9 @@ fn crc_unpacked_to_text(out: &mut Printbuf, crc: &ExtentCrcUnpacked) {
     crc.compression_type.get().to_text(out);
 }
 
-/// A key with pointers' entries, a line each: bch2_bkey_ptrs_to_text(). It
-/// prints keys validate rejected - that's what it's for - so an entry past
-/// the end of the value is reported, not read, and one of a type this code
-/// doesn't know ends it.
+/// A key with pointers' entries, a line each. It prints keys validate
+/// rejected - that's what it's for - so an entry past the end of the value is
+/// reported, not read, and one of a type this code doesn't know ends it.
 pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
     let Some(fs) = fs else {
         write!(out, "no filesystem object available");
@@ -417,10 +415,10 @@ impl BkeyOps for Extent {
 // ── byte swapping ────────────────────────────────────────────────────────
 
 /// The entries of a key written on a machine of the other endianness, made
-/// this one's - its own inverse: bch2_ptr_swab(), every BKEY_TYPE_ptrs
-/// type's ->swab. Every word swapped, then the checksums fixed up: a crc's
-/// checksum is bytes, not a word, and a crc32's and crc64's high part are
-/// fields of their first word.
+/// this one's - its own inverse, every BKEY_TYPE_ptrs type's ->swab. Every
+/// word swapped, then the checksums fixed up: a crc's checksum is bytes, not
+/// a word, and a crc32's and crc64's high part are fields of their first
+/// word.
 ///
 /// This runs before validate. An entry past the end of the value - the walk's
 /// last - is left for validate to report.

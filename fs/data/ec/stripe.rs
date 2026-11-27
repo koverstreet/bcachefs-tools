@@ -250,8 +250,8 @@ pub fn stripe_reuse_lru(new: &Stripe<Validated>) -> Option<RangeInclusive<LruPos
     (nr_data > 1).then(|| at(1, 0)..=at(nr_data - 1, u64::MAX))
 }
 
-/// Whether @p is the data block its stripe_ptr names in @s:
-/// bch2_ptr_matches_stripe(). A block past the value matches nothing.
+/// Whether @p is the data block its stripe_ptr names in @s. A block past the
+/// value matches nothing.
 pub fn ptr_matches_stripe(s: BkeySC<'_, Stripe<Validated>>, p: &ExtentPtrDecoded) -> bool {
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
@@ -326,7 +326,7 @@ impl BkeyOps for Stripe {
 
     #[cold]
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, k: AnyKeySC<'_, Unvalidated>) {
-        // the header's there - bch2_val_to_text() checks min_val_size, all of it,
+        // the header's there - val_to_text() checks min_val_size, all of it,
         // before calling this - but not what's after it
         let s = k.arm::<Stripe>().expect("a stripe").v();
         let val = k.val_bytes();

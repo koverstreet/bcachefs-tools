@@ -13,12 +13,12 @@
 //! them.
 //!
 //! check_key_has_snapshot: per-key repair for keys whose snapshot is missing
-//! or dead; also called at runtime, through bch2_check_key_has_snapshot().
+//! or dead; also called at runtime, through check_key_has_snapshot().
 //!
 //! Before repairing a state, enumerate which writers can produce it.
-//! Unconstructible combinations are rejected at commit
-//! (bch2_snapshot_validate()); real damage is repaired toward what the rest of
-//! the metadata agrees on - the child snapshots, the subvolume (deletion
+//! Unconstructible combinations are rejected at commit (the snapshot key's
+//! validate); real damage is repaired toward what the rest of the metadata
+//! agrees on - the child snapshots, the subvolume (deletion
 //! tombstones it in the transaction that condemns its snapshot), the
 //! per-snapshot accounting (nothing we write deletes a node with data).
 //! Ambiguity fail-stops rather than guessing.
@@ -331,7 +331,7 @@ fn check_state<'a, 't>(
     // A valid state contradicting the legacy flags: only a legacy flags-only
     // writer does that, so the flags are the fresher write. But they're single
     // unprotected bits: trust them only on a node shaped like a legacy
-    // bch2_snapshot_node_delete() tombstone - tree == 0, which nothing else ever
+    // node_delete() tombstone - tree == 0, which nothing else ever
     // has. Left stale, the interior-deletion collector tombstones the node and the
     // edge checks fail-stop on its breadcrumb, wedging every mount (2026-07-20
     // field report; snapshot-inject/stale_state_tombstone).
@@ -1408,7 +1408,7 @@ pub(crate) fn check_key_has_snapshot<'a>(
     prt!(&mut buf, "{} {}", iter.btree(), k.to_text(fs));
 
     if state == IdState::SNAPSHOT_ID_deleted {
-        // At runtime - data moves, bch2_data_update_init() - not in fsck, where
+        // At runtime - data moves - not in fsck, where
         // check_allocations rebuilds the accounting first and check_snapshots
         // undeletes a node with keys (fsck-inject test_deleted_interior_has_data).
         //

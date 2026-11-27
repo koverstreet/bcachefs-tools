@@ -609,7 +609,7 @@ fn in_tree(v: &Snapshot) -> bool {
 /// caller relinks through the parent instead, as for a node that never had a
 /// child.
 ///
-/// Child ids are always below their parent's (bch2_snapshot_validate,
+/// Child ids are always below their parent's (the snapshot key's validate,
 /// snapshot_child_bad), so the walk strictly descends and can't loop; a chain
 /// that doesn't descend is corruption, and stops it.
 fn relink_target(t: &TransAttempt<'_, '_>, mut child_id: u32) -> Result<u32, BchError> {
@@ -1366,11 +1366,11 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
 
 /// A refusal means "repair first, then retry", not failure: the check that
 /// refused has scheduled the passes that fix what it found, and deletion is
-/// rescheduled the next time a dying snapshot is seen (bch2_mark_snapshot,
+/// rescheduled the next time a dying snapshot is seen (mark_snapshot(),
 /// check_snapshot_needs_deletion()). Nothing has been done, so there is
 /// nothing wrong with the filesystem that going read-only would protect.
 ///
-/// These run as recovery passes, and bch2_run_recovery_passes() returns the
+/// These run as recovery passes, and running them returns the
 /// first pass error it sees - which at startup fails the mount. So the
 /// refusals stop here.
 fn refused(ret: Result<(), BchError>) -> Result<(), BchError> {
@@ -1525,7 +1525,7 @@ pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<
 
     if needs_delete {
         // Schedule the deleter through the recovery-pass machinery, like
-        // bch2_mark_snapshot - this catches the interior single-child case,
+        // mark_snapshot() - this catches the interior single-child case,
         // which mark_snapshot (will_delete only) doesn't. Ephemeral +
         // best-effort: ignore the return.
         let mut buf = Printbuf::new();

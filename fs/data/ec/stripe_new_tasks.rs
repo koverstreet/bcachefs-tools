@@ -388,7 +388,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         return Err(e);
     }
 
-    // bch2_dev_remove() sets ->removing before its data drop, then flushes
+    // dev_remove() sets ->removing before its data drop, then flushes
     // outstanding creates, so checking before we commit is enough. Only the
     // new key's pointers matter: blocks being moved off the device get fresh
     // buckets, and reading it during the drop is how their data moves. What

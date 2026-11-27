@@ -37,7 +37,7 @@ use crate::format::{Bpos, Btree};
 ///
 /// The first version seen is one fsck maintains bi_subvol on: within an inum we
 /// visit snapshot IDs ascending, a snapshot's ID is less than its parent's
-/// (bch2_snapshot_validate()), and only a descendant's version can shadow a
+/// (the snapshot key's validate), and only a descendant's version can shadow a
 /// version - so nothing shadows it. Being a subvolume root is a property of the
 /// inum, so the answer holds for every version.
 #[derive(Default)]

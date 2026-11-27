@@ -126,7 +126,6 @@ fn write<'p>(buf: &mut [u8], field: &'p str, target: &FieldRef, v: u64)
 
 impl TransBkey<'_, '_> {
     /// Made an error key, saying @err if the filesystem's version allows it:
-    /// bch2_set_bkey_error().
     pub fn set_error(&mut self, fs: &Fs, err: ErrorKeyReason) {
         assert!(self.as_u64s().len() * 8 >= size_of::<Bkey>() + size_of::<Error>(),
                 "no room in the key's buffer for an error key");

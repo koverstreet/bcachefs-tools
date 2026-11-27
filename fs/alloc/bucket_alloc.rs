@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! One bucket from a device - foreground.c's bch2_bucket_alloc_trans(): the
-//! scans that find a free bucket, and with none free, whether to wait.
+//! One bucket from a device - bucket_alloc(): the scans that find a free
+//! bucket, and with none free, whether to wait.
 //!
 //! Free buckets are found in the freespace btree: extents of free buckets,
 //! at offsets of genbits | bucket - genbits the high bits of the bucket's gc

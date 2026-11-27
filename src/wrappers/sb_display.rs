@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// Superblock display with device names — Rust replacement for the C
-// bch2_sb_to_text_with_names().
-//
-// The C version called bch2_scan_device_sbs (Rust FFI) which returned
-// Vec-allocated memory via forget(), then freed it with darray_exit
-// (kvfree) — allocator mismatch causing heap corruption. This version
-// keeps everything in Rust so the Vec is dropped with the correct
-// allocator.
+// Superblock display with device names.
 
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;

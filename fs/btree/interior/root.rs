@@ -52,8 +52,8 @@ pub struct BtreeRoots {
 }
 
 impl BtreeRoots {
-    /// Btree @id's: a known btree's, or past them, roots_extra's -
-    /// bch2_btree_id_root(). None for one past those.
+    /// Btree @id's: a known btree's, or past them, roots_extra's.
+    /// None for one past those.
     pub fn get(&self, id: u32) -> Option<&BtreeRoot> {
         let nr_known = Btree::NR;
         if id < nr_known {
@@ -105,7 +105,7 @@ crate::published! {
 }
 
 impl BtreeRootsLive {
-    /// Btree @id's root node: bch2_btree_id_root_b().
+    /// Btree @id's root node.
     pub fn node(&self, id: u32) -> Option<&BtreeNode> {
         let b = self.roots_b.get(id as usize)?.get() & !((1 << BTREE_ROOT_LEVEL_BITS) - 1);
         // SAFETY: a root's node, live while it's the root

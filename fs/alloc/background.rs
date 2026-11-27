@@ -607,7 +607,7 @@ impl AllocUnpacked {
         }.varint_fields(&v.data, v.nr_fields)
     }
 
-    /// @k, an alloc key before v4 - zeroed, if it isn't one: bch2_alloc_unpack().
+    /// @k, an alloc key before v4 - zeroed, if it isn't one.
     /// Validate has seen v2 and v3 unpack.
     fn new(k: AnyKeySC<'_, Unvalidated>) -> Self {
         if let Some(a) = k.arm::<Alloc>() {
@@ -636,7 +636,6 @@ fn alloc_v1_val_u64s(a: &Alloc<Unvalidated>) -> usize {
 
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
 /// alloc key, the slot of a bucket without one, as a zeroed one:
-/// bch2_alloc_to_v4().
 pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> AllocV4 {
     let k = k.as_read();
     // A v4 by its length: fields past it are zero, as written before they
@@ -662,16 +661,16 @@ pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> AllocV4 {
 
 impl Fs {
     /// The io clock for @rw, as a bucket's io_time holds it - never 0, which
-    /// is none: bch2_current_io_time().
+    /// is none.
     pub fn current_io_time(&self, rw: usize) -> u64 {
         (self.io_clock[rw].now.load(Ordering::Relaxed) as u64 & LRU_TIME_MAX).max(1)
     }
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {
-    /// alloc_to_v4(), as a key in transaction memory to edit and update with
-    /// - not queued as an update: bch2_alloc_to_v4_mut(). A v4 is grown to
-    /// all of today's struct, or kept as long as it was if that's longer.
+    /// alloc_to_v4(), as a key in transaction memory to edit and update
+    /// with - not queued as an update. A v4 is grown to all of today's
+    /// struct, or kept as long as it was if that's longer.
     pub fn alloc_to_v4_mut(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't, AllocV4>, BchError> {
         if let Some(a) = k.arm::<AllocV4>() {
             let mut a = self.bkey_make_mut_noupdate(a)?;
@@ -690,7 +689,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The alloc key of bucket @pos for @edit, then queued as its update - the
     /// update already queued, if there is one, edited in place:
-    /// bch2_trans_start_alloc_update().
     pub fn start_alloc_update<R>(
         &self,
         pos:   Bpos,
@@ -881,12 +879,11 @@ impl AllocV4 {
         self.data_type.get()
     }
 
-    /// bch2_bucket_sectors_dirty(): u32s added as C's, wrapping.
+    /// u32s added as C's, wrapping.
     fn sectors_dirty(&self) -> i64 {
         i64::from(self.stripe_sectors.wrapping_add(self.dirty_sectors))
     }
 
-    /// bch2_bucket_sectors().
     fn sectors(&self) -> i64 {
         if self.data_type() == DataType::cached {
             i64::from(self.cached_sectors)
@@ -895,9 +892,8 @@ impl AllocV4 {
         }
     }
 
-    /// The sectors of @ca's bucket that aren't in use, a full bucket of them if
-    /// it's empty but not free: bch2_bucket_sectors_fragmented(), which takes
-    /// the sectors as an int.
+    /// The sectors of @ca's bucket that aren't in use, a full bucket of them
+    /// if it's empty but not free - the sectors taken as an int, as C's.
     fn sectors_fragmented(&self, ca: &Dev) -> i64 {
         let d = self.sectors() as i32;
         let bucket_size = i32::from(ca.mi.get().bucket_size);
@@ -1249,12 +1245,12 @@ mod tests {
 // worked through as an empty bucket's state, which goes nowhere.
 
 impl AllocV4 {
-    /// bch2_bucket_sectors_total(): u32s added as C's, wrapping.
+    /// u32s added as C's, wrapping.
     fn sectors_total(&self) -> i64 {
         i64::from(self.stripe_sectors.wrapping_add(self.dirty_sectors).wrapping_add(self.cached_sectors))
     }
 
-    /// A stripe bucket's dirty sectors: bch2_bucket_sectors_unstriped().
+    /// A stripe bucket's dirty sectors.
     fn sectors_unstriped(&self) -> i64 {
         if self.data_type() == DataType::stripe { i64::from(self.dirty_sectors) } else { 0 }
     }
@@ -1370,7 +1366,7 @@ fn dev_data_type_accounting_mod(t: &TransAttempt<'_, '_>, ca: &Dev, data_type: D
 
 impl TransAttempt<'_, '_> {
     /// Device @ca's bucket counts and sectors, for a bucket going from @old
-    /// to @new: bch2_alloc_key_to_dev_counters().
+    /// to @new.
     pub fn alloc_key_to_dev_counters(&self, ca: &Dev, old: &AllocV4, new: &AllocV4,
                                      flags: UpdateTriggerFlags) -> Result<(), BchError> {
         let gc = flags.contains(UpdateTriggerFlags::GC);

@@ -318,8 +318,8 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     let ptr = &s.v().block_ptrs()[i as usize];
     let dev = u32::from(ptr.dev());
 
-    // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair
-    // of a missing device it reports
+    // The error of scheduling the repair of a missing device dev_bkey_tryget()
+    // reports is dropped, as C dropped it
     let Some(ca) = fs.dev_bkey_tryget(s.untyped(), dev).unwrap_or(None) else {
         cold_path();
         if dev != BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
@@ -396,7 +396,7 @@ fn mark_stripe_buckets(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: 
     Ok(())
 }
 
-/// The stripe key's trigger: bch2_trigger_stripe().
+/// The stripe key's trigger.
 ///
 /// Transactional: the new key's can_widen refreshed; an empty stripe that
 /// isn't open deleted; its places in the stripe lrus, and its reconcile_hipri

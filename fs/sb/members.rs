@@ -105,7 +105,7 @@ pub struct MemberCpu {
 //
 // Members are variable-size: each entry is `member_bytes` wide, which may
 // be smaller than `sizeof(Member)` for on-disk backward compatibility.
-// The reader copies into a zeroed struct (like the C `bch2_members_v2_get`);
+// The reader copies into a zeroed struct;
 // to edit one, SbHandle::member_mut(), for a member that's all there.
 // ---------------------------------------------------------------------------
 
@@ -485,7 +485,7 @@ impl SbFieldOps for SbFieldMembersV2<Validated> {
         Ok(())
     }
 
-    /// The devices' error counts - memory's, counted by bch2_io_error().
+    /// The devices' error counts - memory's, counted by io_error().
     fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let rcu = read_lock();
         for ca in fs.devs_rcu(&rcu) {
@@ -617,7 +617,7 @@ pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &Sb, dev: u32) {
     member_to_text_short(out, &sb_member(sb, dev).unwrap_or_else(::pin_init::zeroed), sb, dev);
 }
 
-/// Each of @devs that's a device of @fs's, short: bch2_devs_mask_to_text_locked().
+/// Each of @devs that's a device of @fs's, short.
 pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &Sb, devs: &DevsMask) {
     for dev in devs.iter() {
         if fs.dev_rcu(dev as u32, &read_lock()).is_some() {
@@ -966,7 +966,7 @@ pub(crate) fn btree_bitmap_gc_schedule(fs: &Fs) {
 /// A short list of devices - an extent's, a write point's: at most
 /// BCH_BKEY_PTRS_MAX, no repeats.
 impl DevsList {
-    /// Just @dev: bch2_dev_list_single().
+    /// Just @dev.
     pub fn single(dev: u8) -> Self {
         let mut l = Self::default();
         l.add(dev);
@@ -977,13 +977,12 @@ impl DevsList {
         &self.data[..self.nr as usize]
     }
 
-    /// bch2_dev_list_has_dev().
     pub fn has(&self, dev: u8) -> bool {
         self.as_slice().contains(&dev)
     }
 
-    /// Add @dev, if it isn't in it already: bch2_dev_list_add_dev(). A list
-    /// already full is a bug, as C's BUG_ON().
+    /// Add @dev, if it isn't in it already. A list already full is a bug, as
+    /// C's BUG_ON().
     pub fn add(&mut self, dev: u8) {
         if !self.has(dev) {
             assert!((self.nr as usize) < self.data.len(), "bch_devs_list full adding device {dev}");
@@ -992,7 +991,7 @@ impl DevsList {
         }
     }
 
-    /// Remove @dev, keeping the rest in order: bch2_dev_list_drop_dev().
+    /// Remove @dev, keeping the rest in order.
     pub fn drop(&mut self, dev: u8) {
         if let Some(i) = self.as_slice().iter().position(|&d| d == dev) {
             self.data.copy_within(i + 1..self.nr as usize, i);
@@ -1002,14 +1001,14 @@ impl DevsList {
 }
 
 impl Fs {
-    /// c->devs[@dev], for as long as @rcu's section: bch2_dev_rcu_noerror().
-    /// None past the superblock's devices, or for a slot with no device.
+    /// c->devs[@dev], for as long as @rcu's section. None past the
+    /// superblock's devices, or for a slot with no device.
     pub fn dev_rcu<'g>(&'g self, dev: u32, rcu: &'g ReadGuard) -> Option<&'g Dev> {
         self.devs.get(..self.nr_devices() as usize)?.get(dev as usize)?.read(rcu)
     }
 
     /// Device @dev's name - "(none)" for BCH_SB_MEMBER_INVALID, and for one
-    /// there isn't, its number: bch2_prt_member_name().
+    /// there isn't, its number.
     pub fn member_name_to_text(&self, out: &mut Printbuf, dev: u32) {
         if dev == BCH_SB_MEMBER_INVALID {
             write!(out, "(none)");
@@ -1059,12 +1058,12 @@ impl Fs {
         self.err(Errcode::ENOENT_dev_not_found)
     }
 
-    /// Whether there's a device @dev: bch2_dev_exists().
+    /// Whether there's a device @dev.
     pub fn dev_exists(&self, dev: u32) -> bool {
         self.dev_rcu(dev, &read_lock()).is_some()
     }
 
-    /// A ref on device @dev, if there is one: bch2_dev_tryget_noerror().
+    /// A ref on device @dev, if there is one.
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
         // in c->devs under the RCU lock: removal takes it out before it kills
         // ref_, whose count can't reach zero till a grace period after
@@ -1072,28 +1071,27 @@ impl Fs {
     }
 
     /// @ca made the ref on device @dev, for a walk by device - kept if it's
-    /// already that one's: bch2_dev_iterate_noerror().
+    /// already that one's.
     pub fn dev_iterate(&self, ca: &mut Option<DevRef>, dev: u32) {
         if ca.as_ref().is_none_or(|ca| u32::from(ca.dev_idx) != dev) {
             *ca = self.dev_get(dev);
         }
     }
 
-    /// The first device at index @dev or after, with a ref: __bch2_next_dev_idx().
+    /// The first device at index @dev or after, with a ref.
     pub fn next_dev(&self, dev: u32) -> Option<DevRef> {
         (dev..self.nr_devices()).find_map(|i| self.dev_get(i))
     }
 
-    /// dev_get(), a missing device reported: bch2_dev_tryget().
+    /// dev_get(), a missing device reported.
     pub fn dev_tryget(&self, dev: u32) -> Result<DevRef, BchError> {
         self.dev_get(dev).ok_or_else(|| self.dev_missing(dev))
     }
 
-    /// dev_get() for a pointer of @k's - bch2_dev_bkey_tryget(). A missing
-    /// device isn't an error: it's reported against @k and check_allocations
-    /// scheduled to repair it (unless it's BCH_SB_MEMBER_INVALID, which names
-    /// none), and we carry on without it. The error is scheduling's, e.g.
-    /// restart_recovery.
+    /// dev_get() for a pointer of @k's. A missing device isn't an error: it's
+    /// reported against @k and check_allocations scheduled to repair it
+    /// (unless it's BCH_SB_MEMBER_INVALID, which names none), and we carry on
+    /// without it. The error is scheduling's, e.g. restart_recovery.
     pub fn dev_bkey_tryget(&self, k: BkeySC<'_>, dev: u32) -> Result<Option<DevRef>, BchError> {
         let ca = self.dev_get(dev);
         if ca.is_none() && dev != BCH_SB_MEMBER_INVALID {
@@ -1102,19 +1100,17 @@ impl Fs {
         Ok(ca)
     }
 
-    /// Whether @bucket is one of its device's: bch2_dev_bucket_exists().
+    /// Whether @bucket is one of its device's.
     pub fn dev_bucket_exists(&self, bucket: Bpos) -> bool {
         self.dev_rcu(bucket.inode as u32, &read_lock()).is_some_and(|ca| ca.bucket_valid(bucket.offset))
     }
 
     /// A ref on @bucket's device, if it's a device with that bucket:
-    /// bch2_dev_bucket_tryget_noerror().
     pub fn dev_bucket_tryget_noerror(&self, bucket: Bpos) -> Option<DevRef> {
         self.dev_get(bucket.inode as u32).filter(|ca| ca.bucket_valid(bucket.offset))
     }
 
     /// dev_bucket_tryget_noerror(), a missing device or bucket reported:
-    /// bch2_dev_bucket_tryget().
     pub fn dev_bucket_tryget(&self, bucket: Bpos) -> Result<DevRef, BchError> {
         let ca = self.dev_tryget(bucket.inode as u32)?;
         if !ca.bucket_valid(bucket.offset) {
@@ -1124,8 +1120,8 @@ impl Fs {
         Ok(ca)
     }
 
-    /// An io ref on device @dev, for reading or writing as R is - for
-    /// writing only if it's rw: bch2_dev_get_ioref().
+    /// An io ref on device @dev, for reading or writing as R is - for writing
+    /// only if it's rw.
     pub fn dev_get_ioref<R: IoRefIdx>(&self, dev: u32) -> Option<DevIoRef<R>> {
         let rcu = read_lock();
         let ca = self.io_ref_tryget::<R>(self.dev_rcu(dev, &rcu)?)?;
@@ -1141,7 +1137,7 @@ impl Fs {
 
     /// What @f makes of each device it doesn't skip: each step its own RCU
     /// section, resuming after the device the last one stopped at, as
-    /// __bch2_next_dev().
+    /// next_dev().
     fn walk<'f, T>(&'f self, mut f: impl FnMut(&Dev) -> Option<T> + 'f) -> impl Iterator<Item = T> + 'f {
         let mut next = 0;
         core::iter::from_fn(move || {
@@ -1252,7 +1248,7 @@ pub type DevOuterRef = RefGuard<Placed<AtomicRef<()>, crate::at!(Dev.ref_outer)>
 pub type DevKobjRef = RefGuard<Placed<crate::os::kobject::Kobject, crate::at!(Dev.kobj)>>;
 
 impl DevRef {
-    /// An outer ref on it - bch2_dev_get_outer(): this ref holds ref_outer
+    /// An outer ref on it: this ref holds ref_outer
     /// above zero, removal draining ref_ first.
     pub fn outer_ref(&self) -> DevOuterRef {
         unsafe { RefGuard::get(&self.ref_outer) }
@@ -1467,17 +1463,16 @@ impl Dev {
 unsafe impl Sync for Dev {}
 
 impl Fs {
-    /// Whether device @dev has its block device open: bch2_dev_idx_is_online().
+    /// Whether device @dev has its block device open.
     pub fn dev_idx_is_online(&self, dev: u32) -> bool {
         self.devs_online.test(dev as usize)
     }
 
-    /// bch2_dev_rotational().
     pub fn dev_rotational(&self, dev: u32) -> bool {
         dev != BCH_SB_MEMBER_INVALID && self.devs_rotational.test(dev as usize)
     }
 
-    /// Whether @dev is missing, or being evacuated: bch2_dev_bad_or_evacuating_rcu().
+    /// Whether @dev is missing, or being evacuated.
     pub fn dev_bad_or_evacuating(&self, dev: u32, rcu: &ReadGuard) -> bool {
         self.dev_rcu(dev, rcu).is_none_or(|ca| {
             ca.mi.get().state == MemberState::evacuating
@@ -1580,7 +1575,7 @@ impl Dev {
         }
     }
 
-    /// Whether it's being removed - set by bch2_dev_remove() before the data
+    /// Whether it's being removed - set by dev_remove() before the data
     /// drop, cleared if the removal fails: read once, as C's READ_ONCE().
     pub fn removing(&self) -> bool {
         self.removing.get()
@@ -1620,18 +1615,17 @@ impl Dev {
         core::ptr::from_ref(self).cast_mut()
     }
 
-    /// Whether its block device is open for IO: bch2_dev_is_online().
+    /// Whether its block device is open for IO.
     pub fn is_online(&self) -> bool {
         !self.io_ref_read.is_zero()
     }
 
-    /// Whether the allocator writes to it: bch2_dev_is_rw().
+    /// Whether the allocator writes to it.
     pub fn is_rw(&self) -> bool {
         self.fs.allocator.rw_devs[DataType::free].test(self.dev_idx.into())
     }
 
     /// What a new copy written to it would be worth - nothing unless it's rw:
-    /// bch2_dev_rw_durability().
     pub fn rw_durability(&self) -> u32 {
         if self.is_rw() { self.mi.get().durability.into() } else { 0 }
     }

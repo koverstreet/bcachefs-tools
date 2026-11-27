@@ -75,7 +75,7 @@ pub fn log_no_fs(level: LogLevel, msg: &dyn ToText) {
 
 /// @msg at @level, as it stands, where @opts says: its stdio redirect,
 /// in-kernel, if it has one - a fsck through the ioctl's - else printk().
-/// Of no filesystem, before there's one: bch2_print_opts().
+/// Of no filesystem, before there's one.
 pub fn log_opts(opts: &Opts, level: LogLevel, msg: &dyn ToText) {
     #[cfg(kernel)]
     if opts.stdio != 0 {
@@ -106,8 +106,7 @@ fn printk_buf(buf: &Printbuf) {
     crate::os::printk::printk(buf.as_c_str())
 }
 
-/// log(), without the newline: a line for log_cont() to finish - C's
-/// bch2_print(c, KERN_INFO bch2_log_msg(c, ...)).
+/// log(), without the newline: a line for log_cont() to finish.
 pub fn log_start(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
     print(fs, level.0, true, msg, false)
 }
@@ -300,7 +299,7 @@ pub fn print_lines(prefix: &[u8], lines: &[u8]) {
 /// A message built up in pieces and printed when dropped - C's
 /// CLASS(bch_log_msg). Continuation lines are indented under the first and
 /// raw `\t`/`\r` columns aligned; it goes out whole, through
-/// bch2_print_str_loglevel() as C's does, unless suppressed - by
+/// print_str(), unless suppressed - by
 /// count_fsck_err(), when it's a repeat or being ratelimited.
 pub struct LogMsg<'a> {
     fs:    &'a Fs,

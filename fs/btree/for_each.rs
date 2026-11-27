@@ -33,7 +33,7 @@ pub enum Step<B> {
     /// The next key.
     Next,
     /// The keys from @pos, in place of the next. A C loop body's
-    /// bch2_btree_iter_set_pos(p) is followed by the loop's advance, from p:
+    /// set_pos(p) is followed by the loop's advance, from p:
     /// its From is where that lands - p's successor, or for extents p.
     From(Bpos),
     Break(B),
@@ -390,7 +390,7 @@ impl<'t> BtreeIter<'t> {
     ///  - Ok(()): commit what it queued, and go on to the next key - also
     ///    how a body finishes a key early, keeping its repairs.
     ///  - Err(fc_continue): go on to the next key *without* committing. What
-    ///    was queued is dropped - and bch2_trans_begin()'s dropped-updates
+    ///    was queued is dropped - and begin()'s dropped-updates
     ///    check reports it - so this is for a body that has queued nothing,
     ///    or wants it discarded.
     ///  - Err(fc_break): stop the walk, not an error, without committing.
@@ -520,7 +520,7 @@ impl<'t> BtreeNodeIter<'t> {
 
             // peek_node() leaves iter->pos at the node's min_key (so a restart
             // re-finds the node across splits/merges), so we can't use
-            // bch2_btree_iter_advance(); advance explicitly off the node's
+            // advance(); advance explicitly off the node's
             // max_key. set_pos + bpos_successor re-traverses from the root, so
             // the journal overlay applies and journal-only nodes aren't skipped
             // the way next_node()'s sibling walk did. Matches for_each_btree_node().

@@ -98,7 +98,6 @@ impl<const N: usize> IoFailures<N> {
 
     /// Record @err, reading @p: a failed reconstruct, a checksum error - those
     /// counted, retried until checksum_err_retry_nr - or an io error.
-    /// bch2_mark_io_failure().
     pub fn mark(&mut self, p: &ExtentPtrDecoded, err: BchError) {
         assert!(err.raw() != 0, "marking an io failure that isn't one");
         assert!(!err.matches(Errcode::transaction_restart),
@@ -161,7 +160,7 @@ impl<const N: usize> IoFailures<N> {
     }
 
     /// A line per device - its name, and its errors - then the reconstruct's
-    /// message: bch2_io_failures_to_text().
+    /// message.
     pub fn to_text(&self, out: &mut Printbuf, fs: &Fs) {
         {
             let mut out = out.indent(2);
@@ -268,9 +267,9 @@ fn ptr_better(fs: &Fs, p1: &ExtentPtrDecoded, mut l1: u64, p2: &ExtentPtrDecoded
 pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
     /// Which of its pointers to read - preferring @preferred_dev, and with
     /// BCH_READ_hard_require_read_device only it - against @failed, what
-    /// failed reading it so far: bch2_bkey_pick_read_device(). None if there's
-    /// nothing to read: it's unwritten, or has no pointers but cached ones, or
-    /// none. An error is why nothing could be picked.
+    /// failed reading it so far. None if there's nothing to read: it's
+    /// unwritten, or has no pointers but cached ones, or none. An error is
+    /// why nothing could be picked.
     fn pick_read_device(&self, fs: &Fs, failed: Option<&IoFailures>, preferred_dev: u32,
                         flags: ReadFlags) -> Result<Option<ExtentPtrDecoded>, BchError> {
         use crate::errcode::Errcode as e;

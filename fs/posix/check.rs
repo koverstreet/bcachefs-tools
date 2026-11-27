@@ -25,7 +25,7 @@ use crate::format::{Bpos, Btree, Whiteout};
 /// The snapshots of the keys seen so far at one position, while walking a
 /// btree in key order with all snapshots: a key in an ancestor is hidden from
 /// a descendant that overwrote it. C only passes it through, from check_key()
-/// back to __bch2_str_hash_check_key().
+/// back to str_hash's check_key().
 pub struct SnapshotsSeen {
     pos: Bpos,
     /// Ascending, as seen in key order, plus any a repair added in order.
@@ -646,7 +646,7 @@ pub fn reconstruct_inode(
 /// caller knows it, else found. fsck_repair_unimplemented if it can't be,
 /// decided before anything is queued, so a caller can fall back to reporting.
 /// @snapshot must be a leaf: the subvolume key sets its subvol backref, which
-/// bch2_snapshot_validate() rejects on a node with children.
+/// The snapshot key's validate rejects on a node with children.
 pub fn reconstruct_subvol_root(
     t:        &TransAttempt<'_, '_>,
     snapshot: u32,
@@ -852,7 +852,7 @@ pub fn fsck_update_backpointers(
 
     match d.target() {
         // A subvolume dirent's backpointer lives on the child subvolume's root
-        // inode, same as a regular inode - see bch2_inode_get_dirent(). A
+        // inode, same as a regular inode - see inode_get_dirent(). A
         // dangling subvol dirent (subvol or root inode gone) is
         // check_subvols/check_dirents' problem, not ours.
         DirentTarget::Subvol { child, .. } => {

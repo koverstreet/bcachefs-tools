@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-/// The checks behind bch2_debug_check_bset_lookups, in debug builds.
+/// The checks behind debug_check_bset_lookups, in debug builds.
 fn check_lookups() -> bool {
     cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_bset_lookups()
 }
@@ -512,7 +512,7 @@ impl BtreeNode {
     }
 
     /// Whether a node of @u64s of keys fits its buffer: strictly less than,
-    /// as bch2_btree_node_format_fits() and the write's slop have it.
+    /// as format_fits() and the write's slop have it.
     pub fn fits_u64s(&self, u64s: usize) -> bool {
         size_of::<Head<btree_node>>() + u64s * size_of::<u64>() < self.buf_bytes()
     }
@@ -572,7 +572,6 @@ impl BtreeNode {
     }
 
     /// Room after the last bset, none once it's written:
-    /// bch2_btree_keys_u64s_remaining().
     pub fn keys_u64s_remaining(&self, contents: &NodeContents) -> usize {
         let t = contents.last_set();
         let remaining = self.u64s_remaining(t.end_offset as usize);
@@ -582,8 +581,8 @@ impl BtreeNode {
     }
 
     /// Whether a key of @u64s goes in without a split, or a rewrite first:
-    /// bch2_btree_node_insert_fits(). Not when a write that needs a new bset
-    /// can't have one: the node's rewritten, and nothing more joins the write.
+    /// Not when a write that needs a new bset can't have one: the node's
+    /// rewritten, and nothing more joins the write.
     pub fn insert_fits(&self, contents: &NodeContents, fs: &Fs, u64s: usize) -> bool {
         !self.flags.need_rewrite() &&
             !(self.new_bset_wanted() && self.want_new_bset(contents, fs).is_none()) &&

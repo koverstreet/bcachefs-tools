@@ -85,7 +85,7 @@ pub struct BkeyDurability {
 }
 
 #[repr(C)]
-/// Equal as bch2_crc_unpacked_cmp() says: every field.
+/// Equal: every field.
 #[derive(Clone, Copy, Default, PartialEq, Eq, MaybeZeroable, TypeInfo)]
 pub struct ExtentCrcUnpacked {
     pub compressed_size: u32,
@@ -467,8 +467,7 @@ fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &ExtentPtrDecoded, r: &ExtentPtrD
     }
 }
 
-/// The largest data a crc entry of @e's type can describe, if @e is one:
-/// bch2_crc_field_size_max[].
+/// The largest data a crc entry of @e's type can describe, if @e is one.
 fn crc_size_max(e: ExtentEntry<'_>) -> Option<u32> {
     Some(match e {
         ExtentEntry::crc32(_)  => CRC32_SIZE_MAX,
@@ -480,8 +479,7 @@ fn crc_size_max(e: ExtentEntry<'_>) -> Option<u32> {
 
 /// Whether @l and @r, @r starting where @l ends, can be one extent - their
 /// entries pairing up by type, each pointer pair continuing on disk - and if
-/// so, @l made it: bch2_extent_merge(). The caller checked the merged size
-/// fits a key.
+/// so, @l made it. The caller checked the merged size fits a key.
 pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     let mut l = l.arm::<Ptrs>().expect("->key_merge of a key type with pointers");
     let r = r.arm::<Ptrs>().expect("->key_merge of a key type with pointers");

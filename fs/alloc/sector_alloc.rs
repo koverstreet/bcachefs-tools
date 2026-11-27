@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The sector allocator - foreground.c's bch2_alloc_sectors_req(): space for
-//! a write, its copies' open buckets in its write point.
+//! The sector allocator - alloc_sectors_req(): space for a write, its
+//! copies' open buckets in its write point.
 //!
 //! A write's buckets come from bucket_set.rs's write_point_buckets(), and
 //! when they don't make up its copies, it retries wider before it gives up:

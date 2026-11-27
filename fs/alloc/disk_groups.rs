@@ -504,7 +504,7 @@ fn opt_target_parse(fs: &Fs, val: &[u8], err: Option<&mut Printbuf>) -> Result<T
         return Ok(Target::Null);
     }
 
-    // as bch2_dev_lookup(): by name, with or without /dev/
+    // as dev_lookup(): by name, with or without /dev/
     let name = val.strip_prefix(b"/dev/").unwrap_or(val);
     let dev = {
         let rcu = read_lock();

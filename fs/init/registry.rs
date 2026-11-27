@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The open filesystems - C's bch2_fs_list - and the ones being opened.
+//! The open filesystems, and the ones being opened.
 //!
 //! - FsKey: what a filesystem is found by: the devices an opener names, or -
 //!   once their superblocks are read - a multi-device filesystem's UUID.

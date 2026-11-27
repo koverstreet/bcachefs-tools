@@ -54,7 +54,7 @@
 //! BkeyI's value is inline, after its header; a BkeyS's is split, a
 //! pointer of its own, which may be anywhere - an unpacked key's value is
 //! still in the btree node. So a BkeyS isn't a bkey_i: what needs one -
-//! C's bch2_btree_insert() - takes a BkeyI.
+//! btree_insert() - takes a BkeyI.
 //!
 //! **Narrowing.** arm::<K>() narrows any form to K, keeping the form: None
 //! if the key isn't one. It consumes the key, as a type change does; to

@@ -702,7 +702,7 @@ pub const DEFAULTS: Opts = Opts::DEFAULTS;
 
 // ── Names ────────────────────────────────────────────────────────────────
 
-/// @t's name - "(invalid data type)" if it isn't one: bch2_data_type_str().
+/// @t's name - "(invalid data type)" if it isn't one.
 pub fn data_type_str(t: DataType) -> &'static str {
     t.name().unwrap_or("(invalid data type)")
 }
@@ -824,7 +824,7 @@ impl OptHost for SbFieldExt {
     }
 }
 
-/// A member that's alive: bch2_member_exists().
+/// A member that's alive: member_exists().
 impl OptHost for Member {
     const MEMBER: bool = true;
 
@@ -1291,7 +1291,7 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&Sb<Unvalidat
         },
         OptType::Bitfield { choices, .. } => out.bitflags(choices, v),
         OptType::Fn(f) => (f.to_text)(out, fs, sb, v),
-        // Shown per device, from the member: bch2_member_to_text()
+        // Shown per device, from the member: member_to_text()
         OptType::StrMember { .. } => {}
     }
 }

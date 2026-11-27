@@ -68,9 +68,8 @@ impl<'a> EntryWriter<'a> {
         Ok(b)
     }
 
-    /// An entry of @ty, for @btree_id at @level, of @u64s: its header written,
-    /// and its value for the caller to write all of -
-    /// __bch2_journal_add_entry().
+    /// An entry of @ty, for @btree_id at @level, of @u64s: its header
+    /// written, and its value for the caller to write all of.
     #[inline(always)]
     pub fn add_entry(&mut self, ty: JsetEntryType, btree_id: u8, level: u8, u64s: usize)
         -> Result<&'a mut [u64], NoRoom>
@@ -81,7 +80,7 @@ impl<'a> EntryWriter<'a> {
     }
 
     /// The room left, filled with empty entries - of a header each - so
-    /// what's written uses all of it: bch2_journal_res_put()'s fill.
+    /// what's written uses all of it: res_put()'s fill.
     pub fn pad(&mut self) {
         if !self.room.is_empty() {
             core::mem::take(&mut self.room).fill(header(JsetEntryType::btree_keys, 0, 0, 0));

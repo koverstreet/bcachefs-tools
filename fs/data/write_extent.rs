@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A write's data made into extents at its write point: bch2_write_extent(),
+//! A write's data made into extents at its write point: write_extent(),
 //! with the bios and encoding that takes.
 
 use crate::alloc::sector_alloc::LockedWritePoint;

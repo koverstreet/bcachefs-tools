@@ -36,7 +36,7 @@ const SECTION_HEAD: usize = size_of::<Head<Section>>();
 
 /// Nothing of its own to validate: its header whole, and an entry overrunning
 /// its end, are sb_field_validate()'s, and the entries themselves are
-/// validated late, with the filesystem - bch2_sb_clean_validate_late().
+/// validated late, with the filesystem - validate_late().
 impl SbFieldOps for Section {
     fn to_text(out: &mut Printbuf, fs: Option<&Fs>, _sb: &Sb<Unvalidated>,
                 f: &SbFieldClean<Unvalidated>) {

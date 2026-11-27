@@ -71,7 +71,7 @@ pub(crate) fn delete_empty_stripes(ec: &FsEc) {
 
 impl Fs {
     /// Kick the worker that deletes empty stripes, unless the filesystem's
-    /// going read-only: bch2_do_stripe_deletes().
+    /// going read-only.
     pub fn do_stripe_deletes(&self) {
         self.ec.stripe_delete_work.queue(self.write_ref_wq());
     }

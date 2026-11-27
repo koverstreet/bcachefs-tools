@@ -68,7 +68,7 @@ pub enum UnlockPolicy {
 /// The difference decides how the kernel gets it. A key we derived ourselves
 /// can be handed over directly, which is what the mount helper does; one that
 /// was already in a keyring we have never seen the bytes of, so all we can do
-/// is leave it there for bch2_request_key() to find.
+/// is leave it there for request_key() to find.
 pub enum Unlocked {
     Key(PassphraseCorrect),
     InKeyring,
@@ -93,7 +93,7 @@ impl Unlocked {
         Some(Zeroizing::new(s))
     }
 
-    /// Put it where bch2_request_key() will look, for the mount(2) path - that
+    /// Put it where request_key() will look, for the mount(2) path - that
     /// has nowhere to carry a parameter, so the keyring is the only channel.
     ///
     /// The kernel searches the invoking task's keyring tree, and a fresh

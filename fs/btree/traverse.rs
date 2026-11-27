@@ -675,7 +675,7 @@ impl BtreeTrans<'_> {
     /// to a specified depth
     ///
     /// On error, caller (peek_node()/peek_key()) must return NULL; the error is
-    /// stashed in the iterator and returned from bch2_trans_exit().
+    /// stashed in the iterator and returned from the transaction's drop.
     ///
     /// Cached and btree paths each get a function of their own: a key cache
     /// fill traverses a btree path from inside the cached traverse, and that

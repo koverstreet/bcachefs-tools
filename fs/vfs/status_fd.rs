@@ -31,7 +31,7 @@ struct StatusFd {
     /// alive - the fd outlives the mount either way.
     ///
     /// The loan's lock is a mutex, because the ioctl hands the filesystem to
-    /// bch2_fs_ioctl(), which sleeps: the lock has to be held across that
+    /// fs_ioctl(), which sleeps: the lock has to be held across that
     /// call, or the mounting thread could return from Fs::start() and
     /// tear it down underneath it. The only waiter is that thread, once, at
     /// the end of the mount.

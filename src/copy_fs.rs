@@ -244,7 +244,7 @@ fn create_or_update_file(
         child_inode.bi_gid = gid;
         child_inode.bi_dev = rdev.to_disk();
 
-        // bch2_fsck_write_inode has its own commit_do loop internally —
+        // fsck_write_inode() has its own commit_do loop internally —
         // don't wrap it in trans_commit_do or it double-nests.
         {
             let trans = bcachefs_kernel::btree_trans!(fs);
@@ -331,7 +331,7 @@ fn copy_xattrs(
         };
 
         // POSIX ACLs come in the xattr API's format; bcachefs stores its
-        // own. bch2_get_acl() goes by the inode's flags, not the xattrs:
+        // own. get_acl() goes by the inode's flags, not the xattrs:
         // without them the ACLs are there and ignored.
         let acl;
         let value = if xattr_type.is_acl() {

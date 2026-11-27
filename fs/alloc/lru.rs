@@ -182,7 +182,6 @@ pub(crate) fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Resul
 }
 
 /// Move @target's entry in lru @id from @old_time to @new_time:
-/// bch2_lru_change().
 pub fn lru_change(t: &TransAttempt<'_, '_>, id: LruId, target: u64, old_time: u64, new_time: u64)
     -> Result<(), BchError>
 {

@@ -116,7 +116,7 @@ pub enum ReconcileScan {
 
 impl Fs {
     /// Whether reconcile may run: not read-only, enabled, and if it's only to
-    /// run on AC, not on battery. bch2_reconcile_enabled().
+    /// run on AC, not on battery.
     pub fn reconcile_enabled(&self) -> bool {
         let o = self.opts();
         o.read_only.get() == 0 && o.reconcile_enabled.get() != 0 &&
@@ -1012,13 +1012,12 @@ impl Fs {
         self.reconcile.thread.kick();
     }
 
-    /// Have reconcile scan for pending work, and kick it: as
-    /// bch2_reconcile_pending_wakeup().
+    /// Have reconcile scan for pending work, and kick it.
     pub fn reconcile_pending_wakeup(&self) -> Result<(), BchError> {
         self.request_scan(ReconcileScan::pending, true)
     }
 
-    /// Start the thread, unless it's running: bch2_reconcile_start().
+    /// Start the thread, unless it's running.
     pub fn reconcile_start(&self) -> Result<(), BchError> {
         let r = &self.reconcile;
 
@@ -1047,7 +1046,7 @@ impl Fs {
         }).inspect_err(|e| bch_err!(self, "error creating reconcile thread: {e}"))
     }
 
-    /// Stop the thread, and wait for it to: bch2_reconcile_stop().
+    /// Stop the thread, and wait for it to.
     pub fn reconcile_stop(&self) {
         // copygc_wait_run() and copygc_wait_not_running() check should_stop()
         self.copygc.run_done.wake();
@@ -1059,7 +1058,7 @@ impl Fs {
 
 impl Fs {
     /// What reconcile is doing - and why it can't, without incompatible
-    /// features: bch2_reconcile_status_to_text().
+    /// features.
     #[cold]
     pub fn reconcile_status_to_text(&self, out: &mut Printbuf) {
         out.tabstop_push(24);
@@ -1127,7 +1126,7 @@ impl Fs {
         }
     }
 
-    /// Whether a scan is requested: bch2_reconcile_scan_pending_to_text().
+    /// Whether a scan is requested.
     #[cold]
     pub fn reconcile_scan_pending_to_text(&self, out: &mut Printbuf) {
         // No multithreaded btree access until BCH_FS_may_go_rw, and we're no

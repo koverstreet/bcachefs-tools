@@ -61,8 +61,7 @@ impl HashTable for Xattrs {
     }
 }
 
-/// An xattr's hash under @info: its type, then its name - as
-/// bch2_xattr_hash().
+/// An xattr's hash under @info: its type, then its name.
 fn hash(info: &HashInfo, ty: XattrType, name: &[u8]) -> u64 {
     str_hash::hash_parts(info, &[&[ty.0 as u8], name], false)
 }
@@ -94,7 +93,7 @@ const TYPE_NAMES: [(&str, XattrType); 5] = [
 ];
 
 impl XattrType {
-    /// Whether this version has a handler for it: bch2_xattr_type_to_handler().
+    /// Whether this version has a handler for it.
     pub fn known(self) -> bool {
         TYPE_NAMES.iter().any(|&(_, ty)| ty == self)
     }
@@ -171,8 +170,8 @@ fn to_nul(b: &[u8]) -> &[u8] {
     b.iter().position(|&c| c == 0).map_or(b, |n| &b[..n])
 }
 
-/// @k, an xattr, as text: as bch2_xattr_to_text(). @k may not have passed
-/// validate: lengths past the value are cut to it.
+/// @k, an xattr, as text. @k may not have passed validate: lengths past the
+/// value are cut to it.
 pub fn to_text(out: &mut Printbuf, k: AnyKeySC<'_, Unvalidated>) {
     let x = k.arm::<Xattr>().expect("an xattr").v();
     let ty = x.ty();
@@ -233,8 +232,8 @@ impl crate::btree::bkey::BkeyOps for Xattr {
 // ── Get and set ──────────────────────────────────────────────────────────
 
 /// The value of xattr @name of @ty on inode @inode (@inum), copied into
-/// @buffer if there is one: as bch2_xattr_get_trans(). Its length; ERANGE
-/// if @buffer is too small, ENOENT if there's no such xattr.
+/// @buffer if there is one. Its length; ERANGE if @buffer is too small,
+/// ENOENT if there's no such xattr.
 pub fn get_trans(
     t:      &TransAttempt<'_, '_>,
     inode:  &InodeUnpacked,
@@ -273,8 +272,8 @@ fn copy_out(buffer: Option<&mut [u8]>, v: &[u8]) -> Result<usize, BchError> {
 }
 
 /// Set xattr @name of @ty to @value, on inode @inum - with XATTR_CREATE in
-/// @flags only if it doesn't exist, with XATTR_REPLACE only if it does: as
-/// __bch2_xattr_set(). ERANGE if it doesn't fit in a key.
+/// @flags only if it doesn't exist, with XATTR_REPLACE only if it does.
+/// ERANGE if it doesn't fit in a key.
 pub fn set_key(
     t:         &TransAttempt<'_, '_>,
     inum:      SubvolInum,
@@ -298,8 +297,8 @@ pub fn set_key(
 }
 
 /// Set xattr @name of @ty on inode @inum to @value, or with None remove it,
-/// and update the inode's ctime - @inode is the inode as written: as
-/// bch2_xattr_set(). Removing one that isn't there is ENODATA with
+/// and update the inode's ctime - @inode is the inode as written.
+/// Removing one that isn't there is ENODATA with
 /// XATTR_REPLACE, and nothing otherwise.
 #[allow(clippy::too_many_arguments)]
 pub fn set_trans(
@@ -393,8 +392,7 @@ mod vfs {
     }
 
     impl XattrBuf<'_> {
-        /// @prefix and @name, NUL terminated: as __bch2_xattr_emit(). ERANGE
-        /// if it doesn't fit.
+        /// @prefix and @name, NUL terminated. ERANGE if it doesn't fit.
         fn emit(&mut self, prefix: &[u8], name: &[u8]) -> Result<(), BchError> {
             let total = prefix.len() + name.len() + 1;
 
@@ -412,8 +410,7 @@ mod vfs {
     }
 
     /// @inode's options, as bcachefs.* xattrs - or with @all,
-    /// bcachefs_effective.*, inherited ones too: as
-    /// bch2_xattr_list_bcachefs().
+    /// bcachefs_effective.*, inherited ones too.
     fn list_bcachefs(inode: &InodeUnpacked, buf: &mut XattrBuf<'_>, all: bool)
         -> Result<(), BchError>
     {
@@ -488,9 +485,9 @@ mod vfs {
 
     // bcachefs.* and bcachefs_effective.*: inode options
 
-    /// The value of option @name on @vinode, as text, into @buffer: as
-    /// __bch2_xattr_bcachefs_get(). Only an option set on the inode itself
-    /// counts, without @all; with it, an inherited one does too.
+    /// The value of option @name on @vinode, as text, into @buffer. Only an
+    /// option set on the inode itself counts, without @all; with it, an
+    /// inherited one does too.
     fn bcachefs_get(v: &InodeInfo, name: &CStr, buffer: Option<&mut [u8]>, all: bool)
         -> Result<usize, BchError>
     {
@@ -555,7 +552,7 @@ mod vfs {
     }
 
     /// Set option @name on @dentry's inode to @value, or with None, go back
-    /// to inheriting it from the parent: as __bch2_xattr_bcachefs_set().
+    /// to inheriting it from the parent.
     fn bcachefs_set(dentry: Dentry<'_>, v: &InodeInfo, name: &CStr, value: Option<&[u8]>)
         -> Result<(), BchError>
     {
@@ -712,8 +709,7 @@ mod vfs {
     ]);
 
     /// What an xattr of @ty lists under for @dentry's caller - None if it
-    /// doesn't: the handler's prefix, or its name for a POSIX ACL's. As
-    /// bch2_xattr_list_prefix().
+    /// doesn't: the handler's prefix, or its name for a POSIX ACL's.
     pub fn list_prefix(ty: XattrType, dentry: Dentry<'_>) -> Option<&'static CStr> {
         match ty {
             XattrType::USER              => User::list(dentry).then_some(User::PREFIX),

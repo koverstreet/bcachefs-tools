@@ -33,7 +33,7 @@ use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering::{Acquire, Rela
 
 /// A transaction the walk reaches, of whichever thread: it's read as C reads
 /// it, never through a reference - another thread's is changing under us.
-/// Its memory is RCU-freed (bch2_trans_put()), and the walk is in an RCU
+/// Its memory is RCU-freed (TransGuard's drop), and the walk is in an RCU
 /// read-side section.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Trans(*mut BtreeTrans<'static>);

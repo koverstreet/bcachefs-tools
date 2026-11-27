@@ -217,7 +217,7 @@ impl Dev {
     }
 
     /// Whether the allocator mustn't use bucket @b - migrate marks the space
-    /// it can't: bch2_bucket_nouse().
+    /// it can't.
     pub fn bucket_nouse(&self, b: u64) -> bool {
         self.buckets_nouse.with(|w| AtomicBitmap::from_words(w).test(b as usize))
     }
@@ -337,7 +337,7 @@ impl TransAttempt<'_, '_> {
     /// pointer against the bucket: its gen @b_gen, its @bucket_data_type. A
     /// pointer that doesn't fit is fsck's to repair: an error on insert, and
     /// ignored on overwrite, so deletion works; a stale cached pointer is
-    /// cached_ptr_stale: bch2_bucket_ref_update().
+    /// cached_ptr_stale.
     #[allow(clippy::too_many_arguments)]
     pub fn bucket_ref_update(&self, ca: &Dev, k: BkeySC<'_>, ptr: &ExtentPtr,
                              sectors: i64, ptr_data_type: DataType, b_gen: u8,
@@ -492,8 +492,8 @@ fn trigger_pointer_dev_missing(fs: &Fs, k: BkeySC<'_>, dev: u32, insert: bool) -
 }
 
 /// A pointer's bucket - its sectors and its backpointer - in the alloc key,
-/// and in gc's copy with gc: bch2_trigger_pointer(). Returns the pointer's
-/// sectors on disk, negative going out.
+/// and in gc's copy with gc. Returns the pointer's sectors on disk, negative
+/// going out.
 fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC<'_>,
                    d: &DecodedPtr<'_>, flags: UpdateTriggerFlags) -> Result<i64, BchError> {
     let fs = t.fs();
@@ -561,8 +561,8 @@ fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -
 }
 
 /// An erasure coded pointer's sectors, in its block of the stripe - the key
-/// in the stripes btree, and gc's copy with gc - and in the stripe's
-/// replicas accounting: bch2_trigger_stripe_ptr().
+/// in the stripes btree, and gc's copy with gc - and in the stripe's replicas
+/// accounting.
 fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &ExtentPtrDecoded,
                       data_type: DataType, sectors: i64, flags: UpdateTriggerFlags)
     -> Result<(), BchError>
@@ -571,7 +571,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &ExtentPtrDeco
     let (idx, block) = (p.ec.idx(), p.ec.block());
 
     if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        // the stripe, queued as its update: bch2_bkey_get_mut_typed()
+        // the stripe, queued as its update: bkey_get_mut()
         let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx),
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         // gone, or not this extent's: either way, not part of the stripe
@@ -706,7 +706,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: Bke
 
 /// The trigger of every key type with pointers: each key's pointers and
 /// accounting - the old one's out, the new one's in - if its pointers
-/// changed, and reconcile's part: bch2_trigger_extent().
+/// changed, and reconcile's part.
 pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result<(), BchError> {
     {
         let (old, new) = (op.old.arm::<Ptrs>(), BkeySC::from(&op.new).untyped().arm::<Ptrs>());
@@ -744,7 +744,7 @@ pub(crate) static EXTENT: Trigger = Trigger(trigger_extent);
 /// and the sectors it reserves at all its replicas: reservations carry no
 /// pointers, so the snapshot's sectors, summed from extents' pointers, never
 /// had them. Its key counted here, with them, as an extent's is, not by
-/// trigger_snapshot_nr_keys(): bch2_trigger_reservation().
+/// trigger_snapshot_nr_keys().
 fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_, '_>) -> Result<(), BchError> {
     if !op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) {
         return Ok(());
@@ -808,7 +808,7 @@ pub(crate) fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<
 // ── Metadata buckets ─────────────────────────────────────────────────────
 
 /// Bucket @b of @ca as @sectors of @data_type in its alloc key - set, not
-/// added to, so marking again is a no-op: __bch2_trans_mark_metadata_bucket().
+/// added to, so marking again is a no-op.
 fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
                                   data_type: DataType, sectors: u32) -> Result<(), BchError> {
     let fs = t.fs();
@@ -838,7 +838,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
 }
 
 /// trans_mark_metadata_bucket_key(), in gc's copy - which adds: gc counts
-/// each bucket's metadata once: bch2_mark_metadata_bucket().
+/// each bucket's metadata once.
 fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type: DataType,
                            sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
@@ -870,9 +870,9 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64, data_type
 }
 
 /// Bucket @b of @ca holds @sectors of metadata - superblock, journal, or free
-/// to unmark it: in its alloc key, committed, or in gc's copy:
-/// bch2_trans_mark_metadata_bucket(). The gc side runs in an attempt of its
-/// own; it's only reached on a transaction made for it.
+/// to unmark it: in its alloc key, committed, or in gc's copy. The gc side
+/// runs in an attempt of its own; it's only reached on a transaction made for
+/// it.
 pub fn trans_mark_metadata_bucket(trans: &TransGuard<'_>, ca: &Dev, b: u64, data_type: DataType,
                                   sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
     assert!(matches!(data_type, DataType::free | DataType::sb | DataType::journal),
@@ -895,7 +895,6 @@ pub fn trans_mark_metadata_bucket(trans: &TransGuard<'_>, ca: &Dev, b: u64, data
 
 /// @range's sectors on @ca, metadata of @data_type, into @bucket - a bucket
 /// and its count so far - marking the bucket when the range moves past it:
-/// bch2_trans_mark_metadata_sectors().
 fn trans_mark_metadata_sectors(trans: &TransGuard<'_>, ca: &Dev, range: core::ops::Range<u64>,
                                data_type: DataType, bucket: &mut (u64, u32),
                                flags: UpdateTriggerFlags) -> Result<(), BchError> {
@@ -959,7 +958,7 @@ impl Fs {
     }
 
     /// trans_mark_dev_sb() of every online device - each initialized first,
-    /// if it wasn't: bch2_trans_mark_dev_sbs_flags().
+    /// if it wasn't.
     pub fn trans_mark_dev_sbs(&self, flags: UpdateTriggerFlags) -> Result<(), BchError> {
         for ca in self.online_members() {
             // marked again, even if it was: harmless if not needed, and a
@@ -977,7 +976,7 @@ crate::recovery_pass!(trans_mark_dev_sbs => |fs: &Fs| fs.trans_mark_dev_sbs(Upda
 
 impl Fs {
     /// Every device's buckets_nouse, a zeroed bit per bucket: for migrate, to
-    /// mark the space it can't use. bch2_buckets_nouse_alloc().
+    /// mark the space it can't use.
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
         let state = self.state_lock_write();
         for ca in self.members() {
@@ -1023,7 +1022,6 @@ impl Dev {
     }
 
     /// Its usage counters and bucket generations, as it's set up:
-    /// bch2_dev_buckets_alloc().
     pub fn buckets_alloc(self: Pin<&mut Self>) -> Result<(), BchError> {
         let this = self.project();
         match PerCpu::alloc() {
@@ -1048,8 +1046,8 @@ impl Dev {
 // ── Usage ────────────────────────────────────────────────────────────────
 
 impl Dev {
-    /// The buckets held back from allocations at @watermark - for those at the
-    /// watermarks under it: bch2_dev_buckets_reserved().
+    /// The buckets held back from allocations at @watermark - for those at
+    /// the watermarks under it.
     pub fn buckets_reserved(&self, watermark: Watermark) -> u64 {
         use crate::alloc::foreground::Watermark as w;
         let (some, btree) = (self.mi.get().nbuckets >> 6, u64::from(self.nr_btree_reserve));
@@ -1076,7 +1074,7 @@ impl Dev {
     }
 
     /// Its buckets by data type, every CPU's count summed - not under any
-    /// lock, so only near enough: bch2_dev_usage_read_fast().
+    /// lock, so only near enough.
     pub fn usage_read_fast(&self) -> DevUsage {
         // The allocator's: one sweep over the CPUs, reading only the bucket
         // counts, a third of each CPU's usage
@@ -1089,7 +1087,7 @@ impl Dev {
         u.clamp_nonnegative()
     }
 
-    /// All of its usage, as usage_read_fast(): bch2_dev_usage_full_read_fast().
+    /// All of its usage, as usage_read_fast().
     pub fn usage_full_read_fast(&self) -> DevUsageFull {
         self.usage.sum_nonnegative()
     }

@@ -437,7 +437,6 @@ pub fn move_err_parks(e: BchError) -> bool {
 /// @k's reconcile entry marked pending, if @set, or not - committed, @k at
 /// @iter; at @level, a btree node pointer, its node's key updated in place.
 /// Nothing without work, or if it's already so.
-/// bch2_extent_reconcile_pending_mod().
 pub fn pending_mod(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, set: bool)
     -> Result<(), BchError>
 {

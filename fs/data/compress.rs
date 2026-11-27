@@ -68,8 +68,7 @@ pub struct bch_compression_opt {
 }
 
 impl bch_compression_opt {
-    /// The compression type opt type @t writes, if it's one: C's
-    /// __bch2_compression_opt_to_type[].
+    /// The compression type opt type @t writes, if it's one.
     pub fn type_of(t: u8) -> Option<CompressionType> {
         macro_rules! map {
             ($(($t:ident, $n:literal)),* $(,)?) => {
@@ -88,8 +87,8 @@ impl bch_compression_opt {
         Self::type_of(bits.type_()).is_some() && !(bits.type_() == 0 && bits.level() != 0)
     }
 
-    /// The compression type @v writes: bch2_compression_opt_to_type(). An
-    /// unknown type is none - options are validated, so that's warned about.
+    /// The compression type @v writes. An unknown type is none - options are
+    /// validated, so that's warned about.
     pub fn to_type(v: u8, fs: &Fs) -> CompressionType {
         Self::type_of(Self::from_bits(v).type_()).unwrap_or_else(|| {
             crate::warn_once!(true, fs, "unknown compression opt {v}");

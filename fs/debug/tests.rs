@@ -574,7 +574,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
 /// erasure-coding repair path without a large real filesystem.
 ///
 /// Walks the extents btree for the first extent carrying a stripe_ptr entry
-/// and bumps that entry's block index. `bch2_ptr_matches_stripe()` then fails
+/// and bumps that entry's block index. `ptr_matches_stripe()` then fails
 /// against the (still-present, so the error names it) stripe, while the data
 /// pointer's generation is left valid against its bucket -- so the mismatch
 /// surfaces as the stripe inconsistency and not as a stale pointer.
@@ -627,7 +627,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
     }
 }
 
-/// Stripe reuse and repair open existing stripes, and bch2_trigger_stripe()
+/// Stripe reuse and repair open existing stripes, and the stripe trigger
 /// deletes a stripe it finds empty and not open - but that decision is made in
 /// a trigger, and a commit that drops its locks (waiting on a journal
 /// reservation, say) relocks and retries without re-running triggers. So

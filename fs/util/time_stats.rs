@@ -26,7 +26,7 @@
 //! TimeStatsRef, the stats and their pointer, which the methods are on.
 //!
 //! The time units durations print in, from nanoseconds to eons, are here
-//! too: Nsecs prints in them, as C's bch2_pr_time_units().
+//! too: Nsecs prints in them.
 
 #![allow(non_camel_case_types)]
 
@@ -627,7 +627,7 @@ impl<'a, T: TimeStatsKind> TimeStatsRef<'a, T> {
         (!p.is_null()).then(|| unsafe { PerCpuRef::from_raw(p) })
     }
 
-    /// An event from @start, a local_clock() time, to now: bch2_time_stats_update().
+    /// An event from @start, a local_clock() time, to now.
     pub fn update(self, start: u64) {
         self.update_at(start, local_clock())
     }

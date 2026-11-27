@@ -142,7 +142,7 @@ pub fn rb_work_to_data_pos(mut p: Bpos) -> Bbpos {
 /// What a key carries for reconcile: a key with pointers' entries, and any
 /// key's work btree.
 pub trait BkeyVReconcile: BkeyV {
-    /// Its reconcile entry: bch2_bkey_reconcile_opts().
+    /// Its reconcile entry.
     fn reconcile_opts(&self, fs: &Fs) -> Option<&ExtentReconcile>
     where Self: BkeyVPtrs
     {
@@ -153,7 +153,6 @@ pub trait BkeyVReconcile: BkeyV {
     }
 
     /// The index its reconcile_bp entry has, 0 without one:
-    /// bch2_bkey_get_reconcile_bp().
     fn reconcile_bp_idx(&self, fs: &Fs) -> u64
     where Self: BkeyVPtrs
     {
@@ -172,7 +171,7 @@ pub trait BkeyVReconcile: BkeyV {
     }
 
     /// The work btree it's tracked in - a stripe's by its needs_reconcile, as
-    /// stripes have no reconcile entry: bch2_bkey_reconcile_work_id().
+    /// stripes have no reconcile entry.
     fn reconcile_work_id(&self, fs: &Fs) -> ReconcileWorkId
     where Self::V: BkeyVal<State = Validated>
     {
@@ -192,7 +191,7 @@ impl<K: BkeyV> BkeyVReconcile for K {}
 
 impl TransBkey<'_, '_, PtrsMut> {
     /// Its reconcile_bp entry made @idx - dropped for 0, appended if it has
-    /// none: bch2_bkey_set_reconcile_bp().
+    /// none.
     pub fn set_reconcile_bp(&mut self, fs: &Fs, idx: u64) -> Result<(), NoRoom> {
         let bp = self.extent_entries_mut_at(fs).find_map(|(at, e)| match e {
             ExtentEntryMut::reconcile_bp(bp) => Some((at, bp)),
@@ -290,7 +289,7 @@ fn trigger_dev_counters(t: &TransAttempt<'_, '_>, sectors: Option<u32>, k: BkeyS
 }
 
 /// Reconcile's part of the extent trigger, for a key with or getting a
-/// reconcile entry: bch2_trigger_extent_reconcile(). The key's work btree bit
+/// reconcile entry. The key's work btree bit
 /// - or a btree node pointer's reconcile backpointer, moved to its new work
 /// id's and recorded in its reconcile_bp entry - then the reconcile_work
 /// accounting and dev_leaving counters.
@@ -378,7 +377,7 @@ pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigge
     Ok(())
 }
 
-/// A reconcile entry against itself: bch2_extent_reconcile_validate().
+/// A reconcile entry against itself.
 pub fn extent_reconcile_validate(v: &BkeyValidate<'_, '_>, r: &ExtentReconcile) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, r.pending() != 0 && r.need_rb() == 0, id::extent_reconcile_bad_pending,
                       "pending incorrectly set")?;
@@ -428,12 +427,11 @@ macro_rules! reconcile_opts_to_text {
     }};
 }
 
-/// bch2_extent_rebalance_v1_to_text().
 pub fn extent_rebalance_v1_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &ExtentRebalanceV1) {
     reconcile_opts_to_text!(out, fs, r);
 }
 
-/// What it needs, then its options: bch2_extent_reconcile_to_text().
+/// What it needs, then its options.
 pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &ExtentReconcile) {
     write!(out, "need_rb=");
     crate::util::names::prt_set::<ReconcileOpt>(out, r.need_rb().into());

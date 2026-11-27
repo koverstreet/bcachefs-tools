@@ -739,8 +739,8 @@ impl Btree {
     }
 }
 
-/// A btree this version doesn't know is still said to be one, as C's
-/// bch2_btree_id_to_text() has it: recovery meets them.
+/// A btree this version doesn't know is still said to be one: recovery
+/// meets them.
 impl crate::util::ToText for Btree {
     fn to_text(&self, out: &mut crate::util::Printbuf) {
         match self.name() {

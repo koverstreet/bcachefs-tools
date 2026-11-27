@@ -284,12 +284,12 @@ pub fn keys_merge<'a, 't>(
 
 // ── Lost extents ─────────────────────────────────────────────────────────
 
-/// Next to bch2_btree_lost_data() at the sites that lose a node: @k is the
+/// Next to btree_lost_data() at the sites that lose a node: @k is the
 /// pointer its parent had, so the range is known even when nothing of the
 /// node could be read. Stashed, not attributed: attributing walks the inodes
 /// btree, and these sites can't - they're mid-traverse holding the node's
 /// locks, or have the dangling pointer's deletion queued. check_extents,
-/// which bch2_btree_lost_data() schedules, attributes them.
+/// which btree_lost_data() schedules, attributes them.
 ///
 /// A v1 btree_ptr has no min_key: the range would be a guess, and damage on
 /// the wrong file is worse than none. Extents only, so a lost reflink node

@@ -642,8 +642,8 @@ impl Internal {
 impl StripeNew {
     /// What it holds of the filesystem's given back: its blocks' buckets,
     /// its disk reservation, its buckets in the new stripes' bucket table,
-    /// its slot claim and old stripe - bch2_ec_stripe_new_free() and
-    /// stripe_repair_rebuild_abort() - and a repair's writes, done. By its
+    /// its slot claim and old stripe - stripe_repair_rebuild_abort() -
+    /// and a repair's writes, done. By its
     /// task's teardown, before it's out of new_stripes - its memory goes in
     /// the task's done, after its write ref, which going read-only waits on -
     /// and by its drop, for one discarded.
@@ -782,10 +782,9 @@ pub(crate) fn discard_held(fs: &Fs, b: StripeNewBox) {
 
 // ── To text ──────────────────────────────────────────────────────────────
 
-/// @s: its key, its blocks, and how long it's been being made:
-/// bch2_new_stripe_to_text(). Blocks are listed when handed out, not when
-/// full, so per claimed block: is its bucket still checked out, and how much
-/// room is left?
+/// @s: its key, its blocks, and how long it's been being made. Blocks are
+/// listed when handed out, not when full, so per claimed block: is its bucket
+/// still checked out, and how much room is left?
 #[cold]
 pub(crate) fn new_stripe_to_text(out: &mut Printbuf, fs: &Fs, s: &StripeNew) {
     let i = s.lock();

@@ -394,7 +394,6 @@ impl BtreeIter<'_> {
     /// Move to @pos - in the iterator's own snapshot, unless it's
     /// all_snapshots - with no key there yet: the next peek finds it. Drops the
     /// update path, which was for the old position. The static inline
-    /// bch2_btree_iter_set_pos().
     pub fn set_pos(&mut self, pos: Bpos) {
         if self.update_path != 0 {
             let trans = self.trans;
@@ -432,7 +431,6 @@ impl BtreeIter<'_> {
 
     /// The next key up to @end, walking as @flags say: backwards with prev, a
     /// slot at a time - holes included - with slots. The static inline
-    /// bch2_btree_iter_peek_max_type().
     pub(super) fn peek_max_type_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, end: Bpos,
                                    flags: BtreeIterFlags) -> Peeked {
         let slots = flags.contains(BtreeIterFlags::SLOTS);
@@ -456,7 +454,6 @@ impl BtreeIter<'_> {
     }
 
     /// The previous key, or with slots the slot here: the static inline
-    /// bch2_btree_iter_peek_prev_type().
     fn peek_prev_type_in(&mut self, t: &TransAttempt<'_, '_>, paths: &mut Paths<'_>, flags: BtreeIterFlags) -> Peeked {
         if flags.contains(BtreeIterFlags::SLOTS) {
             // reverse slots aren't defined for extents: peek_slot() is the slot from @pos on
@@ -2104,7 +2101,7 @@ impl<'t> BtreeIter<'t> {
 
     /// The key pointing to @btree's root - none unless the root's just below
     /// @level - with this iterator initialized at it, and given back shared
-    /// with the key: bch2_btree_iter_peek_root(), for BtreeLevels.
+    /// with the key, for BtreeLevels.
     pub(super) fn peek_root<'i>(&'i mut self, t: &TransAttempt<'t, '_>, btree: Btree, level: u32)
         -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
     {

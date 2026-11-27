@@ -597,7 +597,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             (hook.f)(t)
         }
 
-        // bch2_trans_kmalloc() gives 8 byte alignment:
+        // kmalloc() gives 8 byte alignment:
         const { assert!(core::mem::align_of::<Hook<F>>() <= 8) };
 
         let hooks = &self.trans().hooks;
@@ -1318,7 +1318,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
     }
 
-    /// bit_mod(), at @iter's position: bch2_btree_bit_mod_iter().
+    /// bit_mod(), at @iter's position.
     pub fn bit_mod_iter(&self, iter: &BtreeIter<'a>, set: bool) -> Result<(), BchError> {
         let mut k = self.bkey_alloc(BKEY_U64S as u32)?;
         let h = k.k_mut();
@@ -1332,9 +1332,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.update(iter, k, UpdateTriggerFlags::empty())
     }
 
-    /// @key, for write buffered @btree, through the write buffer: as
-    /// bch2_trans_update_buffered(). Copied - into the transaction's journal
-    /// entries, or before journal replay's done, an update of its own.
+    /// @key, for write buffered @btree, through the write buffer. Copied -
+    /// into the transaction's journal entries, or before journal replay's
+    /// done, an update of its own.
     pub fn update_buffered(&self, btree: Btree, key: impl AsRef<BkeyI>) -> Result<(), BchError> {
         self.update_buffered_key(btree, key.as_ref())
     }

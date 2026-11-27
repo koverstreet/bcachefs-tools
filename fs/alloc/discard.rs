@@ -832,7 +832,7 @@ pub(crate) fn fast_discard_bucket_add(ca: &Dev, bucket: u64) {
     }
 }
 
-/// As bch2_dev_get_ioref() has it for a write ref: work queued holding one is
+/// As dev_get_ioref() has it for a write ref: work queued holding one is
 /// for a device that's rw.
 fn dev_is_rw(ca: &Dev) -> bool {
     ca.mi.get().state == MemberState::rw
@@ -845,7 +845,7 @@ fn dev_is_rw(ca: &Dev) -> bool {
 ///
 /// Held back is the reserve the free space accounting takes off,
 /// reserved_sectors - the device's share of the copygc reserve,
-/// gc_reserve_percent (bch2_recalc_capacity()) - or the stripe watermark's,
+/// gc_reserve_percent (recalc_capacity()) - or the stripe watermark's,
 /// where that's more. Invalidating is the cheapest way to free space, nothing
 /// moved: stopping short of reserved_sectors leaves no space writable now,
 /// with cached buckets sitting unreclaimed.

@@ -25,8 +25,7 @@
 //! C had these as a bit in an unsigned long overlapping the struct's next
 //! fields, because xchg() on a byte wasn't on every architecture. Rust's byte
 //! atomics are: LLVM masks a word where the CPU has none, and a plain store
-//! to the word's other bytes only makes the LL/SC or CAS retry. C, while it
-//! still takes them, does so through bch2_byte_lock() and bch2_byte_unlock().
+//! to the word's other bytes only makes the LL/SC or CAS retry.
 
 use super::{Locked, RawLock, RawLockBase, RawTimedLock, RawTryLock};
 use core::sync::atomic::{AtomicU8, Ordering};

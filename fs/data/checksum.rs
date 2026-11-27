@@ -71,8 +71,8 @@ impl core::ops::Add<u32> for Nonce {
 const POLY1305_KEY_SIZE: usize = 32;
 const POLY1305_BLOCK_SIZE: usize = 16;
 
-/// A checksum being computed, over its data's pieces in order: C's
-/// bch2_checksum_state, and Poly1305's alongside. A crc is its value so far
+/// A checksum being computed, over its data's pieces in order, and
+/// Poly1305's alongside. A crc is its value so far
 /// and what that's XORed with at the end: all ones for the _nonzero types,
 /// which start there too.
 enum CsumState {
@@ -184,7 +184,7 @@ fn checksum(fs: Option<&Fs>, ty: CsumType, nonce: Nonce, data: &[u8]) -> Csum {
 }
 
 impl CsumType {
-    /// Whether it's an encryption type: bch2_csum_type_is_encryption().
+    /// Whether it's an encryption type.
     pub fn is_encryption(self) -> bool {
         matches!(self, CsumType::chacha20_poly1305_80 |
                        CsumType::chacha20_poly1305_128)
@@ -206,9 +206,8 @@ impl CsumType {
         })
     }
 
-    /// Whether checksums of two adjacent ranges combine into the whole's -
-    /// bch2_checksum_merge() - so an extent with it can merge:
-    /// bch2_checksum_mergeable().
+    /// Whether checksums of two adjacent ranges combine into the whole's, so
+    /// an extent with it can merge:
     pub fn mergeable(self) -> bool {
         matches!(self, CsumType::none |
                        CsumType::crc32c |
@@ -216,7 +215,7 @@ impl CsumType {
     }
 
     /// Whether @fs can use it - a type this version knows, and an encryption
-    /// type only with the key loaded: bch2_checksum_type_valid().
+    /// type only with the key loaded.
     pub fn valid(self, fs: &Fs) -> bool {
         self.0 < CsumType::NR && (!self.is_encryption() || fs.encryption_key().is_some())
     }
@@ -250,7 +249,7 @@ impl CsumType {
 
 impl Csum {
     /// As many of its bytes as a @ty checksum has, in hex - all 16, for a
-    /// type this version doesn't know: bch2_csum_to_text().
+    /// type this version doesn't know.
     pub fn to_text(&self, out: &mut Printbuf, ty: CsumType) {
         let bytes = crate::util::vstructs::plain_bytes(self);
         for b in &bytes[..ty.bytes().unwrap_or(16) as usize] {
@@ -268,8 +267,8 @@ pub fn csum_err_msg(out: &mut Printbuf, ty: CsumType, expected: Csum, got: Csum)
 
 impl CsumOpt {
     /// The checksum type it writes, for data or metadata - metadata's crcs
-    /// are the nonzero variants: bch2_csum_opt_to_type(). An unknown opt is
-    /// an incompat feature, so warned about, and crc32c.
+    /// are the nonzero variants. An unknown opt is an incompat feature, so
+    /// warned about, and crc32c.
     pub fn to_type(self, fs: &Fs, data: bool) -> CsumType {
         use crate::format::CsumOpt as o;
         use crate::format::CsumType as t;
@@ -312,7 +311,7 @@ impl Fs {
     }
 
     /// The checksum type data reconciled to @r is written with - encrypted,
-    /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
+    /// whatever @r says, on an encrypted filesystem.
     pub fn data_checksum_type_rb(&self, r: &ExtentReconcile) -> CsumType {
         if self.sb.encryption_type.get() != 0 {
             return if self.opts().wide_macs.get() != 0 {
@@ -446,7 +445,7 @@ impl Fs {
             fs.checksum_range(old_ty, extent_nonce(version, &crc_old), range)
         };
 
-        // in constant time, as C's bch2_crc_cmp() means to be
+        // in constant time, as C's crc compare meant to be
         let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
         if differ && fs.opts().no_data_io.get() == 0 {
             static RATELIMIT: crate::util::ratelimit::Ratelimit = crate::util::ratelimit::Ratelimit::new();

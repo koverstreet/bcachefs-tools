@@ -244,7 +244,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// rcu read section, as mark_lock can block.
 ///
 /// The allowance at the limit - when the device is full - is the space we
-/// reserved in bch2_recalc_capacity; we can't have more than that amount of
+/// reserved in recalc_capacity(); we can't have more than that amount of
 /// disk space stranded due to fragmentation and store everything we have
 /// promised to store. But we don't want to be running copygc unnecessarily
 /// when the device still has plenty of free space - rather, we want copygc to
