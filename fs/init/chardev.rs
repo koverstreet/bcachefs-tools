@@ -78,7 +78,7 @@ use core::ops::ControlFlow;
 use crate::util::Printbuf;
 use crate::sb::members::{DevOuterRef, DevRef};
 use crate::os::kernel::{capable, Capability};
-use crate::os::thread_with_file::{Inner, ThreadFile, ThreadWithFile};
+use crate::util::thread_with_file::{Inner, ThreadFile, ThreadWithFile};
 use crate::data::moving::MoveStats;
 use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;

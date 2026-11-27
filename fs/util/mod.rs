@@ -35,6 +35,13 @@ pub mod siphash;
 pub mod sleep;
 pub mod task;
 pub mod thin;
+#[cfg(kernel)]
+pub mod thread_with_file;
+/// Where a filesystem's messages go instead: userspace never has one
+#[cfg(not(kernel))]
+pub mod thread_with_file {
+    pub enum StdioRedirect {}
+}
 pub mod time_stats;
 pub mod timer;
 pub mod varint;

@@ -937,7 +937,7 @@ pub mod ioctl {
     use crate::opts::parse_mount_opts_cstr;
     use crate::os::kernel::{capable, Capability};
     use crate::util::refcount::TryRefcount;
-    use crate::os::thread_with_file::{StdioRedirect, ThreadWithFile};
+    use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::os::ioctl::{UserStr, UserVstruct};
 
     /// The options at user address @addr, or none if it's 0.

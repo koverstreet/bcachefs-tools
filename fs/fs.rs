@@ -219,7 +219,7 @@ pub struct Fs {
     /// This, stdio_filter and stdio_user_only: set as a redirect attaches and
     /// detaches - the status fd's, online fsck's - and read by every print,
     /// on any thread. stdio published last, Release, and read Acquire.
-    pub stdio: AtomicPtr<crate::os::thread_with_file::StdioRedirect>,
+    pub stdio: AtomicPtr<crate::util::thread_with_file::StdioRedirect>,
     pub stdio_filter: AtomicPtr<c::task_struct>,
     /*
      * Online fsck redirects everything it prints; mounting doesn't - a boot

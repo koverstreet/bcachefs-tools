@@ -108,7 +108,7 @@ const PRINTK_LIMIT: usize = 1024;
 /// the person running the fsck, which a mount that only wants those gets -
 /// and if this is the task it's for.
 #[cfg(kernel)]
-pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::os::thread_with_file::StdioRedirect> {
+pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
     let stdio = fs.stdio.load(Ordering::Acquire);
     let filter = fs.stdio_filter.load(Ordering::Relaxed);
     if stdio.is_null() ||

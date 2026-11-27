@@ -44,7 +44,6 @@ pub mod timer;
 pub mod workqueue;
 #[path = "../linux_kernel/ops.rs"]
 pub mod ops;
-pub mod thread_with_file;
 pub mod tracepoint;
 #[path = "../unicode/mod.rs"]
 pub mod unicode;

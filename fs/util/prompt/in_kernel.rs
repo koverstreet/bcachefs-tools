@@ -5,7 +5,7 @@ use crate::c;
 use crate::fs::Fs;
 use crate::util::alloc::Vec;
 use crate::os::kernel::{jiffies, HZ};
-use crate::os::thread_with_file::StdioRedirect;
+use crate::util::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
 
 pub struct Prompt<'a>(&'a StdioRedirect);
