@@ -240,19 +240,13 @@ pub fn val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> Option<Subvolume> {
     Subvolume::val_copy_pad(k)
 }
 
-const SUBVOLUME_STATES: [SubvolumeState; 3] = [
-    SubvolumeState::live,
-    SubvolumeState::unlinked,
-    SubvolumeState::deleted,
-];
-
 /// Any subvolume, in place or whole - the struct reaches these too.
 impl Subvolume<Validated> {
     pub fn snapshot(&self) -> u32 { self.snapshot.get() }
 
     /// None if the field is 0 - the key predates it - or damaged.
     pub fn state_field(&self) -> Option<SubvolumeState> {
-        SUBVOLUME_STATES.into_iter().find(|&s| s.0 == self.state().get())
+        SubvolumeState::decode(self.state().get())
     }
 
     /// The state the legacy UNLINKED_OBSOLETE flag implies.
@@ -277,18 +271,6 @@ impl Subvolume<Whole> {
         self.set_unlinked_obsolete(state != SubvolumeState::live);
         self.state = state.0.into();
     }
-}
-
-/// See snapshot::state_nearest().
-fn state_nearest(raw: u32) -> (SubvolumeState, u32) {
-    let mut best = (SubvolumeState::live, 33);
-    for st in SUBVOLUME_STATES {
-        let dist = (raw ^ st.0).count_ones();
-        if dist < best.1 {
-            best = (st, dist);
-        }
-    }
-    best
 }
 
 // ── Validate, to_text, the trigger ───────────────────────────────────────
@@ -422,7 +404,7 @@ fn check_subvol<'a, 't>(
     // The repairs below go by the state, so it has to be readable first.
     if s.v().state_field().is_none() {
         let raw = s.v().state().get();
-        let (nearest, dist) = state_nearest(raw);
+        let (nearest, dist) = SubvolumeState::nearest(raw);
 
         // Codewords are >= 14 bits apart: within 6 bits, the nearest is the
         // original

@@ -157,6 +157,33 @@ const _: () = {
     }
 };
 
+macro_rules! states {
+    ([$t:ident] $(($n:ident, $v:expr)),* $(,)?) => { &[$($t::$n),*] };
+}
+
+macro_rules! state_codewords {
+    ($($t:ident),*) => { ::paste::paste! { $(
+        impl $t {
+            const ALL: &[$t] = [<$t _arms>]!(states [$t]);
+
+            /// @raw, if it's a state.
+            pub fn decode(raw: u32) -> Option<Self> {
+                Self::ALL.iter().copied().find(|s| s.0 == raw)
+            }
+
+            /// The state nearest @raw, and how many bits away - the first, on a
+            /// tie. Codewords are >= 14 bits apart, so within 6 bits the
+            /// nearest is the original.
+            pub fn nearest(raw: u32) -> (Self, u32) {
+                Self::ALL.iter().map(|&s| (s, (raw ^ s.0).count_ones()))
+                    .min_by_key(|&(_, dist)| dist)
+                    .expect("an enum of states has states")
+            }
+        }
+    )* } };
+}
+state_codewords!(SnapshotState, SubvolumeState);
+
 #[bitfield(Le32)]
 pub struct SnapshotFlags {
     /* Obsolete */

@@ -1019,27 +1019,6 @@ pub fn val<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> Option<Snapshot> {
     Snapshot::val_copy_pad(k)
 }
 
-/// The state codeword nearest @v and its Hamming distance - the first, on a
-/// tie. Codewords are >= 14 bits apart, so within 6 bits the nearest is the
-/// original.
-pub fn state_nearest(v: u32) -> (SnapshotState, u32) {
-    let mut best = (SnapshotState::live, 33);
-    for s in SNAPSHOT_STATES {
-        let dist = (v ^ s.0).count_ones();
-        if dist < best.1 {
-            best = (s, dist);
-        }
-    }
-    best
-}
-
-const SNAPSHOT_STATES: [SnapshotState; 4] = [
-    SnapshotState::live,
-    SnapshotState::will_delete,
-    SnapshotState::no_keys,
-    SnapshotState::deleted,
-];
-
 /// Any snapshot node, in place or whole - the struct reaches these too.
 impl Snapshot<Validated> {
     pub fn parent(&self) -> u32       { self.parent.get() }
@@ -1049,7 +1028,7 @@ impl Snapshot<Validated> {
 
     /// None if the field is 0 - the key predates it - or damaged.
     pub fn state_field(&self) -> Option<SnapshotState> {
-        state_field(self.state().get())
+        SnapshotState::decode(self.state().get())
     }
 
     /// The node's state, on any key: zero isn't a valid state, so a zero
@@ -1132,7 +1111,7 @@ impl fmt::Display for Snapshot {
         if state == 0 {
             // Not upgraded: no state field, the obsolete flags are the truth
             write!(f, " {} (not upgraded, flags {flags:#x}:{obsolete})", self.state_from_flags())
-        } else if state_field(state).is_none() {
+        } else if SnapshotState::decode(state).is_none() {
             write!(f, " state {state:#x} invalid (flags {flags:#x}:{obsolete})")
         } else {
             let state = SnapshotState(state);
@@ -1181,10 +1160,6 @@ impl fmt::Display for ObsoleteFlags {
         }
         Ok(())
     }
-}
-
-fn state_field(state: u32) -> Option<SnapshotState> {
-    SNAPSHOT_STATES.into_iter().find(|&s| s.0 == state)
 }
 
 /// Whether snapshot key @k is long enough to have all of @field: bkey_has_field().
@@ -1242,7 +1217,7 @@ impl BkeyOps for Snapshot {
            v.fs.opts().no_commit_validate.get() == 0 {
             let state = if has_field!(k, state) { s.state.get() } else { 0 };
 
-            bkey_fsck_err_on!(v, state != 0 && state_field(state).is_none(),
+            bkey_fsck_err_on!(v, state != 0 && SnapshotState::decode(state).is_none(),
                               snapshot_state_bad, "invalid state {state:#x}")?;
 
             // A subvol backref is only legal on a live or will_delete leaf:

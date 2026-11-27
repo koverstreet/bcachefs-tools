@@ -303,7 +303,7 @@ fn check_state<'a, 't>(
     // The repairs below go by the state, so it has to be readable first.
     if n.v().state_field().is_none() {
         let raw = n.v().state().get();
-        let (nearest, dist) = snapshot::state_nearest(raw);
+        let (nearest, dist) = SnapshotState::nearest(raw);
 
         // Codewords are >= 14 bits apart: within 6 bits, the nearest is the
         // original. Within 2 is a bitflip, counted apart so failing hardware shows;
