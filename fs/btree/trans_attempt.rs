@@ -39,11 +39,7 @@ use crate::btree::{journal_overlay::JournalKeys, update::TransCommitFlags};
 use crate::data::{extents_format::BKEY_BTREE_PTR_U64s_MAX, write::WriteFlags};
 use crate::journal::flush_wait::Flush;
 pub use crate::alloc::foreground::Watermark;
-use crate::errcode::{
-    BchError,
-    Errcode,
-    ret_to_result_void as ret_to_result,
-};
+use crate::errcode::{BchError, Errcode};
 use crate::btree::path::Paths;
 use crate::btree::trans::{TransGuard, BTREE_TRANS_MEM_MAX};
 use crate::fs::Fs;
@@ -502,10 +498,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return Ok(());
         }
         self.commit_lazy(None, flags)
-    }
-
-    pub fn result(&self, ret: i32) -> Result<(), BchError> {
-        ret_to_result(ret).map(|_| ())
     }
 
     /// The transaction has to know: it's marked restarted and its restart_count

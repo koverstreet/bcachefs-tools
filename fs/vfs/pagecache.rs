@@ -24,7 +24,7 @@ use crate::btree::{bkey::{pos, BkeySC}, iter::{BtreeIter, BtreeIterFlags}};
 use crate::c;
 use self::FolioSectorState as SectorState;
 use crate::data::{durability::BkeyVDurability, extents::BkeyVExtents};
-use crate::errcode::{errptr_to_result, BchError, Errcode};
+use crate::errcode::{BchError, Errcode};
 use crate::format::{Btree, BkeyType};
 use crate::fs::Fs;
 use crate::new_lock;
