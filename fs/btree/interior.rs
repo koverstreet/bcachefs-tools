@@ -119,10 +119,7 @@ pub struct FsBtreeReserveCache {
     pub lock: Locked<Mutex, BtreeReserveCache>,
 }
 
-/* Number of nodes btree coalesce will try to coalesce at once */
-const GC_MERGE_NODES: u32 = 4;
-
-const UPDATE_NODES_MAX: usize = (BTREE_MAX_DEPTH as usize - 2) * 2 + GC_MERGE_NODES as usize;
+const UPDATE_NODES_MAX: usize = BTREE_RESERVE_MAX as usize;
 
 /// An update made visible - its new nodes' pointers in memory - by what: on
 /// interior_updates.unwritten from then until its completion takes it.
