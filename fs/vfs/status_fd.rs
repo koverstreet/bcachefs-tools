@@ -8,8 +8,7 @@
 //!
 //! A stdio file with no thread: the mounting task does the work, printing
 //! as it goes. The channel outlives the fs_context - userspace still holds
-//! the fd - so the mount holds a ref on the file for as long as anything may
-//! print there, and the file frees the channel when both are gone.
+//! the fd - and the mount holds it for as long as anything may print there.
 
 use crate::c;
 use crate::bcachefs_ioctl::{IoctlRecoveryStatus, BCH_IOCTL_RECOVERY_STATUS};
@@ -17,9 +16,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::util::{loan::Loan, vstructs::plain_bytes, ioctl::Ioctl};
-use crate::os::file::File;
-use crate::util::{log::Only, thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile}};
-use kernel::sync::aref::ARef;
+use crate::util::{alloc::Arc, log::Only, thread_with_file::{Stdio, StdioFile, ThreadWithFile}};
 use core::sync::atomic::Ordering::Relaxed;
 use core::ops::ControlFlow;
 use kernel::uaccess::{UserPtr, UserSlice};
@@ -92,11 +89,10 @@ impl StdioFile for StatusFd {
     }
 }
 
-/// The mount's ref on a status channel's file: userspace holds the other, by
-/// its fd, and the file frees the channel when both are gone. Dropped when
+/// The mount's hold on a status channel, userspace's its fd. Dropped when
 /// the mount's over, however it went: the channel is closed, so a reader gets
 /// EOF rather than waiting for a filesystem that isn't coming.
-pub(crate) struct StatusFile(ARef<File<Inner<Stdio<StatusFd>>>>);
+pub(crate) struct StatusFile(Arc<Stdio<StatusFd>>);
 
 impl StatusFile {
     /// A new status channel: its fd, for userspace, and the mount's ref.
@@ -104,28 +100,24 @@ impl StatusFile {
         let status = ThreadWithFile::new_stdio(pin_init!(StatusFd {
             fs <- Loan::new(),
         }? BchError))?;
-        let (fd, file) = status.get_fd()?;
-        Ok((fd, StatusFile(file)))
-    }
-
-    fn status(&self) -> &Stdio<StatusFd> {
-        self.0.ops()
+        let (fd, stdio) = status.get_fd()?;
+        Ok((fd, StatusFile(stdio)))
     }
 
     /// @f - @fs starting up - with the channel: what @fs prints for the user,
     /// and its questions, go to it, and its ioctl answers for @fs.
     pub(crate) fn attached<R>(&self, fs: &Fs, f: impl FnOnce() -> R) -> R {
-        let _attached = fs.stdio.attach(&self.status().redirect, Only::User);
+        let _attached = fs.stdio.attach(&self.0.redirect, Only::User);
 
         // The loan over before the guard drops is what makes the reader flag
         // safe to clear as it does: the ioctl only sets it having seen a
         // filesystem lent, so no further ioctl can set it.
-        self.status().data.fs.lend(fs, f)
+        self.0.data.fs.lend(fs, f)
     }
 }
 
 impl Drop for StatusFile {
     fn drop(&mut self) {
-        self.status().redirect.set_done();
+        self.0.redirect.set_done();
     }
 }

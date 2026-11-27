@@ -720,11 +720,6 @@ impl<P: FileData> NewFile<P> {
         unsafe { file_data::<P>(self.file.as_ptr()) }
     }
 
-    /// A ref on the file.
-    pub fn get_file(&self) -> ARef<File<P>> {
-        unsafe { ARef::from_raw(ARef::into_raw(self.file.clone()).cast()) }
-    }
-
     /// The fd - from here userspace may close it at any moment.
     pub fn install(self) -> i32 {
         let fd = self.fd.reserved_fd();

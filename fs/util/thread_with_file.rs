@@ -15,8 +15,8 @@
 //! then drops what it ran on. What the thread's function owns, a filesystem
 //! it opened or a ref, it drops when it returns; if the file couldn't be
 //! made, the function is dropped unrun. A file with no thread has nothing
-//! for release() to wait on, so whoever prints to it holds a ref on the
-//! file for as long as they may.
+//! for release() to wait on, so whoever prints to it holds the Stdio for as
+//! long as they may.
 //!
 //! Startup: the thread's made stopped, the fd reserved and the file built,
 //! the thread woken, and only then the fd installed - from which moment
@@ -72,12 +72,11 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use cstruct_macros::vtable;
 use crate::util::ffi::{c_long, c_ulong};
-use kernel::sync::aref::ARef;
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 
 /* ThreadWithFile */
 
-pub trait ThreadFile: FileOps<Data = Inner<Self>, Inode = Any> + FreeAnytime {
+pub trait ThreadFile: FileOps<Data = Inner<Self>, Inode = Any> + FreeAnytime + NothingToDetach {
     /// At close, before the thread's stopped: wake it from whatever it's
     /// blocked on that only the file would end.
     fn closing(&self) {}
@@ -86,8 +85,7 @@ pub trait ThreadFile: FileOps<Data = Inner<Self>, Inode = Any> + FreeAnytime {
 #[pin_data(PinnedDrop)]
 pub struct Inner<T: ThreadFile> {
     thread: Option<Kthread>,
-    #[pin]
-    data:   T,
+    data:   Arc<T>,
 }
 
 #[pinned_drop]
@@ -110,18 +108,14 @@ pub struct ThreadWithFile<T: ThreadFile>(Pin<KBox<Inner<T>>>);
 
 impl<T: ThreadFile> ThreadWithFile<T> {
     pub fn new(data: impl PinInit<T, BchError>) -> Result<Self, BchError> {
-        let init = pin_init!(Inner::<T> { thread: None, data <- data }? BchError);
-        Ok(ThreadWithFile(kbox_pin_init(init)?))
+        let data = Arc::try_pin_init(data, GFP_KERNEL)?;
+        Ok(ThreadWithFile(kbox_pin_init(pin_init!(Inner::<T> { thread: None, data }? BchError))?))
     }
 
     /// The kthread's named for the caller.
     pub fn run(mut self, f: impl FnOnce(&T) + Send + FreeAnytime + NothingToDetach + 'static) -> Result<i32, BchError> {
-        // SAFETY: the thread runs only while the file lives - release()
-        // stops it before the data's dropped - or not at all: if there's no
-        // file, it's stopped unrun, as the data is dropped
-        let data: &'static T = unsafe { &*(&raw const self.0.data) };
-
-        let thread = Kthread::create(format_args!("{}", current_comm()), move |_| f(data))?;
+        let data = self.0.data.clone();
+        let thread = Kthread::create(format_args!("{}", current_comm()), move |_| f(&data))?;
         *self.0.as_mut().project().thread = Some(thread);
 
         let file = NewFile::new(self.0)?;
@@ -385,7 +379,7 @@ impl StdioRedirect {
 
 /* Stdio: a ThreadWithFile on a StdioRedirect */
 
-pub trait StdioFile: Send + Sync + FreeAnytime + 'static {
+pub trait StdioFile: Send + Sync + FreeAnytime + NothingToDetach + 'static {
     fn ioctl(&self, _cmd: u32, _arg: c_ulong) -> c_long {
         -(c::ENOTTY as c_long)
     }
@@ -452,11 +446,10 @@ impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
         })
     }
 
-    /// No thread: the caller prints, and calls stdio().set_done() when it's
-    /// finished. The fd, and the file ref to hold while it may print.
-    pub fn get_fd(self) -> Result<(i32, ARef<File<Inner<Stdio<T>>>>), BchError> {
-        let file = NewFile::new(self.0)?;
-        let r = file.get_file();
-        Ok((file.install(), r))
+    /// No thread: the caller prints, and sets the redirect done when it's
+    /// finished. The fd, and the Stdio, to hold while it may print.
+    pub fn get_fd(self) -> Result<(i32, Arc<Stdio<T>>), BchError> {
+        let data = self.0.data.clone();
+        Ok((NewFile::new(self.0)?.install(), data))
     }
 }
