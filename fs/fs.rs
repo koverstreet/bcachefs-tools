@@ -44,7 +44,7 @@ use crate::journal::seq_blacklist::blacklist_table_initialize;
 use crate::locking::{Exclusive, ExclusiveGuard, Guard, Locked, LockedBy, Mutex, MutexNoio, Noio, PercpuRwsemNoio, RwSem, Shared, SharedGuard};
 use crate::{message, prt};
 use crate::sb::counters::{counters_init, FsCounters};
-use crate::sb::io::{read_super, sb_to_fs, Holder, SbCpu, SbWriteFlags};
+use crate::sb::io::{read_super_to, sb_to_fs, Holder, SbCpu, SbWriteFlags};
 use crate::sb::members::{dev_to_text_short, fs_mi_field_upgrades, member_exists, DevKobjRef, DevPieces, SbMembersMut};
 use crate::sb::version::prep_for_start;
 use crate::util::{Printbuf, ToText};
@@ -1078,7 +1078,7 @@ impl OpenFs {
 
         let mut sbs = Vec::with_capacity(devs.len())?;
         for path in devs {
-            sbs.push(read_super(path, opts, Some(holder))?)?;
+            sbs.push(read_super_to(path, opts, Some(holder), out)?)?;
         }
         filter_dead(&mut sbs, opts, Some(out))?;
         Ok(sbs)

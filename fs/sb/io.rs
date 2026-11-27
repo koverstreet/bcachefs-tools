@@ -1520,14 +1520,12 @@ fn read_super_err(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>,
     }
 }
 
-/// The superblock of the device at @path, opened as @opts says - why not
-/// printed, and what reading a backup instead took. An exclusive open claims
+/// The superblock of the device at @path, opened as @opts says - why not, or
+/// what reading a backup instead took, into @out. An exclusive open claims
 /// the device for @holder.
-pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
+pub fn read_super_to(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>, out: &mut Printbuf)
     -> Result<SbHandle, BchError>
 {
-    use crate::util::printbuf::Msg;
-
     let mut err = Printbuf::new();
     let ret = read_super_err(path, opts, holder, &mut err);
 
@@ -1537,20 +1535,31 @@ pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
 
     let name = path.to_bytes();
     match &ret {
-        Err(e) => opts.log().err(&Msg(|out: &mut Printbuf| {
-            prt!(out, "bcachefs (");
+        Err(e) => {
             out.write_bytes(name);
-            prt!(out, "): error reading superblock: {e}\n");
+            prt!(out, ": error reading superblock: {e}\n");
             out.write_bytes(err.as_bytes());
-        })),
-        Ok(_) if !err.as_bytes().is_empty() => opts.log().notice(&Msg(|out: &mut Printbuf| {
-            prt!(out, "bcachefs (");
+        }
+        Ok(_) if !err.as_bytes().is_empty() => {
             out.write_bytes(name);
-            prt!(out, "): ");
+            prt!(out, ": ");
             out.write_bytes(err.as_bytes());
             prt!(out, "successful read from backup\n");
-        })),
+        }
         Ok(_) => {}
+    }
+    ret
+}
+
+/// read_super_to(), printed: an error at err, a backup's read at notice.
+pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
+    -> Result<SbHandle, BchError>
+{
+    let mut out = Printbuf::new();
+    let ret = read_super_to(path, opts, holder, &mut out);
+    if !out.as_bytes().is_empty() {
+        let log = crate::util::log::Log::NO_FS;
+        if ret.is_err() { log.err(&out) } else { log.notice(&out) }
     }
     ret
 }

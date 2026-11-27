@@ -10,7 +10,6 @@
 #[cfg(kernel)]
 use crate::c;
 use crate::fs::{Dev, Fs};
-use crate::opts::Opts;
 use crate::errcode::BchError;
 use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
 use core::panic::Location;
@@ -275,13 +274,11 @@ pub struct Log<'a> {
 }
 
 /// Whose log: a filesystem's - or a device's, after its name - with its
-/// loglevel and stdio redirect; @opts', before there's a filesystem, which
-/// may be a fsck's redirect; or none, printk() as it stands.
+/// loglevel and stdio redirect; or none, printk().
 #[derive(Clone, Copy)]
 enum To<'a> {
     Fs(&'a Fs),
     Dev(&'a Dev),
-    Opts(&'a Opts),
     NoFs,
 }
 
@@ -294,13 +291,6 @@ impl Fs {
 impl Dev {
     pub fn log(&self) -> Log<'_> {
         Log { to: To::Dev(self), ratelimit: None }
-    }
-}
-
-impl Opts {
-    /// The log of a filesystem not yet opened with these options.
-    pub fn log(&self) -> Log<'_> {
-        Log { to: To::Opts(self), ratelimit: None }
     }
 }
 
@@ -328,13 +318,7 @@ impl<'a> Log<'a> {
     /// ratelimit_errors option, where there are options.
     fn suppressed(&self) -> bool {
         let Some((rs, at)) = self.ratelimit else { return false };
-        let enabled = match self.to {
-            To::Fs(fs)     => fs.opts.ratelimit_errors.get() != 0,
-            To::Dev(ca)    => ca.fs().opts.ratelimit_errors.get() != 0,
-            To::Opts(opts) => opts.ratelimit_errors != 0,
-            To::NoFs       => true,
-        };
-        enabled && !rs.allow(at)
+        self.fs().is_none_or(|fs| fs.opts.ratelimit_errors.get() != 0) && !rs.allow(at)
     }
 
     /// A message at err, built up and printed when dropped - suppressed now,
@@ -357,29 +341,17 @@ impl<'a> Log<'a> {
             To::Dev(ca) => { write!(out, "bcachefs ({ca}): "); }
             #[cfg(not(kernel))]
             To::Dev(ca) => { write!(out, "{ca}: "); }
+            #[cfg(kernel)]
+            To::NoFs    => { write!(out, "bcachefs: "); }
             _ => {}
         }
     }
 
     /// @msg's bytes, at @level, where this log goes.
     fn print(&self, level: LogLevel, msg: &[u8]) {
-        match self.to {
-            To::Fs(fs)  => print_bytes(fs, Some(level.num()), msg),
-            To::Dev(ca) => print_bytes(ca.fs(), Some(level.num()), msg),
-            To::Opts(opts) => {
-                #[cfg(kernel)]
-                if opts.stdio != 0 {
-                    // SAFETY: @opts' stdio is the fsck thread's redirect, live
-                    // for as long as its opts are
-                    let stdio = unsafe { &*(opts.stdio as usize as *const crate::os::thread_with_file::StdioRedirect) };
-                    let _ = stdio.write(true, msg);
-                    return;
-                }
-                #[cfg(not(kernel))]
-                let _ = opts;
-                print_lines(&level.prefix(), msg)
-            }
-            To::NoFs => print_lines(&level.prefix(), msg),
+        match self.fs() {
+            Some(fs) => print_bytes(fs, Some(level.num()), msg),
+            None     => print_lines(&level.prefix(), msg),
         }
     }
 
