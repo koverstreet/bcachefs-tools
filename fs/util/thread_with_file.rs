@@ -357,8 +357,7 @@ impl StdioRedirect {
                 let _ = b.data.reserve(makeroom);
 
                 let (before, n) = (b.data.len(), readable.min(b.data.free()));
-                // SAFETY: a stretch copied is filled
-                unsafe { b.data.fill_with(n, |d| u.copy_from_nofault(d)) };
+                b.data.fill_with(n, |d| u.copy_from_nofault(d));
                 b.lines += b.data.iter().skip(before).filter(|&&ch| ch == b'\n').count();
                 n
             };

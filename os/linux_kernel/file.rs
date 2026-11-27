@@ -837,13 +837,17 @@ impl UserBuf {
         ok
     }
 
-    /// @dst filled, without faulting - or not, if any wasn't present.
-    pub fn copy_from_nofault(&mut self, dst: &mut [MaybeUninit<u8>]) -> bool {
-        let ok = dst.len() <= self.len &&
-            unsafe { c::copy_from_user_nofault(dst.as_mut_ptr().cast(), self.ptr().cast::<c_void>(), dst.len()) } == 0;
-        if ok {
-            self.advance(dst.len());
+    /// @dst filled, without faulting - or None, if any wasn't present.
+    pub fn copy_from_nofault<'a>(&mut self, dst: &'a mut [MaybeUninit<u8>]) -> Option<&'a mut [u8]> {
+        let (p, n) = (dst.as_mut_ptr().cast::<u8>(), dst.len());
+        if n > self.len {
+            return None;
         }
-        ok
+        let filled = unsafe {
+            (c::copy_from_user_nofault(p.cast(), self.ptr().cast::<c_void>(), n) == 0)
+                .then(|| core::slice::from_raw_parts_mut(p, n))
+        }?;
+        self.advance(n);
+        Some(filled)
     }
 }

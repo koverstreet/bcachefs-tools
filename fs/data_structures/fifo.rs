@@ -330,22 +330,21 @@ impl<T: Copy, I: FifoIdx> Fifo<T, I> {
     }
 
     /// Up to @n entries onto the back, as many as fit, a stretch of free
-    /// slots at a time: @f fills each stretch it's given, or refuses it and
-    /// the rest. How many it filled.
-    ///
-    /// # Safety
-    /// @f returns true only having written every slot of its stretch.
-    pub unsafe fn fill_with(&mut self, n: usize, mut f: impl FnMut(&mut [MaybeUninit<T>]) -> bool)
-        -> usize
-    {
+    /// slots at a time: @f fills each stretch it's given and hands it back
+    /// written, or refuses it and the rest. How many it filled.
+    pub fn fill_with(&mut self, n: usize,
+                     mut f: impl for<'a> FnMut(&'a mut [MaybeUninit<T>]) -> Option<&'a mut [T]>) -> usize {
         let n = n.min(self.free());
         let (a, b) = self.spare_mut();
         let mut done = 0;
         for s in [a, b] {
             let k = s.len().min(n - done);
-            if k == 0 || !f(&mut s[..k]) {
+            if k == 0 {
                 break;
             }
+            let p = s.as_ptr().cast::<T>();
+            let Some(w) = f(&mut s[..k]) else { break };
+            assert!(core::ptr::eq(w.as_ptr(), p) && w.len() == k, "fill_with: handed back a stretch it wasn't given");
             done += k;
         }
         self.back = Self::add(self.back, done);
@@ -358,15 +357,15 @@ impl<T: Copy, I: FifoIdx> Fifo<T, I> {
             return Err(());
         }
         let mut src = s;
-        // SAFETY: each stretch written in full
-        unsafe {
-            self.fill_with(s.len(), |d| {
-                let (h, t) = src.split_at(d.len());
-                d.as_mut_ptr().cast::<T>().copy_from_nonoverlapping(h.as_ptr(), h.len());
-                src = t;
-                true
+        self.fill_with(s.len(), |d| {
+            let (h, t) = src.split_at(d.len());
+            src = t;
+            let p = d.as_mut_ptr().cast::<T>();
+            Some(unsafe {
+                p.copy_from_nonoverlapping(h.as_ptr(), h.len());
+                core::slice::from_raw_parts_mut(p, h.len())
             })
-        };
+        });
         Ok(())
     }
 }
