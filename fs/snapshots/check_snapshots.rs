@@ -1003,7 +1003,14 @@ fn check_to_subvol<'a, 't>(
         // a tombstoned deletion in flight.
         if subvol.is_none() && !snap_deleting {
             match check::reconstruct_subvol_root(t, id, subvol_id, None) {
-                Ok(root) => return check::reconstruct_subvol(t, id, subvol_id, root),
+                Ok(root) => {
+                    if fsck_err!(t, snapshot_subvol_backref_wrong,
+                                 "snapshot points to missing subvolume {subvol_id} - reconstructing it:\n{}",
+                                 n.to_text(fs))? {
+                        check::reconstruct_subvol(t, id, subvol_id, root)?;
+                    }
+                    return Ok(());
+                }
                 // couldn't find a root inode for it - fall through and report
                 Err(e) if e.matches(Errcode::fsck_repair_unimplemented) => {}
                 Err(e) => return Err(e),
