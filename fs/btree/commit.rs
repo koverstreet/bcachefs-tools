@@ -429,10 +429,6 @@ impl BtreeTrans<'_> {
             return ret;
         }
 
-        if err == Errcode::btree_insert_need_mark_replicas.into() {
-            return t.drop_locks_do_in(paths, |_| crate::alloc::accounting::update_sb(t));
-        }
-
         if err == Errcode::btree_insert_need_journal_reclaim.into() {
             self.unlock_from(paths, crate::ret_ip!());
 
@@ -527,46 +523,30 @@ impl BtreeTrans<'_> {
 
         let mut not_rw = fs.not_rw();
 
-        loop {
-            self.fs_usage_delta.set(Default::default());
+        self.fs_usage_delta.set(Default::default());
 
-            let ret = {
-                let mut mark = fs.mark_lock().read();
-
-                match self.commit_accounting_apply(t, &mut mark, flags) {
-                    Ok(()) => {
-                        /* Only fatal errors are possible later, so no need to revert this */
-                        account_disk_usage_change(t);
-                        drop(mark);
-
-                        match self.journal_replay_insert_keys(t, &mut not_rw) {
-                            Ok(()) => {
-                                fs.event_inc_trace(events::transaction_commit, |out| {
-                                    prt!(out, "{}\nseq {}\n", self.fn_name(), self.journal_res_seq.get());
-                                    self.updates_to_text(out);
-                                });
-                                return Ok(());
-                            }
-                            Err(err) => {
-                                fs_fatal_error!(fs, "fatal error in transaction commit: {err}");
-                                let mut mark = fs.mark_lock().read();
-                                self.accounting_revert(t, &mut mark, flags, usize::MAX);
-                                err
-                            }
-                        }
-                    }
-                    Err((err, at)) => {
-                        self.accounting_revert(t, &mut mark, flags, at);
-                        err
-                    }
-                }
-            };
-
-            if !ret.matches(Errcode::btree_insert_need_mark_replicas) {
-                return Err(ret);
+        {
+            let mut mark = fs.mark_lock().read();
+            if let Err((err, at)) = self.commit_accounting_apply(t, &mut mark, flags) {
+                self.accounting_revert(t, &mut mark, flags, at);
+                return Err(err);
             }
-            t.drop_locks_do(|| crate::alloc::accounting::update_sb(t))?;
+            /* Only fatal errors are possible later, so no need to revert this */
+            account_disk_usage_change(t);
         }
+
+        if let Err(err) = self.journal_replay_insert_keys(t, &mut not_rw) {
+            fs_fatal_error!(fs, "fatal error in transaction commit: {err}");
+            let mut mark = fs.mark_lock().read();
+            self.accounting_revert(t, &mut mark, flags, usize::MAX);
+            return Err(err);
+        }
+
+        fs.event_inc_trace(events::transaction_commit, |out| {
+            prt!(out, "{}\nseq {}\n", self.fn_name(), self.journal_res_seq.get());
+            self.updates_to_text(out);
+        });
+        Ok(())
     }
 
     #[cold]

@@ -42,10 +42,10 @@
  * buffer; this is used by journal replay to determine which updates have been
  * done.
  *
- * The transaction commit path also ensures that replicas entry accounting
- * updates are properly marked in the superblock (so that we know whether we can
- * mount without data being unavailable); it will update the superblock if
- * bch2_accounting_mem_mod() tells it to.
+ * Replicas entry accounting updates are marked in the superblock (so that we
+ * know whether we can mount without data being unavailable) by write buffer
+ * intake, as they go into a journal write - before the flush write that makes
+ * them durable.
  */
 
 use crate::fs::{Dev, Fs};
@@ -57,7 +57,7 @@ use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, Valid
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::sb::members_format::MEMBER_INVALID;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::BchError;
 use crate::format::{self, Bpos};
 use crate::init::error::BkeyValidate;
 use crate::types::ArmOf;
@@ -353,26 +353,10 @@ pub(crate) fn mod_normal(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &
     Ok(())
 }
 
-fn update_sb_one(fs: &Fs, p: Bpos) -> Result<(), BchError> {
-    replicas_entry(&DiskAccountingPos::from_bpos(p)).map_or(Ok(()), |e| fs.mark_replicas(e))
-}
-
 fn mod_gc(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[u64]) -> Result<(), BchError> {
     let fs = t.fs();
-    let p = normalized_bpos(pos);
-    let a = Delta { p, d };
-
-    loop {
-        let r = {
-            let mut mark = fs.mark_lock().read();
-            accounting_mem::mem_add(fs, a, true, &mut mark)
-        };
-        match r {
-            Err(e) if e.matches(Errcode::btree_insert_need_mark_replicas) =>
-                t.drop_locks_do(|| update_sb_one(fs, p))?,
-            r => return r.map(|_| ()),
-        }
-    }
+    let a = Delta { p: normalized_bpos(pos), d };
+    accounting_mem::mem_add(fs, a, true, &mut fs.mark_lock().read()).map(|_| ())
 }
 
 pub fn add<A: KeyType>(t: &TransAttempt<'_, '_>, arm: A, d: A::Delta, gc: bool) -> Result<(), BchError> {
@@ -396,14 +380,6 @@ pub fn add_at(t: &TransAttempt<'_, '_>, pos: &DiskAccountingPos, d: &[i64], gc: 
 
     let d = <[u64]>::ref_from_bytes(d.as_bytes()).expect("i64s are u64s");
     if gc { mod_gc(t, pos, d) } else { mod_normal(t, pos, d) }
-}
-
-/*
- * Ensure accounting keys being updated are present in the superblock, when
- * applicable (i.e. replicas updates)
- */
-pub(crate) fn update_sb(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    t.trans().accounting.get().iter(t, |mut keys| keys.try_for_each(|k| update_sb_one(t.fs(), k.k.p)))
 }
 
 pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)

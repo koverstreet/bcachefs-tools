@@ -466,8 +466,7 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &DevsMask, check: WriteCheck,
 //
 // The table has a lock of its own, readers many and writers rare. The order
 // is sb_lock, then mark_lock - where accounting needs one of its entries and
-// the replicas entry to change together: its insert's check, kill,
-// gc_accounted - then this. write_super() takes it for read, in
+// the replicas entry to change together: kill, gc_accounted - then this. write_super() takes it for read, in
 // can_read_fs_with_devs(): it's never held across one.
 //
 // Journal entries are refcounted - a ref for each journal write holding one,

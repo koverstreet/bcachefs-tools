@@ -267,7 +267,6 @@ xmacro! {
         (no_btree_node, no_btree_node_stale_paths, 201),
         (0, btree_insert_fail, 202),
         (btree_insert_fail, btree_insert_btree_node_full, 203),
-        (btree_insert_fail, btree_insert_need_mark_replicas, 204),
         (btree_insert_fail, btree_insert_need_journal_res, 205),
         (btree_insert_fail, btree_insert_need_journal_reclaim, 206),
         (0, backpointer_to_overwritten_btree_node, 207),

@@ -221,16 +221,6 @@ pub fn to_keys(fs: &Fs, types_mask: u32) -> Result<Vec<u8>, BchError> {
 #[inline(never)]
 fn insert_locked(fs: &Fs, a: Delta<'_>, mark: &mut MarkWrite<'_>) -> Result<(), BchError> {
     let pos = DiskAccountingPos::from_bpos(a.p);
-
-    /*
-     * The replicas entry is checked for under the write lock, not before:
-     * between up_read and down_write replicas gc can drop it, as nothing in
-     * memory references it until this insert.
-     */
-    if replicas_entry(&pos).is_some_and(|e| !fs.replicas_marked(e)) {
-        return Err(fs.err(Errcode::btree_insert_need_mark_replicas));
-    }
-
     let acc = fs.accounting_mem_mut(mark);
 
     /* raced with another insert, already present: */
