@@ -9,7 +9,7 @@
 // the file is what keeps the old filesystem's allocator away from blocks
 // bcachefs is using, and removing it would corrupt both filesystems.
 
-use bcachefs_kernel::format::{SbFeatures, Sb, SbLayout, BCH_SB_SECTOR};
+use bcachefs_kernel::format::{SbFeatures, Sb, SbLayout};
 use bcachefs_kernel::os::blkdev;
 use bcachefs_kernel::fs::{Dev, FsFlag};
 use std::ffi::CString;
@@ -180,7 +180,7 @@ fn mark_unreserved_space(fs: &Fs, extents: &[CRange]) {
 
     // Also mark space for the default sb layout
     let sb_size = 1u64 << fs.dev_sb(&fs.sb_lock(), &ca).expect("device 0's superblock").sb().layout.sb_max_size_bits;
-    mark_nouse_range(&ca, 0, BCH_SB_SECTOR as u64 + sb_size * 2);
+    mark_nouse_range(&ca, 0, Sb::SECTOR as u64 + sb_size * 2);
 }
 
 /// Reserve space for bcachefs metadata file, return extents and inode number.
@@ -295,7 +295,7 @@ fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_bytes: u32) ->
 /// Returns the sb_size.
 fn add_default_sb_layout(layout: &mut SbLayout) -> Result<u32> {
     let sb_size = 1u32 << layout.sb_max_size_bits;
-    let bch_sb_sector = BCH_SB_SECTOR as u64;
+    let bch_sb_sector = Sb::SECTOR as u64;
 
     if layout.nr_superblocks as usize >= layout.sb_offset.len() {
         bail!("Can't add superblock: no space left in superblock layout");
@@ -455,10 +455,10 @@ fn migrate_fs(
             .map_err(|e| anyhow!("Error writing superblock: {}", e))?;
     }
 
-    // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
+    // Calculate reserve_start: round up (superblock_size * 2 + Sb::SECTOR) sectors
     // to bucket boundary (in bytes)
     let bucket_bytes = (fs.dev_get(0).expect("device 0").mi.get().bucket_size as u64) << 9;
-    let reserve_start = ((format_opts.superblock_size as u64 * 2 + BCH_SB_SECTOR as u64) << 9)
+    let reserve_start = ((format_opts.superblock_size as u64 * 2 + Sb::SECTOR as u64) << 9)
         .next_multiple_of(bucket_bytes);
 
     // Copy the filesystem tree
@@ -537,7 +537,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .map_err(|e| anyhow!("Error opening {}: {}", dev_path, e))?;
 
     // Zero the start of the disk to blow away the old superblock
-    let zeroes_len = ((BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Head<Sb>>();
+    let zeroes_len = ((Sb::SECTOR as usize) << 9) + std::mem::size_of::<Head<Sb>>();
     let zeroes = vec![0u8; zeroes_len];
     {
         use std::os::unix::fs::FileExt;
@@ -562,7 +562,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
     // Mark the new sb bucket range as nouse
     let ca = fs.dev_get(0).expect("device 0");
-    mark_nouse_range(&ca, 0, BCH_SB_SECTOR as u64 + sb_size as u64 * 2);
+    mark_nouse_range(&ca, 0, Sb::SECTOR as u64 + sb_size as u64 * 2);
 
     // Clear no_default_sb feature so recovery doesn't force ro
     {

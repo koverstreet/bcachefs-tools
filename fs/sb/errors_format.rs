@@ -527,5 +527,7 @@ pub struct SbFieldErrorsV2 {
     pub entries: [SbFieldErrorEntryV2; 0],
 }
 
-pub const BCH_SB_ERROR_ENTRY_V2_NR_MAX: u64 = (1 << 32) - 1;
-pub const BCH_SB_ERROR_ENTRY_V2_TIME_MAX: u64 = (1 << 40) - 1;
+impl SbFieldErrorEntryV2 {
+    pub const NR_MAX: u64 = (1 << 32) - 1;
+    pub const TIME_MAX: u64 = (1 << 40) - 1;
+}

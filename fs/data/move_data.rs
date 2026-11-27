@@ -44,7 +44,7 @@ use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeLevels, Com
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::format::Stripe;
-use crate::alloc::foreground::BCH_WATERMARK_MASK;
+
 use crate::alloc::write_point::WritePointSpecifier;
 use crate::bcachefs_ioctl::{DataOp, DataProgressDataTypeSpecial, IoctlData,
     IoctlDataScrub};
@@ -167,7 +167,7 @@ impl<'a> Moving<'a> {
         let node_key = BkeyBuf::from_key(k);
 
         let mut flags = CommitOpts::from(data_opts.commit_flags);
-        if data_opts.commit_flags.bits() & BCH_WATERMARK_MASK == wm::copygc as u32 {
+        if data_opts.commit_flags.bits() & wm::MASK == wm::copygc as u32 {
             flags = flags.watermark_hipri();
         }
 

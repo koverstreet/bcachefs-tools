@@ -46,7 +46,7 @@ use crate::os::sysfs::parse_int;
 use core::ffi::CStr;
 use crate::posix::inode_format::InodeOptId_arms;
 use crate::format::{CompressionOpt, CsumOpt, ErrorAction, StrHashOpt, VersionUpgradeOpt,
-    WriteDegradedAction, BCH_REPLICAS_MAX, BCH_SB_SECTOR, Sb, SbHead, SbFieldExt,
+    WriteDegradedAction, BCH_REPLICAS_MAX, Sb, SbHead, SbFieldExt,
     SbFieldExtFlags0, DegradedAction, ScrubJournalOpt, DataType};
 use crate::types::bits_to_longs;
 use cstruct_macros::{MaybeZeroable, bch_enum, Options, TypeInfo};
@@ -495,7 +495,7 @@ pub struct Opts {
     pub direct_io: u8,
 
     /// Sector offset of superblock
-    #[opt(uint(0, i64::MAX), flags = mount, default = BCH_SB_SECTOR, hint = "offset")]
+    #[opt(uint(0, i64::MAX), flags = mount, default = Sb::SECTOR, hint = "offset")]
     pub sb: u64,
 
     #[opt(bool, flags = fs | mount | hidden)]

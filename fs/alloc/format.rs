@@ -123,9 +123,10 @@ pub struct AllocV4 {
 }
 
 #[allow(non_upper_case_globals)]
-pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
-#[allow(non_upper_case_globals)]
-pub const BCH_ALLOC_V4_U64s: usize = size_of::<AllocV4>() / size_of::<u64>();
+impl AllocV4 {
+    pub const U64s_V0: u32 = 6;
+    pub const U64s: usize = size_of::<AllocV4>() / size_of::<u64>();
+}
 
 #[bitfield(u32)]
 pub struct AllocV4Flags {

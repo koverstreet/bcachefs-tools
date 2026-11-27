@@ -368,7 +368,7 @@ pub struct InlineData {
  * bad one is rewritten, so this is what can still say which key's data went bad.
  * Never an encryption type: an encrypted fs encrypts the node.
  *
- * BCH_INLINE_DATA_POISONED in @flags: it failed its checksum, and its damage was
+ * POISONED in @flags: it failed its checksum, and its damage was
  * recorded - reads of it fail without checking it again.
  */
 #[repr(C)]
@@ -381,7 +381,9 @@ pub struct InlineDataCsum {
     pub csum: Csum,
 }
 
-pub const BCH_INLINE_DATA_POISONED: u8 = 1 << 0;
+impl InlineDataCsum {
+    pub const POISONED: u8 = 1 << 0;
+}
 
 #[whole(tail = data: [u8], bkey)]
 #[repr(C)]

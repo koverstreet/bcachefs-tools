@@ -146,7 +146,7 @@ macro_rules! type_nr_counters {
 
 const TYPE_NR_COUNTERS: [usize; TYPE_NR] = DiskAccountingPos_arms!(type_nr_counters);
 
-pub const MAX_COUNTERS: usize = BCH_ACCOUNTING_MAX_COUNTERS as usize;
+pub const MAX_COUNTERS: usize = Accounting::MAX_COUNTERS as usize;
 pub type Counters = [u64; MAX_COUNTERS];
 
 pub trait KeyType: ArmOf<DiskAccountingPosStorage, Tag = u8> + Copy {

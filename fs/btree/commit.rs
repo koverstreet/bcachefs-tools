@@ -25,7 +25,7 @@ use crate::btree::trigger::{run_mem_triggers, run_trans_triggers, verify_update_
 use crate::c;
 use crate::btree::locking::BtreeBkeyCachedCommon;
 use crate::alloc::buckets::ReservationFlags;
-use crate::alloc::foreground::{BCH_WATERMARK_MASK, Watermark};
+use crate::alloc::foreground::Watermark;
 use crate::btree::journal_overlay::JournalKeys;
 use crate::btree::update::BtreeInsertEntry;
 use crate::fs::FsFlag;
@@ -56,7 +56,7 @@ fn jset_u64s(u64s: usize) -> usize {
 }
 
 fn watermark(flags: CommitOpts) -> u32 {
-    flags.to_c().bits() & BCH_WATERMARK_MASK
+    flags.to_c().bits() & Watermark::MASK
 }
 
 fn has(flags: CommitOpts, f: CommitFlags) -> bool {

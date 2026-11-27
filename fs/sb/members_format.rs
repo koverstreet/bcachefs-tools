@@ -19,8 +19,6 @@ pub const BCH_SB_MEMBERS_MAX: u32 = 256;
  */
 pub const BCH_SB_MEMBER_INVALID: u32 = 255;
 
-pub const BCH_MIN_NR_NBUCKETS: u32 = 1 << 9;
-
 #[bch_enum(open)]
 #[repr(u32)]
 pub enum IopsMeasurement {
@@ -85,15 +83,19 @@ pub struct Member {
  * btree_allocated_bitmap can represent sector addresses of a u64: it itself has
  * 64 elements, so 64 - ilog2(64)
  */
-pub const BCH_MI_BTREE_BITMAP_SHIFT_MAX: u32 = 58;
+impl Member {
+    pub const MIN_NBUCKETS: u32 = 1 << 9;
 
-/*
- * This limit comes from the bucket_gens array - it's a single allocation, and
- * kernel allocation are limited to INT_MAX
- */
-pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
+    pub const BTREE_BITMAP_SHIFT_MAX: u32 = 58;
 
-pub const BCH_MEMBER_V1_BYTES: u32 = 56;
+    /*
+     * This limit comes from the bucket_gens array - it's a single allocation, and
+     * kernel allocation are limited to INT_MAX
+     */
+    pub const NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
+
+    pub const V1_BYTES: u32 = 56;
+}
 
 #[bitfield(Le64)]
 pub struct MemberFlags {

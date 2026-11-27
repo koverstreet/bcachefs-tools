@@ -151,9 +151,8 @@ use crate::sb::errors_format::SbFieldErrorsV2;
 use crate::sb::members::DevReadRefKind;
 use crate::sb::members_format::{SbFieldMembersV2, BCH_SB_MEMBERS_MAX, MemberErrorType};
 use crate::util::time_stats::TimeStat;
-use crate::format::{Sb, SbFieldCrypt, __uuid_t, Csum, Key,
-    BCH_SB_EXTENT_BP_SHIFT_DEFAULT, bch_sb_field, SbFieldExt, SbLayout,
-    BCH_SB_LAYOUT_SECTOR, BCH_SB_LAYOUT_SIZE_BITS_MAX, BCH_SB_SECTOR, BCH_SINGLE_DEVICE_SB_FIELDS,
+use crate::format::{Sb, SbFieldCrypt, __uuid_t, Csum, Key, bch_sb_field, SbFieldExt, SbLayout,
+    BCH_SINGLE_DEVICE_SB_FIELDS,
     CsumType, DegradedAction, ErrorAction, SbCompat, bch_sb_field_by_tag, bch_sb_field_match,
     SbFieldExtWhole, SbHead, BCH_VERSION, SbCompats, SbFeatures, SbFieldType, Btree,
     DataType, Nonce, MetadataVersion, SbFeature};
@@ -496,7 +495,7 @@ fn validate_layout(layout: &SbLayout, out: &mut Printbuf) -> Result<(), BchError
                "Invalid superblock layout: no superblocks")?;
     sb_err_on!(out, usize::from(layout.nr_superblocks) > layout.sb_offset.len(),
                invalid_sb_layout_nr_superblocks, "Invalid superblock layout: too many superblocks")?;
-    sb_err_on!(out, u32::from(layout.sb_max_size_bits) > BCH_SB_LAYOUT_SIZE_BITS_MAX,
+    sb_err_on!(out, u32::from(layout.sb_max_size_bits) > SbLayout::SIZE_BITS_MAX,
                invalid_sb_layout_sb_max_size_bits, "Invalid superblock layout: max_size_bits too high")?;
 
     let max_sectors = 1u64 << layout.sb_max_size_bits;
@@ -1260,7 +1259,7 @@ fn read_one_super(io: &mut SbIo, storage: &mut SbStorage, offset: u64,
             Err(VStructError::Overrun { want, .. }) => *want,
             Err(e) => return sb_err_on!(err, true, invalid_sb_too_big, "Invalid superblock: {e}"),
         };
-        let max = 512u64 << u32::from(h.layout.sb_max_size_bits).min(BCH_SB_LAYOUT_SIZE_BITS_MAX);
+        let max = 512u64 << u32::from(h.layout.sb_max_size_bits).min(SbLayout::SIZE_BITS_MAX);
         sb_err_on!(err, bytes as u64 > max, invalid_sb_too_big,
                    "Invalid superblock: too big (got {bytes} bytes, layout max {max})")?;
 
@@ -1290,7 +1289,7 @@ fn read_one_super(io: &mut SbIo, storage: &mut SbStorage, offset: u64,
 fn read_layout_sector(io: &mut SbIo, storage: &mut SbStorage,
                       err: &mut Printbuf) -> Result<SbLayout, BchError> {
     let buf = plain_bytes_mut(&mut storage[..]);
-    io.read(BCH_SB_LAYOUT_SECTOR.into(), &mut buf[..size_of::<SbLayout>()])?;
+    io.read(SbLayout::SECTOR.into(), &mut buf[..size_of::<SbLayout>()])?;
     let layout = read_past::<SbLayout>(buf, 0);
     validate_layout(&layout, err)?;
     Ok(layout)
@@ -1469,7 +1468,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Hold
         // the primary first, for its layout; the layout's own sector if it
         // can't be read
         let mut primary_err = Printbuf::new();
-        match read_one_super(io, &mut storage, BCH_SB_SECTOR.into(), &mut primary_err) {
+        match read_one_super(io, &mut storage, Sb::SECTOR.into(), &mut primary_err) {
             Ok(()) => {
                 let primary_seq = io.seq;
                 let layout = head_of(plain_bytes(&storage[..])).layout;
@@ -2751,7 +2750,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     cpu.encryption_type         .set(src.encryption_type());
 
     cpu.extent_bp_shift.set(match src.extent_bp_shift() {
-        0 => BCH_SB_EXTENT_BP_SHIFT_DEFAULT as u8,
+        0 => Sb::EXTENT_BP_SHIFT_DEFAULT as u8,
         shift => shift,
     });
 

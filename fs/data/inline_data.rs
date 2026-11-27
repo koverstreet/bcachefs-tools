@@ -12,7 +12,7 @@ use crate::btree::bkey::{AnyKeySC, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal, Bk
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
-use crate::data::extents_format::{BCH_INLINE_DATA_POISONED, InlineData, InlineDataCsum,
+use crate::data::extents_format::{InlineData, InlineDataCsum,
     InlineDataV2};
 use crate::opts::InodeOpts;
 use crate::data::checksum::csum_err_msg;
@@ -149,7 +149,7 @@ impl InlineDataCsum {
     }
 
     pub fn poisoned(&self) -> bool {
-        self.flags & BCH_INLINE_DATA_POISONED != 0
+        self.flags & InlineDataCsum::POISONED != 0
     }
 }
 
@@ -213,7 +213,7 @@ async fn poison_task(fs: &Fs, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
         if h.poisoned() {
             return Ok(());
         }
-        h.flags |= BCH_INLINE_DATA_POISONED;
+        h.flags |= InlineDataCsum::POISONED;
         t.update(&iter, n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         if record {

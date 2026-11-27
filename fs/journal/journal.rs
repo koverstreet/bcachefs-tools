@@ -126,7 +126,7 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 
 use crate::btree::iter::TransAttempt;
 use crate::c;
-use crate::alloc::foreground::{BCH_WATERMARK_MASK, Watermark};
+use crate::alloc::foreground::Watermark;
 use crate::init::recovery::NotRw;
 use crate::util::time_stats::TimeStat;
 use self::JournalCycleFlags as Cycle;
@@ -684,7 +684,7 @@ pub enum JournalCycleFlags {
 #[bch_enum(closed)]
 #[repr(u32)]
 pub enum JournalResFlag {
-    __JOURNAL_RES_GET_NONBLOCK = crate::alloc::foreground::BCH_WATERMARK_BITS,
+    __JOURNAL_RES_GET_NONBLOCK = Watermark::BITS,
     __JOURNAL_RES_GET_CHECK,
 }
 
@@ -972,7 +972,7 @@ impl Journal {
         let ret = !self.lock.can_discard.get() &&
             self.lock.seq_ondisk.get() == fs.journal_cur_seq() &&
             self.lock.cur_entry_error.get() != 0 &&
-            (flags & BCH_WATERMARK_MASK) >= Watermark::reclaim as u32;
+            (flags & Watermark::MASK) >= Watermark::reclaim as u32;
 
         if ret {
             let mut msg = LogMsg::new(fs);
@@ -1106,7 +1106,7 @@ impl Journal {
 
             ebug_assert!(new.count(new.idx()) != 0, "journal entry open with no ref on its buf");
 
-            if (flags & BCH_WATERMARK_MASK) < self.lock.hot.watermark.get() {
+            if (flags & Watermark::MASK) < self.lock.hot.watermark.get() {
                 return None;
             }
 
@@ -1730,7 +1730,7 @@ impl Journal {
                 return fs.throw(Errcode::journal_blocked);
             }
 
-            if (flags & BCH_WATERMARK_MASK) < self.lock.hot.watermark.get() {
+            if (flags & Watermark::MASK) < self.lock.hot.watermark.get() {
                 break fs.throw(Errcode::journal_full);
             }
 

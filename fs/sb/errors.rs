@@ -20,8 +20,7 @@ use core::cmp::{Ordering, Reverse};
 use cstruct_macros::{MaybeZeroable, bitfield, TypeInfo, BitfieldMembers};
 use crate::btree::bkey::ValidateFlags;
 use crate::format::{Sb, SbFieldType};
-use crate::sb::errors_format::{BCH_SB_ERROR_ENTRY_V2_NR_MAX, BCH_SB_ERROR_ENTRY_V2_TIME_MAX,
-    SbFieldErrorEntry, SbFieldErrors, SbFieldErrorsV2,
+use crate::sb::errors_format::{SbFieldErrorEntry, SbFieldErrors, SbFieldErrorsV2,
     SbFieldErrorEntryV2};
 pub use crate::sb::errors_format::{FsckFlags, SbErrorId};
 use crate::util::{vstructs::{Unvalidated, Validated}, alloc::Vec, DateTime, Printbuf};
@@ -63,7 +62,7 @@ pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = SbErrorId
 /// A v2 count, which saturates: one that did is a floor, not an exact value.
 pub fn prt_error_nr(out: &mut Printbuf, nr: u64) {
     write!(out, "{nr}");
-    if nr >= BCH_SB_ERROR_ENTRY_V2_NR_MAX {
+    if nr >= SbFieldErrorEntryV2::NR_MAX {
         write!(out, "+");
     }
 }
@@ -127,9 +126,9 @@ impl SbFieldErrorEntryV2 {
     pub(crate) fn new(id: SbErrorId, nr: u64, first: u64, last: u64) -> Self {
         let mut e = Self::default();
         e.v.set_id(id);
-        e.v.set_nr(nr.min(BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
-        e.v.set_first_error_time(first.min(BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-        e.v.set_last_error_time(last.min(BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        e.v.set_nr(nr.min(SbFieldErrorEntryV2::NR_MAX) as u32);
+        e.v.set_first_error_time(first.min(SbFieldErrorEntryV2::TIME_MAX));
+        e.v.set_last_error_time(last.min(SbFieldErrorEntryV2::TIME_MAX));
         e
     }
 }

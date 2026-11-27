@@ -218,7 +218,7 @@ use crate::btree::interior::BTREE_NODE_RESERVE;
 use crate::data::reconcile::work::ReconcileScan;
 use crate::journal::buckets::JournalDevice;
 use crate::opts::Opts;
-use crate::sb::members_format::{Member, BCH_MEMBER_NBUCKETS_MAX, SbFieldMembersV2,
+use crate::sb::members_format::{Member, SbFieldMembersV2,
     BCH_SB_MEMBERS_MAX, MemberErrorType};
 use crate::alloc::accounting::{self, dev_usage_init};
 use crate::btree::iter::{trans_commit_do, CommitFlags, UpdateTriggerFlags};
@@ -1707,8 +1707,8 @@ impl Fs {
             self.request_scan(s, false)?;
         }
 
-        if nbuckets > u64::from(BCH_MEMBER_NBUCKETS_MAX) {
-            prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, BCH_MEMBER_NBUCKETS_MAX);
+        if nbuckets > u64::from(Member::NBUCKETS_MAX) {
+            prt!(err, "New device size too big ({} greater than max {})\n", nbuckets, Member::NBUCKETS_MAX);
             return self.throw(Errcode::device_size_too_big);
         }
 

@@ -15,7 +15,7 @@
 //!
 //! Each check can explain itself into a trace, for reconcile_set_pending.
 
-use crate::alloc::{disk_groups::Target, foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark}};
+use crate::alloc::{disk_groups::Target, foreground::{AllocWait, Watermark}};
 use crate::btree::{bkey::{BkeySC, BkeyV}, iter::TransAttempt};
 use crate::data::update::{DataUpdateOpts, DataUpdateType};
 use crate::init::dev::DevsList;
@@ -48,7 +48,7 @@ fn no_room<T>(fs: &Fs, need_copygc: bool) -> Result<T, BchError> {
 }
 
 fn watermark(data_opts: &DataUpdateOpts) -> Watermark {
-    Watermark::from_bits(data_opts.commit_flags.bits() & BCH_WATERMARK_MASK)
+    Watermark::from_bits(data_opts.commit_flags.bits() & Watermark::MASK)
 }
 
 impl Fs {

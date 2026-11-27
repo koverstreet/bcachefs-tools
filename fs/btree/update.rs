@@ -180,7 +180,7 @@ impl BtreeInsertEntry {
 pub enum TransCommitFlagBit {
     /* First bits for Watermark: */
     /// don't check for enospc
-    no_enospc = crate::alloc::foreground::BCH_WATERMARK_BITS + 1,
+    no_enospc = Watermark::BITS + 1,
     /// don't attempt to take a ref on c->writes
     no_check_rw,
     /// don't take a journal reservation, instead pin journal entry

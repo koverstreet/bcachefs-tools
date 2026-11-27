@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
+use crate::format::Sb;
 use crate::fs::{Dev, StateLockWrite, Fs};
 use crate::alloc::accounting::{self, mod_dev_cached_sectors};
 use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
@@ -40,7 +41,7 @@ use cstruct_macros::{MaybeZeroable, bitfield, Fieldwise, Plain, TypeInfo, bch_en
 use core::cell::Cell;
 use nestify::nest;
 use crate::format::{Bpos, Btree, CompressionType, DataType, BkeyType, BCH_BKEY_PTRS_MAX,
-    BCH_REPLICAS_MAX, BCH_SB_SECTOR, Bkey, SbCompat, SbCompats};
+    BCH_REPLICAS_MAX, Bkey, SbCompat, SbCompats};
 
 #[bch_enum(flags)]
 #[repr(u32)]
@@ -928,7 +929,7 @@ fn trans_mark_dev_sb_in(trans: &TransGuard<'_>, ca: &Dev, flags: UpdateTriggerFl
         fs.dev_sb(&sb, ca).expect("marking a device with no superblock").sb().layout
     };
     let sb_sectors = 1u64 << layout.sb_max_size_bits;
-    let sb_sector = u64::from(BCH_SB_SECTOR);
+    let sb_sector = u64::from(Sb::SECTOR);
     let mut bucket = (0, 0);
 
     for offset in layout.sb_offset[..usize::from(layout.nr_superblocks)].iter().map(|o| o.get()) {

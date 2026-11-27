@@ -21,7 +21,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::alloc::capacity::DiskReservation;
-use crate::alloc::foreground::{AllocWait, BCH_WATERMARK_MASK, Watermark};
+use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -575,7 +575,7 @@ impl DataUpdate {
         self.op.set(w::pages_stable | w::pages_owned | w::data_encoded |
                     w::update | data_opts.write_flags);
         self.op.bits.set_compression_opt(io_opts.background_compression);
-        let watermark = (data_opts.commit_flags.bits() & BCH_WATERMARK_MASK)
+        let watermark = (data_opts.commit_flags.bits() & Watermark::MASK)
             .max(Watermark::normal as u32);
         self.op.bits.set_watermark(watermark as u8);
 

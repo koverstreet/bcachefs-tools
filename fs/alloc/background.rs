@@ -483,8 +483,8 @@ use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyVal, BkeyWhole
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
                          UpdateTriggerFlags};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BCH_ALLOC_V4_U64s,
-    BCH_ALLOC_V4_U64s_V0, BucketGens, BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
+use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BucketGens,
+    BCH_ALLOC_FIELDS_V1, BCH_ALLOC_FIELDS_V2};
 use crate::alloc::lru_format::{BCH_LRU_BUCKET_FRAGMENTATION_START, LRU_TIME_MAX};
 use crate::errcode::{Errcode, BchError};
 use crate::init::error::{id, BkeyValidate};
@@ -655,7 +655,7 @@ pub fn alloc_to_v4<V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> AllocV4 {
         a.stripe_refcount      = (u.stripe != 0).into();
         a
     });
-    a.set_backpointers_start(BCH_ALLOC_V4_U64s as u8);
+    a.set_backpointers_start(AllocV4::U64s as u8);
     a
 }
 
@@ -677,7 +677,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             // Widened to all of today's struct: say so, for a kernel that
             // reads by BACKPOINTERS_START - one from before it read by length
             // would drop what's written past an older start
-            a.v_mut().set_backpointers_start(BCH_ALLOC_V4_U64s as u8);
+            a.v_mut().set_backpointers_start(AllocV4::U64s as u8);
             return Ok(a);
         }
 
@@ -938,7 +938,7 @@ impl AllocV4 {
     /// inline: alloc_v4_u64s_noerror().
     fn u64s_noerror(&self) -> usize {
         let start = match self.backpointers_start() {
-            0 => BCH_ALLOC_V4_U64s_V0 as usize,
+            0 => AllocV4::U64s_V0 as usize,
             s => s.into(),
         };
         start + usize::from(self.nr_backpointers()) * (size_of::<Backpointer>() / size_of::<u64>())

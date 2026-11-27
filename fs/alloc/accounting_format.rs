@@ -57,7 +57,9 @@ pub struct Accounting {
     pub d: [u64; 0],
 }
 
-pub const BCH_ACCOUNTING_MAX_COUNTERS: u32 = 3;
+impl Accounting {
+    pub const MAX_COUNTERS: u32 = 3;
+}
 
 #[bch_enum(open)]
 #[nr]

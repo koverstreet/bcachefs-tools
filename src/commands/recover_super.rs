@@ -4,7 +4,7 @@ use std::os::fd::AsFd;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::ValidateFlags;
 use bcachefs_kernel::os::blkdev;
-use bcachefs_kernel::format::{Sb, BCH_SB_SECTOR};
+use bcachefs_kernel::format::Sb;
 use bcachefs_kernel::opts::Opts;
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::sb::SbFieldType;
@@ -196,7 +196,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
         block_size << 9,
         bucket_size << 9,
         sb_max_size,
-        BCH_SB_SECTOR as u64,
+        Sb::SECTOR as u64,
         dev_size >> 9,
         false,
     )?;

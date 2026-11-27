@@ -1205,9 +1205,15 @@ impl MetadataVersion {
     pub const CURRENT: Self = Self(Self::NR - 1);
 }
 
-pub const BCH_SB_SECTOR: u32 = 8;
+impl Sb {
+    pub const SECTOR: u32 = 8;
+    pub const EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
+}
 
-pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
+impl SbLayout {
+    pub const SIZE_BITS_MAX: u32 = 16; /* 32 MB */
+    pub const SECTOR: u32 = 7;
+}
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, MaybeZeroable, Plain, TypeInfo)]
@@ -1223,8 +1229,6 @@ pub struct SbLayout {
 // superblock buckets are marked - and may be read mid-edit, each offset as
 // before or after
 impl crate::util::projections::TearSafe for SbLayout {}
-
-pub const BCH_SB_LAYOUT_SECTOR: u32 = 7;
 
 /*
  * @offset	- sector where this sb was written
@@ -1440,8 +1444,6 @@ pub struct SbFlags6 {
     #[bits(2)]  write_degraded_action:  WriteDegradedAction,
     __:                                 u2,
 }
-
-pub const BCH_SB_EXTENT_BP_SHIFT_DEFAULT: u32 = 10;
 
 
 impl SbFeatures {

@@ -114,8 +114,10 @@ pub enum Watermark {
     interior_updates,
 }
 
-pub const BCH_WATERMARK_BITS: u32 = 3;
-pub const BCH_WATERMARK_MASK: u32 = !(!0 << BCH_WATERMARK_BITS);
+impl Watermark {
+    pub const BITS: u32 = 3;
+    pub const MASK: u32 = !(!0 << Self::BITS);
+}
 
 pub const OPEN_BUCKETS_COUNT: u32 = 4096;
 

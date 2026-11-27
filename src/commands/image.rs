@@ -4,6 +4,7 @@
 // primary device, then migrates metadata to the primary and drops the temp device.
 
 use bcachefs_kernel::fs::Dev;
+use bcachefs_kernel::sb::members_format::Member;
 use std::ffi::CString;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use bcachefs_kernel::data::{write::WriteFlags, moving::{MoveStats, MovingCtxt}};
 use bcachefs_kernel::errcode::Errcode;
 use bcachefs_kernel::opts::{Opts, OptFlags, OptId};
 use bcachefs_kernel::sb::members::DevReadRefKind;
-use bcachefs_kernel::sb::members_format::{BCH_MIN_NR_NBUCKETS, SbFieldMembersV2};
+use bcachefs_kernel::sb::members_format::SbFieldMembersV2;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc};
@@ -568,7 +569,7 @@ fn image_update_inner(
     let metadata_dev_size = std::cmp::max(
         input_bytes,
         std::cmp::max(
-            fs.opts().btree_node_size.get() as u64 * BCH_MIN_NR_NBUCKETS as u64,
+            fs.opts().btree_node_size.get() as u64 * Member::MIN_NBUCKETS as u64,
             64 << 20,
         ),
     );

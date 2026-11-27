@@ -10,12 +10,12 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::alloc::{buckets::Bucket, disk_groups::Target};
 use bcachefs_kernel::init::dev::{bch_sb_buf, SbHandle};
 use bcachefs_kernel::opts::{Opts, OptId};
-use bcachefs_kernel::sb::members_format::{Member, BCH_MIN_NR_NBUCKETS, SbFieldMembersV2};
+use bcachefs_kernel::sb::members_format::{Member, SbFieldMembersV2};
 use bcachefs_kernel::os::blkdev;
 
 use crate::util::{die, read_exact_at, write_all_at};
 use bcachefs_kernel::format::{MetadataVersion, SbFeatures, EncryptedKey, Key, Sb,
-    SbFieldCrypt, SbFieldExt, SbLayout, BCH_SB_LAYOUT_SECTOR, BCH_SB_SECTOR};
+    SbFieldCrypt, SbFieldExt, SbLayout};
 use bcachefs_kernel::sb::{io::{BCHFS_MAGIC, SbResize}, members::SbMembersMut};
 use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::alloc::disk_groups::SbDiskGroupsMut;
@@ -349,7 +349,7 @@ pub fn format(
         sb.sb_mut().dev_idx = idx as u8;
 
         if dev.sb_offset == 0 {
-            dev.sb_offset = BCH_SB_SECTOR as u64;
+            dev.sb_offset = Sb::SECTOR as u64;
             dev.sb_end = size_sectors;
         }
 
@@ -368,9 +368,9 @@ pub fn format(
 
         let fd = dev.as_fd();
 
-        if dev.sb_offset == BCH_SB_SECTOR as u64 {
+        if dev.sb_offset == Sb::SECTOR as u64 {
             // Zero start of disk
-            let zeroes = vec![0u8; (BCH_SB_SECTOR as usize) << 9];
+            let zeroes = vec![0u8; (Sb::SECTOR as usize) << 9];
             write_all_at(fd, &zeroes, 0)
                 .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
@@ -470,7 +470,7 @@ fn btree_node_size_min(opts: &Opts) -> u64 {
 /// but gets dicey). Within that constraint, try to reach at least
 /// encoded_extent_max to avoid fragmenting checksummed/compressed extents.
 fn dev_bucket_size_clamp(fs_opts: Opts, dev_size: u64, fs_bucket_size: u64) -> u64 {
-    let min_nr_nbuckets = BCH_MIN_NR_NBUCKETS as u64;
+    let min_nr_nbuckets = Member::MIN_NBUCKETS as u64;
 
     // Largest bucket size that still gives >= 2048 buckets
     let max_size = rounddown_pow_of_two(dev_size / (min_nr_nbuckets * 4))
@@ -534,7 +534,7 @@ pub fn pick_bucket_size(opts: &Opts, devs: &[DevOpts]) -> u64 {
     // Hard minimum: bucket must hold a btree node
     let mut bucket_size = (opts.block_size as u64).max(btree_node_size_min(opts));
 
-    let min_dev_size = BCH_MIN_NR_NBUCKETS as u64 * bucket_size;
+    let min_dev_size = Member::MIN_NBUCKETS as u64 * bucket_size;
     for dev in devs {
         if dev.fs_size < min_dev_size {
             let path = dev.path.to_string_lossy();
@@ -599,11 +599,11 @@ pub fn check_bucket_size(opts: &Opts, dev: &DevOpts) {
         ));
     }
 
-    if dev.nbuckets < BCH_MIN_NR_NBUCKETS as u64 {
+    if dev.nbuckets < Member::MIN_NBUCKETS as u64 {
         die(&format!(
             "Not enough buckets: {}, need {} (bucket size {})",
             dev.nbuckets,
-            BCH_MIN_NR_NBUCKETS,
+            Member::MIN_NBUCKETS,
             dev.opts.bucket_size
         ));
     }
@@ -631,10 +631,10 @@ pub fn super_write(fd: BorrowedFd<'_>, sb: &mut Sb) {
         let sb_bytes = sb_src.len();
         let layout_src = &sb_src[layout_range.clone()];
 
-        if offset_sectors == BCH_SB_SECTOR as u64 && bs > 4096 {
+        if offset_sectors == Sb::SECTOR as u64 && bs > 4096 {
             // Layout and superblock are in the same aligned block;
             // write them together.
-            let layout_offset = (BCH_SB_LAYOUT_SECTOR as usize) << 9;
+            let layout_offset = (SbLayout::SECTOR as usize) << 9;
             let sb_offset = (offset_sectors as usize) << 9;
             let write_len = (sb_offset + sb_bytes).next_multiple_of(bs);
             let mut buf = vec![0u8; write_len];
@@ -644,7 +644,7 @@ pub fn super_write(fd: BorrowedFd<'_>, sb: &mut Sb) {
 
             pwrite_exact(fd, &buf, 0);
         } else {
-            if offset_sectors == BCH_SB_SECTOR as u64 {
+            if offset_sectors == Sb::SECTOR as u64 {
                 // Write backup layout in the block preceding the superblock
                 let mut buf = vec![0u8; bs];
 
@@ -701,7 +701,7 @@ pub fn sb_layout_init(
     // Create two superblocks in the allowed range
     let mut sb_pos = sb_start;
     for i in 0..l.nr_superblocks as usize {
-        if sb_pos != BCH_SB_SECTOR as u64 {
+        if sb_pos != Sb::SECTOR as u64 {
             let align = (block_size >> 9) as u64;
             sb_pos = sb_pos.next_multiple_of(align);
         }
@@ -722,7 +722,7 @@ pub fn sb_layout_init(
     // If we're not creating a superblock at the default offset, it
     // means we're being run from the migrate tool and we could be
     // overwriting existing data if we write to the end of the disk
-    if sb_start == BCH_SB_SECTOR as u64 && !no_sb_at_end {
+    if sb_start == Sb::SECTOR as u64 && !no_sb_at_end {
         let sb_max_size = 1u64 << l.sb_max_size_bits;
         let bucket_sectors = (bucket_size >> 9) as u64;
         let backup_sb = (sb_end - sb_max_size) / bucket_sectors * bucket_sectors;

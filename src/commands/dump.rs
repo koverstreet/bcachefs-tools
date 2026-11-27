@@ -1,4 +1,4 @@
-use bcachefs_kernel::format::{BkeyType, SbLayout, BCH_SB_LAYOUT_SECTOR, Val, Bkey,
+use bcachefs_kernel::format::{BkeyType, SbLayout, Val, Bkey,
     BkeyFormat, BKEY_U64s, Bset, BTREE_MAX_DEPTH, btree_node, BtreeNodeEntry, DegradedAction,
     ErrorAction, Jset};
 use bcachefs_kernel::fs::Dev;
@@ -463,7 +463,7 @@ fn get_sb_journal(fs: &Fs, ca: &Dev, entire_journal: bool, d: &mut DumpDev) {
 
         // Superblock layout
         range_add(&mut d.sb,
-                  (BCH_SB_LAYOUT_SECTOR as u64) << 9,
+                  (SbLayout::SECTOR as u64) << 9,
                   std::mem::size_of::<SbLayout>() as u64);
 
         // All superblock copies

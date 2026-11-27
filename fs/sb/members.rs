@@ -7,8 +7,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIte
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::init::dev::{DevsList, DevsMask, bch_sb_buf, DevFlag};
-use crate::sb::members_format::{Member, BCH_MEMBER_NBUCKETS_MAX, BCH_MI_BTREE_BITMAP_SHIFT_MAX,
-    BCH_MIN_NR_NBUCKETS, SbFieldMembersV1, SbFieldMembersV2, BCH_SB_MEMBER_INVALID,
+use crate::sb::members_format::{Member, SbFieldMembersV1, SbFieldMembersV2, BCH_SB_MEMBER_INVALID,
     BCH_SB_MEMBERS_MAX, IopsMeasurement, MemberErrorType};
 use crate::errcode::{Errcode, BchError};
 use crate::locking::MemallocFlags;
@@ -109,7 +108,7 @@ pub struct MemberCpu {
 // to edit one, SbHandle::member_mut(), for a member that's all there.
 // ---------------------------------------------------------------------------
 
-const BCH_MEMBER_V1_BYTES: usize = crate::sb::members_format::BCH_MEMBER_V1_BYTES as usize;
+const V1_BYTES: usize = Member::V1_BYTES as usize;
 const MEMBERS_V2_HEAD: usize = size_of::<Head<SbFieldMembersV2>>();
 const MEMBERS_V1_HEAD: usize = size_of::<Head<SbFieldMembersV1>>();
 
@@ -267,7 +266,7 @@ impl<S: InPlace> SbFieldMembersV2<S> {
 
 impl<S: InPlace> SbFieldMembersV1<S> {
     fn members(&self) -> Option<Strided<'_, Member>> {
-        Strided::new(&self._members, BCH_MEMBER_V1_BYTES)
+        Strided::new(&self._members, V1_BYTES)
     }
 }
 
@@ -303,9 +302,9 @@ impl bch_sb_buf {
     }
 
     fn put_member_v1<F: SbSection<Arm: Unsized> + ?Sized>(&mut self, start: usize, i: u32, m: &Member) {
-        let at = start + i as usize * BCH_MEMBER_V1_BYTES;
+        let at = start + i as usize * V1_BYTES;
         let f = bytes_of_mut(self.field_mut::<F>().expect("members: just sized"));
-        f[at..at + BCH_MEMBER_V1_BYTES].copy_from_slice(&plain_bytes(m)[..BCH_MEMBER_V1_BYTES]);
+        f[at..at + V1_BYTES].copy_from_slice(&plain_bytes(m)[..V1_BYTES]);
     }
 }
 
@@ -321,7 +320,7 @@ pub trait SbMembersMut: SbResize {
         }
 
         let nr = u32::from(self.sb().nr_devices);
-        let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * nr as usize).div_ceil(size_of::<u64>());
+        let u64s = (MEMBERS_V1_HEAD + V1_BYTES * nr as usize).div_ceil(size_of::<u64>());
         self.field_resize::<SbFieldMembersV1>(u64s as u32)
             .ok_or(BchError::from(Errcode::ENOSPC_sb_members))?;
 
@@ -341,7 +340,7 @@ pub trait SbMembersMut: SbResize {
         if self.field::<SbFieldMembersV2>().is_none() {
             let mi = self.field_resize::<SbFieldMembersV2>(u64s)?;
             mi.pad = Default::default();
-            mi.member_bytes = (BCH_MEMBER_V1_BYTES as u16).into();
+            mi.member_bytes = (V1_BYTES as u16).into();
 
             for i in 0..nr {
                 let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_else(::pin_init::zeroed);
@@ -379,13 +378,13 @@ fn invalid() -> Result<(), BchError> {
 
 fn validate_member(err: &mut Printbuf, m: &Member, sb: &Sb<Unvalidated>, i: u32) -> Result<(), BchError> {
     let nbuckets = m.nbuckets.get();
-    sb_err_on!(err, nbuckets > BCH_MEMBER_NBUCKETS_MAX.into(), invalid_sb_members,
-               "device {i}: too many buckets (got {nbuckets}, max {})", BCH_MEMBER_NBUCKETS_MAX)?;
+    sb_err_on!(err, nbuckets > Member::NBUCKETS_MAX.into(), invalid_sb_members,
+               "device {i}: too many buckets (got {nbuckets}, max {})", Member::NBUCKETS_MAX)?;
 
     // wrapping, as C's: a first_bucket past nbuckets isn't caught here
     let usable = nbuckets.wrapping_sub(m.first_bucket.get().into());
-    sb_err_on!(err, usable < BCH_MIN_NR_NBUCKETS.into(), invalid_sb_members,
-               "device {i}: not enough buckets (got {usable}, min {})", BCH_MIN_NR_NBUCKETS)?;
+    sb_err_on!(err, usable < Member::MIN_NBUCKETS.into(), invalid_sb_members,
+               "device {i}: not enough buckets (got {usable}, min {})", Member::MIN_NBUCKETS)?;
 
     let (bucket_size, block_size) = (m.bucket_size.get(), sb.block_size.get());
     sb_err_on!(err, bucket_size < block_size, invalid_sb_members,
@@ -395,7 +394,7 @@ fn validate_member(err: &mut Printbuf, m: &Member, sb: &Sb<Unvalidated>, i: u32)
                "device {i}: bucket size {bucket_size} smaller than btree node size {}",
                sb.btree_node_size())?;
 
-    sb_err_on!(err, u32::from(m.btree_bitmap_shift) >= BCH_MI_BTREE_BITMAP_SHIFT_MAX,
+    sb_err_on!(err, u32::from(m.btree_bitmap_shift) >= Member::BTREE_BITMAP_SHIFT_MAX,
                invalid_sb_members, "device {i}: invalid btree_bitmap_shift {}",
                m.btree_bitmap_shift)?;
 
@@ -808,7 +807,7 @@ impl Dev {
         }
 
         let shift = m.btree_bitmap_shift;
-        assert!(u32::from(shift) < BCH_MI_BTREE_BITMAP_SHIFT_MAX);
+        assert!(u32::from(shift) < Member::BTREE_BITMAP_SHIFT_MAX);
         assert!(end <= 64u64 << shift);
 
         let bits = bitmap_bits(start, end, shift);
@@ -1679,7 +1678,7 @@ mod tests {
     #[test]
     fn members_v2_from_v1() {
         let mut sb = new_sb(3);
-        let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * 3).div_ceil(8) as u32;
+        let u64s = (MEMBERS_V1_HEAD + V1_BYTES * 3).div_ceil(8) as u32;
         sb.field_resize::<SbFieldMembersV1>(u64s).unwrap();
         for i in 0..3 {
             sb.put_member_v1::<SbFieldMembersV1>(MEMBERS_V1_HEAD, i.into(), &member(i));
@@ -1698,14 +1697,14 @@ mod tests {
     #[test]
     fn members_v2_grown() {
         let mut sb = new_sb(3);
-        put_v2(&mut sb, 3, BCH_MEMBER_V1_BYTES);
+        put_v2(&mut sb, 3, V1_BYTES);
         assert!(sb.member_mut(0).is_none());
 
         sb.members_v2_init().unwrap();
         for i in 0..3 {
             let mut want = ::pin_init::zeroed::<Member>();
-            plain_bytes_mut(&mut want)[..BCH_MEMBER_V1_BYTES]
-                .copy_from_slice(&plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
+            plain_bytes_mut(&mut want)[..V1_BYTES]
+                .copy_from_slice(&plain_bytes(&member(i))[..V1_BYTES]);
             assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&want));
         }
     }
@@ -1715,7 +1714,7 @@ mod tests {
     #[test]
     fn members_v1_to_text() {
         let mut sb = new_sb(3);
-        let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * 3).div_ceil(8) as u32;
+        let u64s = (MEMBERS_V1_HEAD + V1_BYTES * 3).div_ceil(8) as u32;
         sb.field_resize::<SbFieldMembersV1>(u64s).unwrap();
         for i in 0..3 {
             sb.put_member_v1::<SbFieldMembersV1>(MEMBERS_V1_HEAD, i.into(), &member(i));
@@ -1736,7 +1735,7 @@ mod tests {
         sb.members_cpy_v2_v1().unwrap();
         for i in 0..2 {
             let m = members_v1(sb.sb()).unwrap().get(i.into()).unwrap();
-            assert_eq!(plain_bytes(&m)[..BCH_MEMBER_V1_BYTES], plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
+            assert_eq!(plain_bytes(&m)[..V1_BYTES], plain_bytes(&member(i))[..V1_BYTES]);
         }
 
         sb.sb_mut().set_version_incompat(MetadataVersion(MetadataVersion::extent_flags.0 + 1));
