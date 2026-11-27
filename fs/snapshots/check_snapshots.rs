@@ -45,7 +45,7 @@ use crate::fs::{Fs, FsFlag};
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::snapshots::{delete, snapshot, subvolume};
-use crate::util::{alloc::Vec, vstructs::Validated, Join, Printbuf, ToText};
+use crate::util::{alloc::Vec, printbuf::Msg, vstructs::Validated, Join, Printbuf, ToText};
 use crate::{message, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use crate::format::{Bpos, Btree, MetadataVersion, BTREE_MAX_DEPTH};
@@ -190,19 +190,22 @@ fn check_snapshot_tree<'t>(
         Ok(r)  => root_id != fs.snapshots.root(root_id) || k.k.p.offset as u32 != r.v.tree(),
     };
 
-    // A root missing while nodes of the tree name it as their parent: they're
-    // check_snapshots' to repair, and this key is where the root belongs.
+    // A root missing while nodes of the tree name it as their parent, or grown
+    // a parent that doesn't list it: the nodes are check_snapshots' to repair,
+    // and this key is where the root belongs.
     let tree_id = k.k.p.offset as u32;
     let nodes_say_root = match &root {
         Err(_) => find_key(t, Btree::snapshots, |k| k.arm::<Snapshot>().is_some_and(|s| {
             let s = s.v();
             s.state_decoded() != Some(SnapshotState::deleted) && s.tree() == tree_id && s.parent() == root_id
         }))?.is_some(),
-        Ok(_) => false,
+        Ok(r) => r.v.state_decoded() != Some(SnapshotState::deleted) &&
+            r.v.tree() == tree_id && r.v.parent() != 0 &&
+            !lookup_node(t, r.v.parent())?.is_some_and(|p| points_at(&p.v, Role::Parent, root_id)),
     };
     if nodes_say_root {
         fsck_err_report!(fs, snapshot_tree_to_missing_snapshot,
-                         "snapshot tree's root {root_id} is missing, but nodes in the tree still name it -\n\
+                         "snapshot tree's root {root_id} is missing or not a root, but nodes in the tree still name it -\n\
                           leaving it for check_snapshots:\n{}",
                          k.to_text(fs));
         return Ok(());
@@ -725,6 +728,25 @@ fn missing_interior(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<Place>, 
     Ok(Some(Place { parent, children: [children[0], children.get(1).copied().unwrap_or(0)], tree }))
 }
 
+/// Where node @id of tree @tree goes, when nothing claims it: the one live
+/// interior node of the tree with an empty child slot - a live interior node
+/// has two children, so that's where one was lost - above @id and not below
+/// it. 0 if there's none, or more than one.
+fn vacancy(t: &TransAttempt<'_, '_>, id: u32, tree: u32) -> Result<u32, BchError> {
+    let fs = t.fs();
+
+    let vacant = find_nodes(t, id + 1, |c_id, s| {
+        s.state_decoded() == Some(SnapshotState::live) && s.tree() == tree &&
+            matches!(s.children(), [c, 0] if c != 0) &&
+            !fs.snapshots.is_ancestor_early(c_id, id)
+    })?;
+
+    Ok(match vacant[..] {
+        [c] => c,
+        _   => 0,
+    })
+}
+
 /// The nodes an edge repair is between, keys and all: which pointer is wrong
 /// is only decidable across both, so the message shows both.
 struct EdgeNodes<'n, 'f> {
@@ -793,6 +815,9 @@ enum EdgeRepair {
     Complete(u32),
     /// Recreate the missing node our pointer names, here.
     Recreate(Place),
+    /// Re-home us, our place lost: under this node, into its empty child
+    /// slot - 0, as a tree's root.
+    Rehome(u32),
 }
 
 /// Check the edge between node @n, as @role, and @other_id, which its
@@ -924,6 +949,26 @@ fn edge_repair(
         }
     }
 
+    // Nothing claims us, and our parent pointer names a node that can't have us:
+    // our place is lost. Re-home where our tree has room for us, or failing that
+    // as a tree's root - keeping our own keys, but not what we inherited.
+    if role == Role::Child &&
+       !can_take_child(t, other_id)? &&
+       nodes_naming(t, id, Role::Parent)?.is_empty() {
+        let home = vacancy(t, id, n.v().tree())?;
+        if fsck_err!(t, snapshot_edge_bad,
+                     "snapshot {id} parent pointer {other_id} names a node {}, and no node claims {id} -\n{}{}",
+                     if other.is_some() { "with no place for it" } else { "that doesn't exist" },
+                     Msg(|out: &mut Printbuf| if home != 0 {
+                         prt!(out, "re-homing it under {home}, where its tree has room for a child")
+                     } else {
+                         prt!(out, "its tree has no room for it: making it a tree root, its ancestry lost")
+                     }),
+                     EdgeNodes::new(fs, n, other.as_ref(), None))? {
+            return Ok(Some(EdgeRepair::Rehome(home)));
+        }
+    }
+
     // One stomped field leaves the other side's pointer for the repairs above, so
     // this is multiple corruptions or a destroyed node: report and stop.
     fs.log().err(message!("snapshot topology damage is beyond single-corruption repair:\n\
@@ -970,6 +1015,12 @@ fn check_edge<'a, 't>(
             edit_node(t, other_id, |u| Ok(set_ptr(u.v_mut(), role.other(), old, id)))?,
         EdgeRepair::Recreate(place) =>
             recreate(t, other_id, place)?,
+        EdgeRepair::Rehome(home) => {
+            set_ptr(n.v_mut(t)?, role, other_id, home);
+            if home != 0 {
+                edit_node(t, home, |u| Ok(set_ptr(u.v_mut(), Role::Parent, 0, id)))?;
+            }
+        }
         EdgeRepair::Retarget(_) => unreachable!("repaired above"),
     }
     edge_repair_commit(t)
@@ -1000,9 +1051,13 @@ fn tree_ptr_repair<'a, 't>(
 
     let tree = snapshot::tree_lookup(t, tree_id).found()?;
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
+        // A node re-homed as a root takes its snapshot subvolume with it: the
+        // new tree's master is made a non-snapshot, as check_snapshot_tree()
+        // would - a pass too late.
+        let master = tree_master_subvol(t, root_id)?.unwrap_or(0);
         tree_id = snapshot::tree_create(t, |new| {
             let v = new.v_mut();
-            v.master_subvol = fs.snapshots.oldest_subvol(root_id).unwrap_or(0).into();
+            v.master_subvol = master.into();
             v.root_snapshot = root_id.into();
             Ok(new.k().p.offset as u32)
         })?;
@@ -1381,22 +1436,45 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())
 }
 
-/// Recreate node @id of @tree if it's missing - only if it's a tree to
-/// itself: one we can't place.
+/// Recreate node @id of @tree - the ids its keys' inodes share - if it's
+/// missing: where what's left places it. The interior node its children and
+/// the node or tree above have it as; else a leaf in its tree's one empty
+/// child slot; else a tree to itself, the ancestry it had lost.
 fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(), BchError> {
     let fs = t.fs();
 
-    if fsck_err_on!(t, fs.snapshots.id_state(id) == IdState::SNAPSHOT_ID_empty,
-                    snapshot_node_missing,
-                    "snapshot node {id} from tree {} missing, recreate?", Join(" ", tree.iter()))? {
-        if tree.len() > 1 {
-            fs.log().err(message!("cannot reconstruct snapshot trees with multiple nodes"));
-            return Err(fs.err(Errcode::fsck_repair_unimplemented));
-        }
-
-        return recreate_node(t, id);
+    if fs.snapshots.id_state(id) != IdState::SNAPSHOT_ID_empty {
+        return Ok(());
     }
 
+    let mut place = missing_interior(t, id)?;
+    let leaf = place.is_none();
+    if leaf {
+        let in_tree = tree.iter().find(|&&o| fs.snapshots.id_state(o) != IdState::SNAPSHOT_ID_empty);
+        if let Some(tree) = in_tree.map(|&o| fs.snapshots.tree(o)) {
+            place = match vacancy(t, id, tree)? {
+                0    => None,
+                home => Some(Place { parent: home, children: [0, 0], tree }),
+            };
+        }
+    }
+
+    if !fsck_err!(t, snapshot_node_missing,
+                  "snapshot node {id} from tree {} missing - recreating it {}", Join(" ", tree.iter()),
+                  Msg(|out: &mut Printbuf| match place {
+                      Some(p) => prt!(out, "where the nodes around it place it: {p:?}"),
+                      None    => prt!(out, "as a tree to itself: nothing places it, its ancestry is lost"),
+                  }))? {
+        return Ok(());
+    }
+
+    fs.snapshots.set_need_table_rebuild();
+    let Some(place) = place else { return recreate_node(t, id) };
+
+    recreate(t, id, place)?;
+    if leaf {
+        edit_node(t, place.parent, |u| Ok(set_ptr(u.v_mut(), Role::Parent, 0, id)))?;
+    }
     Ok(())
 }
 
@@ -1431,9 +1509,15 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
         r.next()?;
     }
 
+    // Highest first, and the table rebuilt after each: a missing interior node
+    // is back before its missing children are placed.
+    for tree in r.trees.iter_mut() {
+        tree.sort_unstable_by(|a, b| b.cmp(a));
+    }
     for tree in r.trees.iter() {
         for &id in tree.iter() {
             trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| reconstruct_node(t, id, tree))?;
+            snapshot::table_rebuild_if_needed(&trans)?;
         }
     }
 
