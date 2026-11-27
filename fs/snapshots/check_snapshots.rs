@@ -1062,33 +1062,31 @@ fn check_skiplists<'a, 't>(
 ) -> Result<(), BchError> {
     let fs = t.fs();
     let id = n.id();
+    let parent_id = n.v().parent();
+    let bad = |skip: u32| if parent_id == 0 { skip != 0 } else { !fs.snapshots.is_ancestor_early(id, skip) };
 
-    for i in 0..n.v().skip.len() {
-        let parent_id = n.v().parent();
-        let skip = (n.v().skip[i]).get();
-
-        let bad = if parent_id == 0 { skip != 0 } else { !fs.snapshots.is_ancestor_early(id, skip) };
-        if !bad {
-            continue;
-        }
-
-        let mut msg = Printbuf::new();
-        prt!(&mut msg, "snapshot with bad skiplist pointer {skip}:\n{}\n", n.to_text(fs));
-        if skip != 0 {
-            let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, skip as u64),
-                                          BtreeIterFlags::empty());
-            let skip_k = iter.peek_slot(t)?.expect("a slot always has a key");
-            prt!(&mut msg, "points to\n  {}\n", skip_k.to_text(fs));
-        }
-
-        if fsck_err!(t, snapshot_bad_skiplist, "{msg}")? {
-            n.v_mut(t)?.skip[i] = fs.snapshots.skiplist_get(parent_id).into();
-        }
+    // One report for the node, all its bad entries: a restart reruns the visit,
+    // and only a message the same as the last is recognized as a repeat
+    let skips = n.v().skip.map(|s| s.get());
+    if !skips.iter().any(|&s| bad(s)) {
+        return Ok(());
     }
 
-    // Kept sorted: is_ancestor() tries the highest first.
-    if n.has_update() {
-        n.v_mut(t)?.skip.sort_unstable_by_key(|s| (*s).get());
+    let mut msg = Printbuf::new();
+    prt!(&mut msg, "snapshot with bad skiplist pointers:\n{}\n", n.to_text(fs));
+    for &skip in skips.iter().filter(|&&s| s != 0 && bad(s)) {
+        let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, skip as u64), BtreeIterFlags::empty());
+        let skip_k = iter.peek_slot(t)?.expect("a slot always has a key");
+        prt!(&mut msg, "{skip} points to\n  {}\n", skip_k.to_text(fs));
+    }
+
+    if fsck_err!(t, snapshot_bad_skiplist, "{msg}")? {
+        let v = n.v_mut(t)?;
+        for skip in v.skip.iter_mut().filter(|s| bad(s.get())) {
+            *skip = fs.snapshots.skiplist_get(parent_id).into();
+        }
+        // Kept sorted: is_ancestor() tries the highest first.
+        v.skip.sort_unstable_by_key(|s| (*s).get());
     }
     Ok(())
 }
