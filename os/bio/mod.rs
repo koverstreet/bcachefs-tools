@@ -109,8 +109,7 @@ pub use iter::{BioRange, Chunk, Chunks, Mapped, Segment, Segments, Walk};
 pub use buffers::{io_buf, Buffer, IoBuf, MapBuf, MappedPages, Pages, IO_ALIGN};
 #[cfg(kernel)]
 pub use bvec::{Bvec, FolioHold, Holds};
-pub use owned::{bio_put, BioBox, BioInPlace, BioLend, BioPool, BioSet, BvecAlloc, BvecMempool, Gathered, HoldsDev,
-                Lent, Submitted};
+pub use owned::{BioBox, BioInPlace, BioLend, BioSet, BioAlloc, BvecMempool, Gathered, HoldsDev, Lent, Submitted};
 
 fn req_op(opf: u32) -> u32 {
     opf & ((1 << c::REQ_OP_BITS) - 1)
@@ -150,11 +149,11 @@ impl BioOwns for Data {
     type Bvec = c::bio_vec;
 }
 
-pub(crate) type BioVecs<B = Data> = InlineVec<<B as BioOwns>::Bvec, BIO_INLINE_VECS, u16, BvecAlloc>;
+pub(crate) type BioVecs<B = Data> = InlineVec<<B as BioOwns>::Bvec, BIO_INLINE_VECS, u16, BioAlloc>;
 
 /// Room made on @vecs for @additional more bvecs, which can then be pushed
 /// without failing: past BIO_MAX_VECS there's none, as bio_add_page() fails.
-fn reserve_bvecs<V>(vecs: &mut InlineVec<V, BIO_INLINE_VECS, u16, BvecAlloc>, additional: usize)
+fn reserve_bvecs<V>(vecs: &mut InlineVec<V, BIO_INLINE_VECS, u16, BioAlloc>, additional: usize)
     -> Result<(), BchError>
 {
     if vecs.len() + additional > c::BIO_MAX_VECS as usize {
@@ -190,16 +189,16 @@ pub struct Bio<B: BioOwns = Data> {
     owns:    B,
 }
 
-/// Its bvecs emptied as they're freed: a bioset's bio is dropped again by
-/// bio_put() when what it's in fails to init. What it owns drops last: a
-/// mapped buffer outlives the bio.
+/// Its bvecs emptied as they're freed: a bio is dropped again, by bio_in(),
+/// when what it's in fails to init. What it owns drops last: a mapped buffer
+/// outlives the bio.
 #[pinned_drop]
 impl<B: BioOwns> PinnedDrop for Bio<B> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.get_mut();
         this.owns.release(&mut this.vecs);
         unsafe { crate::os::bio::sys::uninit(&mut this.bio) };
-        drop(core::mem::replace(&mut this.vecs, BioVecs::<B>::new_in(BvecAlloc::NONE)));
+        drop(core::mem::replace(&mut this.vecs, BioVecs::<B>::new_in(BioAlloc::NONE)));
     }
 }
 

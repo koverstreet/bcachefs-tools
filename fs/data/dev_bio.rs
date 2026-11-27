@@ -19,7 +19,7 @@ use crate::os::kernel::{local_clock, READ, WRITE};
 use crate::data::ptrs::dev_to_text;
 use crate::errcode::{blk_status_to_bch_err, BchError, Errcode};
 use crate::fs::Fs;
-use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data, Gathered, HoldsDev};
+use crate::os::bio::{AtEnd, Bio, BioBox, BioOwns, Data, Gathered, HoldsDev, BioAlloc};
 use crate::os::blkdev::BlockDevice;
 
 #[pin_data]
@@ -47,7 +47,7 @@ impl<B: BioOwns> DevBio<B> {
     /// Its IO done - submit_owned() and awaited - the rest of its end: its
     /// device and status, if it failed. The box goes before the io ref, which
     /// keeps the device's bioset its bio is put back to.
-    pub fn finish(mut b: BioBox<Self>) -> Option<(u8, c::blk_status_t)> {
+    pub fn finish(mut b: BioBox<Self, BioAlloc>) -> Option<(u8, c::blk_status_t)> {
         let (ca, status) = b.as_mut().take_end();
         drop(b);
         (status != 0).then_some((ca.dev_idx, status))

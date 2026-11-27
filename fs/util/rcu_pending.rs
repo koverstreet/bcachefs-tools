@@ -25,7 +25,7 @@ use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
 use crate::os::alloc::Global;
-use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, AtOnce, Flags, Vec};
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, AtOnce, Flags, Vec, WithAlloc};
 use crate::util::mempool::Mempool;
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
@@ -766,6 +766,23 @@ unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {
 /// again - as a T - and back to the port's allocator a grace period after
 /// its free.
 pub type RcuPool<T> = Mempool<RcuPending<'static, T, Global>>;
+
+/// A T with the pool it goes back to - a box's, from it: a pool's element.
+/// A type of its own, so the pool it names is a pool of it.
+#[repr(transparent)]
+pub struct Pooled<T: RcuRealloc + 'static>(WithAlloc<T, &'static RcuPool<Pooled<T>>>);
+
+impl<T: RcuRealloc + 'static> HasRcuHead for Pooled<T> {
+    const HEAD: usize = <WithAlloc<T, &'static RcuPool<Pooled<T>>> as HasRcuHead>::HEAD;
+    const WORK: bool = T::WORK;
+}
+
+// as reusable as its T
+unsafe impl<T: RcuRealloc + 'static> RcuRealloc for Pooled<T> {
+    fn try_claim(&self) -> bool {
+        self.0.t.try_claim()
+    }
+}
 
 impl<T: RcuRealloc> RcuPool<T> {
     /// @min_nr T's held in reserve.

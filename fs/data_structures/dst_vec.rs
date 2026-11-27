@@ -3,7 +3,7 @@
 //! DstVec<T, L, A>: a vector on a DstArray, its length the header and its
 //! capacity the count, owned by a ThinBox - so it's a single pointer, its low
 //! bit clear: InlineVec tags it. Its allocator is kept before its buffer, so
-//! one with state - a bio's BvecAlloc - is what it grows from and frees to.
+//! one with state - a bio's BioAlloc - is what it grows from and frees to.
 
 use crate::data_structures::array_vec::LenUint;
 use crate::data_structures::dst_array::DstArray;

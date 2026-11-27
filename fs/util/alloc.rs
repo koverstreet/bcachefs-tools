@@ -48,12 +48,12 @@ pub unsafe trait Alloc: Allocator {
     type Frees: Frees = AsTypeSays;
 }
 
-/// How a T in memory of its own layout - nothing allocated before it, as a
-/// box's - is dropped and freed.
+/// How a T a box holds - in a WithAlloc<T, A>, @a's memory, nothing else
+/// before it - is dropped and freed.
 pub trait Frees {
     /// # Safety
-    /// @p is a T in @a's memory, of T's layout, and nothing but RCU readers
-    /// uses it after.
+    /// @p is a WithAlloc<T, A>'s T, in @a's memory, and nothing but RCU
+    /// readers uses it after.
     unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A);
 }
 
@@ -74,9 +74,10 @@ pub enum AtOnce {}
 impl Frees for AtOnce {
     unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A) {
         <T as crate::util::maybe_rcu_alloc::RcuFreeing>::assert_drops_at_free();
+        let (layout, off) = with_alloc_layout::<A>(Layout::new::<T>()).expect("a T's layout, with its allocator");
         unsafe {
             core::ptr::drop_in_place(p.as_ptr());
-            a.deallocate(p.cast(), Layout::new::<T>());
+            a.deallocate(p.byte_sub(off).cast(), layout);
         }
     }
 }
@@ -154,9 +155,49 @@ unsafe impl<A: AllocGfp> AllocGfp for WithFlags<A> {
     }
 }
 
-/// What a T of @t - sized or not - freed to an A is allocated as, A before it,
-/// and where in that the T is: so what holds only a pointer to the T frees it
-/// to where it came from. A zero-sized A is nothing, and it's @t.
+/// A T and the allocator it returns to, in one allocation: so what holds only
+/// a pointer to it - a box, a bio C hands back - frees it to where it came
+/// from. A zero-sized A is nothing: laid out as T.
+#[repr(C)]
+pub struct WithAlloc<T, A> {
+    pub(crate) alloc: A,
+    pub(crate) t:     T,
+}
+
+impl<T, A> WithAlloc<T, A> {
+    /// Where its T is in it: as with_alloc_layout() has it, which what's
+    /// freed to an A goes by - repr(C) is that rule, and this says so.
+    const T_OFF: usize = match with_alloc_layout::<A>(Layout::new::<T>()) {
+        Ok((l, off)) => {
+            assert!(l.size() == size_of::<Self>() && l.align() == align_of::<Self>()
+                    && off == core::mem::offset_of!(Self, t),
+                    "a WithAlloc not laid out as with_alloc_layout() says");
+            off
+        }
+        Err(_) => panic!("a WithAlloc past isize::MAX bytes"),
+    };
+
+    /// Where its T is, in one at @p.
+    pub fn t(p: *mut Self) -> *mut T {
+        p.cast::<u8>().wrapping_add(Self::T_OFF).cast()
+    }
+
+    /// Where the one its T, at @t, is in is.
+    pub fn of_t(t: *mut T) -> *mut Self {
+        t.cast::<u8>().wrapping_sub(Self::T_OFF).cast()
+    }
+}
+
+// its head is its T's
+impl<T: crate::util::rcu::HasRcuHead, A> crate::util::rcu::HasRcuHead for WithAlloc<T, A> {
+    const HEAD: usize = Self::T_OFF + T::HEAD;
+    const WORK: bool = T::WORK;
+}
+
+/// What a T of @t - sized or not - freed to an A is allocated as, A before it -
+/// a WithAlloc<T, A>'s layout - and where in that the T is: so what holds only
+/// a pointer to the T frees it to where it came from. A zero-sized A is
+/// nothing, and it's @t.
 pub const fn with_alloc_layout<A>(t: Layout) -> Result<(Layout, usize), AllocError> {
     match Layout::new::<A>().extend(t) {
         Ok((l, off)) => Ok((l.pad_to_align(), off)),

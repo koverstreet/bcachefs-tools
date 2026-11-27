@@ -740,7 +740,7 @@ use crate::types::NeBytes;
 use crate::locking::MemallocFlags;
 use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, DevWriteRefKind};
-use crate::os::bio::{Bio, BioBox, BioOwns, BioRange, BioVecs, Buffer, Pages, Typed};
+use crate::os::bio::{Bio, BioBox, BioOwns, BioRange, BioVecs, Buffer, Pages, BioAlloc, Typed};
 use crate::os::kernel::{local_clock, unlikely, WRITE};
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
@@ -1027,7 +1027,7 @@ pub(crate) enum ExtentData<'a> {
 
 /// A bio of an extent's own, its data in it - freed, its buffers with it, as
 /// it's dropped, once its replicas are done.
-pub(crate) type ExtentBio = BioBox<'static, Bio<ExtentBuf>>;
+pub(crate) type ExtentBio = BioBox<'static, Bio<ExtentBuf>, BioAlloc>;
 
 pub(crate) enum ExtentBuf {
     /// Pages of its own, the extent's data bounced into them: to compress,

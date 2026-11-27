@@ -20,7 +20,7 @@ use crate::fs::{Dev, Fs};
 use crate::locking::MemallocFlags;
 use crate::os::kernel::WRITE;
 use crate::sb::members::{BlockDev, DevIoRef, IoRefIdx, DevReadRefKind};
-use crate::os::bio::{BioBox, BioOwner, BioRange, BioSet, Data, HasBio, Remapped, Submitted};
+use crate::os::bio::{BioBox, BioOwner, BioRange, BioSet, Data, HasBio, Remapped, BioAlloc, Submitted};
 use crate::os::workqueue::Queue;
 use crate::util::task::{waiter, Resumable, Resume, ResumeAt};
 use cstruct_macros::args_stored_once;
@@ -61,7 +61,7 @@ impl ReplicaErrs {
 /// A replica in flight, and what its end does besides its DevBio's: a nocow
 /// write's bucket to unlock, and whether it's to be flushed.
 struct Replica<'a> {
-    io:     Submitted<'a, DevBio, waiter::Async>,
+    io:     Submitted<'a, DevBio, waiter::Async, BioAlloc>,
     dev:    u8,
     nocow:  Option<(u64, bool)>,
 }
@@ -164,7 +164,7 @@ impl<'a> InFlight<'a> {
 
     /// A clone of @src for @ca - waited for if nothing's in flight, else only
     /// if its set has one now.
-    fn clone_of(&self, ca: &Dev, src: BioRange<'a>, opf: u32) -> Option<BioBox<'a, DevBio>> {
+    fn clone_of(&self, ca: &Dev, src: BioRange<'a>, opf: u32) -> Option<BioBox<'a, DevBio, BioAlloc>> {
         let _noio = MemallocFlags::noio();
         let _nowait = (!self.bios.is_empty()).then(MemallocFlags::noreclaim);
         let mut n = (self.clones)(ca).alloc::<BchError, _>(0, opf, |b| DevBio::new(b.clone_of(src))).ok()?;

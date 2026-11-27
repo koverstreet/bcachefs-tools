@@ -95,7 +95,7 @@ impl<H: FolioHold> BioOwns for Holds<H> {
 impl<H: FolioHold> super::Typed for Holds<H> {}
 
 impl<H: FolioHold> Bio<Holds<H>> {
-    /// @v, last: grown into, from its BvecAlloc, past what it has room for -
+    /// @v, last: grown into, from its BioAlloc, past what it has room for -
     /// failing as reserve_bvecs() does, @v dropped.
     pub fn push(&mut self, v: Bvec<H>) -> Result<(), BchError> {
         let len = v.len();

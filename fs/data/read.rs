@@ -106,7 +106,7 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::late::{Late, ModuleInit};
 use crate::util::mempool::Mempool;
 use crate::util::rcu::{read_lock, RcuHead, RcuMember};
-use crate::util::rcu_pending::{RcuPool, RcuRealloc};
+use crate::util::rcu_pending::{Pooled, RcuPool, RcuRealloc};
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
@@ -400,8 +400,8 @@ impl Rbio {
 /// it's of.
 enum Kind<'r> {
     Own(LentBio<'r>),
-    Clone(&'r Rbio, BioBox<'r, Rbio, &'static RcuPool<Rbio>>),
-    Bounce(&'r Rbio, BioBox<'r, Rbio<Pages<'r>>, &'static RcuPool<Rbio<Pages<'static>>>>),
+    Clone(&'r Rbio, BioBox<'r, Rbio, &'static RcuPool<Pooled<Rbio>>>),
+    Bounce(&'r Rbio, BioBox<'r, Rbio<Pages<'r>>, &'static RcuPool<Pooled<Rbio<Pages<'static>>>>>),
     /// The promote's task, reading into its bio, started with what was read
     /// once the fragment's done with it
     Promote(&'r Rbio, PromoteTask),
@@ -464,8 +464,8 @@ static FRAGMENTS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
 /// the next is made, so one in reserve keeps them all going. A pool each of
 /// clones and of bounces, each bio listed: freed - or handed out again, as
 /// the same type - while the list's walk may be reading it.
-static FRAGMENT_CLONES: Late<RcuPool<Rbio>, ModuleInit> = ::pin_init::zeroed();
-static FRAGMENT_BOUNCES: Late<RcuPool<Rbio<Pages<'static>>>, ModuleInit> = ::pin_init::zeroed();
+static FRAGMENT_CLONES: Late<RcuPool<Pooled<Rbio>>, ModuleInit> = ::pin_init::zeroed();
+static FRAGMENT_BOUNCES: Late<RcuPool<Pooled<Rbio<Pages<'static>>>>, ModuleInit> = ::pin_init::zeroed();
 
 static FRAGMENT_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 static FRAGMENT_BIO_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
