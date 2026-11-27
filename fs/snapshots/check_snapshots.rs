@@ -543,6 +543,15 @@ fn ptr_available(t: &TransAttempt<'_, '_>, n: &Snapshot, n_id: u32, role: Role)
     Ok(None)
 }
 
+/// Whether node @id could be a child's parent: it exists, with a child slot
+/// that's empty or names a node that doesn't point back.
+fn can_take_child(t: &TransAttempt<'_, '_>, id: u32) -> Result<bool, BchError> {
+    match lookup_node(t, id)? {
+        Some(p) => Ok(ptr_available(t, &p.v, id, Role::Parent)?.is_some()),
+        None    => Ok(false),
+    }
+}
+
 /// Whether snapshot @id owns anything: any nonzero counter in any snapshotted
 /// btree. Keys as well as sectors: a snapshot of only dirents or xattrs has no
 /// sectors.
@@ -764,11 +773,24 @@ fn edge_repair(
     // Our pointer completes the edge if the target's slot toward us is empty
     // or holds a stale pointer - never a tombstone's, handled above.
     if let Some(o) = &other {
-        if parent_child_consistent(n.v(), id, role, &o.v, other_id) {
-            if let Some(old) = ptr_available(t, &o.v, other_id, role.other())? {
+        if let Some(old) = ptr_available(t, &o.v, other_id, role.other())? {
+            if parent_child_consistent(n.v(), id, role, &o.v, other_id) {
                 if fsck_err!(t, snapshot_edge_bad,
                              "snapshot {id} {ptr} pointer {other_id} is not reciprocated, but is corroborated by\n\
                               tree and depth and the target's position ({old}) is unattested - completing the edge{}",
+                             EdgeNodes::new(fs, n, Some(o), None))? {
+                    return Ok(Some(EdgeRepair::Complete(old)));
+                }
+            } else if role == Role::Parent && old != 0 &&
+                      other_id < id && o.v.tree == n.v().tree &&
+                      !can_take_child(t, old)? {
+                // A child whose parent pointer names a node that can't be its
+                // parent is ours, if ids and tree agree: its depth was derived
+                // from that pointer, and check_depth() and check_skiplists()
+                // redo it after.
+                if fsck_err!(t, snapshot_edge_bad,
+                             "snapshot {id} child pointer {other_id} is not reciprocated: its parent pointer names\n\
+                              {old}, which has no place for it - completing the edge{}",
                              EdgeNodes::new(fs, n, Some(o), None))? {
                     return Ok(Some(EdgeRepair::Complete(old)));
                 }
