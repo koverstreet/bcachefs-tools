@@ -463,7 +463,7 @@ impl BtreeTrans<'_> {
         let fs = self.fs();
         let ret = self.commit_error_inner(t, paths, res, flags, i, err);
 
-        assert!(ret.as_ref().is_err_and(BchError::is_restart) == (self.restarted().0 != 0));
+        assert!(ret.as_ref().is_err_and(BchError::is_restart) == (self.restarted().is_some()));
 
         if let Some(err) = ret.as_ref().err().filter(|e| e.matches(c::ENOSPC) && has(flags, CommitFlags::NO_ENOSPC)) {
             fs_inconsistent!(fs, "commit_error: incorrectly got {err}\n");

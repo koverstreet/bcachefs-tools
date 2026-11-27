@@ -1016,6 +1016,21 @@ impl BchError {
 
     pub fn raw(&self) -> i32 { self.0.get().into() }
 
+    /// An Option<BchError> from 16 bits, 0 for None: a bitfield's.
+    pub const fn opt_from_bits(v: u16) -> Option<Self> {
+        match NonZeroU16::new(v) {
+            Some(v) => Some(Self(v)),
+            None    => None,
+        }
+    }
+
+    pub const fn opt_into_bits(e: Option<Self>) -> u16 {
+        match e {
+            Some(e) => e.0.get(),
+            None    => 0,
+        }
+    }
+
     /// The plain errno this is a case of, negated: for the VFS or userspace.
     pub fn class(&self) -> i32 {
         -self.errno()

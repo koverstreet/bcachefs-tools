@@ -656,7 +656,7 @@ impl BtreeTrans<'_> {
          */
         if let Some(e) = restart {
             let _ = self.restart(e);
-        } else if paths[idx].should_be_locked() && self.restarted().0 == 0 {
+        } else if paths[idx].should_be_locked() && self.restarted().is_none() {
             if upgrade {
                 paths[idx].bits.set_locks_want(l as u8);
             }
@@ -935,7 +935,7 @@ impl BtreeTrans<'_> {
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         let old_locks_want = path.locks_want();
 
-        if self.restarted().0 != 0 {
+        if self.restarted().is_some() {
             return;
         }
 
@@ -984,7 +984,7 @@ impl BtreeTrans<'_> {
     /* Btree transaction locking: */
 
     pub(crate) fn downgrade(&self, paths: &mut Paths<'_>) {
-        if self.restarted().0 != 0 {
+        if self.restarted().is_some() {
             return;
         }
 
@@ -1004,9 +1004,8 @@ impl BtreeTrans<'_> {
     pub(crate) fn relock_traced(&self, paths: &mut Paths<'_>, trace: bool, ret_ip: usize) -> Result<(), BchError> {
         self.verify_locks(paths);
 
-        let restarted = self.restarted();
-        if restarted.0 != 0 {
-            return Err(restarted.into());
+        if let Some(e) = self.restarted() {
+            return Err(e);
         }
         let tracing = trace && <events::trans_restart_relock as TraceEvent>::trace_enabled();
 
@@ -1045,7 +1044,7 @@ impl BtreeTrans<'_> {
     /// relock that fails has the caller's address.
     #[inline(always)]
     pub fn relock(&self) -> Result<(), BchError> {
-        if self.locked() && self.restarted().0 == 0 {
+        if self.locked() && self.restarted().is_none() {
             return Ok(());
         }
         self.relock_traced(&mut self.paths(), true, crate::ret_ip!())
@@ -1054,7 +1053,7 @@ impl BtreeTrans<'_> {
     /// relock(), with the path table had already: for what C lends it to.
     #[inline(always)]
     pub(crate) fn relock_from(&self, paths: &mut Paths<'_>) -> Result<(), BchError> {
-        if self.locked() && self.restarted().0 == 0 {
+        if self.locked() && self.restarted().is_none() {
             return Ok(());
         }
         self.relock_traced(paths, true, crate::ret_ip!())
@@ -1306,7 +1305,7 @@ impl BtreeTrans<'_> {
              * iterating over all nodes and got to the end of the btree
              */
             assert!(path.node(path.level() as usize).is_null() ||
-                    !(path.should_be_locked() && self.locked() && self.restarted().0 == 0),
+                    !(path.should_be_locked() && self.locked() && self.restarted().is_none()),
                     "path that should be locked has nothing locked, in a locked transaction");
             return;
         }

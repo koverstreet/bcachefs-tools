@@ -697,7 +697,7 @@ impl<'t> BtreeIter<'t> {
     pub(super) fn set_dontneed_in(&mut self, paths: &mut Paths<'_>) {
         let trans = self.trans;
 
-        if self.path == 0 || trans.restarted().0 != 0 {
+        if self.path == 0 || trans.restarted().is_some() {
             return;
         }
 

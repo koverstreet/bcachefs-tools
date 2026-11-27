@@ -558,7 +558,7 @@ impl BtreeTrans<'_> {
         self.set_in_traverse_all(true);
 
         let ret = 'retry_all: loop {
-            self.set_restarted(Errcode(0));
+            self.set_restarted(None);
             self.last_restarted_ip.set(0);
 
             for i in self.path_idxs() {
@@ -710,7 +710,7 @@ impl BtreeTrans<'_> {
 
     fn path_traverse_done(&self, paths: &mut Paths<'_>, idx: PathIdx, ret: &Result<(), BchError>) {
         ebug_assert!(ret.as_ref().is_err_and(|e| e.matches(Errcode::transaction_restart)) ==
-                     (self.restarted().0 != 0));
+                     (self.restarted().is_some()));
         self.path_verify(paths, idx);
     }
 
@@ -718,8 +718,8 @@ impl BtreeTrans<'_> {
     /// the end of it.
     #[inline(always)]
     fn path_traverse_start(&self, paths: &mut Paths<'_>, idx: PathIdx) -> Option<Result<(), BchError>> {
-        if self.restarted().0 != 0 {
-            return Some(Err(BchError::from(self.restarted())));
+        if let Some(e) = self.restarted() {
+            return Some(Err(e));
         }
 
         if !self.srcu_held() {

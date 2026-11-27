@@ -119,7 +119,8 @@ pub struct BtreeTransBits {
     /* Rust's: the TransAttempts made and not yet ended */
     #[bits(8)] attempts_live:       u8,
     __pad25:                        u7,
-    #[bits(16)] pub restarted: Errcode,
+    #[bits(16, from = BchError::opt_from_bits, into = BchError::opt_into_bits)]
+    pub restarted: Option<BchError>,
     __pad:                          u16,
 }
 
@@ -570,7 +571,7 @@ impl<'f> BtreeTrans<'f> {
     /// restart: for what reads the nodes its paths hold.
     pub(crate) fn verify_not_unlocked_or_in_restart(&self) {
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            if self.restarted().0 != 0 || !self.locked() {
+            if self.restarted().is_some() || !self.locked() {
                 self.unlocked_or_in_restart_error()
             }
         }
@@ -902,8 +903,8 @@ impl Drop for TransGuard<'_> {
         let t = &**self;
         let c = t.fs();
 
-        if t.restarted().0 != 0 {
-            t.in_restart_error();
+        if let Some(e) = t.restarted() {
+            t.in_restart_error(e);
         }
 
         t.unlock_long();
@@ -1161,7 +1162,7 @@ impl BtreeTrans<'_> {
          */
         crate::warn_on_once!(cfg!(CONFIG_BCACHEFS_DEBUG) &&
                              self.has_updates() &&
-                             self.restarted().0 == 0 && !self.in_traverse_all() &&
+                             self.restarted().is_none() && !self.in_traverse_all() &&
                              !self.begin_may_drop_updates());
 
         self.reset_updates(paths);
@@ -1183,7 +1184,7 @@ impl BtreeTrans<'_> {
             self.set_journal_replay_not_finished(false);
         }
 
-        if self.restarted() == Errcode::transaction_restart_mem_realloced {
+        if self.restarted() == Some(Errcode::transaction_restart_mem_realloced.into()) {
             self.mem_realloc(paths);
         }
 
@@ -1198,7 +1199,7 @@ impl BtreeTrans<'_> {
                  * doing something new: dont keep iterators excpt the ones that
                  * are in use - except for the subvolumes btree:
                  */
-                if self.restarted().0 == 0 && path.btree_id() != Btree::subvolumes {
+                if self.restarted().is_none() && path.btree_id() != Btree::subvolumes {
                     path.set_preserve(false);
                 }
 
@@ -1227,7 +1228,7 @@ impl BtreeTrans<'_> {
 
         self.srcu_begin(paths, ret_ip);
 
-        if self.restarted().0 == 0 {
+        if self.restarted().is_none() {
             self.locking_wait.trans_start_time.set(now);
         }
         self.last_begin_time.set(now);
@@ -1235,7 +1236,7 @@ impl BtreeTrans<'_> {
         self.last_begin_ip.set(ret_ip);
 
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
-        if self.restarted().0 != 0 {
+        if self.restarted().is_some() {
             self.restart_count_this_trans.set(self.restart_count_this_trans.get() + 1);
         } else {
             self.restart_count_this_trans.set(0);
@@ -1248,7 +1249,7 @@ impl BtreeTrans<'_> {
             self.trans_kmalloc_trace.set(trace);
         }
 
-        if self.restarted().0 != 0 {
+        if self.restarted().is_some() {
             /* restart is hot — skip the resched check */
             let _ = self.path_traverse_all(paths);
             self.clear_notrace_relock_fail();
@@ -1336,7 +1337,7 @@ impl BtreeTrans<'_> {
     pub(crate) fn restart_foreign_task(&self, err: Errcode, ip: usize) -> BchError {
         assert!(BchError::from(err).matches(Errcode::transaction_restart));
 
-        self.set_restarted(err);
+        self.set_restarted(Some(err.into()));
         self.last_restarted_ip.set(ip);
         err.into()
     }
@@ -1363,8 +1364,7 @@ impl BtreeTrans<'_> {
 
     #[cold]
     #[inline(never)]
-    fn in_restart_error(&self) -> ! {
-        let err = BchError::from(self.restarted());
+    fn in_restart_error(&self, err: BchError) -> ! {
         let mut by = Printbuf::new();
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
         {
@@ -1381,8 +1381,8 @@ impl BtreeTrans<'_> {
     #[cold]
     #[inline(never)]
     fn unlocked_or_in_restart_error(&self) -> ! {
-        if self.restarted().0 != 0 {
-            self.in_restart_error();
+        if let Some(e) = self.restarted() {
+            self.in_restart_error(e);
         }
 
         if !self.locked() {

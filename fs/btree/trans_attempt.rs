@@ -129,7 +129,7 @@ fn begin_if_unusable(trans: &BtreeTrans<'_>) {
                       "{}: an iterator made from the transaction inside an attempt, not from the attempt",
                       trans.fn_name());
 
-    if trans.restarted().0 != 0 || !trans.locked() {
+    if trans.restarted().is_some() || !trans.locked() {
         trans.begin_raw(&mut trans.paths(), AttemptKey(()));
     }
 }

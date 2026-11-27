@@ -852,7 +852,7 @@ impl BtreeTrans<'_> {
              * If we need this path locked, the duplicate also has te be locked
              * before we free this one:
              */
-            if should_be_locked && !paths[d].should_be_locked() && self.restarted().0 == 0 {
+            if should_be_locked && !paths[d].should_be_locked() && self.restarted().is_none() {
                 let relocked = if self.locked() {
                     self.path_relock_norestart(paths, d)
                 } else {
@@ -865,7 +865,7 @@ impl BtreeTrans<'_> {
                 paths[d].bits.set_should_be_locked(true);
             }
 
-            ebug_assert!(!(should_be_locked && self.restarted().0 == 0 && self.locked() &&
+            ebug_assert!(!(should_be_locked && self.restarted().is_none() && self.locked() &&
                            !paths[d].locked(paths[d].level() as usize)));
 
             paths[idx].bits.set_should_be_locked(false);
