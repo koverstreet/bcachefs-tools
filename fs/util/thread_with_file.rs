@@ -33,7 +33,7 @@
 use crate::c;
 use crate::data_structures::fifo::FifoRead;
 use crate::errcode::{BchError, Errcode};
-use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
+use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::Fifo;
 use crate::util::alloc::{kbox_pin_init, Arc, KBox, Vec};
@@ -137,11 +137,7 @@ impl StdioBuf {
     }
 
     fn len(&self) -> usize {
-        self.lock().data.len()
-    }
-
-    fn lock(&self) -> ExclusiveGuard<'_, SpinLockIrq, Buf> {
-        self.buf.lock()
+        self.buf.lock().data.len()
     }
 
     fn wake(&self) {
@@ -200,7 +196,7 @@ impl StdioRedirect {
 
     /// has_room(), for input: which may grow past the limit for a line.
     fn input_has_room(&self) -> bool {
-        let b = self.input.lock();
+        let b = self.input.buf.lock();
         b.data.len() < STDIO_REDIRECT_BUFSIZE || b.lines == 0 || self.done()
     }
 
@@ -225,7 +221,7 @@ impl StdioRedirect {
             }
 
             let wrote = self.has_room(out) && {
-                let mut b = out.lock();
+                let mut b = out.buf.lock();
                 b.data.reserve(msg.len()).is_ok() &&
                     b.data.extend_from_slice(msg).is_ok()
             };
@@ -253,7 +249,7 @@ impl StdioRedirect {
                 if self.done() {
                     return Some(None);
                 }
-                let b = input.lock();
+                let b = input.buf.lock();
                 (b.lines != 0).then(|| {
                     let nl = b.data.iter().position(|&ch| ch == b'\n').expect("a line counted, and no newline");
                     Some(nl + 1)
@@ -268,7 +264,7 @@ impl StdioRedirect {
             }
 
             line.clear();
-            let mut b = input.lock();
+            let mut b = input.buf.lock();
             b.data.drain_with(n, |s| line.extend_from_slice(s).is_ok());
             b.lines -= 1;
             drop(b);
@@ -293,7 +289,7 @@ impl StdioRedirect {
                 return Err(Errcode::EFAULT_thread_with_file_read_user.into());
             }
 
-            let n = out.lock().data.drain_with(writeable, |s| u.copy_to_nofault(s));
+            let n = out.buf.lock().data.drain_with(writeable, |s| u.copy_to_nofault(s));
 
             if n != 0 {
                 out.wake();
@@ -316,7 +312,7 @@ impl StdioRedirect {
             }
 
             let n = {
-                let mut b = input.lock();
+                let mut b = input.buf.lock();
                 let mut makeroom = readable;
                 if b.lines != 0 {
                     makeroom = makeroom.min(STDIO_REDIRECT_BUFSIZE.saturating_sub(b.data.len()));
