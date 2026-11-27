@@ -275,8 +275,8 @@ impl SbFieldOps for SbFieldErrorsV2<Validated> {
  */
 /// @err a BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
 /// status's error.
-pub fn blk_sts_sb_err(err: i32) -> SbErrorId {
-    match Errcode(err.unsigned_abs()) {
+pub fn blk_sts_sb_err(err: BchError) -> SbErrorId {
+    match Errcode(err.raw() as u32) {
         Errcode::BLK_STS_NOTSUPP => SbErrorId::blk_sts_notsupp,
         Errcode::BLK_STS_TIMEOUT => SbErrorId::blk_sts_timeout,
         Errcode::BLK_STS_NOSPC => SbErrorId::blk_sts_nospc,

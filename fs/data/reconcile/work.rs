@@ -1022,14 +1022,14 @@ impl Fs {
         let r = &self.reconcile;
 
         // a thread that exited on its own is still ours to reap
-        if r.thread_exit_ret.load(Relaxed) != 0 {
+        if r.thread_exit_ret.load().is_some() {
             self.reconcile_stop();
         }
         if r.thread.started() || self.opts().nochanges.get() != 0 {
             return Ok(());
         }
 
-        r.thread_exit_ret.store(0, Relaxed);
+        r.thread_exit_ret.store(None);
 
         // the thread's stopped before the filesystem goes - reconcile_stop(),
         // on the way to read-only
@@ -1041,7 +1041,7 @@ impl Fs {
                 if !e.matches(c::EROFS) {
                     fs.event_inc_trace(events::reconcile_error, |out| write!(out, "{e}"));
                 }
-                fs.reconcile.thread_exit_ret.store(e.raw(), Relaxed);
+                fs.reconcile.thread_exit_ret.store(Some(e));
             }
         }).inspect_err(|e| bch_err!(self, "error creating reconcile thread: {e}"))
     }
@@ -1111,10 +1111,9 @@ impl Fs {
         }
 
         write!(out, "\n");
-        let exit_ret = self.reconcile.thread_exit_ret.load(Relaxed);
         let task = self.reconcile.thread.task();
 
-        if let Some(e) = BchError::new(exit_ret) {
+        if let Some(e) = self.reconcile.thread_exit_ret.load() {
             write!(out, "Reconcile thread exited: {e}\n");
         } else if let Some(task) = task {
             write!(out, "Reconcile thread backtrace:\n");

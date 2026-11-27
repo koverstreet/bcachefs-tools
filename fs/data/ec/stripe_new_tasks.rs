@@ -185,7 +185,7 @@ async fn old_stripe_read(fs: &Fs, old: &StripeKey, buf: &mut StripeBuf, required
 /// Nothing for a stripe that's cancelled: it's never made.
 fn next_written(s: &StripeNew, w: &Working, all: bool) -> Option<usize> {
     let i = s.lock();
-    if s.err.get().is_some() || w.parity.is_none() {
+    if s.err.load().is_some() || w.parity.is_none() {
         return None;
     }
 
@@ -218,7 +218,7 @@ async fn zip_block(fs: &Fs, s: &StripeNew, w: &mut Working, i: usize, at: Resume
 
     // no writer claimed it: made here, by create, which mustn't wait
     if let Err(e) = parity.alloc_block(i, MemWait::Never) {
-        s.err.set(e);
+        s.err.set_first(e);
         return;
     }
 
@@ -240,7 +240,7 @@ async fn zip_block(fs: &Fs, s: &StripeNew, w: &mut Working, i: usize, at: Resume
         errs.record(parity);
         if parity.failed_mask(PRE) != 0 {
             bch_err!(fs, "error creating stripe: error zeroing the rest of a data bucket");
-            s.err.set(fs.err(Errcode::ec_block_write));
+            s.err.set_first(fs.err(Errcode::ec_block_write));
         }
     }
 
@@ -381,7 +381,7 @@ async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(),
 async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStripeLost>,
                             at: Resume<'_>) -> Result<(), BchError>
 {
-    if let Some(e) = s.err.get() {
+    if let Some(e) = s.err.load() {
         if !e.matches(c::EROFS) {
             bch_err!(fs, "error creating stripe: error writing data buckets");
         }
@@ -498,7 +498,7 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
     let new = i.new_stripe.stripe();
     match ret {
         Err(e) => {
-            s.err.set(e);
+            s.err.set_first(e);
             fs.event_inc_trace(events::stripe_create_fail, |out| {
                 prt!(out, "error {e}\n{}", new.to_text(fs));
             });

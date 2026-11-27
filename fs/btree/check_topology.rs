@@ -532,7 +532,7 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
     let fs = t.fs();
     let trans = t.trans();
     let roots = &fs.btree.cache.roots;
-    let Some(err) = BchError::new(roots.error(btree.0)) else {
+    let Some(err) = roots.error(btree.0) else {
         return Ok(());
     };
 
@@ -541,7 +541,7 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
 
     let mut fake_root = |level| {
         roots.lock().get_mut(btree.0).expect("a btree below btree_id_nr_alive()").alive = 0;
-        fs.btree_id_root_set_error(btree.0, 0);
+        fs.btree_id_root_set_error(btree.0, None);
         let _ = root_alloc_fake_trans(trans, btree, level);
         *reconstructed_root = true;
     };
@@ -671,7 +671,7 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
                 trans.lockrestart_do(|t| drop_root(t, btree, level, &root_k))?;
 
                 if !reconstructed_root {
-                    fs.btree_id_root_set_error(i, -(c::EIO as i32));
+                    fs.btree_id_root_set_error(i, Some(c::EIO.into()));
                     continue;
                 }
 

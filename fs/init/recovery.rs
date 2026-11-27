@@ -19,7 +19,7 @@ use crate::posix::mode::{umode_t, S_IFDIR};
 use crate::posix::inode_format::BCACHEFS_ROOT_INO;
 use crate::snapshots::format::{BCACHEFS_ROOT_SUBVOL, Subvolume};
 use crate::snapshots::subvolume::SubvolInum;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::fs::{btree_id_can_reconstruct, btree_id_is_alloc, Fs, FsFlag as Flag};
 use crate::init::error::{self, id};
 use crate::journal::read::{journal_pos_from_member_info_resume, journal_read, journal_reread_for_rewind};
@@ -537,7 +537,7 @@ fn journal_replay_entry_early(fs: &Fs, entry: &JsetEntry) -> Result<(), BchError
             r.level = entry.level;
             r.key.set_key(k);
             r.alive = 1;
-            roots.published().roots_error[id as usize].set(0);
+            roots.published().roots_error[id as usize].store(None);
 
             /* every journal entry carries every root, this version's btrees or not: */
             let nr_roots = Btree::NR + roots.roots_extra.len() as u32;
@@ -601,21 +601,21 @@ fn read_btree_roots(fs: &Fs) -> Result<(), BchError> {
         buf.reset();
         prt!(&mut buf, "btree={} level={}", Btree(i), level);
 
-        let fixed = if fs.btree.cache.roots.error(i) != 0 {
+        let fixed = if fs.btree.cache.roots.error(i).is_some() {
             mustfix_fsck_err!(fs, btree_root_bkey_invalid, "invalid btree root {}", buf)?
         } else {
             let read = fs.btree_root_read(Btree(i), key.as_ref(), level.into());
-            fs.btree_id_root_set_error(i, ret_to_c(read));
+            fs.btree_id_root_set_error(i, read.err());
             mustfix_fsck_err_on!(fs, read.is_err(), btree_root_read_error,
                                  "error reading btree root {}: {}", buf, read.err().map_or("", |e| e.msg()))?
         };
         if fixed && btree_id_can_reconstruct(i) {
-            fs.btree_id_root_set_error(i, 0);
+            fs.btree_id_root_set_error(i, None);
         }
     }
 
     for i in 0..Btree::NR {
-        if fs.btree_id_root(i).is_none() && fs.btree.cache.roots.error(i) == 0 {
+        if fs.btree_id_root(i).is_none() && fs.btree.cache.roots.error(i).is_none() {
             {
                 let mut roots = fs.btree.cache.roots.lock();
                 let r = roots.get_mut(i).expect("a known btree's root");

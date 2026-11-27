@@ -133,7 +133,7 @@ use self::JournalCycleFlags as Cycle;
 use crate::journal::flush_wait::{BufWait, FlushEntry, FlushWait, Waiters, JOURNAL_BUF_FLUSH, JOURNAL_BUF_FLUSH_NO_WAIT,
                                  JOURNAL_BUF_NOFLUSH, JOURNAL_BUF_NOT_IN_FLIGHT};
 use crate::debug::trace::events;
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{AtomicError, Errcode, BchError};
 use crate::format::{SbFeature, Jset, JsetEntry, JsetEntryType, DataType};
 use crate::journal::pins::{PinsRead, flush_degraded, pin_resize, PinBuf, PinRange,
     JournalEntryPin};
@@ -458,10 +458,10 @@ published! {
         pub seq: AtomicI64,
 
         /*
-         * 0, or -ENOSPC if waiting on journal reclaim, or -EROFS if
-         * insufficient devices:
+         * -ENOSPC if waiting on journal reclaim, or -EROFS if insufficient
+         * devices:
          */
-        pub cur_entry_error: Volatile<i32>,
+        pub cur_entry_error: AtomicError,
         /* if nonzero, we may not open a new journal entry: */
         pub blocked: Volatile<u32>,
         pub can_discard: Volatile<bool>,
@@ -971,7 +971,7 @@ impl Journal {
         let fs = self.fs();
         let ret = !self.lock.can_discard.get() &&
             self.lock.seq_ondisk.get() == fs.journal_cur_seq() &&
-            self.lock.cur_entry_error.get() != 0 &&
+            self.lock.cur_entry_error.load().is_some() &&
             (flags & Watermark::MASK) >= Watermark::reclaim as u32;
 
         if ret {
@@ -1311,7 +1311,7 @@ impl Journal {
             return fs.throw(Errcode::journal_blocked);
         }
 
-        if let Some(e) = BchError::new(self.lock.cur_entry_error.get()) {
+        if let Some(e) = self.lock.cur_entry_error.load() {
             return Err(e);
         }
 
@@ -2357,7 +2357,7 @@ impl Journal {
         prt!(out, "blocked:\t{}\n",                     self.lock.blocked.get());
         prt!(out, "flush_wait:\t{}\n",                  u32::from(self.flush_waiting()));
         prt!(out, "current entry sectors:\t{}\n",       g.cur_entry_sectors);
-        prt!(out, "current entry error:\t{}\n",         BchError::new(self.lock.cur_entry_error.get()).map_or("(No error)", |e| e.msg()));
+        prt!(out, "current entry error:\t{}\n",         self.lock.cur_entry_error.load().map_or("(No error)", |e| e.msg()));
         prt!(out, "current entry:\t");
 
         match s.cur_entry_offset() {

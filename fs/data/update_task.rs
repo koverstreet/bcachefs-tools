@@ -39,7 +39,7 @@ use crate::data::read::{Rbio, ReadDone};
 use crate::data::scrub_journal::BadRef;
 use crate::data::update::{Held, DataUpdate, DataUpdateOpts};
 use crate::debug::async_objs::{AsyncObj, AsyncObjSlot, AsyncObjKind};
-use crate::errcode::{ret_to_result_void, BchError, Errcode};
+use crate::errcode::{BchError, Errcode};
 use crate::data::promote::InFlight;
 use crate::fs::Fs;
 use crate::os::workqueue::Queue;
@@ -311,7 +311,7 @@ impl Body<'_> {
             let u = &mut **self;
             use crate::data::write::{write, WriteBio, WriteFor};
             write(&mut u.op, WriteBio::Update(&mut u.pages), WriteFor::Update(&u.index), resume).await;
-            ret_to_result_void(i32::from(u.op.error))?;
+            u.op.error.map_or(Ok(()), Err)?;
         }
         Ok(())
     }

@@ -732,7 +732,7 @@ use crate::data::ptrs::{Ptrs, PtrsMut};
 use crate::data::write_extent::{write_extent, Extent};
 use crate::data::write_nocow::nocow_write;
 use crate::data::write_replicas::{InFlight, Refs, ReplicaErrs};
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::format::{Bpos, Bversion, DataType, BkeyType, MetadataVersion, SbFeature,
     BKEY_PTRS_MAX, REPLICAS_MAX, Bkey, CsumType};
 use crate::fs::Fs;
@@ -753,7 +753,7 @@ use self::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
 use core::fmt;
 use core::pin::Pin;
-use cstruct_macros::{MaybeZeroable, Init, bitfield, bch_enum, TypeInfo, BitfieldMembers};
+use cstruct_macros::{Init, bitfield, bch_enum, TypeInfo, BitfieldMembers};
 use nestify::nest;
 use pin_init::pin_data;
 
@@ -781,7 +781,7 @@ nest! {
     /* made by init(): bch2_write_op_init() */
     #[pin_data]
     #[repr(C)]
-    #[derive(MaybeZeroable, BitfieldMembers, TypeInfo, Init)]
+    #[derive(BitfieldMembers, TypeInfo, Init)]
     #[init_args(fs: &Fs, opts: InodeOpts)]
     pub struct WriteOp {
         #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
@@ -790,7 +790,8 @@ nest! {
 
         pub written: u32, /* sectors */
         pub flags: u16,
-        pub error: i16, /* dio write path expects it to hold -ERESTARTSYS... */
+        #[init(None)]
+        pub error: Option<BchError>,
         pub io_error: u8,
 
         #[members]
@@ -937,7 +938,7 @@ impl WriteOp {
     }
 
     pub(crate) fn set_error(&mut self, e: BchError) {
-        self.error = -e.raw() as i16;
+        self.error = Some(e);
     }
 
     /// insert_keys' heap buffer freed, if it has one: an op isn't dropped.
@@ -1105,8 +1106,8 @@ fn __write_done(op: &mut Op) {
 
     debug_assert!(op.open_buckets.nr == 0, "write done with open buckets");
 
-    if op.error == 0 {
-        op.error = ret_to_c(fs.journal.error()) as i16;
+    if op.error.is_none() {
+        op.error = fs.journal.error().err();
     }
 
     fs.times.get(TimeStat::data_write as usize).update(op.start_time);
@@ -1719,7 +1720,7 @@ pub fn __write_op_to_text(out: &mut Printbuf, op: &Op) {
     }
     out.newline();
 
-    prt!(out, "ret\t{}\n", BchError::new(op.error.into()).map_or("(No error)", |e| e.msg()));
+    prt!(out, "ret\t{}\n", op.error.map_or("(No error)", |e| e.msg()));
 }
 
 #[cold]

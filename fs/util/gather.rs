@@ -58,7 +58,7 @@
 //! out but the owner's, or it's a bug: a drop can't await, and one that
 //! slept would hide the wait it was meant to be.
 
-use crate::errcode::{BchError, FirstErr};
+use crate::errcode::{BchError, AtomicError};
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::util::alloc::{AllocError, Vec};
@@ -110,19 +110,19 @@ impl Fold for () {
 /// The first error put, or Ok.
 impl Fold for Result<(), BchError> {
     type Item = Self;
-    type Acc = FirstErr;
+    type Acc = AtomicError;
 
-    fn acc() -> impl PinInit<FirstErr> {
-        FirstErr::new()
+    fn acc() -> impl PinInit<AtomicError> {
+        AtomicError::new()
     }
 
-    fn fold(acc: &FirstErr, v: Self) {
+    fn fold(acc: &AtomicError, v: Self) {
         if let Err(e) = v {
-            acc.set(e);
+            acc.set_first(e);
         }
     }
 
-    fn result(acc: &FirstErr) -> Self {
+    fn result(acc: &AtomicError) -> Self {
         acc.result()
     }
 }

@@ -85,7 +85,7 @@ use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch
                   promote::{promote_alloc, Promoted, PromoteTask}, update::read_err_benign};
 use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut};
 use crate::data::reflink::{lookup_indirect_extent, Indirect};
-use crate::errcode::{Errcode as err, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{Errcode as err, AtomicError, BchError};
 use crate::fs::{Dev, Fs, FsFlag};
 use crate::init::{damage, error::{inum_offset_err_msg_trans, inum_offset_err_msg, id}};
 use crate::posix::inode_opts::get_io_opts;
@@ -108,7 +108,7 @@ use crate::util::rcu::read_lock;
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
-use core::sync::atomic::{AtomicBool, AtomicI16, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use core::ops::ControlFlow;
 use core::alloc::Layout;
 use core::pin::Pin;
@@ -157,7 +157,7 @@ pub struct RbioHdr {
 
     pub saw_error: AtomicBool,
     pub self_healing: AtomicBool,
-    pub ret: AtomicI16,
+    pub ret: AtomicError,
     pub read_for: ReadFor,
 
     pub subvol: u32,
@@ -188,11 +188,11 @@ impl<B: BioOwns> core::ops::Deref for Rbio<B> {
 
 impl RbioHdr {
     pub fn ret(&self) -> Result<(), BchError> {
-        ret_to_result_void(self.ret.load(Relaxed).into())
+        self.ret.result()
     }
 
     pub fn set_ret(&self, ret: Result<(), BchError>) {
-        self.ret.store(ret_to_c(ret) as i16, Relaxed);
+        self.ret.store(ret.err());
     }
 
     fn report(&self, errors: ReadErr, msg: impl Fn(&mut Printbuf)) -> bool {
@@ -270,7 +270,7 @@ impl<B: BioOwns> Rbio<B> {
                 start_time,
                 saw_error:    AtomicBool::new(false),
                 self_healing: AtomicBool::new(false),
-                ret:          AtomicI16::new(0),
+                ret:          AtomicError::new(),
                 read_for,
                 subvol,
                 opts,
@@ -1043,7 +1043,7 @@ fn mark_failure(pick: &ExtentPtrDecoded, failed: &mut IoFailures, e: BchError) -
 }
 
 fn ptrs_io_error(fs: &Fs, k: BkeySC<'_>, failed: &IoFailures) -> u16 {
-    let failed_dev = |dev: u32| failed.dev(dev).is_some_and(|f| f.errcode != 0 || f.csum_nr != 0);
+    let failed_dev = |dev: u32| failed.dev(dev).is_some_and(|f| f.err.is_some() || f.csum_nr != 0);
     k.arm::<Ptrs>().map_or(0, |kp| {
         kp.ptrs(fs).enumerate().filter(|(_, p)| failed_dev(p.dev().into())).fold(0, |m, (i, _)| m | 1 << i)
     })

@@ -47,11 +47,11 @@ use crate::format::Btree;
 pub struct Repair {
     key:      BtreeKeyBuf,
     bad_devs: u32,
-    read_err: i32,
+    read_err: Option<BchError>,
 }
 
 /// Queued for do_repairs(): see Repair. What's bad, for the scrub's Gather.
-pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, read_err: i32) -> Bad {
+pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, read_err: Option<BchError>) -> Bad {
     let r = Repair { key: BtreeKeyBuf::new(btree, level, k), bad_devs, read_err };
     let repair = fs.scrub_journal_repairs.lock().push(r).is_ok();
     if !repair {
@@ -59,7 +59,7 @@ pub fn queue(fs: &Fs, btree: Btree, level: u32, k: BkeySC<'_>, bad_devs: u32, re
     }
 
     /* uncorrected: every replica failed, so only a rewind fixes it */
-    Bad { lost: read_err != 0, repair, devs: mask_devs(fs, k, bad_devs), ..Default::default() }
+    Bad { lost: read_err.is_some(), repair, devs: mask_devs(fs, k, bad_devs), ..Default::default() }
 }
 
 /// The devices of @k's pointers in @mask, a mask of them by position.
@@ -151,7 +151,7 @@ async fn node_verdict(fs: &Fs, key: BtreeKeyBuf, reads: &mut Replicas<ReplicaRea
         /* just the devices, for reporting: uncorrected sectors mean a rewind */
         Bad { nodes: 1, btrees: 1 << key.btree.0, devs: mask_devs(fs, key.key(), bad), ..Default::default() }
     } else if bad != 0 {
-        queue(fs, key.btree, key.level, key.key(), bad, 0)
+        queue(fs, key.btree, key.level, key.key(), bad, None)
     } else {
         Bad::default()
     }
@@ -471,7 +471,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
      * write was one we couldn't read back, the file lost it - say so.
      */
     if !extents_match(fs, k, stashed) {
-        if r.read_err == 0 {
+        if r.read_err.is_none() {
             return Ok(Outcome::Unchanged);
         }
 
@@ -498,7 +498,7 @@ fn repair_one(m: &Moving<'_>, t: &TransAttempt<'_, '_>, r: &Repair) -> Result<Ou
     let nr_ptrs = trimmed.as_sc().arm::<Ptrs>().map_or(0, |k| k.ptrs(fs).count());
     let all_ptrs = (1u32 << nr_ptrs) - 1;
 
-    if let Some(e) = BchError::new(r.read_err).filter(|_| bad_devs == all_ptrs) {
+    if let Some(e) = r.read_err.filter(|_| bad_devs == all_ptrs) {
         let err = crate::data::read::data_read_sb_err(e);
         damage::record_key(t, btree, stashed.k.p, err)?;
         return t.commit(None, CommitFlags::NO_ENOSPC).map(|()| Outcome::Lost);

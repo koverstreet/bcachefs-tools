@@ -68,7 +68,7 @@ use crate::data::write::WriteFlags;
 use crate::init::dev::{AtomicDevsMask, DevsList, DevsMask};
 use crate::sb::members_format::{MEMBER_INVALID, MEMBERS_MAX};
 use crate::util::time_stats::TimeStat;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::data::copygc::can_make_progress;
 use crate::format::{DataType, BKEY_PTRS_MAX};
 use crate::locking::{ExclusiveGuard, SpinLockIrq, ByteLock, Locked, Lockdep};
@@ -356,7 +356,7 @@ nest! {
             may_wait:                  bool,
             __pad:                     u2,
         },
-        pub err: i16,
+        pub err: Option<BchError>,
         pub wake_counter_snapshot: u32,
         pub free_buckets: u64,
     }
@@ -1148,7 +1148,7 @@ impl<'r, 'f> alloc_request<'r, 'f> {
                 .with_will_retry_set_devices(b.will_retry_set_devices())
                 .with_copygc_can_make_progress(copygc_can_make_progress)
                 .with_may_wait(self.may_wait()),
-            err: err.map_or(0, |e| ret_to_c(Err(e)) as i16),
+            err,
             wake_counter_snapshot,
             free_buckets,
         };
@@ -1181,7 +1181,7 @@ impl<'r, 'f> alloc_request<'r, 'f> {
                 }
             }
             write!(out, " free {} copygc_progress {}", e.free_buckets, u8::from(b.copygc_can_make_progress()));
-            match BchError::new(e.err.into()) {
+            match e.err {
                 None      => write!(out, " -> ok\n"),
                 Some(err) => write!(out, " -> {err}\n"),
             };
@@ -1244,7 +1244,7 @@ impl Fs {
         let rcu = read_lock();
         let mut found = false;
 
-        for e in req.trace.iter().filter(|e| e.err != 0 && u32::from(e.dev) != MEMBER_INVALID) {
+        for e in req.trace.iter().filter(|e| e.err.is_some() && u32::from(e.dev) != MEMBER_INVALID) {
             found = true;
 
             let Some(ca) = self.dev_rcu(e.dev.into(), &rcu) else { return true };
@@ -1596,9 +1596,9 @@ impl OpenBuckets {
     /// cancelled with its error: the writes to it failed.
     pub fn write_errors(&self, fs: &Fs, failed: &IoFailures) {
         for f in failed.devs() {
-            let err = BchError::new(f.errcode.into()).unwrap_or(Errcode::data_write_io.into());
+            let err = f.err.unwrap_or(Errcode::data_write_io.into());
             self.iter(fs).filter(|ob| u32::from(ob.id().dev()) == u32::from(f.dev))
-                .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set(err));
+                .filter_map(|ob| ob.into_ref().stripe()).for_each(|s| s.err.set_first(err));
         }
     }
 }

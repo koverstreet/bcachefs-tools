@@ -105,7 +105,7 @@ fn writepage_io_done(io: &mut Io) {
     let mapping = io.mapping;
     let inode = mapping.inode();
 
-    if io.op.error != 0 {
+    if io.op.error.is_some() {
         inode.ei_flags.set(InodeInfoFlag::EI_INODE_ERROR, true);
 
         folios_clear_replicas(io, |folio| {

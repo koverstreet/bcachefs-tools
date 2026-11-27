@@ -160,7 +160,7 @@ fn dio_write_copy_iov<P: UserPage>(dio: &mut Dio<P>) -> Result<(), ()> {
 
 /// What the dio wrote, or its error, what it held given back.
 fn dio_write_done<P: UserPage>(d: &mut Dio<P>) -> Result<usize, BchError> {
-    let ret = BchError::new(d.op.error.into()).map_or(Ok((d.written << 9) as usize), Err);
+    let ret = d.op.error.map_or(Ok((d.written << 9) as usize), Err);
     drop(d.write_ref.take());
 
     /* inode->i_dio_count is our ref on inode and thus bch_fs */
@@ -186,7 +186,7 @@ fn dio_write_end<P: UserPage>(dio: &mut Dio<P>) {
 
     dio.wbio.release();
 
-    if unlikely(dio.op.error != 0) {
+    if unlikely(dio.op.error.is_some()) {
         inode.ei_flags.set(InodeInfoFlag::EI_INODE_ERROR, true);
     }
 }
@@ -290,7 +290,7 @@ async fn dio_write_loop<P: UserPage>(d: &mut Dio<P>) -> Result<(), BchError> {
 
         dio_write_end(d);
 
-        if likely(d.iter.get().count() == 0) || d.op.error != 0 {
+        if likely(d.iter.get().count() == 0) || d.op.error.is_some() {
             return Ok(());
         }
 

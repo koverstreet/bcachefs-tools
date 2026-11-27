@@ -12,13 +12,14 @@ pub mod work;
 
 use crate::data::moving::MoveStats;
 use crate::init::progress::ProgressIndicator;
+use crate::errcode::AtomicError;
 use crate::fs::Fs;
 use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::{Status, StripesPending};
 use crate::locking::{Locked, SeqLock, SpinLockIrq};
 use crate::new_lock;
 use crate::os::{kthread::Daemon, power_supply::PowerNotifier};
-use core::sync::atomic::{AtomicBool, AtomicI32};
+use core::sync::atomic::AtomicBool;
 use cstruct_macros::{placed, MaybeZeroable, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -35,8 +36,8 @@ pub struct FsReconcile {
     #[init(Daemon::new())]
     pub(crate) thread: Daemon,
     #[pin]
-    #[init(AtomicI32::new(0))]
-    pub(crate) thread_exit_ret: AtomicI32,
+    #[init(AtomicError::new())]
+    pub(crate) thread_exit_ret: AtomicError,
 
     /* What it's doing, for sysfs */
     #[pin]

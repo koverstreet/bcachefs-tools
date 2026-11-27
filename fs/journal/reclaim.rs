@@ -348,7 +348,7 @@ impl Journal {
             }
 
             g.cur_entry_sectors = 0;
-            g.published().cur_entry_error.set(-fs.err(Errcode::insufficient_journal_devices).raw());
+            g.published().cur_entry_error.store(Some(fs.err(Errcode::insufficient_journal_devices)));
             return;
         }
 
@@ -372,14 +372,10 @@ impl Journal {
         self.set_watermark(g);
 
         g.cur_entry_sectors = g.space[journal_space_discarded as usize].next_entry;
-        let cur_entry_error = if g.cur_entry_sectors != 0 {
-            0
-        } else {
-            -fs.err(Errcode::journal_full).raw()
-        };
-        g.published().cur_entry_error.set(cur_entry_error);
+        let cur_entry_error = (g.cur_entry_sectors == 0).then(|| fs.err(Errcode::journal_full));
+        g.published().cur_entry_error.store(cur_entry_error);
 
-        if cur_entry_error == 0 {
+        if cur_entry_error.is_none() {
             self.wake_async_wait();
         }
     }

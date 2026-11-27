@@ -148,7 +148,7 @@ use crate::data::ec::stripe_new_blocks::new_stripe_key;
 use crate::data::ec::stripe_new_reuse::Reuse;
 use crate::data::ec::stripe_new_tasks::{stripe_done, stripe_task};
 use crate::data::moving::MovingIo;
-use crate::errcode::{Errcode, BchError, FirstErr};
+use crate::errcode::{Errcode, BchError, AtomicError};
 use crate::fs::Fs;
 use crate::locking::{ExclusiveGuard, Locked, MemallocFlags, Mutex};
 use crate::util::alloc::{AllocError, KBox, Vec};
@@ -190,7 +190,7 @@ pub struct StripeNew {
     seq:                  AtomicU64,
     /// Why it's cancelled - a writer's IO failed, or its head gave up on it:
     /// the first error
-    pub(crate) err:       FirstErr,
+    pub(crate) err:       AtomicError,
     /// An EcStripeNewState
     state:                AtomicU32,
     /// Woken as an io ref's put - a block's bucket closing - and as it goes
@@ -430,7 +430,7 @@ impl StripeNew {
             in_flight_ref: RefSlot::new(),
             in_flight   <- Gather::new(),
             seq:        AtomicU64::new(0),
-            err:        FirstErr::new(),
+            err:        AtomicError::new(),
             state:      AtomicU32::new(State::open as u32),
             io_ref_put: EventCount::new(),
             internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),

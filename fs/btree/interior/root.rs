@@ -13,7 +13,7 @@ use crate::btree::bkey::{BkeyV, BkeyI, BKEY_U64S};
 use crate::btree::interior::BtreeAlloc;
 use crate::data::extents_format::BKEY_BTREE_PTR_VAL_U64s_MAX;
 use crate::debug::trace::events;
-use crate::errcode::BchError;
+use crate::errcode::{AtomicError, BchError};
 use crate::format::{BkeyType, Btree, BTREE_ID_NR_MAX, JsetEntry, jset_entry_btree_root};
 use crate::fs::Fs;
 use crate::{prt, POS_MIN, SPOS_MAX};
@@ -99,7 +99,7 @@ crate::published! {
     #[derive(MaybeZeroable)]
     pub struct BtreeRootsLive {
         pub roots_b: [Volatile<usize>; BTREE_ID_NR_MAX as usize],
-        pub roots_error: [Volatile<i16>; BTREE_ID_NR_MAX as usize],
+        pub roots_error: [AtomicError; BTREE_ID_NR_MAX as usize],
         pub roots_nr_extra: Volatile<u32>,
     }
 }
@@ -113,8 +113,8 @@ impl BtreeRootsLive {
     }
 
     /// The error reading btree @id's root left.
-    pub fn error(&self, id: u32) -> i32 {
-        self.roots_error.get(id as usize).map_or(0, |e| e.get().into())
+    pub fn error(&self, id: u32) -> Option<BchError> {
+        self.roots_error.get(id as usize)?.load()
     }
 }
 

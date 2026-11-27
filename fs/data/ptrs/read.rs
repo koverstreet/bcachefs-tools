@@ -37,8 +37,8 @@ crate::module_param! {
 pub struct DevIoFailures {
     pub dev: u8,
     pub csum_nr: u8,
-    pub ec_errcode: i16,
-    pub errcode: i16,
+    pub ec_err: Option<BchError>,
+    pub err: Option<BchError>,
 }
 
 /// What failed, a device at a time, with room for @N devices - and an erasure
@@ -84,34 +84,32 @@ impl<const N: usize> IoFailures<N> {
 
     /// @dev's io error, if it has one.
     pub fn dev_err(&self, dev: u32) -> Option<BchError> {
-        self.dev(dev).and_then(|f| BchError::new(f.errcode.into()))
+        self.dev(dev).and_then(|f| f.err)
     }
 
-    pub fn set_errcode(&mut self, dev: u32, err: i32) {
-        self.dev_mut(dev).errcode = err as i16;
+    pub fn set_err(&mut self, dev: u32, err: BchError) {
+        self.dev_mut(dev).err = Some(err);
     }
 
     /// @dev's bio's error: its bi_status, as our errcode, thrown.
     pub fn set_blk_status(&mut self, fs: &Fs, dev: u32, status: u8) {
-        self.set_errcode(dev, -fs.err(crate::errcode::blk_status_to_bch_err(status)).raw());
+        self.set_err(dev, fs.err(crate::errcode::blk_status_to_bch_err(status)));
     }
 
     /// Record @err, reading @p: a failed reconstruct, a checksum error - those
     /// counted, retried until checksum_err_retry_nr - or an io error.
     pub fn mark(&mut self, p: &ExtentPtrDecoded, err: BchError) {
-        assert!(err.raw() != 0, "marking an io failure that isn't one");
         assert!(!err.matches(Errcode::transaction_restart),
                 "marking a transaction restart as an io failure");
 
         let f = self.dev_mut(p.ptr.dev().into());
-        let code = -(err.raw() as i16);
 
         if p.do_ec_reconstruct {
-            f.ec_errcode = code;
-        } else if err.raw() == Errcode::data_read_retry_csum_err.0 as i32 {
+            f.ec_err = Some(err);
+        } else if err == Errcode::data_read_retry_csum_err.into() {
             f.csum_nr = f.csum_nr.saturating_add(1);
         } else {
-            f.errcode = code;
+            f.err = Some(err);
         }
     }
 
@@ -122,10 +120,10 @@ impl<const N: usize> IoFailures<N> {
             if f.csum_nr != 0 {
                 errors |= ReadErr::CHECKSUM;
             }
-            if f.ec_errcode != 0 {
+            if f.ec_err.is_some() {
                 errors |= ReadErr::EC_RECONSTRUCT;
             }
-            if let Some(e) = BchError::new(f.errcode.into()) {
+            if let Some(e) = f.err {
                 errors |= if e.matches(Errcode::decompress) {
                     ReadErr::DECOMPRESSION
                 } else {
@@ -138,14 +136,10 @@ impl<const N: usize> IoFailures<N> {
 
     /// Count, by status, each failure that came back from the block layer.
     pub fn count_blk_errors(&self, fs: &Fs) {
-        let count = |code: i16| {
-            if BchError::new(code.into()).is_some_and(|e| e.matches(Errcode::blockdev_io_error)) {
-                fs.sb_error_count(blk_sts_sb_err(code.into()));
+        for e in self.devs().iter().flat_map(|f| [f.err, f.ec_err]).flatten() {
+            if e.matches(Errcode::blockdev_io_error) {
+                fs.sb_error_count(blk_sts_sb_err(e));
             }
-        };
-        for f in self.devs() {
-            count(f.errcode);
-            count(f.ec_errcode);
         }
     }
 
@@ -154,8 +148,8 @@ impl<const N: usize> IoFailures<N> {
     /// operation that succeeded; a record with no error at all isn't one.
     pub fn all_dev_removed(&self) -> bool {
         self.devs().iter().all(|f| {
-            f.csum_nr == 0 && f.ec_errcode == 0 &&
-                BchError::new(f.errcode.into()).is_some_and(|e| e.matches(Errcode::BLK_STS_REMOVED))
+            f.csum_nr == 0 && f.ec_err.is_none() &&
+                f.err.is_some_and(|e| e.matches(Errcode::BLK_STS_REMOVED))
         })
     }
 
@@ -169,18 +163,17 @@ impl<const N: usize> IoFailures<N> {
                 out.make_room(1024);
                 dev_to_text(&mut out, fs, f.dev);
 
-                let err_str = |code: i16| BchError::new(code.into()).map_or("(No error)", |e| e.msg());
-                if f.csum_nr == 0 && f.ec_errcode == 0 && f.errcode == 0 {
+                if f.csum_nr == 0 && f.ec_err.is_none() && f.err.is_none() {
                     write!(out, " no error - confused");
                 }
                 if f.csum_nr != 0 {
                     write!(out, " checksum ({})", f.csum_nr);
                 }
-                if f.errcode != 0 {
-                    write!(out, " io: {}", err_str(f.errcode));
+                if let Some(e) = f.err {
+                    write!(out, " io: {e}");
                 }
-                if f.ec_errcode != 0 {
-                    write!(out, " ec reconstruct: {}", err_str(f.ec_errcode));
+                if let Some(e) = f.ec_err {
+                    write!(out, " ec reconstruct: {e}");
                 }
                 out.newline();
             }
@@ -317,16 +310,16 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                     cold_path();
                     let csum_nr = f.csum_nr;
                     p.crc_retry_nr = csum_nr;
-                    p.has_ec &= f.ec_errcode == 0;
+                    p.has_ec &= f.ec_err.is_none();
 
                     if ca.is_some() {
-                        have_io_errors |= f.errcode != 0 || f.ec_errcode != 0;
+                        have_io_errors |= f.err.is_some() || f.ec_err.is_some();
                     }
                     have_csum_errors |= csum_nr != 0;
 
-                    if p.has_ec && (f.errcode != 0 || csum_nr != 0) {
+                    if p.has_ec && (f.err.is_some() || csum_nr != 0) {
                         p.do_ec_reconstruct = true;
-                    } else if f.errcode != 0 || csum_nr > fs.opts().checksum_err_retry_nr.get() {
+                    } else if f.err.is_some() || csum_nr > fs.opts().checksum_err_retry_nr.get() {
                         continue;
                     }
                 }

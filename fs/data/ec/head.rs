@@ -285,7 +285,7 @@ fn head_stripe<'g>(g: &'g HeadGuard<'_>) -> Option<&'g StripeNew> {
 fn stripe_head_detach(fs: &Fs, g: &mut HeadGuard<'_>, err: Option<BchError>) {
     let s = g.s.take().expect("detaching a stripe head's stripe, with none");
     if let Some(err) = err {
-        s.err.set(err);
+        s.err.set_first(err);
     }
     set_pending(fs, s);
 }
@@ -521,7 +521,7 @@ fn alloc_for_head(fs: &Fs, h: &EcStripeHead, g: &mut HeadGuard<'_>, max_data_blo
 pub(crate) fn set_pending(fs: &Fs, b: StripeNewBox) {
     {
         let i = b.lock();
-        assert!(i.allocated || b.err.get().is_some(),
+        assert!(i.allocated || b.err.load().is_some(),
                 "stripe {} handed on, neither allocated nor cancelled", i.new_stripe.idx());
     }
 

@@ -67,7 +67,7 @@ pub fn write(
         let mut state = state;
         let WriteState { op, wbio, .. } = &mut *state;
         write::write(op, write::WriteBio::Bio(wbio), write::WriteFor::Tools, Resume::queue(Queue::system_dfl())).await;
-        BchError::new(op.error.into()).map_or(Ok(WriteResult { sectors_delta: op.i_sectors_delta }), Err)
+        op.error.map_or(Ok(WriteResult { sectors_delta: op.i_sectors_delta }), Err)
     }, waiter::Sync::current())?;
     wait.wait_sync(Sleep::UNINTERRUPTIBLE).expect("a write's task, ended with what it wrote")
 }

@@ -646,8 +646,8 @@ impl Fs {
     }
 
     /// Btree @id's root error, published as the root is.
-    pub fn btree_id_root_set_error(&self, id: u32, err: i32) {
-        self.btree.cache.roots.lock().published().roots_error[id as usize].set(err as i16);
+    pub fn btree_id_root_set_error(&self, id: u32, err: Option<BchError>) {
+        self.btree.cache.roots.lock().published().roots_error[id as usize].store(err);
     }
 
     pub fn btree_id_nr_alive(&self) -> u32 {

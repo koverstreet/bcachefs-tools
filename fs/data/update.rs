@@ -37,7 +37,7 @@ use crate::data::extents::{ExtentPtrDecoded, ReadFlags};
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
 use crate::data::write::{WriteOp, WriteFlags};
 use crate::opts::InodeOpts;
-use crate::errcode::{Errcode, ret_to_c, BchError};
+use crate::errcode::{Errcode, BchError};
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, extent_ptr_durability,
                                BkeyVDurability};
 use crate::data::moving::Moving;
@@ -778,7 +778,7 @@ impl DataUpdate {
         let fs = self.fs();
         if self.index.opts.type_ == Type::scrub_no_repair {
             let bit = pick.map_or(0, |p| dev_ptr_bit(fs, self.key(), p.ptr.dev().into()));
-            put_found(found, scrub_journal::queue(fs, self.index.btree_id, 0, self.key(), bit, ret_to_c(Err(e))));
+            put_found(found, scrub_journal::queue(fs, self.index.btree_id, 0, self.key(), bit, Some(e)));
         } else {
             let err = crate::data::read::data_read_sb_err(e);
             let (btree, pos) = (self.index.btree_id, self.key().k.p);
@@ -874,7 +874,7 @@ impl DataUpdate {
         if type_ == Type::scrub_no_repair {
             if self.index.opts.ptrs_io_error != 0 {
                 put_found(found, scrub_journal::queue(fs, self.index.btree_id, 0, self.key(),
-                                                      self.index.opts.ptrs_io_error.into(), 0));
+                                                      self.index.opts.ptrs_io_error.into(), None));
             }
             return Ok(false);
         }

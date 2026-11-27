@@ -163,7 +163,7 @@ impl NodeValidate<'_> {
         if let NodeIo::Read { ca, failed: Some(f), .. } = &mut self.io {
             /* not over keys_lost, from earlier in this replica: */
             if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err)) {
-                f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err).raw());
+                f.set_err(ca.dev_idx.into(), fs.err(e::btree_node_validate_err));
             }
         }
     }
@@ -177,7 +177,7 @@ impl NodeValidate<'_> {
     pub fn keys_lost(&mut self) {
         let fs = self.fs;
         if let NodeIo::Read { ca, failed: Some(f), .. } = &mut self.io {
-            f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err_keys_lost).raw());
+            f.set_err(ca.dev_idx.into(), fs.err(e::btree_node_validate_err_keys_lost));
         }
     }
 
@@ -193,7 +193,7 @@ impl NodeValidate<'_> {
 
             if let Some(f) = failed.as_deref_mut() {
                 if !f.dev_err(ca.dev_idx.into()).is_some_and(|err| err.matches(e::btree_node_validate_err_keys_lost)) {
-                    f.set_errcode(ca.dev_idx.into(), -fs.err(e::btree_node_validate_err_csum).raw());
+                    f.set_err(ca.dev_idx.into(), fs.err(e::btree_node_validate_err_csum));
                 }
             }
         }

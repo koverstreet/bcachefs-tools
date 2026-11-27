@@ -235,12 +235,12 @@ impl BtreeTrans<'_> {
                 }
 
                 let err = fs.btree.cache.roots.error(btree.0);
-                ebug_assert!(err != 0);
+                ebug_assert!(err.is_some());
                 /*
                  * Returning 0 here would spin: our caller loops until
                  * the root is locked or we return an error
                  */
-                return Err(BchError::new(err).unwrap_or_else(|| fs.err(Errcode::btree_root_error_unset)));
+                return Err(err.unwrap_or_else(|| fs.err(Errcode::btree_root_error_unset)));
             };
             let b = unsafe { b.as_ref() };
 

@@ -24,8 +24,8 @@ use crate::c;
 use core::{fmt, iter};
 use core::num::NonZeroU16;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI32, Ordering};
-use cstruct_macros::{bch_enum, xmacro};
+use core::sync::atomic::{AtomicU16, Ordering};
+use cstruct_macros::{bch_enum, xmacro, MaybeZeroable};
 
 xmacro! {
     BLK_ERRS {
@@ -1125,31 +1125,44 @@ impl From<kernel::error::Error> for BchError {
     }
 }
 
-/// An error set from anywhere, once: the first set is kept, later ones
-/// dropped - why something was cancelled, or what a fork-join's jobs ran
-/// into first.
-pub struct FirstErr(AtomicI32);
+/// An error that may have happened, set from anywhere: an Option<BchError>,
+/// atomically - a completion's result, why something was cancelled, or what a
+/// fork-join's jobs ran into first.
+#[derive(MaybeZeroable)]
+pub struct AtomicError {
+    code: AtomicU16,
+}
 
-impl FirstErr {
+// its writes are atomic, so its writer is itself
+impl crate::util::projections::Publish for AtomicError {
+    type Writer = Self;
+}
+
+impl AtomicError {
     pub const fn new() -> Self {
-        FirstErr(AtomicI32::new(0))
+        AtomicError { code: AtomicU16::new(0) }
     }
 
-    /// @e, unless there's one already.
-    pub fn set(&self, e: impl Into<BchError>) {
-        let _ = self.0.compare_exchange(0, e.into().raw(), Ordering::Relaxed, Ordering::Relaxed);
+    pub fn load(&self) -> Option<BchError> {
+        NonZeroU16::new(self.code.load(Ordering::Relaxed)).map(BchError)
     }
 
-    pub fn get(&self) -> Option<BchError> {
-        BchError::new(self.0.load(Ordering::Relaxed))
+    pub fn store(&self, e: Option<BchError>) {
+        self.code.store(e.map_or(0, |e| e.0.get()), Ordering::Relaxed);
+    }
+
+    /// @e, unless there's one already: the first set is kept, later ones
+    /// dropped.
+    pub fn set_first(&self, e: impl Into<BchError>) {
+        let _ = self.code.compare_exchange(0, e.into().0.get(), Ordering::Relaxed, Ordering::Relaxed);
     }
 
     pub fn result(&self) -> Result<(), BchError> {
-        self.get().map_or(Ok(()), Err)
+        self.load().map_or(Ok(()), Err)
     }
 }
 
-impl Default for FirstErr {
+impl Default for AtomicError {
     fn default() -> Self {
         Self::new()
     }

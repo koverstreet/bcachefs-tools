@@ -18,7 +18,7 @@ use crate::util::alloc::KBox;
 use crate::data::ec::buf::{block_checksum, blocks_in, errs_only_dev_offline, errs_to_text, validate, Blocks, MemWait,
                            StripeBuf, EC_BLOCKS_ALL, POST, PRE};
 use crate::data::ec::stripe::{ptr_matches_stripe, shape, MAX_BLOCKS};
-use crate::errcode::{Errcode, BchError};
+use crate::errcode::{AtomicError, Errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
@@ -36,7 +36,6 @@ use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{log_msg_ratelimited, prt};
 use core::pin::Pin;
-use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::args_stored_once;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
 use crate::format::{Bpos, Btree, DataType, Csum, CsumType};
@@ -64,23 +63,22 @@ pub struct BlockErrs([Option<BchError>; MAX_BLOCKS]);
 
 impl Fold for BlockErrs {
     type Item = Self;
-    /// Each block's errcode, raw: 0 for none
-    type Acc = [AtomicI32; MAX_BLOCKS];
+    type Acc = [AtomicError; MAX_BLOCKS];
 
     fn acc() -> impl PinInit<Self::Acc> {
-        core::array::from_fn::<_, MAX_BLOCKS, _>(|_| AtomicI32::new(0))
+        core::array::from_fn::<_, MAX_BLOCKS, _>(|_| AtomicError::new())
     }
 
     fn fold(acc: &Self::Acc, v: Self) {
         for (a, e) in acc.iter().zip(v.0) {
-            if let Some(e) = e {
-                a.store(e.raw(), Ordering::Relaxed);
+            if e.is_some() {
+                a.store(e);
             }
         }
     }
 
     fn result(acc: &Self::Acc) -> Self {
-        BlockErrs(core::array::from_fn(|i| BchError::new(acc[i].load(Ordering::Relaxed))))
+        BlockErrs(core::array::from_fn(|i| acc[i].load()))
     }
 }
 
