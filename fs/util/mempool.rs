@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A mempool, in both builds: elements of a size, from an allocator @A - C's
+//! A mempool, in both builds: elements of a layout, from an allocator @A - C's
 //! mempool_alloc_t and mempool_free_t - with a reserve of them set aside when
 //! it's made, so allocating can wait for one to be freed where the allocator
 //! would fail.
@@ -38,7 +38,9 @@ pub struct Mempool<A: AllocGfp = crate::os::alloc::Global> {
     /* bumped by every element freed to the reserve, for alloc_raw() to wait on */
     freed:   EventCount,
     min_nr:  usize,
+    /* its elements' layout: zero, not made */
     size:    usize,
+    align:   usize,
     #[pin]
     alloc:   A,
 }
@@ -83,18 +85,35 @@ fn drain<A: AllocGfp>(alloc: &A, reserve: &mut Vec<Element>, layout: Layout) {
 }
 
 impl<A: AllocGfp> Mempool<A> {
-    /// @min_nr elements of @size bytes, from @alloc. Nothing to undo if it
-    /// fails.
+    /// @min_nr elements of @size bytes, from @alloc, aligned as kmalloc()
+    /// aligns them. Nothing to undo if it fails.
     pub fn new_in<E>(alloc: impl PinInit<A, E>, min_nr: usize, size: usize) -> impl PinInit<Self, BchError>
     where
         BchError: From<E>,
     {
-        let layout = kv_layout(size);
+        Self::of_layout(alloc, min_nr, kv_layout(size))
+    }
+
+    /// new_in(), of elements of @layout: a pool of one type, from an
+    /// allocator of it.
+    pub fn with_layout_in<E>(alloc: impl PinInit<A, E>, min_nr: usize, layout: Layout) -> impl PinInit<Self, BchError>
+    where
+        BchError: From<E>,
+    {
+        Self::of_layout(alloc, min_nr, Ok(layout))
+    }
+
+    fn of_layout<E>(alloc: impl PinInit<A, E>, min_nr: usize, layout: Result<Layout, AllocError>)
+        -> impl PinInit<Self, BchError>
+    where
+        BchError: From<E>,
+    {
         ::pin_init::pin_init!(Self {
             reserve <- new_lock!(Vec::with_capacity(min_nr)?, Volatile::new(0), "mempool"),
             freed: EventCount::new(),
             min_nr,
-            size: layout.map(|_| size)?,
+            size: layout?.size(),
+            align: layout?.align(),
             alloc <- alloc,
         }? BchError)
         .pin_chain(|pool| pool.fill())
@@ -134,7 +153,7 @@ impl<A: AllocGfp> Mempool<A> {
     }
 
     fn layout(&self) -> Layout {
-        kv_layout(self.size).expect("a made pool's element layout")
+        Layout::from_size_align(self.size, self.align).expect("a made pool's element layout")
     }
 
     /// An element, for C to hold: free_raw() takes it back.

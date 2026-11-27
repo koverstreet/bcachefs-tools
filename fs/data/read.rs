@@ -105,7 +105,8 @@ use crate::util::alloc::{flags, init_with, AllocGfp, Flags, Box, Global};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::late::{Late, ModuleInit};
 use crate::util::mempool::Mempool;
-use crate::util::rcu::read_lock;
+use crate::util::rcu::{read_lock, RcuHead, RcuMember};
+use crate::util::rcu_pending::{RcuPool, RcuRealloc};
 use crate::util::task::{exclusive_size, requeue, waiter, Join, Resumable, Resume, ResumeAt, Spawn, TaskSlot};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
@@ -170,14 +171,21 @@ pub struct RbioHdr {
 /// B is what its bio owns: nothing, or a page cache extent's folios - read as
 /// the plain Rbio (erased()).
 #[pin_data]
-#[derive(MaybeZeroable, TypeInfo)]
+#[derive(MaybeZeroable, TypeInfo, RcuHead)]
 #[repr(C)]
 pub struct Rbio<B: BioOwns = Data> {
     pub hdr: RbioHdr,
+    /// The async object list's walk may be reading it
+    #[rcu_head]
+    rcu:     RcuMember<RcuHead>,
     #[pin]
     pub bio: BioLend<B>,
 }
 crate::has_bio!(Rbio<B>, bio, owns B where B: BioOwns);
+
+// a fragment's bio's: readers only print it - as the rbio it is now, if it's
+// been handed out again
+unsafe impl<B: BioOwns> RcuRealloc for Rbio<B> {}
 
 impl<B: BioOwns> core::ops::Deref for Rbio<B> {
     type Target = RbioHdr;
@@ -277,6 +285,7 @@ impl<B: BioOwns> Rbio<B> {
                 opts,
                 err_report,
             },
+            rcu: RcuMember::default(),
             bio <- BioLend::new(bio),
         }? BchError)
     }
@@ -391,8 +400,8 @@ impl Rbio {
 /// it's of.
 enum Kind<'r> {
     Own(LentBio<'r>),
-    Clone(&'r Rbio, BioBox<'r, Rbio, Pool>),
-    Bounce(&'r Rbio, BioBox<'r, Rbio<Pages<'r>>, Pool>),
+    Clone(&'r Rbio, BioBox<'r, Rbio, &'static RcuPool<Rbio>>),
+    Bounce(&'r Rbio, BioBox<'r, Rbio<Pages<'r>>, &'static RcuPool<Rbio<Pages<'static>>>>),
     /// The promote's task, reading into its bio, started with what was read
     /// once the fragment's done with it
     Promote(&'r Rbio, PromoteTask),
@@ -452,8 +461,11 @@ static FRAGMENTS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
 
 /// The fragments read in their caller's task - a retry's, a data update's, a
 /// page cache extent's: each caller has one at a time, read and dropped before
-/// the next is made, so one in reserve keeps them all going.
-static FRAGMENT_BIOS: Late<Mempool, ModuleInit> = ::pin_init::zeroed();
+/// the next is made, so one in reserve keeps them all going. A pool each of
+/// clones and of bounces, each bio listed: freed - or handed out again, as
+/// the same type - while the list's walk may be reading it.
+static FRAGMENT_CLONES: Late<RcuPool<Rbio>, ModuleInit> = ::pin_init::zeroed();
+static FRAGMENT_BOUNCES: Late<RcuPool<Rbio<Pages<'static>>>, ModuleInit> = ::pin_init::zeroed();
 
 static FRAGMENT_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
 static FRAGMENT_BIO_BVECS: Late<BvecMempool, ModuleInit> = ::pin_init::zeroed();
@@ -463,7 +475,8 @@ type Pool = &'static Mempool;
 pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
     let size = exclusive_size::<FragmentBio, FragmentFut<'static>, Pool>();
     FRAGMENTS.init(m, || Mempool::new(1, size))?;
-    FRAGMENT_BIOS.init(m, || Mempool::new(1, size_of::<Rbio<Pages<'static>>>()))?;
+    FRAGMENT_CLONES.init(m, || RcuPool::rcu(1))?;
+    FRAGMENT_BOUNCES.init(m, || RcuPool::rcu(1))?;
     FRAGMENT_BVECS.init(m, || BvecMempool::new(1))?;
     FRAGMENT_BIO_BVECS.init(m, || BvecMempool::new(1))
 }
@@ -471,7 +484,8 @@ pub fn pools_init(m: &ThisModule) -> Result<(), BchError> {
 pub fn pools_exit(q: &Quiesced<'_>) {
     FRAGMENT_BIO_BVECS.exit(q);
     FRAGMENT_BVECS.exit(q);
-    FRAGMENT_BIOS.exit(q);
+    FRAGMENT_BOUNCES.exit(q);
+    FRAGMENT_CLONES.exit(q);
     FRAGMENTS.exit(q);
 }
 
@@ -1332,24 +1346,24 @@ struct Planned<'r, 'k> {
 }
 
 impl<'r> Planned<'r, '_> {
-    /// The fragment, its bio from FRAGMENT_BIOS, made into @into: for a read
-    /// awaited in its caller's task - a retry's, a data update's, a page cache
-    /// extent's.
+    /// The fragment, its bio from FRAGMENT_CLONES or FRAGMENT_BOUNCES, made
+    /// into @into: for a read awaited in its caller's task - a retry's, a data
+    /// update's, a page cache extent's.
     fn make(self, fs: &'r Fs, orig: &'r Rbio, into: &mut Option<Fragment<'r>>) -> Result<(), BchError> {
         let Planned { how, plan, range, ca, k } = self;
         let opf = orig.bio().opf();
 
         let _noio = MemallocFlags::noio();
-        let (pool, bvecs) = (&*FRAGMENT_BIOS, FRAGMENT_BIO_BVECS.alloc());
+        let bvecs = FRAGMENT_BIO_BVECS.alloc();
         let kind = match how {
             How::Promote(p) => Kind::Promote(orig, p.task),
             How::Bounce(size, gfp) => {
                 let bs = fs.opts().block_size.get().into();
-                Kind::Bounce(orig, BioBox::new_in(pool, bvecs, pages::nr_vecs(size), 0, |b| {
+                Kind::Bounce(orig, BioBox::new_in(&*FRAGMENT_BOUNCES, bvecs, pages::nr_vecs(size), 0, |b| {
                     Rbio::fragment(orig, b.init_from(|bio| Pages::fill(bio, &fs.bio_bounce, bs, size, size, gfp)))
                 })?)
             }
-            How::Clone => Kind::Clone(orig, BioBox::new_in(pool, bvecs, 0, 0,
+            How::Clone => Kind::Clone(orig, BioBox::new_in(&*FRAGMENT_CLONES, bvecs, 0, 0,
                                                            |b| Rbio::fragment(orig, b.clone_of(range)))?),
             How::Own => Kind::Own(orig.lend()),
         };

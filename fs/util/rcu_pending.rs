@@ -20,10 +20,13 @@ use pin_init::{pin_init_from_closure, PinInit, Zeroable};
 
 use crate::c;
 use crate::c::rcu_head;
+use crate::errcode::BchError;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
+use crate::os::alloc::Global;
 use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, Flags, Vec};
+use crate::util::mempool::Mempool;
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
 use crate::os::{percpu::{free_percpu, CpuShared, PerCpu, PerCpuRef}, workqueue::{Queue, RawWork}};
@@ -756,6 +759,18 @@ unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
 }
 
 unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {}
+
+/// A pool of T's, each RCU readers may still be in when it's handed out
+/// again - as a T - and back to the port's allocator a grace period after
+/// its free.
+pub type RcuPool<T> = Mempool<RcuPending<'static, T, Global>>;
+
+impl<T: RcuRealloc> RcuPool<T> {
+    /// @min_nr T's held in reserve.
+    pub fn rcu(min_nr: usize) -> impl PinInit<Self, BchError> {
+        Mempool::with_layout_in(RcuPending::new(Flavor::RCU, Global), min_nr, Layout::new::<T>())
+    }
+}
 
 /// A mempool's: its flags for what's fresh from A. One claimed is a T freed,
 /// not zeroed: zeroed here if it's asked for.
