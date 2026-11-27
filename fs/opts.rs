@@ -390,7 +390,7 @@ pub struct Opts {
     pub move_bytes_in_flight: u32,
 
     /// Maximum number of IOs to keep in flight by the move path
-    #[opt(uint(1, 1024), flags = fs | mount | runtime | nodoc, default = 64)]
+    #[opt(uint(1, 1024), flags = fs | mount | runtime | nodoc, default = 1024)]
     pub move_ios_in_flight: u32,
 
     /// Run fsck on mount
