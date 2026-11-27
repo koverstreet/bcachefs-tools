@@ -68,6 +68,7 @@ use crate::os::percpu::Counters as _;
 use crate::util::printbuf::Join;
 use crate::{bch_err_fn, bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
 use core::mem::size_of;
+use core::ops::Range;
 use zerocopy::{FromBytes, IntoBytes};
 
 pub use crate::alloc::accounting_format::*;
@@ -107,10 +108,18 @@ impl<S> DiskAccountingPos<S> {
     }
 
     pub(crate) fn next_type_start(&self) -> Bpos {
-        let mut next = [0u8; BPOS_SIZE];
-        next[0] = self.type_().0 as u8 + 1;
-        DiskAccountingPos::from_bytes(&next).to_bpos()
+        type_range(self.type_()).end
     }
+}
+
+/// Type @t's positions: from its first to the next type's.
+pub(crate) fn type_range(t: DiskAccountingType) -> Range<Bpos> {
+    let start = |t: u8| {
+        let mut b = [0u8; BPOS_SIZE];
+        b[0] = t;
+        DiskAccountingPos::from_bytes(&b).to_bpos()
+    };
+    start(t.0 as u8)..start(t.0 as u8 + 1)
 }
 
 impl DevDataType {

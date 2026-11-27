@@ -100,7 +100,6 @@ xmacro! {
         (ENOMEM, ENOMEM_stripe_buf, 30),
         (ENOMEM, ENOMEM_replicas_table, 31),
         (ENOMEM, ENOMEM_cpu_replicas, 32),
-        (ENOMEM, ENOMEM_replicas_gc, 33),
         (ENOMEM, ENOMEM_disk_groups_validate, 34),
         (ENOMEM, ENOMEM_disk_groups_to_cpu, 35),
         (ENOMEM, ENOMEM_mark_snapshot, 36),

@@ -16,8 +16,8 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::alloc::accounting::{CounterSet, DiskAccountingPos, ReplicasCounters};
-use crate::alloc::accounting_mem::{self, MarkWrite};
+use crate::alloc::accounting::{replicas_entry, CounterSet, DiskAccountingPos, ReplicasCounters};
+use crate::alloc::accounting_mem;
 use crate::btree::bkey::{BkeySC, BkeyV, ValidateFlags};
 use crate::data::{ec::format::Stripe, ptrs::{BkeyVPtrs, Ptrs}};
 use crate::alloc::replicas_format::{ReplicasEntryV0, ReplicasEntryV1,
@@ -39,7 +39,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, Head, State, Unsized, 
 use crate::util::{Printbuf, ToText};
 use core::fmt;
 use core::mem::{offset_of, size_of};
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use cstruct_macros::bch_enum;
 
 #[bch_enum(closed)]
@@ -466,27 +466,52 @@ pub(crate) fn can_write_with_devs(fs: &Fs, devs: &DevsMask, check: WriteCheck,
 //
 // The table has a lock of its own, readers many and writers rare. The order
 // is sb_lock, then mark_lock - where accounting needs one of its entries and
-// the replicas entry to change together: kill, gc_accounted - then this. write_super() takes it for read, in
-// can_read_fs_with_devs(): it's never held across one.
+// the replicas entry to change together: gc_accounted - then this.
+// write_super() takes it for read, in can_read_fs_with_devs(): it's never
+// held across one.
 //
 // Journal entries are refcounted - a ref for each journal write holding one,
-// until reclaim puts it - and the last put kills the entry. The refs are
-// atomics beside the table, taken and put under the read lock.
+// until reclaim puts it - and the last put kills the entry.
 //
-// An accounting key's entry is added as the key goes into a journal write,
-// and reaches the superblock before the next flush write - the write that
-// makes the key durable: until then the table has entries the superblock
-// doesn't, @unwritten.
+// An accounting key's entry lives by what the journal and the btree hold. It's
+// added as a key for it goes into a journal write, and reaches the superblock
+// before the next flush write - the write that makes the key durable: until
+// then the table has entries the superblock doesn't, @unwritten. It dies when
+// a write buffer flush leaves its accounting at zero, with no newer key taken
+// in for it, once the journal is durable through what that flush flushed.
+//
+// What's kept beside each entry is in its Slot, atomics taken and put under
+// the read lock.
+
+/// What the table keeps beside an entry.
+#[derive(Default)]
+struct Slot {
+    /// A journal entry's: the journal writes holding it.
+    refs:    AtomicI32,
+    /// An accounting key's: the newest journal seq intake took a key in at.
+    seq:     AtomicU64,
+    /// An accounting key's: the seq a flush left its accounting at zero as of.
+    dead_at: AtomicU64,
+}
+
+impl Slot {
+    /// Dead, with the journal durable through @durable: left at zero as of a
+    /// seq that is, and nothing taken in since.
+    fn dead(&self, durable: u64) -> bool {
+        let dead_at = self.dead_at.load(Ordering::Relaxed);
+        dead_at != 0 && dead_at <= durable && self.seq.load(Ordering::Relaxed) <= dead_at
+    }
+}
 
 pub struct ReplicasCpu {
     entries:   StridedBuf<Entry>,
-    refs:      Vec<AtomicI32>,
+    slots:     Vec<Slot>,
     unwritten: bool,
 }
 
 impl ReplicasCpu {
     pub const fn new() -> Self {
-        ReplicasCpu { entries: StridedBuf::new(), refs: Vec::new(), unwritten: false }
+        ReplicasCpu { entries: StridedBuf::new(), slots: Vec::new(), unwritten: false }
     }
 
     fn len(&self) -> usize {
@@ -501,17 +526,17 @@ impl ReplicasCpu {
         (0..self.len()).map(|i| self.entry(i))
     }
 
-    fn with_refs(&self) -> impl Iterator<Item = (&Entry, &AtomicI32)> {
-        self.entries().zip(self.refs.iter())
+    fn with_slots(&self) -> impl Iterator<Item = (&Entry, &Slot)> {
+        self.entries().zip(self.slots.iter())
     }
 
-    /// @nr slots of @stride bytes, zeroed, their refs 0.
+    /// @nr slots of @stride bytes, zeroed, their Slots too.
     fn zeroed(nr: usize, stride: usize) -> Result<Self, AllocError> {
-        let mut refs = Vec::with_capacity(nr)?;
+        let mut slots = Vec::with_capacity(nr)?;
         for _ in 0..nr {
-            refs.push(AtomicI32::new(0))?;
+            slots.push(Slot::default())?;
         }
-        Ok(ReplicasCpu { entries: StridedBuf::zeroed(nr, stride)?, refs, unwritten: false })
+        Ok(ReplicasCpu { entries: StridedBuf::zeroed(nr, stride)?, slots, unwritten: false })
     }
 
     /// The entries @walk yields that @keep keeps, each one's devices sorted -
@@ -533,55 +558,48 @@ impl ReplicasCpu {
             |r, i, j| r.entries.slot(i).elems().cmp(r.entries.slot(j).elems()),
             |r, i, j| {
                 r.entries.swap(i, j);
-                r.refs.swap(i, j);
+                r.slots.swap(i, j);
             });
+    }
+
+    /// Slot @i against entry bytes @want. An entry's length is in its head,
+    /// so two entries differ within the shorter one.
+    fn cmp(&self, i: usize, want: &[u8]) -> core::cmp::Ordering {
+        let n = want.len().min(self.entries.stride());
+        self.entries.slot(i).elems()[..n].cmp(&want[..n])
     }
 
     /// The slot holding @e, if any.
     fn find(&self, e: &Entry) -> Option<usize> {
         verify_entry(e);
-        let want = e.as_bytes();
-        if want.len() > self.entries.stride() {
-            return None;
-        }
-        Eytzinger0::<usize>::new(self.len()).find(|i| self.entries.slot(i).elems()[..want.len()].cmp(want))
+        Eytzinger0::<usize>::new(self.len()).find(|i| self.cmp(i, e.as_bytes()))
     }
 
-    /// A copy, @e added - with room for it, if it's bigger than any: sorted.
-    fn with(&self, e: &Entry) -> Result<Self, AllocError> {
+    /// @e added, unwritten, if it isn't there - the table restrided for it if
+    /// it's bigger than any: sorted. Whether it was. It can't fail: intake
+    /// adds an entry the journal write it's in can't go without.
+    fn add(&mut self, e: &Entry) -> bool {
+        if self.find(e).is_some() {
+            return false;
+        }
+
         let e = e.as_bytes();
-        let mut new = ReplicasCpu {
-            entries:   self.entries.restrided(self.entries.stride().max(e.len()), 1)?,
-            refs:      Vec::with_capacity(self.len() + 1)?,
-            unwritten: self.unwritten,
-        };
-        for r in self.refs.iter() {
-            new.refs.push(AtomicI32::new(r.load(Ordering::Relaxed)))?;
-        }
-        new.refs.push(AtomicI32::new(0))?;
-        new.entries.slot_mut(self.len()).elems_mut()[..e.len()].copy_from_slice(e);
-        new.sort();
-        Ok(new)
-    }
-
-    /// A copy of those @keep says to: sorted.
-    fn filtered(&self, keep: impl Fn(&Entry) -> bool) -> Result<Self, AllocError> {
-        let mut new = Self::zeroed(self.entries().filter(|e| keep(e)).count(), self.entries.stride())?;
-        for (dst, i) in (0..self.len()).filter(|&i| keep(self.entry(i))).enumerate() {
-            new.entries.slot_mut(dst).elems_mut().copy_from_slice(self.entries.slot(i).elems());
-            new.refs[dst].store(self.refs[i].load(Ordering::Relaxed), Ordering::Relaxed);
-        }
-        new.sort();
-        Ok(new)
+        let mut entries = self.entries.restrided(self.entries.stride().max(e.len()), 1);
+        self.slots.push_nofail(Slot::default());
+        entries.slot_mut(self.len()).elems_mut()[..e.len()].copy_from_slice(e);
+        self.entries = entries;
+        self.unwritten = true;
+        self.sort();
+        true
     }
 
     /// Those @keep says to, the rest dropped. Whether any were.
-    fn retain(&mut self, keep: impl Fn(&Entry, &AtomicI32) -> bool) -> bool {
+    fn retain(&mut self, keep: impl Fn(&Entry, &Slot) -> bool) -> bool {
         let mut dst = 0;
         for i in 0..self.len() {
-            if keep(self.entry(i), &self.refs[i]) {
+            if keep(self.entry(i), &self.slots[i]) {
                 self.entries.copy(i, dst);
-                self.refs.swap(i, dst);
+                self.slots.swap(i, dst);
                 dst += 1;
             }
         }
@@ -589,7 +607,7 @@ impl ReplicasCpu {
         let changed = dst != self.len();
         if changed {
             self.entries.truncate(dst);
-            self.refs.truncate(dst);
+            self.slots.truncate(dst);
             self.sort();
         }
         changed
@@ -599,9 +617,9 @@ impl ReplicasCpu {
     fn remove(&mut self, i: usize) {
         let last = self.len() - 1;
         self.entries.copy(last, i);
-        self.refs.swap(i, last);
+        self.slots.swap(i, last);
         self.entries.truncate(last);
-        self.refs.truncate(last);
+        self.slots.truncate(last);
         self.sort();
     }
 
@@ -674,8 +692,9 @@ impl ReplicasCpu {
 
 impl ToText for ReplicasCpu {
     fn to_text(&self, out: &mut Printbuf) {
-        prt_spaced(out, self.with_refs(), |out, (e, r)| {
-            write!(out, "ref={} ", r.load(Ordering::Relaxed) as u32);
+        prt_spaced(out, self.with_slots(), |out, (e, s)| {
+            write!(out, "ref={} seq={} dead_at={} ", s.refs.load(Ordering::Relaxed) as u32,
+                   s.seq.load(Ordering::Relaxed), s.dead_at.load(Ordering::Relaxed));
             e.to_text(out);
         });
     }
@@ -782,30 +801,41 @@ impl Fs {
         self.replicas_obsolete(e.data_type.get()) || e.devs.is_empty() || self.replicas.read().find(e).is_some()
     }
 
+    /// @edit on the table, under sb_lock: if it says the superblock's out of
+    /// date, written to match. No room in the superblock is an error; a
+    /// failed write isn't ours - it's emergency read-only, or errors=continue.
+    fn replicas_edit(&self, edit: impl FnOnce(&mut ReplicasCpu) -> Result<bool, BchError>)
+        -> Result<(), BchError>
+    {
+        let mut sb = self.sb_lock();
+        {
+            let mut r = self.replicas.write();
+            if !edit(&mut r)? {
+                return Ok(());
+            }
+            r.write_sb(self, &mut sb)?;
+        }
+        // write_super() takes the replicas lock for read: after it's dropped
+        self.write_super_replicas(&mut sb);
+        Ok(())
+    }
+
     /// @e added, if it isn't there, and written to the superblock - and
-    /// @refs taken on it.
+    /// @refs taken on it, once it is: a failed write leaves none to put.
     #[cold]
     #[inline(never)]
     fn mark_replicas_slowpath(&self, e: &Entry, refs: i32) -> Result<(), BchError> {
         verify_entry(e);
 
-        let mut sb = self.sb_lock();
-        let dirty = {
-            let mut r = self.replicas.write();
-            let mut dirty = false;
-            if r.find(e).is_none() {
-                let mut new = r.with(e).map_err(|_| self.err(Errcode::ENOMEM_cpu_replicas))?;
-                new.write_sb(self, &mut sb)?;
-                *r = new;
-                dirty = true;
-            }
-            let i = r.find(e).expect("an entry just added");
-            r.refs[i].fetch_add(refs, Ordering::Relaxed);
-            dirty
-        };
-        // write_super() takes the replicas lock for read: after it's dropped
-        if dirty {
-            self.write_super_replicas(&mut sb);
+        self.replicas_edit(|r| {
+            r.add(e);
+            Ok(r.unwritten)
+        })?;
+
+        // A journal entry's: nothing kills one till its refs are put
+        if refs != 0 {
+            let r = self.replicas.read();
+            r.slots[r.find(e).expect("a journal entry just marked")].refs.fetch_add(refs, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -815,41 +845,97 @@ impl Fs {
         if likely(self.replicas_marked(e)) { Ok(()) } else { self.mark_replicas_slowpath(e, 0) }
     }
 
-    /// @e, an accounting key's going into a journal write, added if it isn't
+    fn intake_entry<'p>(&self, p: &'p DiskAccountingPos<Unvalidated>) -> Option<&'p Entry> {
+        replicas_entry(p).filter(|e| !self.replicas_obsolete(e.data_type.get()) && !e.devs.is_empty())
+    }
+
+    /// The replicas positions @walk yields, in bpos order - their entries'
+    /// byte order, the table's - for accounting keys going into journal
+    /// write @seq: their entries added if they aren't
     /// there - written by replicas_write_unwritten(), before the flush write
-    /// that makes the key durable.
-    pub fn mark_replicas_unwritten(&self, e: &Entry) -> Result<(), BchError> {
-        if likely(self.replicas_marked(e)) {
-            return Ok(());
+    /// that makes the keys durable - and @seq the newest taken in for them.
+    /// @walk is walked alongside the table, both in order - and again, write
+    /// locked, only if an entry was missing.
+    pub fn replicas_intake<I>(&self, walk: impl Fn() -> I, seq: u64)
+        where I: Iterator<Item = DiskAccountingPos<Unvalidated>>
+    {
+        let mut missing = false;
+        {
+            let r = self.replicas.read();
+            let mut table = Eytzinger0::<usize>::new(r.len()).iter().peekable();
+            for p in walk() {
+                let Some(e) = self.intake_entry(&p) else { continue };
+                let want = e.as_bytes();
+
+                while table.next_if(|&i| r.cmp(i, want).is_lt()).is_some() {}
+                match table.next_if(|&i| r.cmp(i, want).is_eq()) {
+                    Some(i) => { r.slots[i].seq.fetch_max(seq, Ordering::Relaxed); }
+                    None    => missing = true,
+                }
+            }
         }
-        verify_entry(e);
+
+        if likely(!missing) {
+            return;
+        }
 
         let mut r = self.replicas.write();
-        if r.find(e).is_none() {
-            let mut new = r.with(e).map_err(|_| self.err(Errcode::ENOMEM_cpu_replicas))?;
-            new.unwritten = true;
-            *r = new;
+        for p in walk() {
+            let Some(e) = self.intake_entry(&p) else { continue };
+            r.add(e);
+            r.slots[r.find(e).expect("an entry just added")].seq.fetch_max(seq, Ordering::Relaxed);
         }
+    }
+
+    /// A write buffer flush has left @e's accounting at zero, with what was
+    /// taken in up to @seq: unless something newer has been taken in for it,
+    /// it dies once the journal is durable through @seq -
+    /// replicas_kill_dead().
+    pub fn replicas_flushed_zero(&self, e: &Entry, seq: u64) {
+        let r = self.replicas.read();
+        if let Some(s) = r.find(e).map(|i| &r.slots[i]) {
+            if s.seq.load(Ordering::Relaxed) <= seq {
+                s.dead_at.store(seq, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The entries dead with the journal durable through @durable killed, and
+    /// the superblock written without them.
+    pub fn replicas_kill_dead(&self, durable: u64) {
+        if likely(!self.replicas.read().slots.iter().any(|s| s.dead(durable))) {
+            return;
+        }
+        if let Err(e) = self.replicas_edit(|r| Ok(r.retain(|_, s| !s.dead(durable)))) {
+            warn(self, format_args!("error writing the superblock without dead replicas entries: {e}"));
+        }
+    }
+
+    /// The table as the btree has it now, for what decides by it - device
+    /// removal and offline: the write buffer flushed, so what's gone to zero
+    /// is found, and the journal, so that's durable and the entries killed.
+    pub fn replicas_settle(&self) -> Result<(), BchError> {
+        crate::btree_trans!(self).write_buffer_flush_sync()?;
+        self.journal_flush()?;
+        self.replicas_kill_dead(self.journal.lock.flushed_seq_ondisk.get());
         Ok(())
     }
 
-    /// The entries mark_replicas_unwritten() added, written to the
-    /// superblock: before a journal flush write is submitted.
-    pub fn replicas_write_unwritten(&self) -> Result<(), BchError> {
+    /// The entries replicas_intake() added, in the superblock before a journal
+    /// flush write is submitted - and @write, written: not for the
+    /// clean->dirty transition entry, whose superblock write after it, the
+    /// one that marks the fs dirty, carries them.
+    pub fn replicas_write_unwritten(&self, write: bool) -> Result<(), BchError> {
         if likely(!self.replicas.read().unwritten) {
             return Ok(());
         }
+        if write {
+            return self.replicas_edit(|r| Ok(r.unwritten));
+        }
 
         let mut sb = self.sb_lock();
-        {
-            let mut r = self.replicas.write();
-            if !r.unwritten {
-                return Ok(());
-            }
-            r.write_sb(self, &mut sb)?;
-        }
-        // write_super() takes the replicas lock for read: after it's dropped
-        self.write_super_replicas_ret(&mut sb)
+        let mut r = self.replicas.write();
+        if r.unwritten { r.write_sb(self, &mut sb) } else { Ok(()) }
     }
 
     /// Whether @e, a journal entry, has devices: only those are refcounted.
@@ -871,7 +957,7 @@ impl Fs {
 
         let got = {
             let r = self.replicas.read();
-            r.find(e).map(|i| r.refs[i].fetch_add(1, Ordering::Relaxed)).is_some()
+            r.find(e).map(|i| r.slots[i].refs.fetch_add(1, Ordering::Relaxed)).is_some()
         };
         if got { Ok(()) } else { self.mark_replicas_slowpath(e, 1) }
     }
@@ -885,7 +971,7 @@ impl Fs {
 
         {
             let r = self.replicas.read();
-            match r.find(e).map(|i| r.refs[i].fetch_sub(nr as i32, Ordering::Relaxed) - nr as i32) {
+            match r.find(e).map(|i| r.slots[i].refs.fetch_sub(nr as i32, Ordering::Relaxed) - nr as i32) {
                 Some(v) if v > 0 => return,
                 Some(0) => {}
                 _ => {
@@ -899,7 +985,7 @@ impl Fs {
         let mut sb = self.sb_lock();
         {
             let mut r = self.replicas.write();
-            if let Some(i) = r.find(e).filter(|&i| r.refs[i].load(Ordering::Relaxed) == 0) {
+            if let Some(i) = r.find(e).filter(|&i| r.slots[i].refs.load(Ordering::Relaxed) == 0) {
                 self.replicas_kill(&mut r, &mut sb, i);
             }
         }
@@ -921,8 +1007,8 @@ impl Fs {
         let mut sb = self.sb_lock();
         let dirty = {
             let mut r = self.replicas.write();
-            let changed = r.retain(|e, refs| e.data_type != DataType::journal ||
-                                             refs.load(Ordering::Relaxed) != 0);
+            let changed = r.retain(|e, s| e.data_type != DataType::journal ||
+                                             s.refs.load(Ordering::Relaxed) != 0);
             if changed {
                 r.write_sb(self, &mut sb)?;
             }
@@ -944,14 +1030,8 @@ impl Fs {
             let mark = self.mark_lock().write();
             let mut r = self.replicas.write();
 
-            let mut new = r.filtered(|e| e.data_type == DataType::journal ||
-                    accounting_mem::has_replicas(self, &mark, e))
-                .map_err(|_| {
-                    crate::bch_err!(self, "error allocating c->replicas_gc");
-                    self.err(Errcode::ENOMEM_replicas_gc)
-                })?;
-            new.write_sb(self, &mut sb)?;
-            *r = new;
+            r.retain(|e, _| e.data_type == DataType::journal || accounting_mem::has_replicas(self, &mark, e));
+            r.write_sb(self, &mut sb)?;
         }
         self.write_super(&mut sb);
         Ok(())
@@ -982,21 +1062,10 @@ impl Fs {
 }
 
 impl Fs {
-    /// The caller writes the superblock, after dropping mark_lock.
-    pub(crate) fn replicas_entry_kill(&self, sb: &mut SbLockGuard<'_>, _mark: &MarkWrite<'_>, e: &Entry) {
-        let mut r = self.replicas.write();
-        match r.find(e) {
-            Some(i) => self.replicas_kill(&mut r, sb, i),
-            None => warn(self, format_args!("replicas entry not found in sb: {e}")),
-        }
-    }
-}
-
-impl Fs {
     /// A warning for any ref left: at shutdown, the journal done with them all.
     pub fn verify_replicas_refs_clean(&self) {
-        for (e, r) in self.replicas.read().with_refs().filter(|(_, r)| r.load(Ordering::Relaxed) != 0) {
-            warn(self, format_args!("replicas entry ref leaked:\nref={} {e}", r.load(Ordering::Relaxed) as u32));
+        for (e, s) in self.replicas.read().with_slots().filter(|(_, s)| s.refs.load(Ordering::Relaxed) != 0) {
+            warn(self, format_args!("replicas entry ref leaked:\nref={} {e}", s.refs.load(Ordering::Relaxed) as u32));
         }
     }
 }
@@ -1036,7 +1105,7 @@ mod tests {
                   entry(BTREE, 1, &[0, 1])];
         let mut r = ReplicasCpu::new();
         for e in &es {
-            r = r.with(e).unwrap();
+            r.add(e);
         }
         assert!(es.iter().all(|e| r.find(e).is_some()));
         assert!(r.find(&entry(BTREE, 1, &[0])).is_none());
@@ -1057,7 +1126,7 @@ mod tests {
         assert!(sb.field::<SbFieldReplicasV0>().is_some());
         assert!(same(&r, &back(&sb)));
 
-        r = r.with(&entry(USER, 2, &[0, 1, 2])).unwrap();
+        r.add(&entry(USER, 2, &[0, 1, 2]));
         assert!(r.to_sb(&mut sb));
         assert!(sb.field::<SbFieldReplicas>().is_some());
         assert!(sb.field::<SbFieldReplicasV0>().is_none());
@@ -1072,11 +1141,12 @@ mod tests {
         sb.sb_realloc(0).unwrap();
 
         let e = entry(BTREE, 1, &[invalid]);
-        let mut r = ReplicasCpu::new().with(&e).unwrap();
+        let mut r = ReplicasCpu::new();
+        r.add(&e);
         let mut err = Printbuf::new();
         assert!(r.validate(sb.sb(), &mut err).is_ok());
 
-        let mut r = r.with(&e).unwrap();
+        let mut r = ReplicasCpu::from_entries(|| [SbEntry::from(&*e); 2].into_iter(), |_| true).unwrap();
         assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(Errcode::invalid_sb_replicas));
     }
 
@@ -1090,7 +1160,9 @@ mod tests {
             let invalid = MEMBER_INVALID as u8;
             let mut sb = SbHandle::default();
             sb.sb_realloc(0).unwrap();
-            assert!(ReplicasCpu::new().with(&entry(BTREE, 1, &[invalid])).unwrap().to_sb(&mut sb));
+            let mut r = ReplicasCpu::new();
+            r.add(&entry(BTREE, 1, &[invalid]));
+            assert!(r.to_sb(&mut sb));
 
             // a u64 more: past the whole entry, 3 bytes, the start of one
             // claiming 20 devices

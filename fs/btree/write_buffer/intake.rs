@@ -3,7 +3,7 @@
 use super::flush::move_keys_from_inc_to_flushing;
 use super::keys::{wb_key_u64s, KeysLiveWriter, WbKeys};
 use super::{insert_checks, resize_gfp, wb_btree_idx, AccountingKey, Buf, FlushingGuard, IncGuard, SEQ_U64S, WB_RESIZE_GFP};
-use crate::alloc::accounting::{self, DiskAccountingPos};
+use crate::alloc::accounting::{self, DiskAccountingPos, DiskAccountingType};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::write_buffer::{FsBtreeWriteBuffer, WbBtree, WbFlushCaller as Caller};
 use crate::data_structures::{dst_room::DstRoom, eytzinger::Eytzinger0};
@@ -417,13 +417,19 @@ impl<'a> Intake<'a> {
             let mut live_accounting_keys = 0;
 
             if ret.is_ok() {
+                let replicas = accounting::type_range(DiskAccountingType::replicas);
+                let first = Eytzinger0::find_ge_by(&accounting, |a| a.k.k.p.cmp(&replicas.start));
+                self.fs.replicas_intake(|| Eytzinger0::of(&accounting).iter_from(first)
+                    .map(|i| &accounting[i].k)
+                    .take_while(|k| k.k.p < replicas.end)
+                    .filter(|k| !accounting::is_zero(BkeySC::from(*k)))
+                    .map(|k| DiskAccountingPos::from_bpos(k.k.p)), seq);
+
                 for a in accounting.iter_mut() {
                     if !accounting::is_zero(BkeySC::from(&a.k)) {
                         a.journal_seq = seq;
                         live_accounting_keys += 1;
-                        ret = accounting::replicas_entry(&DiskAccountingPos::from_bpos(a.k.k.p))
-                            .map_or(Ok(()), |e| self.fs.mark_replicas_unwritten(e))
-                            .and_then(|()| self.key_to_wb_idx(idx, &a.k));
+                        ret = self.key_to_wb_idx(idx, &a.k);
                         if ret.is_err() {
                             break;
                         }

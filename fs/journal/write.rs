@@ -840,6 +840,10 @@ fn write_done(w: &JournalBuf, written: Written) {
         fs.do_discards_async();
     }
 
+    if done.any {
+        fs.replicas_kill_dead(j.lock.flushed_seq_ondisk.get());
+    }
+
     drop(in_flight);
 }
 
@@ -1241,7 +1245,15 @@ fn write_start(w: &JournalBuf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, w
         j.do_writes_locked(&mut g);
     }
 
-    if w.wait_word().load(Relaxed) != JOURNAL_BUF_FLUSH_NO_WAIT {
+    let transition = w.wait_word().load(Relaxed) == JOURNAL_BUF_FLUSH_NO_WAIT;
+
+    // A noflush write's keys are durable once a flush write after it is:
+    // that one writes the accounting entries this one's intake added
+    if !w.must_not_flush() {
+        fs.replicas_write_unwritten(!transition)?;
+    }
+
+    if !transition {
         /*
          * Mark journal replicas before we submit the write to guarantee
          * recovery will find the journal entries after a crash.
@@ -1252,12 +1264,6 @@ fn write_start(w: &JournalBuf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, w
          * flushers can't wait on that entry, so there's no one to wake
          * early ahead of the deferred superblock write.
          */
-        // A noflush write's keys are durable once a flush write after it is:
-        // that one writes the accounting entries this one's intake added
-        if !w.must_not_flush() {
-            fs.replicas_write_unwritten()?;
-        }
-
         let pins = j.pins();
 
         if let Err(e) = fs.replicas_entry_get(&DevlistEntry::new(DataType::journal, written.devs)) {

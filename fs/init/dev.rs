@@ -1284,18 +1284,11 @@ impl StateLockWrite<'_> {
 
             /*
              * dev_remove_alloc issued btree deletes that need to be durable before
-             * we drop the sb member entry:
+             * we drop the sb member entry - and the replicas entries their
+             * accounting left at zero killed, so has_data() is right:
              */
-            fs.journal_flush()
-                .inspect_err(|e| prt!(err, "journal_flush() error: {}\n", e.msg()))?;
-
-            fs.replicas_gc_accounted()
-                .inspect_err(|e| prt!(err, "replicas_gc_accounted() error: {}\n", e.msg()))?;
-            /*
-             * flushing the journal should be sufficient, but it's the write buffer
-             * flush that kills superblock replicas entries after they've gone to 0
-             * so bch2_dev_has_data() returns the correct value:
-             */
+            fs.replicas_settle()
+                .inspect_err(|e| prt!(err, "replicas_settle() error: {}\n", e.msg()))?;
 
             let data = ca.has_data();
             if !data.is_empty() {
@@ -1679,6 +1672,13 @@ impl Fs {
         if !ca.is_online() {
             prt!(err, "Already offline\n");
             return Ok(());
+        }
+
+        // dev_may_offline() decides by the replicas table: entries gone to
+        // zero and not yet killed would refuse. Not if it fails - a failing
+        // device is what's offlined, and the table as it is only refuses more
+        if self.flags.get(FsFlag::rw) {
+            let _ = self.replicas_settle();
         }
 
         state.dev_may_offline(ca, flags, err)?;

@@ -6,7 +6,7 @@ use crate::alloc::accounting::{self, accounting_bkey, is_mem, key_to_text,
 use crate::alloc::buckets::FsUsageBase;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
                          TransAttempt};
 use crate::btree::trans::TransGuard;
@@ -100,11 +100,6 @@ impl Table {
         self.entries.push(e)?;
         Eytzinger0::insert_last_by(&mut self.entries, |l, r| l.pos.cmp(&r.pos));
         Ok(())
-    }
-
-    fn remove(&mut self, i: usize) {
-        Eytzinger0::remove_to_last(&mut self.entries, i);
-        self.entries.pop();
     }
 
     fn free_gc(&mut self) {
@@ -241,8 +236,11 @@ fn insert_locked(fs: &Fs, a: Delta<'_>, mark: &mut MarkWrite<'_>) -> Result<(), 
     Ok(())
 }
 
-pub fn maybe_kill(fs: &Fs, p: Bpos) {
-    let pos = DiskAccountingPos::from_bpos(p);
+/// A write buffer flush has left @k's position at zero: its replicas entry, if
+/// it has one, dies once the journal is durable through the newest key
+/// coalesced into @k, its version's seq.
+pub fn flushed_zero(fs: &Fs, k: &BkeyI) {
+    let pos = DiskAccountingPos::from_bpos(k.k.p);
     let Some(e) = replicas_entry(&pos) else { return };
 
     if e.data_type.get() > DataType::btree &&
@@ -250,20 +248,7 @@ pub fn maybe_kill(fs: &Fs, p: Bpos) {
         return;
     }
 
-    let mut sb = fs.sb_lock();
-    {
-        let mut mark = fs.mark_lock().write();
-        let acc = fs.accounting_mem_mut(&mut mark);
-        let Some(i) = acc.find(p) else { return };
-        if !acc.entries[i].is_zero() {
-            return;
-        }
-
-        acc.remove(i);
-
-        fs.replicas_entry_kill(&mut sb, &mark, e);
-    }
-    fs.write_super(&mut sb);
+    fs.replicas_flushed_zero(e, bversion_journal_seq(k.k.bversion));
 }
 
 pub(crate) fn mem_gc(fs: &Fs) {
@@ -826,6 +811,11 @@ fn journal_pos_to_bversion(res: &JournalRes, offset: usize) -> Bversion {
         hi: (res.seq >> 32) as u32,
         lo: (res.seq << 32) | (u64::from(res.offset) + offset as u64),
     }
+}
+
+/// The journal seq journal_pos_to_bversion() put in @v.
+fn bversion_journal_seq(v: Bversion) -> u64 {
+    (u64::from(v.hi) << 32) | (v.lo >> 32)
 }
 
 fn applies(flags: CommitOpts) -> bool {

@@ -16,7 +16,7 @@
 //! slice's.
 
 use crate::data_structures::dst_room::DstRoom;
-use crate::util::alloc::{AllocError, Vec};
+use crate::util::alloc::{flags, AllocError, Vec};
 use crate::util::projections::View;
 use crate::util::vstructs::{cast_plain_mut, Plain};
 use core::marker::PhantomData;
@@ -153,14 +153,19 @@ impl<T: ?Sized> StridedBuf<T> {
     }
 
     /// A copy, @extra slots more, each @stride bytes - no fewer than ours:
-    /// each slot of ours at the start of its, the rest zero.
-    pub fn restrided(&self, stride: usize, extra: usize) -> Result<Self, AllocError> {
+    /// each slot of ours at the start of its, the rest zero. It can't fail.
+    pub fn restrided(&self, stride: usize, extra: usize) -> Self {
         assert!(stride >= self.stride);
-        let mut new = Self::zeroed(self.len() + extra, stride)?;
+        let len = (self.len() + extra) * stride;
+        let mut bytes = Vec::new();
+        bytes.reserve_gfp(len, flags::NOFAIL).expect("a strided buffer past isize::MAX bytes");
+        bytes.extend_zeroed_within_capacity(len).expect("room just reserved");
+
+        let mut new = Self { bytes, stride, _t: PhantomData };
         for (i, s) in self.slots().enumerate() {
             new.slot_mut(i).elems_mut()[..s.elems().len()].copy_from_slice(s.elems());
         }
-        Ok(new)
+        new
     }
 }
 
@@ -222,7 +227,7 @@ mod tests {
         b.copy(1, 0);
         assert!(b.slots().map(|s| s.elems()).eq([&[2, 9][..], &[2, 9], &[1, 9]]));
 
-        let r = b.restrided(3, 1).unwrap();
+        let r = b.restrided(3, 1);
         assert!(r.slots().map(|s| s.elems()).eq([&[2, 9, 0][..], &[2, 9, 0], &[1, 9, 0], &[0, 0, 0]]));
 
         b.truncate(1);

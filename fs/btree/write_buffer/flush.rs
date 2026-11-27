@@ -156,9 +156,9 @@ fn flush_one<'a>(
 
         if k.k.key_type() == BkeyType::accounting {
             accounting::accumulate(&mut wb.k, k);
-            if accounting::is_zero(BkeySC::from(&wb.k)) {
-                accounting_mem::maybe_kill(fs, wb.k.k.p);
-            }
+        }
+        if accounting::is_zero(BkeySC::from(&wb.k)) {
+            accounting_mem::flushed_zero(fs, &wb.k);
         }
     }
     *accounting_accumulated = true;
