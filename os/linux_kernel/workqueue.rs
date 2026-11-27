@@ -164,10 +164,10 @@ impl Queue {
         unsafe { Self::from_raw(c::system_long_wq) }
     }
 
-    /// system_wq: per-cpu, what schedule_work_on() queues on.
-    pub fn system() -> &'static Queue {
+    /// system_percpu_wq: per-cpu, what schedule_work_on() queues on.
+    pub fn system_percpu() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw(c::system_wq) }
+        unsafe { Self::from_raw(c::system_percpu_wq) }
     }
 
     /// system_dfl_wq: the default, unbound.
