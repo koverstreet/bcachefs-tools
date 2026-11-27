@@ -30,9 +30,9 @@
 //!  - done: the thread's finished, or the file's closing. It closes both
 //!    ways: reads drain what's left, then get EOF; writes get EPIPE. What
 //!    the thread returned is what close(2) returns.
-//!  - The soft limit, STDIO_REDIRECT_BUFSIZE: a write may go past it rather
-//!    than split a line the thread is waiting for - waiting_for_line - and
-//!    the thread's own messages go in whole or not at all.
+//!  - The soft limit, STDIO_REDIRECT_BUFSIZE: input may always grow to hold
+//!    one more line - a write goes past it while there's no whole line in
+//!    the buffer - and the thread's own messages go in whole or not at all.
 //!  - Under the lock, a spinlock: each buffer is a Fifo<u8>, grown there -
 //!    the lock's NORECLAIM scope - or reserved before the lock where it
 //!    mustn't fail. Copies
@@ -132,8 +132,9 @@ const STDIO_REDIRECT_BUFSIZE: usize = 4096;
 
 #[derive(Default)]
 struct Buf {
-    data:             Fifo<u8>,
-    waiting_for_line: bool,
+    data:  Fifo<u8>,
+    /// The whole lines in @data, input's: its newlines.
+    lines: usize,
 }
 
 #[pin_data]
@@ -232,6 +233,11 @@ impl StdioRedirect {
         buf.len() < STDIO_REDIRECT_BUFSIZE || self.done()
     }
 
+    /// has_room(), for input: which may grow past the limit for a line.
+    fn input_has_room(&self) -> bool {
+        self.has_room(&self.input) || self.input.lock().lines == 0
+    }
+
     /// The thread's output, written: @msg in whole, or an error - EPIPE if
     /// the file's closed, and if @nonblocking, EAGAIN rather than wait for
     /// the reader to make room.
@@ -271,12 +277,11 @@ impl StdioRedirect {
                 if self.done() {
                     return Some(None);
                 }
-                let mut b = input.lock();
-                let nl = b.data.iter().position(|&ch| ch == b'\n');
-                if nl.is_none() {
-                    b.waiting_for_line = true;
-                }
-                nl.map(|nl| Some(nl + 1))
+                let b = input.lock();
+                (b.lines != 0).then(|| {
+                    let nl = b.data.iter().position(|&ch| ch == b'\n').expect("a line counted, and no newline");
+                    Some(nl + 1)
+                })
             }).map_err(|_| BchError::from(Errcode::ETIME_thread_with_file_readline))?
               .ok_or(BchError::from(Errcode::EPIPE_thread_with_file_readline))?;
 
@@ -289,7 +294,7 @@ impl StdioRedirect {
             line.clear();
             let mut b = input.lock();
             b.data.drain_with(n, |s| line.extend_from_slice(s).is_ok());
-            b.waiting_for_line = false;
+            b.lines -= 1;
             drop(b);
 
             input.wake();
@@ -337,14 +342,15 @@ impl StdioRedirect {
             let n = {
                 let mut b = input.lock();
                 let mut makeroom = readable;
-                if !b.waiting_for_line || b.data.iter().any(|&ch| ch == b'\n') {
+                if b.lines != 0 {
                     makeroom = makeroom.min(STDIO_REDIRECT_BUFSIZE.saturating_sub(b.data.len()));
                 }
                 let _ = b.data.reserve(makeroom);
 
-                let n = readable.min(b.data.free());
+                let (before, n) = (b.data.len(), readable.min(b.data.free()));
                 // SAFETY: a stretch copied is filled
                 unsafe { b.data.fill_with(n, |d| u.copy_from_nofault(d)) };
+                b.lines += b.data.iter().skip(before).filter(|&&ch| ch == b'\n').count();
                 n
             };
 
@@ -353,7 +359,7 @@ impl StdioRedirect {
             } else if nonblock {
                 return Err(Errcode::EAGAIN_thread_with_file_write_user.into());
             } else {
-                input.wait_interruptible(|| self.has_room(input))?;
+                input.wait_interruptible(|| self.input_has_room())?;
             }
         }
         Ok(())
@@ -367,7 +373,7 @@ impl StdioRedirect {
         if self.has_data(&self.output) {
             mask |= c::EPOLLIN;
         }
-        if self.has_room(&self.input) {
+        if self.input_has_room() {
             mask |= c::EPOLLOUT;
         }
         if self.done() {
