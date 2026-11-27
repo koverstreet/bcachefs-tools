@@ -185,7 +185,7 @@ fn check_snapshot_tree<'t>(
         }))?.is_some(),
         Ok(r) => r.v.state_decoded() != Some(SnapshotState::deleted) &&
             r.v.tree() == tree_id && r.v.parent() != 0 &&
-            !lookup_node(t, r.v.parent())?.is_some_and(|p| points_at(&p.v, Role::Parent, root_id)),
+            !node_points_at(t, r.v.parent(), Role::Parent, root_id)?,
     };
     if nodes_say_root {
         fsck_err_report!(fs, snapshot_tree_to_missing_snapshot,
@@ -263,13 +263,13 @@ fn referenced(t: &TransAttempt<'_, '_>, s: &Snapshot, id: u32) -> Result<bool, B
     }
 
     if s.parent() != 0 &&
-       lookup_node(t, s.parent())?.is_some_and(|p| points_at(&p.v, Role::Parent, id)) {
+       node_points_at(t, s.parent(), Role::Parent, id)? {
         return Ok(true);
     }
 
     for child in s.children() {
         if child != 0 &&
-           lookup_node(t, child)?.is_some_and(|ch| points_at(&ch.v, Role::Child, id)) {
+           node_points_at(t, child, Role::Child, id)? {
             return Ok(true);
         }
     }
@@ -493,6 +493,11 @@ fn points_at(s: &Snapshot<Validated>, role: Role, other: u32) -> bool {
     }
 }
 
+/// Whether node @id exists and, as @role, points at @other.
+fn node_points_at(t: &TransAttempt<'_, '_>, id: u32, role: Role, other: u32) -> Result<bool, BchError> {
+    Ok(lookup_node(t, id)?.is_some_and(|n| points_at(&n.v, role, other)))
+}
+
 /// Point @s's @role pointer at @old to @new instead - 0 clears a child slot
 /// - keeping the children in order.
 fn set_ptr(s: &mut Snapshot, role: Role, old: u32, new: u32) {
@@ -539,7 +544,7 @@ fn ptr_available(t: &TransAttempt<'_, '_>, n: &Snapshot, n_id: u32, role: Role)
     }
 
     for &p in ptrs {
-        if !lookup_node(t, p)?.is_some_and(|n| points_at(&n.v, role.other(), n_id)) {
+        if !node_points_at(t, p, role.other(), n_id)? {
             return Ok(Some(p));
         }
     }
@@ -1351,13 +1356,11 @@ impl TreeReconstruct {
 /// Recreate missing node @id, a tree to itself: with a tree key, if there
 /// isn't one with it as the root.
 fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
-    let fs = t.fs();
-
     let tree_id = find_key(t, Btree::snapshot_trees, |k| {
         k.arm::<SnapshotTree>().map(|k| k.v()).is_some_and(|st| st.root_snapshot.get() == id)
     })?;
 
-    let tree_id = match tree_id {
+    let tree = match tree_id {
         Some(tree_id) => tree_id,
         None => snapshot::tree_create(t, |tree| {
             tree.v_mut().root_snapshot = id.into();
@@ -1365,17 +1368,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         })?,
     };
 
-    let mut n = t.bkey_alloc_typed::<Snapshot>()?;
-    n.k_mut().p = pos(0, id as u64);
-
-    let v = n.v_mut();
-    v.tree     = tree_id.into();
-    v.btime.lo = fs.current_time().into();
-    v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).into();
-    v.set_state(SnapshotState::live);
-
-    fs.snapshots.table_make_room(id)?;
-    t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())
+    recreate(t, id, Place { parent: 0, children: [0, 0], tree })
 }
 
 /// Recreate node @id of @tree - the ids its keys' inodes share - if it's
