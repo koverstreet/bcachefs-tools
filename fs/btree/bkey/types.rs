@@ -51,7 +51,6 @@
 //! kind is at a value's definition: #[whole(bkey)], #[grown(.., bkey)],
 //! #[derive(SizedVal)].
 
-use super::BkeyP;
 use crate::btree::{bkey::{ops, BkeyOps, Ops}, iter::{BtreeIter, TransBkey}};
 use crate::format::{BkeyType, BkeyTypeFlags, Bpos, Val, Bkey, BkeyType_arms};
 use crate::typeinfo::{StructInfo, TypeInfo};
@@ -850,11 +849,6 @@ macro_rules! bkey_family_conv {
             ['a]      [BkeyS<'a,]                => [BkeyS<'a,]:    |k| k.cast();
             ['a]      [&'a BkeyI<]               => [&'a BkeyI<]:   |k| k.cast();
             ['a]      [&'a mut BkeyI<]           => [&'a mut BkeyI<]: |k| k.cast_mut();
-            ['a]      [&'a BkeyP<]               => [&'a BkeyP<]:   |k| k.cast();
-            ['a]      [&'a mut BkeyP<]           => [&'a mut BkeyP<]: |k| k.cast_mut();
-            ['a]      [&'a BkeyI<]               => [&'a BkeyP<]:   |k| <&BkeyP<V>>::from(k).cast();
-            ['a]      [&'a mut BkeyI<]           => [&'a mut BkeyP<]:
-                |k| <&mut BkeyP<V>>::from(k).cast_mut();
             ['a, 't]  [TransBkey<'a, 't,]        => [TransBkey<'a, 't,]: |k| k.cast();
             ['a]      [&'a BkeyI<]               => [BkeySC<'a,]:   |k| BkeySC::<V>::from(k).cast();
             ['a, 'b]  [&'a BkeyS<'b,]            => [BkeySC<'a,]:   |k| BkeySC::<V>::from(k).cast();

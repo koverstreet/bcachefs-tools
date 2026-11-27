@@ -29,7 +29,7 @@
 //! own, and no failures to record.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_val_to_text, AllTypes, BkeyI, BkeySC, FamilyVal, ValidateFlags, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC, ValidateFlags, POS_MIN, SPOS_MAX};
 use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::cache::{btree_id_level_to_text, Bounce, BtreeNodeCacheState};
 use crate::btree::node::sort::{build_aux_trees, SortRuns};
@@ -66,7 +66,7 @@ use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes, from_bytes_mut, Head,
-                            Unsized, Unvalidated, VStruct};
+                            Unsized, Unvalidated, VStruct, Validated};
 use crate::util::{backref::BackRef, printbuf::Msg};
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, ratelimit, prt};
@@ -481,7 +481,7 @@ fn bset_ondisk_to_text<H: BsetHolder + ?Sized>(out: &mut Printbuf, fs: &Fs, cont
         }
 
         let mut u = Bkey::default();
-        bkey_val_to_text(&mut out, Some(fs), k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut u));
+        bkey_val_to_text(&mut out, Some(fs), k.cast::<Validated>().disassemble(contents, &mut u));
         out.newline();
         at += k.u64s() * size_of::<u64>();
     }
@@ -762,7 +762,7 @@ fn validate_vals(v: &mut NodeValidate<'_>, contents: &mut NodeContents) -> Resul
     let mut at = 0;
 
     while let Some(k) = i.key_at_mut(at) {
-        let k = k.cast_mut::<FamilyVal<AllTypes>>();
+        let k = k.cast_mut::<Validated>();
 
         let drop_key = {
             let mut tmp = Bkey::default();

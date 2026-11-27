@@ -77,7 +77,7 @@ use crate::types::{Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut,
                             from_bytes_mut, Head, Unvalidated,
                             UnvalidatedEntriesMut, Validated, ViewEntries};
-use crate::btree::bkey::{AllTypes, AnyKey, BkeyP, BkeyPHeader, FamilyVal};
+use crate::btree::bkey::{AnyKey, BkeyP, BkeyPHead};
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, bch_enum, grown, tagged_union, unsized_vstruct, whole, MaybeZeroable, Plain, TypeInfo, SizedVal, BitfieldMembers};
 
@@ -1978,16 +1978,16 @@ impl Bset<Unvalidated> {
 
     /// The key at byte @at of its keys, if all of it is there: None at their
     /// end, or if what's there runs past it.
-    pub fn key_at(&self, at: usize) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+    pub fn key_at(&self, at: usize) -> Option<&BkeyP<Unvalidated>> {
         BkeyP::from_slice(cast_plain_slice(self.start_bytes().get(at..)?).expect(KEY_OFFSET))
     }
 
-    pub fn key_at_mut(&mut self, at: usize) -> Option<&mut BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
+    pub fn key_at_mut(&mut self, at: usize) -> Option<&mut BkeyP<Unvalidated>> {
         BkeyP::from_slice_mut(cast_plain_slice_mut(self.start_bytes_mut().get_mut(at..)?).expect(KEY_OFFSET))
     }
 
     /// The first word of the key at byte @at, whatever its u64s say.
-    pub fn key_header(&self, at: usize) -> Option<&BkeyPHeader> {
+    pub fn key_header(&self, at: usize) -> Option<&BkeyPHead> {
         cast_plain(self.start_bytes().get(at..)?)
     }
 

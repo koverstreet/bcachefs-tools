@@ -13,7 +13,7 @@
 //! yet - Rust has no unvalidated keys to give them.
 
 use crate::btree::bkey::BkeyI;
-use crate::btree::bkey::{AllTypes, BkeyP, BkeyS, FamilyVal};
+use crate::btree::bkey::{BkeyP, BkeyS};
 use crate::fs::Fs;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion, Val, BkeyFormat, BkeyPacked};
 use crate::util::vstructs::Unvalidated;
@@ -47,7 +47,7 @@ unsafe fn bkey_swab_key(f: Option<&BkeyFormat>, k: *mut BkeyPacked) {
 /// yet validated: too short to be a key, it's left for validate.
 pub unsafe fn bkey_compat(fs: Option<&Fs>, btree: Btree, version: MetadataVersion, big_endian: bool,
                           write: bool, f: Option<&BkeyFormat>,
-                          k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
+                          k: &mut BkeyP<Unvalidated>) {
     let k = core::ptr::from_mut(k).cast::<BkeyPacked>();
     let packed = |k: *mut BkeyPacked| unsafe { (*BkeyP::from_raw(k)).is_packed() };
     // a journal key's has none: it's never packed

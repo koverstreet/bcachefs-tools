@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{bkey_header_validate, bkey_val_validate, AllTypes, BkeyI, BkeyP, BkeySC, FamilyVal,
+use crate::btree::bkey::{bkey_header_validate, bkey_val_validate, BkeyI, BkeyP, BkeySC,
                          ValidateFlags, BKEY_U64S, BkeyValidateContext, BkeyValidateFrom};
 use crate::btree::{compat, node::{BtreeNode, NodeContents}, read::BsetHolder};
 use crate::data::extents::ReadFlags;
@@ -13,7 +13,7 @@ use crate::data::ptrs::BkeyVRead;
 use crate::format::{BkeyType, Btree, MetadataVersion, Bkey, Bset, btree_node, KEY_FORMAT_CURRENT};
 use crate::fs::{Dev, Fs};
 use crate::init::{error::{id, BkeyValidate}, passes::RecoveryPass};
-use crate::util::{vstructs::{Head, Unvalidated}, Printbuf, ToText};
+use crate::util::{vstructs::{Head, Unvalidated, Validated}, Printbuf, ToText};
 use crate::{bkey_fsck_err_on, prt};
 use core::cmp::Ordering;
 
@@ -412,7 +412,7 @@ fn bkey_packed_valid(fs: &Fs, b: &BtreeNode, contents: &NodeContents, i: &Bset<U
     }
 
     let mut tmp = Bkey::default();
-    let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
+    let u = k.cast::<Validated>().disassemble(contents, &mut tmp);
     bkey_header_validate(&BkeyValidate::new(fs, u, &validate_from(b, ValidateFlags::silent))).is_ok()
 }
 
@@ -423,7 +423,7 @@ fn btree_node_read_bkey_cmp(contents: &NodeContents, l: &BkeyP, r: &BkeyP) -> Or
         .then((deleted(r) - deleted(l)).cmp(&0))
 }
 
-fn bkey_compat(v: &NodeValidate<'_>, ks: &BsetKeys<'_>, k: &mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) {
+fn bkey_compat(v: &NodeValidate<'_>, ks: &BsetKeys<'_>, k: &mut BkeyP<Unvalidated>) {
     if ks.version < MetadataVersion::CURRENT ||
        ks.big_endian != cfg!(target_endian = "big") ||
        cfg!(CONFIG_BCACHEFS_DEBUG) {
@@ -482,7 +482,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut Bset<Unva
     }
 
     let mut tmp = Bkey::default();
-    let u = k.cast::<FamilyVal<AllTypes>>().disassemble(contents, &mut tmp);
+    let u = k.cast::<Validated>().disassemble(contents, &mut tmp);
 
     match bset_key_validate(fs, contents, u, ks.updated_range, &ks.from) {
         Err(err) if err == BchError::from(e::fsck_delete_bkey) => return Ok(KeyAction::Drop(u64s)),
@@ -495,7 +495,7 @@ fn bset_key_check(v: &mut NodeValidate<'_>, ks: &BsetKeys<'_>, i: &mut Bset<Unva
 
     if let Some(p) = prev {
         let key = |at| i.key_at(at).expect("a key validated already")
-            .cast::<FamilyVal<AllTypes>>();
+            .cast::<Validated>();
         let (pk, kk) = (key(p), key(at));
 
         if btree_node_read_bkey_cmp(contents, pk, kk) != Ordering::Less {

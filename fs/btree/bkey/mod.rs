@@ -45,7 +45,7 @@
 //! does all three; untyped() erases keeping the form and state. as_ref() is
 //! the BkeyI a validated key is: an unvalidated one has none.
 //!
-//! A key in a btree node is a BkeyP<V> (packed.rs), in the node's format or
+//! A key in a btree node is a BkeyP<S> (packed.rs), in the node's format or
 //! unpacked: a BkeyI is one, a BkeyP is a BkeyI only if it isn't packed, and
 //! it's read by unpacking against its node, and compared by the node -
 //! b.cmp_packed(l, r).

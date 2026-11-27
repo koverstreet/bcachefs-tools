@@ -4,46 +4,42 @@
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 
-use super::{AllTypes, BkeyI, BkeySC, FamilyVal, ValidatedVal, BKEY_U64S};
+use super::{AnyKey, BkeySC, BKEY_U64S};
 use crate::btree::node::NodeContents;
 use crate::format::{Bpos, BkeyType, Bkey, BkeyFormat, BkeyFormatBits, BkeyPacked,
     KEY_FORMAT_CURRENT};
 use crate::os::kernel::likely;
-use crate::util::vstructs::{cast_plain_slice, plain_bytes, plain_bytes_mut, Unsized, Unvalidated};
-use cstruct_macros::Plain;
+use crate::util::vstructs::{cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, State, Unsized,
+                            Unvalidated};
+use cstruct_macros::{unsized_vstruct, MaybeZeroable, Plain};
 
-/// V, as a BkeyI's, is the key's type and state - only a marker: where the
-/// value starts is the node's format's.
-#[repr(C)]
-pub struct BkeyP<V: ?Sized = FamilyVal<AllTypes>> {
-    val:  PhantomData<V>,
-    data: [u64],
-}
-
-/// A packed key's first u64, its u64s, format and type the first three bytes:
-/// BkeyPacked itself is padded to a bkey's size, so a reference to one
-/// reaches past a short key. What every key has, so what's read of a key
-/// before its u64s are checked.
+/// A key as a node holds it, in state S: its header, then the rest of its
+/// u64s - as many as its header says, the header's included. The key's own
+/// fields are in the node's format and its value follows them, so neither is
+/// a type: a packed key is worked with unpacked - disassemble() is the key in
+/// S, its value any type's, to narrow.
+///
+/// Its header, Head<BkeyP>: its first u64, its u64s, format and type the first
+/// three bytes. BkeyPacked itself is padded to a bkey's size, so a reference
+/// to one reaches past a short key. What every key has, so what's read of a
+/// key before its u64s are checked.
+#[unsized_vstruct(tail = [u64], u64s = u64s, start = 0)]
 #[repr(C, align(8))]
-#[derive(Plain)]
-pub struct BkeyPHeader {
+#[derive(MaybeZeroable, Plain)]
+pub struct BkeyP {
     pub(super) u64s:        u8,
     pub(super) format_bits: BkeyFormatBits,
     pub(super) type_:       u8,
     _key:                   [u8; 5],
 }
 
-impl BkeyPHeader {
+impl BkeyPHead {
     pub(super) fn of(w: &u64) -> &Self {
         unsafe { &*(w as *const u64).cast() }
     }
 
     pub(super) fn of_mut(w: &mut u64) -> &mut Self {
         unsafe { &mut *(w as *mut u64).cast() }
-    }
-
-    pub fn u64s(&self) -> usize {
-        self.u64s as usize
     }
 
     pub fn format(&self) -> u8 {
@@ -71,103 +67,73 @@ impl BkeyPHeader {
 }
 
 impl BkeyP {
+    /// The key at @p, as long as its u64s say - its header, if they say
+    /// it's shorter.
     pub unsafe fn from_raw(p: *const BkeyPacked) -> *const Self {
-        unsafe { core::ptr::slice_from_raw_parts(p.cast::<u64>(), (*p).u64s as usize) as *const Self }
+        <Self as Unsized>::from_raw(p.cast(), unsafe { (*p).u64s as usize }.max(1) * size_of::<u64>())
     }
 
     pub unsafe fn from_raw_mut(p: *mut BkeyPacked) -> *mut Self {
-        unsafe { core::ptr::slice_from_raw_parts_mut(p.cast::<u64>(), (*p).u64s as usize) as *mut Self }
-    }
-
-    /// The key @s starts with, if all of it is in @s.
-    pub fn from_slice(s: &[u64]) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
-        let u64s = s.first()?.to_ne_bytes()[0] as usize;
-        if u64s == 0 || u64s > s.len() {
-            return None;
-        }
-        let s = &s[..u64s];
-        Some(unsafe { &*(s as *const [u64] as *const BkeyP<FamilyVal<AllTypes, Unvalidated>>) })
-    }
-
-    /// A key in a BkeyPacked of its own, as one packed onto the stack.
-    pub fn from_packed(k: &BkeyPacked) -> Option<&BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
-        Self::from_slice(cast_plain_slice(plain_bytes(k)).expect("a bkey_packed is whole u64s"))
-    }
-
-    pub fn from_slice_mut(s: &mut [u64]) -> Option<&mut BkeyP<FamilyVal<AllTypes, Unvalidated>>> {
-        let u64s = s.first()?.to_ne_bytes()[0] as usize;
-        let s = s.get_mut(..u64s).filter(|s| !s.is_empty())?;
-        Some(unsafe { &mut *(s as *mut [u64] as *mut BkeyP<FamilyVal<AllTypes, Unvalidated>>) })
+        <Self as Unsized>::from_raw_mut(p.cast(), unsafe { (*p).u64s as usize }.max(1) * size_of::<u64>())
     }
 }
 
-impl<V: ?Sized> BkeyP<V> {
+impl BkeyP<Unvalidated> {
+    /// The key @s starts with, if all of it is in @s.
+    pub fn from_slice(s: &[u64]) -> Option<&Self> {
+        Self::from_bytes(plain_bytes(s)).ok()
+    }
+
+    /// A key in a BkeyPacked of its own, as one packed onto the stack.
+    pub fn from_packed(k: &BkeyPacked) -> Option<&Self> {
+        Self::from_slice(cast_plain_slice(plain_bytes(k)).expect("a bkey_packed is whole u64s"))
+    }
+
+    pub fn from_slice_mut(s: &mut [u64]) -> Option<&mut Self> {
+        Self::from_bytes_mut(plain_bytes_mut(s)).ok()
+    }
+}
+
+impl<S: State> BkeyP<S> {
+    /// Its u64s, the header's included.
     pub fn as_slice(&self) -> &[u64] {
-        &self.data
+        cast_plain_slice(self.as_bytes()).expect("a packed key is whole u64s")
     }
 
-    pub(crate) fn cast<W: ?Sized>(&self) -> &BkeyP<W> {
-        unsafe { &*(self as *const Self as *const BkeyP<W>) }
+    pub(crate) fn cast<T: State>(&self) -> &BkeyP<T> {
+        unsafe { &*(self as *const Self as *const BkeyP<T>) }
     }
 
-    pub(crate) fn cast_mut<W: ?Sized>(&mut self) -> &mut BkeyP<W> {
-        unsafe { &mut *(self as *mut Self as *mut BkeyP<W>) }
-    }
-
-    fn header(&self) -> &BkeyPHeader {
-        unsafe { &*core::ptr::from_ref(self).cast::<BkeyPHeader>() }
-    }
-
-    fn header_mut(&mut self) -> &mut BkeyPHeader {
-        unsafe { &mut *core::ptr::from_mut(self).cast::<BkeyPHeader>() }
-    }
-
-    pub fn u64s(&self) -> usize {
-        self.header().u64s()
+    pub(crate) fn cast_mut<T: State>(&mut self) -> &mut BkeyP<T> {
+        unsafe { &mut *(self as *mut Self as *mut BkeyP<T>) }
     }
 
     pub fn bytes(&self) -> usize {
         self.u64s() * size_of::<u64>()
     }
 
-    pub fn format(&self) -> u8 {
-        self.header().format()
-    }
-
-    pub fn is_packed(&self) -> bool {
-        self.header().is_packed()
-    }
-
     pub fn needs_whiteout(&self) -> bool {
-        self.header().format_bits.needs_whiteout() != 0
+        self.format_bits.needs_whiteout() != 0
     }
 
     pub fn set_needs_whiteout(&mut self, v: bool) {
-        self.header_mut().format_bits.set_needs_whiteout(v as u8);
+        self.format_bits.set_needs_whiteout(v as u8);
     }
 
     pub fn set_format(&mut self, format: u8) {
-        self.header_mut().format_bits.set_format(format);
+        self.format_bits.set_format(format);
     }
 
     pub fn key_type(&self) -> BkeyType {
-        BkeyType(self.header().type_ as u32)
+        BkeyType(self.type_ as u32)
     }
 
     pub fn set_key_type(&mut self, t: BkeyType) {
-        self.header_mut().type_ = t.0 as u8;
-    }
-
-    pub fn key_u64s(&self, f: &BkeyFormat) -> usize {
-        self.header().key_u64s(f)
+        self.type_ = t.0 as u8;
     }
 
     pub fn key_bytes(&self, f: &BkeyFormat) -> usize {
         self.key_u64s(f) * size_of::<u64>()
-    }
-
-    pub fn u64s_valid(&self, f: &BkeyFormat) -> bool {
-        self.header().u64s_valid(f)
     }
 
     fn is_bkey_i(&self) -> bool {
@@ -177,7 +143,7 @@ impl<V: ?Sized> BkeyP<V> {
 
 /// Reading past the header - the value, or an unpacked key's whole header,
 /// a bkey - needs the key's u64s to be validate's.
-impl<V: ?Sized + ValidatedVal> BkeyP<V> {
+impl BkeyP {
     pub fn val_u64s(&self, f: &BkeyFormat) -> usize {
         self.u64s() - self.key_u64s(f)
     }
@@ -187,19 +153,20 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     pub fn val(&self, f: &BkeyFormat) -> &[u64] {
-        let key_u64s = self.key_u64s(f);
+        let (key_u64s, words) = (self.key_u64s(f), self.as_slice());
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            assert!(key_u64s <= self.data.len());
+            assert!(key_u64s <= words.len());
         }
-        unsafe { self.data.get_unchecked(key_u64s..) }
+        unsafe { words.get_unchecked(key_u64s..) }
     }
 
     pub fn val_mut(&mut self, f: &BkeyFormat) -> &mut [u64] {
         let key_u64s = self.key_u64s(f);
+        let words = cast_plain_slice_mut(self.as_bytes_mut()).expect("a packed key is whole u64s");
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
-            assert!(key_u64s <= self.data.len());
+            assert!(key_u64s <= words.len());
         }
-        unsafe { self.data.get_unchecked_mut(key_u64s..) }
+        unsafe { words.get_unchecked_mut(key_u64s..) }
     }
 
     fn unpacked_header(&self) -> &Bkey {
@@ -240,13 +207,13 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
     }
 
     /// The key unpacked into @u, the value where it is.
-    pub fn disassemble<'a>(&'a self, b: &NodeContents, u: &'a mut Bkey) -> BkeySC<'a, V> {
+    pub fn disassemble<'a>(&'a self, b: &NodeContents, u: &'a mut Bkey) -> BkeySC<'a> {
         self.disassembled(&b.format, self.unpack(b), u)
     }
 
     /// disassemble(), of the key unpacked already: @k.
     pub(crate) fn disassembled<'a>(&'a self, f: &BkeyFormat, k: Bkey,
-                                   u: &'a mut Bkey) -> BkeySC<'a, V> {
+                                   u: &'a mut Bkey) -> BkeySC<'a> {
         *u = k;
         BkeySC {
             k:    u,
@@ -259,17 +226,13 @@ impl<V: ?Sized + ValidatedVal> BkeyP<V> {
 }
 
 impl NodeContents {
-    pub fn cmp_packed(&self,
-                      l: &BkeyP<impl ?Sized + ValidatedVal>,
-                      r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
+    pub fn cmp_packed(&self, l: &BkeyP, r: &BkeyP) -> Ordering {
         self.cmp_packed_inlined(l, r)
     }
 
     /// For the sorts' merge loops.
     #[inline(always)]
-    pub fn cmp_packed_inlined(&self,
-                              l: &BkeyP<impl ?Sized + ValidatedVal>,
-                              r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
+    pub fn cmp_packed_inlined(&self, l: &BkeyP, r: &BkeyP) -> Ordering {
         if likely(l.is_packed() && r.is_packed()) {
             self.cmp_packed_format_checked(l, r)
         } else {
@@ -279,17 +242,13 @@ impl NodeContents {
 
     #[cold]
     #[inline(never)]
-    fn cmp_mixed(&self,
-                 l: &BkeyP<impl ?Sized + ValidatedVal>,
-                 r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
+    fn cmp_mixed(&self, l: &BkeyP, r: &BkeyP) -> Ordering {
         l.unpack_pos(self).cmp(&r.unpack_pos(self))
     }
 
     /// Both keys packed.
     #[inline(always)]
-    pub fn cmp_packed_format_checked(&self,
-                                     l: &BkeyP<impl ?Sized + ValidatedVal>,
-                                     r: &BkeyP<impl ?Sized + ValidatedVal>) -> Ordering {
+    pub fn cmp_packed_format_checked(&self, l: &BkeyP, r: &BkeyP) -> Ordering {
         let f = &self.format;
 
         if cfg!(CONFIG_BCACHEFS_DEBUG) {
@@ -306,7 +265,7 @@ impl NodeContents {
         ret
     }
 
-    pub fn cmp_left_packed(&self, l: &BkeyP<impl ?Sized + ValidatedVal>, r: &Bpos) -> Ordering {
+    pub fn cmp_left_packed(&self, l: &BkeyP, r: &Bpos) -> Ordering {
         l.unpack_pos(self).cmp(r)
     }
 }
@@ -314,25 +273,24 @@ impl NodeContents {
 /*
  * It's safe to treat an unpacked bkey as a packed one, but not the reverse
  */
-impl<'a, V: ?Sized> From<&'a BkeyI<V>> for &'a BkeyP<V> {
-    fn from(k: &'a BkeyI<V>) -> Self {
-        let u64s = k.k.u64s as usize;
-        unsafe { &*(core::ptr::slice_from_raw_parts(core::ptr::from_ref(k).cast::<u64>(), u64s) as *const BkeyP<V>) }
+impl<'a, S: State> From<&'a AnyKey<S>> for &'a BkeyP<S> {
+    fn from(k: &'a AnyKey<S>) -> Self {
+        unsafe { &*<BkeyP<S> as Unsized>::from_raw(core::ptr::from_ref(k).cast(), k.k.bytes()) }
     }
 }
 
-impl<'a, V: ?Sized> From<&'a mut BkeyI<V>> for &'a mut BkeyP<V> {
-    fn from(k: &'a mut BkeyI<V>) -> Self {
-        let u64s = k.k.u64s as usize;
-        unsafe { &mut *(core::ptr::slice_from_raw_parts_mut(core::ptr::from_mut(k).cast::<u64>(), u64s) as *mut BkeyP<V>) }
+impl<'a, S: State> From<&'a mut AnyKey<S>> for &'a mut BkeyP<S> {
+    fn from(k: &'a mut AnyKey<S>) -> Self {
+        let bytes = k.k.bytes();
+        unsafe { &mut *<BkeyP<S> as Unsized>::from_raw_mut(core::ptr::from_mut(k).cast(), bytes) }
     }
 }
 
 /// Only a key that isn't packed is a bkey_i: the key back if it is.
-impl<'a, V: ?Sized + Unsized> TryFrom<&'a BkeyP<V>> for &'a BkeyI<V> {
-    type Error = &'a BkeyP<V>;
+impl<'a, S: State> TryFrom<&'a BkeyP<S>> for &'a AnyKey<S> {
+    type Error = &'a BkeyP<S>;
 
-    fn try_from(k: &'a BkeyP<V>) -> Result<Self, Self::Error> {
+    fn try_from(k: &'a BkeyP<S>) -> Result<Self, Self::Error> {
         if !k.is_bkey_i() {
             return Err(k);
         }
@@ -340,10 +298,10 @@ impl<'a, V: ?Sized + Unsized> TryFrom<&'a BkeyP<V>> for &'a BkeyI<V> {
     }
 }
 
-impl<'a, V: ?Sized + Unsized> TryFrom<&'a mut BkeyP<V>> for &'a mut BkeyI<V> {
-    type Error = &'a mut BkeyP<V>;
+impl<'a, S: State> TryFrom<&'a mut BkeyP<S>> for &'a mut AnyKey<S> {
+    type Error = &'a mut BkeyP<S>;
 
-    fn try_from(k: &'a mut BkeyP<V>) -> Result<Self, Self::Error> {
+    fn try_from(k: &'a mut BkeyP<S>) -> Result<Self, Self::Error> {
         if !k.is_bkey_i() {
             return Err(k);
         }

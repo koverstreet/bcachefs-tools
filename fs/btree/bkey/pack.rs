@@ -6,7 +6,7 @@ use core::cmp::Ordering;
 use core::mem::offset_of;
 
 use super::format::{bkey_fields, fls64, u64_bitmask, BKEY_FORMAT_CURRENT, FIELDS, NR_FIELDS};
-use super::packed::BkeyPHeader;
+use super::packed::BkeyPHead;
 use super::{spos, BkeyP, BKEY_U64S};
 use crate::btree::node::{BkeyUnpackField, NodeContents};
 use crate::debug::params::debug_check_bkey_unpack;
@@ -14,7 +14,7 @@ use crate::format::BkeyField::{self, *};
 use crate::format::{BkeyFormat, Bpos, BkeyType, Bkey, BkeyFormatBits, BkeyPacked,
     KEY_FORMAT_CURRENT, KEY_FORMAT_LOCAL_BTREE, KEY_PACKED_BITS_START};
 use crate::os::kernel::unlikely;
-use crate::util::{vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut}, Printbuf, ToText};
+use crate::util::{vstructs::{cast_plain_slice_mut, plain_bytes, plain_bytes_mut, State}, Printbuf, ToText};
 use cstruct_macros::{bch_enum, MaybeZeroable, Plain};
 
 /*
@@ -84,7 +84,7 @@ fn packed(k: &[u64]) -> &BkeyP {
 }
 
 fn set_pos_header(w: &mut u64, key_u64s: u8) {
-    let h = BkeyPHeader::of_mut(w);
+    let h = BkeyPHead::of_mut(w);
     h.u64s  = key_u64s;
     h.format_bits.set_format(KEY_FORMAT_LOCAL_BTREE as u8);
     h.type_ = BkeyType::deleted.0 as u8;
@@ -192,12 +192,12 @@ impl<'a> UnpackState<'a> {
 }
 
 impl BkeyFormat {
-    pub fn unpack_key(&self, k: &BkeyP<impl ?Sized>) -> Bkey {
+    pub fn unpack_key(&self, k: &BkeyP<impl State>) -> Bkey {
         self.unpack_key_words(k.as_slice())
     }
 
     fn unpack_key_words(&self, k: &[u64]) -> Bkey {
-        let h = BkeyPHeader::of(&k[0]);
+        let h = BkeyPHead::of(&k[0]);
         let mut s = UnpackState::new(self, k);
 
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
@@ -223,7 +223,7 @@ impl BkeyFormat {
         out
     }
 
-    pub fn unpack_pos(&self, k: &BkeyP<impl ?Sized>) -> Bpos {
+    pub fn unpack_pos(&self, k: &BkeyP<impl State>) -> Bpos {
         let mut s = UnpackState::new(self, k.as_slice());
 
         ebug_assert!(self.nr_fields as usize == NR_FIELDS);
@@ -255,7 +255,7 @@ impl BkeyFormat {
         bkey_fields!(pack_fields);
         s.finish();
 
-        let h = BkeyPHeader::of_mut(&mut out[0]);
+        let h = BkeyPHead::of_mut(&mut out[0]);
         h.u64s  = (self.key_u64s as u32 + k.u64s as u32 - BKEY_U64S as u32) as u8;
         h.format_bits.set_format(KEY_FORMAT_LOCAL_BTREE as u8);
         h.format_bits.set_needs_whiteout(k.format_bits.needs_whiteout());
@@ -270,7 +270,7 @@ impl BkeyFormat {
     #[cold]
     #[inline(never)]
     fn pack_verify(&self, packed: &[u64], unpacked: &Bkey) {
-        let h = BkeyPHeader::of(&packed[0]);
+        let h = BkeyPHead::of(&packed[0]);
 
         assert!(h.u64s >= self.key_u64s, "packed to {} u64s, under its format's {}", h.u64s, self.key_u64s);
         assert!(usize::from(h.u64s - self.key_u64s) == unpacked.val_u64s(),
@@ -403,7 +403,7 @@ impl BkeyFormat {
      * Bits are indexed from 0 - return is [0, nr_key_bits)
      */
     pub fn greatest_differing_bit(&self, mut nr_key_bits: u32,
-                                  l: &BkeyP<impl ?Sized>, r: &BkeyP<impl ?Sized>) -> u32 {
+                                  l: &BkeyP<impl State>, r: &BkeyP<impl State>) -> u32 {
         let (l, r) = (l.as_slice(), r.as_slice());
         let mut p = high_word_offset(self);
         let mut word_bits = 64 - HIGH_BIT_OFFSET;
@@ -439,7 +439,7 @@ impl BkeyFormat {
 
     #[inline(always)]
     pub(super) fn cmp_bits(&self, mut nr_key_bits: u32,
-                           l: &BkeyP<impl ?Sized>, r: &BkeyP<impl ?Sized>) -> Ordering {
+                           l: &BkeyP<impl State>, r: &BkeyP<impl State>) -> Ordering {
         let (l, r) = (l.as_slice(), r.as_slice());
         let mut p = high_word_offset(self);
 
@@ -520,7 +520,7 @@ fn packed_to_binary_text(out: &mut Printbuf, f: &BkeyFormat, k: &[u64]) {
  * Also: doesn't work on extents - it doesn't preserve the invariant that
  * if k is packed bkey_start_pos(k) will successfully pack
  */
-fn transform_key(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &BkeyP<impl ?Sized>) -> bool {
+fn transform_key(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &BkeyP<impl State>) -> bool {
     out[0] = 0;
 
     let mut out_s = PackState::new(out_f, out);
@@ -537,14 +537,14 @@ fn transform_key(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &Bke
 
     out_s.finish();
 
-    let o = BkeyPHeader::of_mut(&mut out[0]);
+    let o = BkeyPHead::of_mut(&mut out[0]);
     o.u64s  = (out_f.key_u64s as usize + k.u64s() - in_f.key_u64s as usize) as u8;
     o.format_bits.set_needs_whiteout(k.needs_whiteout() as u8);
     o.type_ = k.key_type().0 as u8;
     true
 }
 
-pub fn transform(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &BkeyP<impl ?Sized>) -> bool {
+pub fn transform(out_f: &BkeyFormat, out: &mut [u64], in_f: &BkeyFormat, k: &BkeyP<impl State>) -> bool {
     if !transform_key(out_f, out, in_f, k) {
         return false;
     }
