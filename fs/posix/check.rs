@@ -736,7 +736,8 @@ pub fn repoint_subvol(
 /// Recreate missing subvolume key @subvol, at leaf @snapshot with root inode
 /// @root - from reconstruct_subvol_root() - and point the snapshot, and its
 /// tree if it has no master subvolume, back at it. Where it's mounted is the
-/// root's to say; it's a snapshot if its tree has a master already.
+/// root's to say; it's a snapshot unless it's its tree's master - the tree
+/// can still name it, its own key the one lost.
 pub fn reconstruct_subvol(
     t:        &TransAttempt<'_, '_>,
     snapshot: u32,
@@ -759,15 +760,14 @@ pub fn reconstruct_subvol(
         }),
         message!("getting snapshot {snapshot}"))?;
 
-    let had_master = fs.log().err_msg(
+    let master = fs.log().err_msg(
         t.bkey_get_mut::<SnapshotTree, _>(Btree::snapshot_trees, pos(0, tree as u64),
                                            BtreeIterFlags::empty(), UpdateTriggerFlags::empty(), |st| {
             let st = st.v_mut();
-            let had_master = st.master_subvol != 0;
-            if !had_master {
+            if st.master_subvol == 0 {
                 st.master_subvol = subvol.into();
             }
-            Ok(had_master)
+            Ok(st.master_subvol.get())
         }),
         message!("getting snapshot tree {tree}"))?;
 
@@ -777,7 +777,7 @@ pub fn reconstruct_subvol(
     v.snapshot       = snapshot.into();
     v.inode          = root.into();
     v.fs_path_parent = fs_path_parent.into();
-    v.set_snap(had_master);
+    v.set_snap(master != subvol);
     v.set_state(SubvolumeState::live);
     t.insert(Btree::subvolumes, k, UpdateTriggerFlags::empty())
 }
