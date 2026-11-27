@@ -61,7 +61,7 @@ use crate::os::bio::{Bio, BioOwner, BioSubmit, BvecMempool};
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 use crate::os::kernel::{random_u64, random_u64_below};
 use crate::os::kernel::{local_clock, mem_alloc_profiling_enabled, PAGE_SIZE, READ};
-use crate::util::log::{LogLevel, LogMsg};
+use crate::util::log::LogLevel;
 use crate::os::module::{Quiesced, ThisModule};
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, waiter, Resumable, Resume, Spawn, TaskSlot};
@@ -69,7 +69,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, from_bytes
                             Unsized, Unvalidated, VStruct};
 use crate::util::{backref::BackRef, printbuf::Msg};
 use crate::util::Printbuf;
-use crate::{fs_fatal_error, log_msg_ratelimited, prt};
+use crate::{fs_fatal_error, ratelimit, prt};
 use core::mem::offset_of;
 use core::ops::{ControlFlow, Deref, Range};
 use core::pin::Pin;
@@ -233,7 +233,7 @@ impl NodeRead<'_> {
         let (fs, b) = (self.fs, &*self.node);
         let btree = Btree(b.c.btree_id.get().into());
 
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "btree node read error at btree {}\n", b.pos_to_text(fs));
         msg.write_bytes_indented(err.as_bytes());
         self.failed.to_text(&mut msg, fs);
@@ -897,7 +897,7 @@ pub fn node_read(trans: &BtreeTrans<'_>, node: ReadInFlightNode, sync: bool) {
     fs.event_inc_trace(events::btree_node_read, |out| prt!(out, "{}", b.pos_to_text(fs)));
 
     let Ok(Some(pick)) = key.pick_read_device(fs, None, 0, ReadFlags::empty()) else {
-        let mut msg = log_msg_ratelimited!(fs);
+        let mut msg = ratelimit!(fs.log()).msg();
 
         prt!(&mut msg, "btree node read error: no device to read from\n at {}\n", b.pos_to_text(fs));
         let _ = btree_lost_data(fs, &mut msg, btree);

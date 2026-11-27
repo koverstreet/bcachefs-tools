@@ -41,7 +41,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
 use crate::util::{alloc::KBox, rcu::read_lock, vstructs::Validated};
-use crate::{message, here, log_msg_ratelimited, prt};
+use crate::{message, here, ratelimit, prt};
 use core::mem::size_of;
 use core::sync::atomic::Ordering::Relaxed;
 use crate::format::{BkeyType, Bpos, Btree, ErrorKeyReason, Backpointer, CsumType};
@@ -386,7 +386,7 @@ fn stripe_repair_unrebuildable(ctxt: &Moving<'_>, h: OpenStripe<'_>, s: BkeySC<'
     let b = StripeBlocks::get(fs, s)?;
 
     if b.live & !clean != 0 {
-        let mut msg = log_msg_ratelimited!(fs);
+        let mut msg = ratelimit!(fs.log()).msg();
         write!(msg, "stripe repair: extents left in blocks being dropped from an unreconstructable stripe:\n{}",
                s.to_text(fs));
         return Ok(StripeRepair::Retry);
@@ -573,7 +573,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, trans: &TransGuard<'_>, ca: 
     n.fetch_add(r.bad_sectors as i64, Relaxed);
 
     let ty = s.v().csum_type.get();
-    let mut msg = log_msg_ratelimited!(fs);
+    let mut msg = ratelimit!(fs.log()).msg();
     write!(msg, "scrub: stripe block {block} on {}: {} sectors don't match the stripe's checksums, expected ",
            ca, r.bad_sectors);
     r.want.to_text(&mut msg, ty);
@@ -698,7 +698,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, Stripe<Validated>>, h: OpenSt
     });
 
     if let Err(e) = ret {
-        let mut msg = log_msg_ratelimited!(fs);
+        let mut msg = ratelimit!(fs.log()).msg();
         write!(msg, "stripe repair: error allocating buckets for the new stripe: {e}");
         prt!(&mut msg, "\nold: {}", s.to_text(fs));
         prt!(&mut msg, "\nnew: {}", ns.lock().new_stripe.stripe().to_text(fs));

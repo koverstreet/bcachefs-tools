@@ -41,7 +41,6 @@ use crate::sb::counters::COUNTERS;
 use crate::sb::members;
 use crate::prt;
 use crate::os::kernel::{READ, WRITE};
-use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::os::kobject::{BinFile, BinFiles, Group, Groups, Kobject};
 use crate::util::place::Placed;
@@ -128,7 +127,7 @@ const INTERNAL: &[Attr<Fs>] = &gated(started, [
         }
     })),
     Attr::wo(c"trigger_emergency_read_only", |c, _| writable(c, |c| {
-        let mut msg = LogMsg::new(c);
+        let mut msg = c.log().msg();
         writeln!(msg, "shutdown by sysfs");
         c.emergency_read_only(&mut msg);
         Ok(())

@@ -742,13 +742,12 @@ use crate::debug::trace::events;
 use crate::sb::members::{DevIoRef, DevWriteRefKind};
 use crate::os::bio::{Bio, BioBox, BioOwns, BioRange, BioVecs, Buffer, Pages, Typed};
 use crate::os::kernel::{local_clock, unlikely, WRITE};
-use crate::util::log::LogMsg;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::refcount::TryRefcount;
 use crate::util::task::{requeue, waiter, Resumable, Resume, RunQueue};
 use crate::os::workqueue::Queue;
 use crate::util::{Nsecs, Printbuf, ToText};
-use crate::{btree_trans, log_msg_ratelimited, prt};
+use crate::{btree_trans, ratelimit, prt};
 use self::WriteFlags as w;
 use crate::journal::flush_wait::{Flush, FlushWait};
 use core::fmt;
@@ -1095,7 +1094,7 @@ fn log_write_error_start(out: &mut Printbuf, op: &Op, update: Option<&DataUpdate
 }
 
 pub(crate) fn write_op_error(op: &Op, update: Option<&DataUpdateIndex>, offset: u64, msg: fmt::Arguments<'_>) {
-    let mut m = log_msg_ratelimited!(op.fs());
+    let mut m = ratelimit!(op.fs().log()).msg();
 
     log_write_error_start(&mut m, op, update, offset);
     prt!(&mut *m, "{msg}");
@@ -1156,7 +1155,7 @@ fn write_io_error_keys(op: &mut Op, update: Option<&DataUpdateIndex>) -> Result<
     let fs = op.fs();
     let ret = write_drop_io_error_ptrs(op);
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
 
     /*
      * Writing degraded because a device was removed is not news:

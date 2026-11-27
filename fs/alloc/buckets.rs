@@ -31,9 +31,9 @@ use crate::opts::data_type_str;
 use crate::locking::{ByteLock, Guard as _, Locked};
 use crate::types::bits_to_longs;
 use crate::os::{kernel::unlikely, percpu::{Counters, PerCpu}};
-use crate::util::{log::LogMsg, rcu::{read_lock, RcuArrayWriter, ReadGuard}, Printbuf, ToText};
+use crate::util::{rcu::{read_lock, RcuArrayWriter, ReadGuard}, Printbuf, ToText};
 use crate::data_structures::bitmap::AtomicBitmap;
-use crate::{btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
+use crate::{btree_trans, fsck_err_on, ratelimit, message, percpu_field, prt};
 use core::convert::Infallible;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -428,7 +428,7 @@ impl TransAttempt<'_, '_> {
         -> Result<(), BchError>
     {
         let fs = self.fs();
-        let mut buf = LogMsg::new(fs);
+        let mut buf = fs.log().msg();
 
         msg.to_text(&mut buf);
         prt!(&mut buf, "\nwhile marking {}\n", k.to_text(fs));
@@ -487,7 +487,7 @@ fn trigger_pointer_dev_missing(fs: &Fs, k: BkeySC<'_>, dev: u32, insert: bool) -
         let _ = fs.err(Errcode::trigger_pointer);
     }
 
-    let mut msg = log_msg_ratelimited!(fs);
+    let mut msg = ratelimit!(fs.log()).msg();
     prt!(&mut msg, "Error while {} key:\n", if insert { "inserting" } else { "deleting" });
     fs.dev_missing_bkey_msg(k, dev, &mut msg)
 }
@@ -552,7 +552,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: Btree, level: u32, k: BkeySC
 #[cold]
 fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut msg = log_msg_ratelimited!(fs);
+    let mut msg = ratelimit!(fs.log()).msg();
 
     prt!(&mut msg, "extent doesn't match stripe {idx}, not updating stripe block accounting\n  while marking {}\n",
          k.to_text(fs));
@@ -820,7 +820,7 @@ fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &Dev, b: u64,
 
     let cur = a.v().data_type();
     if cur != DataType::free && data_type != DataType::free && cur != data_type {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "bucket {}:{b} gen {} different types of data in same bucket: {}, {}\nwhile marking {}\n",
              ca.dev_idx, a.v().generation, data_type_str(cur),
              data_type_str(data_type), data_type_str(data_type));

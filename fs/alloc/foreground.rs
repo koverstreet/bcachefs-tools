@@ -81,7 +81,6 @@ use crate::util::futex::EventCount;
 use crate::util::hash::{hash_64, Fold};
 use crate::data_structures::inline_vec::InlineVec;
 use crate::os::kernel::{jiffies, time_after, unlikely, HZ};
-use crate::util::log::{print_str, LogLevel};
 use crate::util::place::Contained;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
@@ -1387,7 +1386,7 @@ impl Fs {
             self.journal.to_text(&mut out.indent(2));
         }
 
-        print_str(self, LogLevel::ERR, &mut buf);
+        self.log().err(&buf);
     }
 }
 

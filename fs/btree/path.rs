@@ -25,7 +25,6 @@ use crate::fs::Fs;
 use crate::types::{bits_to_longs, Lent};
 use crate::util::alloc::kvzalloc_nofail;
 use crate::util::backtrace::prt_symbol;
-use crate::util::log::LogMsg;
 use crate::util::rcu::rcu_assign_pointer;
 use crate::util::Printbuf;
 
@@ -1407,7 +1406,7 @@ impl BtreeTrans<'_> {
     }
 
     fn dump_paths_updates_as_is(&self, paths: &Paths<'_>) {
-        let mut msg = LogMsg::new(self.fs());
+        let mut msg = self.fs().log().msg();
         self.paths_to_text_as_is(&mut msg, paths);
         self.updates_to_text(&mut msg);
     }

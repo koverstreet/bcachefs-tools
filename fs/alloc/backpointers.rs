@@ -58,7 +58,6 @@ use crate::init::progress::Progress;
 use crate::locking::MemallocFlags;
 use crate::util::alloc::Vec;
 use crate::os::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
-use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::data_structures::sort::heapsort_by;
 use crate::util::vstructs::{plain_bytes, Unvalidated};
@@ -275,7 +274,7 @@ fn backpointer_mod_err(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, new_bp: &Bk
     }
 
     let new_bp = BkeySC::<Backpointer>::from(new_bp);
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     if insert {
         prt!(&mut msg, "existing backpointer found when inserting {}\n", new_bp.to_text(fs));
         let mut out = msg.indent(2);

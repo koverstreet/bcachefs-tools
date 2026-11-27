@@ -6,11 +6,6 @@
 //!
 //! In-kernel each message is prefixed with the filesystem's name; userspace
 //! prints it bare.
-//!
-//! What C shares - struct bch_log_msg, and the C this calls - is declared here
-//! too: util/log_gen.h.
-
-#![allow(non_camel_case_types)]
 
 #[cfg(kernel)]
 use crate::c;
@@ -18,25 +13,8 @@ use crate::fs::{Dev, Fs};
 use crate::opts::Opts;
 use crate::errcode::BchError;
 use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
-use core::ffi::CStr;
 use core::panic::Location;
 use core::sync::atomic::Ordering;
-use cstruct_macros::bch_enum;
-
-
-#[bch_enum(closed)]
-#[repr(u32)]
-pub enum KernLoglevel {
-    LOGLEVEL_emerg = 0,
-    LOGLEVEL_alert = 1,
-    LOGLEVEL_crit = 2,
-    LOGLEVEL_err = 3,
-    LOGLEVEL_warning = 4,
-    LOGLEVEL_notice = 5,
-    LOGLEVEL_info = 6,
-    LOGLEVEL_debug = 7,
-}
-
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
 #[derive(Clone, Copy)]
@@ -60,76 +38,12 @@ impl LogLevel {
     }
 }
 
-/// Print @msg at @level: what a Log level comes to.
-pub fn log(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
-    print(fs, level.0, true, msg, true)
-}
-
-/// @msg at @level, of no filesystem - there isn't one yet: pr_err() and the
-/// rest of printk().
-pub fn log_no_fs(level: LogLevel, msg: &dyn ToText) {
-    printk(level, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
-        msg.to_text(out);
-        out.newline();
-    }))
-}
-
-/// @msg at @level, as it stands, where @opts says: its stdio redirect,
-/// in-kernel, if it has one - a fsck through the ioctl's - else printk().
-/// Of no filesystem, before there's one.
-pub fn log_opts(opts: &Opts, level: LogLevel, msg: &dyn ToText) {
-    #[cfg(kernel)]
-    if opts.stdio != 0 {
-        let mut buf = Printbuf::new();
-        msg.to_text(&mut buf);
-        // SAFETY: @opts' stdio is the fsck thread's redirect, live for as
-        // long as its opts are
-        let stdio = unsafe { &*(opts.stdio as usize as *const crate::os::thread_with_file::StdioRedirect) };
-        let _ = stdio.write(true, buf.as_bytes());
-        return;
-    }
-    #[cfg(not(kernel))]
-    let _ = opts;
-    printk(level, msg)
-}
-
-/// @msg at @level, as it stands.
-fn printk(level: LogLevel, msg: &dyn ToText) {
-    let mut buf = Printbuf::new();
-    buf.write_bytes(&[0x01, level.0]);
-    msg.to_text(&mut buf);
-    printk_buf(&buf)
-}
-
-/// @buf, which starts with its KERN_SOH and level, to the log as data: a '%'
-/// in it is text.
-fn printk_buf(buf: &Printbuf) {
-    crate::os::printk::printk(buf.as_c_str())
-}
-
-/// log(), without the newline: a line for log_cont() to finish.
-pub fn log_start(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
-    print(fs, level.0, true, msg, false)
-}
-
-/// The rest of the line log_start() began: KERN_CONT.
-pub fn log_cont(fs: &Fs, msg: &dyn ToText) {
-    print(fs, b'c', false, msg, true)
-}
-
 /// @msg at printk level @level, after the filesystem's name if @prefix, and
-/// a newline if @newline.
+/// a newline if @newline, in one printk: Log::info_start() and cont()'s, a line
+/// a KERN_CONT finishes.
 fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
-    // A level sets the one continuations - KERN_CONT, anything not a digit -
-    // print at.
-    let loglevel = if level.is_ascii_digit() {
-        let l = u32::from(level - b'0');
-        fs.prev_loglevel.store(l, Ordering::Relaxed);
-        l
-    } else {
-        fs.prev_loglevel.load(Ordering::Relaxed)
-    };
-    if loglevel > max_loglevel(fs) {
+    // KERN_CONT, anything not a digit, is at the previous level
+    if loglevel(fs, level.is_ascii_digit().then(|| level - b'0')).is_none() {
         return;
     }
 
@@ -152,29 +66,26 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
         let _ = stdio.write(true, &buf.as_bytes()[2..]);
         return;
     }
-    printk_buf(&buf)
+    crate::os::printk::printk(buf.as_c_str())
 }
 
-/// The filesystem's loglevel: the most verbose level printed.
-fn max_loglevel(fs: &Fs) -> u32 {
-    match fs.loglevel.load(Ordering::Relaxed) {
+/// The level a message at @level - None, the previous message's - prints at,
+/// if the filesystem's loglevel lets it through. A level given is the one
+/// what follows continues at.
+fn loglevel(fs: &Fs, level: Option<u8>) -> Option<u32> {
+    let level = match level {
+        Some(l) => {
+            fs.prev_loglevel.store(l.into(), Ordering::Relaxed);
+            u32::from(l)
+        }
+        None => fs.prev_loglevel.load(Ordering::Relaxed),
+    };
+    let max = match fs.loglevel.load(Ordering::Relaxed) {
         0 if fs.opts().verbose() => 7,
         0 => 6,
         l => l,
-    }
-}
-
-/// @msg at @level after device @ca's name, as C's bch_dev_log() - in
-/// userspace too, unlike the filesystem's.
-pub fn log_dev(ca: &Dev, level: LogLevel, msg: &dyn ToText) {
-    let msg = crate::util::printbuf::Msg(|out: &mut Printbuf| {
-        #[cfg(kernel)]
-        write!(out, "bcachefs ({ca}): ");
-        #[cfg(not(kernel))]
-        write!(out, "{ca}: ");
-        msg.to_text(out);
-    });
-    print(ca.fs(), level.0, false, &msg, true)
+    };
+    (level <= max).then_some(level)
 }
 
 /// Print @msg at @level as it stands, one line at a time with no prefix.
@@ -213,23 +124,14 @@ pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::os::thread_w
 /// @s at printk level @level - None, the previous message's - if the
 /// filesystem's loglevel lets it through. Indent left after the last newline
 /// isn't printed.
-pub fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
+fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
     let trimmed = s.len() - s.iter().rev().take_while(|&&b| b == b' ').count();
     let len = if trimmed == 0 || s[trimmed - 1] == b'\n' { trimmed } else { s.len() };
     if len == 0 {
         return;
     }
 
-    let level = match level {
-        Some(l) => {
-            fs.prev_loglevel.store(l.into(), Ordering::Relaxed);
-            u32::from(l)
-        }
-        None => fs.prev_loglevel.load(Ordering::Relaxed),
-    };
-    if level > max_loglevel(fs) {
-        return;
-    }
+    let Some(level) = loglevel(fs, level) else { return };
 
     #[cfg(kernel)]
     if let Some(stdio) = stdio_redirect(fs, false) {
@@ -240,7 +142,7 @@ pub fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
     #[cfg(kernel)]
     let prefix: &[u8] = if level < 8 { &[0x01, b'0' + level as u8] } else { &[0x01] };
     #[cfg(not(kernel))]
-    let prefix: &[u8] = &[];
+    let prefix: &[u8] = { let _ = level; &[] };
     print_lines(prefix, s)
 }
 
@@ -276,7 +178,7 @@ fn lines_under(lines: &[u8], limit: usize) -> Option<usize> {
 }
 
 /// @lines to printk(), each chunk after @prefix.
-pub fn print_lines(prefix: &[u8], lines: &[u8]) {
+fn print_lines(prefix: &[u8], lines: &[u8]) {
     // SAFETY: released below, if taken
     #[cfg(kernel)]
     let locked = unsafe { c::console_trylock() } != 0;
@@ -300,39 +202,24 @@ pub fn print_lines(prefix: &[u8], lines: &[u8]) {
 /// A message built up in pieces and printed when dropped - C's
 /// CLASS(bch_log_msg). Continuation lines are indented under the first and
 /// raw `\t`/`\r` columns aligned; it goes out whole, through
-/// print_str(), unless suppressed - by
-/// count_fsck_err(), when it's a repeat or being ratelimited.
+/// print_bytes(), unless suppressed - ratelimited, or by count_fsck_err(), when
+/// it's a repeat. Log::msg() starts one; Log::at() is one written whole.
 pub struct LogMsg<'a> {
-    fs:    &'a Fs,
+    log:   Log<'a>,
     level: LogLevel,
     msg:   Printbuf,
 }
 
-/// @name's prefix, in-kernel, and the continuation indent.
-pub fn log_msg_start(out: &mut Printbuf, name: &CStr) {
-    out.indent_add_nextline(2);
-    #[cfg(kernel)]
-    write!(out, "bcachefs ({}): ", name.to_str().unwrap_or("?"));
-    #[cfg(not(kernel))]
-    let _ = name;
-}
-
 impl<'a> LogMsg<'a> {
-    /// At err.
-    pub fn new(fs: &'a Fs) -> Self {
-        Self::with_level(fs, LogLevel::ERR)
-    }
-
-    pub fn with_level(fs: &'a Fs, level: LogLevel) -> Self {
-        let mut msg = Printbuf::new();
-        log_msg_start(&mut msg, fs.name());
-        LogMsg { fs, level, msg }
-    }
-
     /// For a message whose level depends on how things turned out.
     pub fn set_level(&mut self, level: LogLevel) {
         self.level = level;
     }
+
+    pub fn with_level(mut self, level: LogLevel) -> Self { self.level = level; self }
+    pub fn notice(mut self) -> Self  { self.level = LogLevel::NOTICE; self }
+    pub fn info(mut self) -> Self    { self.level = LogLevel::INFO; self }
+    pub fn verbose(mut self) -> Self { self.level = LogLevel::DEBUG; self }
 }
 
 impl core::ops::Deref for LogMsg<'_> {
@@ -351,7 +238,7 @@ impl Drop for LogMsg<'_> {
         }
 
         self.msg.tabstop_align();
-        print_bytes(self.fs, Some(self.level.num()), self.msg.as_bytes());
+        self.log.print(self.level, self.msg.as_bytes());
     }
 }
 
@@ -373,32 +260,6 @@ macro_rules! ratelimit {
     }};
 }
 
-/// A LogMsg at err, suppressed while this call site is ratelimited: C's
-/// CLASS(bch_log_msg_ratelimited).
-///
-/// `log_msg_ratelimited!(fs, i, N)` gives the call site N ratelimit states and
-/// uses the i'th: an IO error path's recovered errors and its failures each
-/// get their own, so a stream of one can't ratelimit away the other.
-#[macro_export]
-macro_rules! log_msg_ratelimited {
-    ($fs:expr) => {
-        $crate::log_msg_ratelimited!($fs, 0, 1)
-    };
-    ($fs:expr, $idx:expr, $n:expr) => {{
-        static RATELIMIT: [$crate::util::ratelimit::Ratelimit; $n] =
-            [const { $crate::util::ratelimit::Ratelimit::new() }; $n];
-        let fs: &$crate::fs::Fs = $fs;
-        let mut msg = $crate::util::log::LogMsg::new(fs);
-        msg.set_suppressed(fs.ratelimit_suppress(&RATELIMIT[$idx], &$crate::here_str!()));
-        msg
-    }};
-}
-
-/// As C's should_print_err(): a restart isn't an error worth reporting.
-pub fn should_print_err(err: &BchError) -> bool {
-    !err.is_restart()
-}
-
 /// Where a message goes: the filesystem's log, or a device's - after its name
 /// - maybe ratelimited. @msg is anything ToText; message!() makes one from a
 /// format string.
@@ -409,24 +270,44 @@ pub fn should_print_err(err: &BchError) -> bool {
 /// Rust devs, please fix this.
 #[derive(Clone, Copy)]
 pub struct Log<'a> {
-    fs:        &'a Fs,
-    dev:       Option<&'a Dev>,
+    to:        To<'a>,
     ratelimit: Option<(&'a Ratelimit, &'static Location<'static>)>,
+}
+
+/// Whose log: a filesystem's - or a device's, after its name - with its
+/// loglevel and stdio redirect; @opts', before there's a filesystem, which
+/// may be a fsck's redirect; or none, printk() as it stands.
+#[derive(Clone, Copy)]
+enum To<'a> {
+    Fs(&'a Fs),
+    Dev(&'a Dev),
+    Opts(&'a Opts),
+    NoFs,
 }
 
 impl Fs {
     pub fn log(&self) -> Log<'_> {
-        Log { fs: self, dev: None, ratelimit: None }
+        Log { to: To::Fs(self), ratelimit: None }
     }
 }
 
 impl Dev {
     pub fn log(&self) -> Log<'_> {
-        Log { fs: self.fs(), dev: Some(self), ratelimit: None }
+        Log { to: To::Dev(self), ratelimit: None }
+    }
+}
+
+impl Opts {
+    /// The log of a filesystem not yet opened with these options.
+    pub fn log(&self) -> Log<'_> {
+        Log { to: To::Opts(self), ratelimit: None }
     }
 }
 
 impl<'a> Log<'a> {
+    /// No filesystem's: there isn't one, or it isn't known - printk().
+    pub const NO_FS: Log<'static> = Log { to: To::NoFs, ratelimit: None };
+
     /// Suppressed while @rs is, which names this call site when it is: a
     /// state of the filesystem's, or one of the call site's own -
     /// ratelimit!().
@@ -435,13 +316,92 @@ impl<'a> Log<'a> {
         Log { ratelimit: Some((rs, Location::caller())), ..self }
     }
 
-    pub fn at(self, level: LogLevel, msg: &dyn ToText) {
-        if let Some((rs, at)) = self.ratelimit && self.fs.ratelimit_suppress(rs, at) {
-            return;
+    fn fs(&self) -> Option<&'a Fs> {
+        match self.to {
+            To::Fs(fs)  => Some(fs),
+            To::Dev(ca) => Some(ca.fs()),
+            _           => None,
         }
-        match self.dev {
-            Some(ca) => log_dev(ca, level, msg),
-            None     => log(self.fs, level, msg),
+    }
+
+    /// Whether the ratelimit, if there is one, drops this message: with the
+    /// ratelimit_errors option, where there are options.
+    fn suppressed(&self) -> bool {
+        let Some((rs, at)) = self.ratelimit else { return false };
+        let enabled = match self.to {
+            To::Fs(fs)     => fs.opts.ratelimit_errors.get() != 0,
+            To::Dev(ca)    => ca.fs().opts.ratelimit_errors.get() != 0,
+            To::Opts(opts) => opts.ratelimit_errors != 0,
+            To::NoFs       => true,
+        };
+        enabled && !rs.allow(at)
+    }
+
+    /// A message at err, built up and printed when dropped - suppressed now,
+    /// if it's ratelimited and over the limit.
+    pub fn msg(self) -> LogMsg<'a> {
+        let mut msg = Printbuf::new();
+        msg.indent_add_nextline(2);
+        self.prefix(&mut msg);
+        msg.set_suppressed(self.suppressed());
+        LogMsg { log: self, level: LogLevel::ERR, msg }
+    }
+
+    /// Whose message it is: in-kernel, the filesystem's or device's name -
+    /// a device's in userspace too, where the filesystem's is implicit.
+    fn prefix(&self, out: &mut Printbuf) {
+        match self.to {
+            #[cfg(kernel)]
+            To::Fs(fs)  => { write!(out, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?")); }
+            #[cfg(kernel)]
+            To::Dev(ca) => { write!(out, "bcachefs ({ca}): "); }
+            #[cfg(not(kernel))]
+            To::Dev(ca) => { write!(out, "{ca}: "); }
+            _ => {}
+        }
+    }
+
+    /// @msg's bytes, at @level, where this log goes.
+    fn print(&self, level: LogLevel, msg: &[u8]) {
+        match self.to {
+            To::Fs(fs)  => print_bytes(fs, Some(level.num()), msg),
+            To::Dev(ca) => print_bytes(ca.fs(), Some(level.num()), msg),
+            To::Opts(opts) => {
+                #[cfg(kernel)]
+                if opts.stdio != 0 {
+                    // SAFETY: @opts' stdio is the fsck thread's redirect, live
+                    // for as long as its opts are
+                    let stdio = unsafe { &*(opts.stdio as usize as *const crate::os::thread_with_file::StdioRedirect) };
+                    let _ = stdio.write(true, msg);
+                    return;
+                }
+                #[cfg(not(kernel))]
+                let _ = opts;
+                print_lines(&level.prefix(), msg)
+            }
+            To::NoFs => print_lines(&level.prefix(), msg),
+        }
+    }
+
+    pub fn at(self, level: LogLevel, msg: &dyn ToText) {
+        let mut m = self.msg();
+        m.level = level;
+        msg.to_text(&mut m);
+    }
+
+    /// @msg at info, with no newline: a line for cont() to finish, in one
+    /// printk each - KERN_CONT. Not ratelimited, and a filesystem's.
+    pub fn info_start(self, msg: &dyn ToText) {
+        match self.fs() {
+            Some(fs) => print(fs, LogLevel::INFO.0, true, msg, false),
+            None     => self.info(msg),
+        }
+    }
+
+    /// The rest of the line info_start() began.
+    pub fn cont(self, msg: &dyn ToText) {
+        if let Some(fs) = self.fs() {
+            print(fs, b'c', false, msg, true)
         }
     }
 
@@ -459,7 +419,7 @@ impl<'a> Log<'a> {
     pub fn err_fn<T, E: Copy + Into<BchError>>(self, result: Result<T, E>) -> Result<T, E> {
         if let Err(e) = &result {
             let e: BchError = (*e).into();
-            if should_print_err(&e) {
+            if !e.is_restart() {
                 let at = Location::caller();
                 self.err(crate::message!("{}:{}: error {}", at.file(), at.line(), e.msg()));
             }
@@ -472,7 +432,7 @@ impl<'a> Log<'a> {
     pub fn err_msg<T, E: Copy + Into<BchError>>(self, result: Result<T, E>, msg: &dyn ToText) -> Result<T, E> {
         if let Err(e) = &result {
             let e: BchError = (*e).into();
-            if should_print_err(&e) {
+            if !e.is_restart() {
                 let at = Location::caller();
                 self.err(crate::message!("{}:{}: error {} {}", at.file(), at.line(), msg, e.msg()));
             }
@@ -523,7 +483,7 @@ macro_rules! warn_once {
     }};
     ($cond:expr, no_fs, $($msg:tt)*) => {
         $crate::warn_once!(@once $cond,
-            $crate::util::log::log_no_fs($crate::util::log::LogLevel::ERR, $crate::message!($($msg)*)))
+            $crate::util::log::Log::NO_FS.err($crate::message!($($msg)*)))
     };
     ($cond:expr, $fs:expr, $($msg:tt)*) => {
         $crate::warn_once!(@once $cond, $fs.log().err($crate::message!($($msg)*)))

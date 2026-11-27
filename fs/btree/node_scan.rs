@@ -27,7 +27,6 @@ use crate::util::alloc::Vec;
 use crate::os::bio::{Bio, BioBox, BioOwner};
 use crate::data_structures::{eytzinger::Eytzinger0, heap::{MinHeap, PeekMut}, sort::dedup_by};
 use crate::os::kernel::{cond_resched, jiffies, local_clock, sort_nonatomic, time_after, HZ, PAGE_SIZE};
-use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::util::par::{self, Backend};
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, Head};
@@ -128,7 +127,7 @@ fn dump_nodes(fs: &Fs, what: &str, nodes: &[FoundBtreeNode]) -> bool {
             n.to_text(&mut out, fs);
         }
     }
-    print_str(fs, LogLevel::INFO, &mut buf);
+    fs.log().info(&buf);
     true
 }
 
@@ -316,7 +315,7 @@ impl<'f> DevScan<'f> {
 
 fn read_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     par::scope(Backend::Kthreads, fs.tasks(), |sc| {
-        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+        let mut msg = fs.log().msg().notice();
         prt!(&mut msg, "scanning for btree nodes on");
 
         for ca in fs.online_members().filter(|ca| ca.mi.get().data_allowed.contains(DataType::btree.into())) {
@@ -408,8 +407,8 @@ fn scan_for_btree_nodes(fs: &Fs) -> Result<(), BchError> {
     });
     nodes.truncate(kept);
 
-    if let Some(mut ignored) = ignored {
-        print_str(fs, LogLevel::INFO, &mut ignored);
+    if let Some(ignored) = ignored {
+        fs.log().info(&ignored);
     }
 
     sort_nonatomic(&mut nodes, |l, r| l.pos().cmp(&r.pos()));

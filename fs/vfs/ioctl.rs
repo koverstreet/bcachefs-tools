@@ -52,7 +52,6 @@ use super::super_block::SuperBlock;
 use crate::os::ioctl::{arg, input, no_arg, output, vstruct, UserArg, UserStr};
 use crate::util::ioctl::{dir, Ioctl};
 use crate::os::kernel::{capable, current_fsgid, current_fsuid, current_umask, Capability};
-use crate::util::log::LogMsg;
 use crate::util::printbuf::Printbuf;
 use crate::os::iov_iter::IovIter;
 use crate::vfs::{direct::direct_io_read, inode::{InodeInfo, InodeRef}};
@@ -423,7 +422,7 @@ fn goingdown(sb: &SuperBlock, user: UserArg<u32>) -> Result<(), BchError> {
     }
     let flags = user.read()?;
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     msg.set_suppressed(true); /* cleared by ERO */
     prt!(&mut *msg, "shutdown by ioctl type {flags}");
 

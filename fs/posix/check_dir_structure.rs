@@ -38,7 +38,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::subvolume;
 use crate::posix::dirent::{self, Dirent};
 use crate::posix::inode::{Inodes, InodeUnpacked};
-use crate::util::{alloc::Vec, Printbuf, log::LogMsg};
+use crate::util::{alloc::Vec, Printbuf};
 use crate::{message, here, inode_fsck_err, prt};
 use crate::format::Btree;
 
@@ -263,7 +263,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_, Inodes>) -> Res
 
             // The dirent is gone, and the name with it, but bi_dir says which directory:
             // print its path. A restart propagates to the commit loop, unprinted.
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             write!(msg, "unreachable inode, naming dirent missing; was in directory ");
             if let Err(e) = namei::inum_snapshot_to_path(t, inode.bi_dir, snapshot, &mut msg) {
                 msg.set_suppressed(true);

@@ -18,7 +18,6 @@ use crate::locking::{six::SixHold, six::SixLockType::{self, SIX_LOCK_read}};
 use crate::prt;
 use crate::types::L1_CACHE_BYTES;
 use crate::os::kernel::{likely, prefetch, race_fault, unlikely};
-use crate::util::log::LogMsg;
 
 fn btree_node_mem_ptr<'f>(fs: &'f Fs, k: &BkeyI) -> Option<&'f BtreeNode> {
     let p = BkeySC::from(k).arm::<BtreePtrV2>()?;
@@ -35,7 +34,7 @@ fn btree_bad_header(fs: &Fs, b: LockedNode<'_, BtreeNode>) {
 
     let contents = b.contents();
     let data = contents.data();
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(msg, "cached btree node header doesn't match expected (memory corruption?)\nexpected: ");
     btree_id_level_to_text(&mut msg, Btree(b.c.btree_id.get().into()), b.c.level.get().into());
     prt!(msg, "\nptr: ");

@@ -18,7 +18,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, BkeyOps};
-use crate::util::{vstructs::Unvalidated, log::should_print_err, max_of, Printbuf};
+use crate::util::{vstructs::Unvalidated, max_of, Printbuf};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::{AllocWait, OpenBuckets, Watermark};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans,
@@ -113,7 +113,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: SubvolInum, iter: &m
 
     match &ret {
         Ok(()) if sectors_allocated != 0 => fs.io_clock[WRITE].increment(sectors_allocated),
-        Err(e) if should_print_err(e) => {
+        Err(e) if !e.is_restart() => {
             let mut buf = Printbuf::new();
             let pos = iter.pos();
             let _ = t.trans().lockrestart_do(|t| {

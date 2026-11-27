@@ -37,7 +37,6 @@ use crate::init::error::count_fsck_err;
 use crate::debug::trace::events;
 use crate::sb::errors::SbErrorId;
 use crate::os::kernel::{likely, unlikely};
-use crate::util::log::LogMsg;
 use crate::prt;
 use core::ops::ControlFlow;
 use crate::format::{Bpos, Btree, BkeyType};
@@ -270,7 +269,7 @@ impl<'t> TransAttempt<'_, 't> {
         let fs = self.fs();
         let (inum, snapshot) = (inode.offset, inode.snapshot);
 
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut *msg, "inode {inum} snapshot {snapshot} i_sectors underflow: {} + {} < 0",
              bi_sectors, *i_sectors_delta);
 

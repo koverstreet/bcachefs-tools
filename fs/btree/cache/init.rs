@@ -10,7 +10,7 @@ use crate::fs::Fs;
 use crate::locking::six::six_lock_counts;
 use crate::prt;
 use crate::os::kernel::cond_resched;
-use crate::util::{log::LogMsg, place::{Contained, PlacedDrop}};
+use crate::util::{place::{Contained, PlacedDrop}};
 use crate::locking::six::SixLockType::{SIX_LOCK_intent, SIX_LOCK_read, SIX_LOCK_write};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
@@ -28,7 +28,7 @@ fn btree_cache_exit_locked_dump(fs: &Fs, lists: &BtreeCacheGuard<'_>, b: &BtreeN
     let counts = six_lock_counts(lock);
     let state = b.cache_state(lists);
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(msg, "{what} on {} node at cache_exit\n",
          if state == State::FREEABLE { "freeable" } else { "live" });
     prt!(msg, "btree={} level={} cache_state={} flags=0x{:x} hash_val=0x{:x}\n",

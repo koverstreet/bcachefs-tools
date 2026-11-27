@@ -16,7 +16,6 @@ use crate::os::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, 
 use crate::os::workqueue::Queue;
 use crate::util::backtrace::prt_current_backtrace;
 use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
-use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -928,7 +927,7 @@ pub(crate) fn btree_bitmap_gc_schedule(fs: &Fs) {
         return;
     }
 
-    let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+    let mut msg = fs.log().msg().notice();
     msg.set_suppressed(true); // run_explicit() unsuppresses
 
     let mut want_schedule = false;
@@ -1199,7 +1198,7 @@ impl Fs {
 
     /// dev_missing_bkey_msg(), logged.
     pub fn dev_missing_bkey(&self, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
-        self.dev_missing_bkey_msg(k, dev, &mut LogMsg::new(self))
+        self.dev_missing_bkey_msg(k, dev, &mut self.log().msg())
     }
 
     /// A pointer to device @dev, which there isn't, from where there's no key
@@ -1211,14 +1210,11 @@ impl Fs {
         }
 
         let _noreclaim = MemallocFlags::noreclaim();
-        let mut buf = Printbuf::new();
-
-        crate::util::log::log_msg_start(&mut buf, self.name());
+        let mut buf = self.log().msg();
         write!(buf, "pointer to {} device {dev}\n",
                if self.devs_removed.test(dev as usize) { "removed" } else { "nonexistent" });
         let _ = prt_current_backtrace(&mut buf, 1);
         self.inconsistent_error(&mut buf);
-        print_str(self, LogLevel::ERR, &mut buf);
     }
 }
 

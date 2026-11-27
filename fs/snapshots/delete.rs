@@ -70,7 +70,7 @@ use crate::locking::{Locked, RwSem};
 use crate::{new_lock, message, fs_inconsistent, fsck_err, prt,
     trans_inconsistent};
 use crate::snapshots::{check_snapshots, snapshot};
-use crate::util::{alloc::Vec, log::{self, LogLevel, LogMsg}, Printbuf};
+use crate::util::{alloc::Vec, log::LogMsg, Printbuf};
 use crate::data_structures::eytzinger::Eytzinger1;
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -478,7 +478,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
            (subvol.state().get() != SubvolumeState::deleted.0 &&
             fs.version_upgrade_complete() >=
             MetadataVersion::per_dev_fragmentation_lru) {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             let _ = writeln!(msg, "deleting node with bad subvolume pointer:");
             prt!(&mut msg, "{}", (&s).to_text(fs));
             return fs.throw(Errcode::EINVAL_snapshot_delete_bad_subvol);
@@ -500,11 +500,11 @@ fn refusal_to_text(trans: &TransGuard<'_>, ret: &Result<(), BchError>, id: u32, 
     let Err(e) = ret else { return };
 
     let mut msg = if *e == Errcode::EINVAL_snapshot_delete_has_two_children.into() {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         let _ = writeln!(msg, "deleting node with two children:");
         msg
     } else if *e == Errcode::EINVAL_snapshot_delete_interior_at_runtime.into() {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         let _ = writeln!(msg, "deleting interior node {id} with child {} at runtime:",
                          fs.snapshots.first_child(id));
         msg
@@ -664,7 +664,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, Sna
     let fs = t.fs();
     let id = u.k().p.offset as u32;
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(&mut msg, "{}\n", u.to_text(fs));
 
     if u.v().children()[1] != 0 {
@@ -984,7 +984,7 @@ fn delete_dead_snapshot_keys_v2(trans: &TransGuard<'_>, run: &Run<'_>) -> Result
         // scan doesn't use the index either - rescan with it, on the btrees
         // accounting named and no others.
         let _ = write!(msg, "\nfalling back to the v1 scan");
-        log::print_str(fs, LogLevel::NOTICE, &mut msg);
+        fs.log().notice(&msg);
 
         // Retarget the progress indicator: it was initialized for the inodes
         // btree, which is not what we're about to walk. Nothing after this
@@ -1167,7 +1167,7 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
        (live_child == id ||
         !fs.snapshots.exists(live_child) ||
         !snapshot::is_ancestor(t, live_child, id)) {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
 
         let _ = writeln!(msg, "snapshot deletion found damaged topology (resolved live child {live_child}):");
         prt!(&mut msg, "{}", k.to_text(fs));
@@ -1442,7 +1442,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
 
     if !delete.is_empty() {
         {
-            let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+            let mut msg = fs.log().msg().notice();
 
             let _ = writeln!(msg, "Deleting interior snapshot nodes forces check_snapshots:");
             passes::run_explicit(fs, &mut msg, RecoveryPass::check_snapshots,

@@ -27,7 +27,6 @@ use crate::fs::Fs;
 use crate::posix::inode_opts::{get_fs, get_io_opts};
 use crate::debug::trace::events;
 use crate::util::alloc::{Global, Vec};
-use crate::util::log::LogMsg;
 use crate::locking::{Locked, SpinLockIrq};
 use crate::util::gather::{Fold, Gather, GatherRef, Scope};
 use crate::util::sleep::Sleep;
@@ -345,7 +344,7 @@ fn report_range(fs: &Fs, start: u64, end: u64, bad: &Bad) {
         (true, false) => ", btree nodes with no good replica",
     };
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(&mut msg, "journal scrub: {what}{nodes} in flush range seq {}-{end}, \
                     device(s) not honoring flush/FUA:", start + 1);
     for i in bad.devs.iter() {
@@ -426,7 +425,7 @@ pub fn scrub(fs: &Fs) -> Result<u64, BchError> {
         let nr = found.nodes;
         fs.event_inc_trace(events::journal_scrub_lost_btree_nodes, |out| prt!(out, "{nr} btree nodes"));
 
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "journal scrub: {nr} btree nodes with no good replica, \
                         repairing topology before journal replay\n");
 

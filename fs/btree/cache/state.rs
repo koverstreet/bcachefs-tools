@@ -11,7 +11,7 @@ use crate::format::Btree;
 use crate::fs::Fs;
 use crate::locking::{six::{six_lock_counts, six_lock_wakeup_all, SixLockType}, Guard as _};
 use crate::prt;
-use crate::util::{hash::GoldenRatio, log::LogMsg, rcu::read_lock};
+use crate::util::{hash::GoldenRatio, rcu::read_lock};
 use crate::os::kernel::is_vmalloc_addr;
 use crate::btree::cache::BtreeNodeCacheState as State;
 use core::ptr::NonNull;
@@ -97,7 +97,7 @@ impl Fs {
          */
         if crate::warn_once!(!state_hashed(new) && b.flags.dirty(), self,
                              "dirty node in unhashed state transition") {
-            let mut msg = LogMsg::new(self);
+            let mut msg = self.log().msg();
             prt!(msg, "dirty node in unhashed state transition {} -> {}\n", old as u32, new as u32);
             prt!(msg, "btree={} level={} cache_state={} flags=0x{:x} hash_val=0x{:x}\n",
                  b.c.btree_id.get(), b.c.level.get(), old as u32, b.flags.load().into_bits(), b.hash_val());

@@ -12,7 +12,7 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::debug::trace::events;
 use crate::os::kernel::unlikely;
-use crate::util::{log::{print_lines, LogLevel}, Printbuf};
+use crate::util::{log::Log, Printbuf};
 use core::cmp::Ordering;
 use cstruct_macros::MaybeZeroable;
 
@@ -590,7 +590,7 @@ impl KeyIter {
                 prt!(&mut buf, " [{t} {}]", set.k - keys.sets[t].first_offset());
             }
 
-            print_lines(&LogLevel::ERR.prefix(), buf.as_bytes());
+            Log::NO_FS.err(&buf);
             panic!("btree node iter __next_check");
         }
     }
@@ -660,7 +660,7 @@ impl KeyIter {
             prt!(&mut buf, "set {t} key {}: {}\n", set.k, keys.key_at(set.k).unpack(b));
         }
 
-        print_lines(&LogLevel::ERR.prefix(), buf.as_bytes());
+        Log::NO_FS.err(&buf);
     }
 }
 

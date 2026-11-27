@@ -42,7 +42,7 @@ use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrs
 use crate::init::{damage, error::id};
 use crate::posix::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
-use crate::util::{alloc::Flags, log::LogMsg, rcu::read_lock, Printbuf};
+use crate::util::{alloc::Flags, rcu::read_lock, Printbuf};
 use crate::os::bio::{io_buf, Bio, BioBox, BioSubmit, Buffer};
 use crate::{message, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use crate::data_structures::array_vec::ArrayVec;
@@ -78,7 +78,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: Btree, level: u32, 
     del_iter.iter().traverse(t)?;
     t.delete_at(del_iter.iter(), UpdateTriggerFlags::empty())?;
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(&mut msg, "btree node with no readable replicas, dropping pointer:\n{}", n.to_text(fs));
     damage::note_lost_extents(fs, btree, n);
     crate::init::recovery::btree_lost_data(fs, &mut msg, btree)?;
@@ -481,7 +481,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: Btree, lev
             fs.async_btree_op(b.node(), b.contents(), crate::btree::async_ops::AsyncBtreeOp::Rewrite);
             Ok(())
         })? {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut msg, "btree node with no readable replicas kept in cache, to be rewritten once rw:\n{}",
                  new.as_sc().to_text(fs));
         } else {

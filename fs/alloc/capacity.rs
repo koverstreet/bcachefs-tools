@@ -45,7 +45,7 @@ use crate::debug::trace::events;
 use crate::util::atomic::try_update;
 use crate::util::sleep::Sleep;
 use crate::os::{kernel::unlikely, percpu::{CpuGuard, PerCpuRef, Counters, PerCpu}};
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::util::rcu::read_lock;
 use crate::util::{HumanReadable, Printbuf};
 use crate::alloc::dev_select::{PlacementWriter, Placement};
@@ -1026,8 +1026,7 @@ impl PinnedDrop for FsCapacity {
             let online_reserved = crate::percpu_field!(self.pcpu.get(), counters.online_reserved).sum();
             for (i, &v) in online_reserved.iter().enumerate() {
                 if v != 0 {
-                    log_no_fs(LogLevel::ERR,
-                              &crate::message!("online_reserved not 0 at shutdown: {v} at {} replicas", i + 1));
+                    Log::NO_FS.err(&crate::message!("online_reserved not 0 at shutdown: {v} at {} replicas", i + 1));
                     crate::warn_on!(true);
                 }
             }

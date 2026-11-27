@@ -49,7 +49,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::posix::inode_opts::{reinherit_attrs, InodeOptChange};
 use crate::snapshots::subvolume;
-use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf, ToText, log::LogMsg};
+use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf, ToText};
 use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ops::ControlFlow;
 use crate::format::{Btree, MetadataVersion};
@@ -318,7 +318,7 @@ fn report_bad_unlink(
     name:   &OsStr,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
 
     writeln!(msg, "vfs did bad unlink: wanted inum {}:{}, got {}:{}",
              wanted.subvol, wanted.inum, got.subvol, got.inum);

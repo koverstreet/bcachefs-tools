@@ -28,7 +28,7 @@ use crate::util::{raid, Printbuf};
 use crate::util::alloc::{kbox_pin_init, Flags, KBox};
 use crate::os::bio::{io_buf, IoBuf};
 use crate::util::backref::BackRef;
-use crate::util::log::{LogLevel, LogMsg};
+use crate::util::log::LogLevel;
 use crate::util::ratelimit::Ratelimit;
 use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
@@ -657,7 +657,7 @@ pub fn validate_msg(fs: &Fs, s: BkeySC<'_, Stripe<Validated>>, buf: &mut StripeB
         (Ok(()), false) => (LogLevel::NOTICE, &RATELIMIT_NOTICE),
     };
 
-    let mut msg = LogMsg::with_level(fs, level);
+    let mut msg = fs.log().msg().with_level(level);
     write!(msg, "{}: {}:\n", caller.to_str().unwrap_or("?"),
            if ret.is_err() || damage_matters { "error reading stripe" } else { "damaged stripe blocks, none in use" });
     prt!(&mut msg, "{}\n", s.untyped().to_text(fs));

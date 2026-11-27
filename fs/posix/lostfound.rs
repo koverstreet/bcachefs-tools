@@ -111,7 +111,7 @@ fn create_lostfound(
 ) -> Result<InodeUnpacked, BchError> {
     let fs = t.fs();
 
-    let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+    let mut msg = fs.log().msg().notice();
     write!(msg, "creating ");
     namei::inum_to_path(t, root_inum, &mut msg)?;
     write!(msg, "/lost+found in subvol {} snapshot {snapshot}", root_inum.subvol);
@@ -160,7 +160,7 @@ fn restore_lostfound(
         },
         message!("looking up lost+found inode {inum} in snapshot {snapshot} or {root_snapshot}"))?;
 
-    let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+    let mut msg = fs.log().msg().notice();
     write!(msg, "restoring ");
     namei::inum_to_path(t, root_inum, &mut msg)?;
     write!(msg, "/lost+found in subvol {} snapshot {snapshot}: inode {inum}, deleted here, \

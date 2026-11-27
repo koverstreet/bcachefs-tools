@@ -65,7 +65,6 @@ use crate::btree::iter::{
 };
 use crate::btree::trans::TransGuard;
 use crate::init::error::{id, BkeyValidate};
-use crate::util::log::LogMsg;
 use core::ops::ControlFlow;
 use core::ffi::CStr;
 use cstruct_macros::{bitfield, BitfieldMembers, MaybeZeroable, TypeInfo};
@@ -336,7 +335,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_, FamilyVal<InodesTypes, Unvalidated>>, u: 
         ("bi_casefold",      RecoveryPass::check_dirents),
     ];
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     msg.set_suppressed(true);
     prt!(&mut msg, "inode unpack error at field {fieldnr} ({}) in {}\n", names[fieldnr], k.k);
     u.to_text(&mut msg);
@@ -1906,7 +1905,7 @@ fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut InodeUnpacked, delta
         (id::inode_wrong_nlink, RecoveryPass::check_nlinks)
     };
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     writeln!(msg, "inode {}:{} link count {old} {delta:+} out of range, held at {}",
              inode.bi_inum, inode.bi_snapshot, inode.bi_nlink);
     let log = crate::init::error::count_fsck_err(fs, err, &mut msg);

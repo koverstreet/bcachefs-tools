@@ -12,7 +12,7 @@ use crate::fs::Fs;
 use crate::prt;
 use crate::types::Le64;
 use crate::os::kernel::{likely, random_u64};
-use crate::util::log::{log_no_fs, print_lines, LogLevel};
+use crate::util::log::Log;
 use crate::util::printbuf::Msg;
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Head};
 use crate::util::Printbuf;
@@ -268,7 +268,7 @@ pub struct BsetStats {
 }
 
 fn pr_err(args: fmt::Arguments<'_>) {
-    log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| { let _ = out.write_fmt(args); }));
+    Log::NO_FS.err(&Msg(|out: &mut Printbuf| { let _ = out.write_fmt(args); }));
 }
 
 impl Keys<'_> {
@@ -353,7 +353,7 @@ impl Keys<'_> {
         prt!(&mut buf, "{l_name} key {}\n", l.unpack(b));
         prt!(&mut buf, "{r_name} key {}\n", r.unpack(b));
 
-        print_lines(&LogLevel::ERR.prefix(), buf.as_bytes());
+        Log::NO_FS.err(&buf);
         panic!("__verify_insert_pos");
     }
 

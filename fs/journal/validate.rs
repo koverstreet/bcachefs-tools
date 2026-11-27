@@ -17,7 +17,6 @@ use crate::btree::bkey::{AnyKey, AnyKeySC, BkeyP, BkeySC, ValidateFlags, BkeyVal
 use crate::init::error::{fs_inconsistent, id, mustfix_fsck_err, sb_error_count, BkeyValidate};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::{errors::SbErrorId, members::DevName};
-use crate::util::log::LogMsg;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, cast_plain_slice_mut, ArmRef,
                             Head, Unvalidated, VStructError, from_bytes};
 use crate::util::{DateTime, Printbuf, ToText};
@@ -149,7 +148,7 @@ fn journal_key_lost(fs: &Fs, from: &BkeyValidateContext) {
         return;
     }
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     /* printed only if bch2_btree_lost_data() did something: */
     msg.set_suppressed(true);
 

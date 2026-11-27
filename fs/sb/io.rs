@@ -1101,11 +1101,8 @@ impl SbIo {
         let bytes = bytes_for(u64s as usize);
         let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
         if bytes as u64 > max {
-            use crate::util::log::{log_no_fs, LogLevel};
-            use crate::util::printbuf::Msg;
-            log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
-                prt!(out, "{bdev}: superblock too big: want {bytes} but have {max}");
-            }));
+            use crate::util::log::Log;
+            Log::NO_FS.err(crate::message!("{bdev}: superblock too big: want {bytes} but have {max}"));
             return Err(Errcode::ENOSPC_sb.into());
         }
 
@@ -1529,7 +1526,6 @@ fn read_super_err(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>,
 pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
     -> Result<SbHandle, BchError>
 {
-    use crate::util::log::{log_opts, LogLevel};
     use crate::util::printbuf::Msg;
 
     let mut err = Printbuf::new();
@@ -1541,13 +1537,13 @@ pub fn read_super(path: &CStr, opts: &mut Opts, holder: Option<&Arc<Holder>>)
 
     let name = path.to_bytes();
     match &ret {
-        Err(e) => log_opts(opts, LogLevel::ERR, &Msg(|out: &mut Printbuf| {
+        Err(e) => opts.log().err(&Msg(|out: &mut Printbuf| {
             prt!(out, "bcachefs (");
             out.write_bytes(name);
             prt!(out, "): error reading superblock: {e}\n");
             out.write_bytes(err.as_bytes());
         })),
-        Ok(_) if !err.as_bytes().is_empty() => log_opts(opts, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| {
+        Ok(_) if !err.as_bytes().is_empty() => opts.log().notice(&Msg(|out: &mut Printbuf| {
             prt!(out, "bcachefs (");
             out.write_bytes(name);
             prt!(out, "): ");
@@ -2386,7 +2382,6 @@ fn dev_sbs<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, cas: &'a WriteDevs) -> Resu
 /// fix_safe, which only say so - or another writer's, and the filesystem
 /// goes read-only.
 fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), BchError> {
-    use crate::util::log::LogMsg;
     const READ: MemberErrorType = MemberErrorType::read;
 
     let mut sbs = dev_sbs(fs, sb, cas)?;
@@ -2412,7 +2407,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
         let expected = dev_sb.io.seq;
 
         if read != expected {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(msg, "{}", dev_sb.io.bdev());
             if read < expected {
                 prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
@@ -2482,7 +2477,6 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Co
 #[track_caller]
 fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &WriteDevs,
                 copies: &Copies) -> Result<(), BchError> {
-    use crate::util::log::LogMsg;
 
     let mut degraded_flags = ForceIf::DEGRADED;
     if fs.opts().degraded() == DegradedAction::very {
@@ -2508,7 +2502,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&DevsMask>, cas: &Wr
         return Ok(());
     }
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
 
     // A degraded write (wrote to fewer devices, but still enough to mount)
     // repeats on every superblock write while a device is failing, so

@@ -20,7 +20,6 @@ use crate::util::alloc::{kvzalloc, AllocError, Flags, Vec};
 use crate::util::thin::ThinBox;
 use crate::os::bio::{io_buf, Bio, BioBox, BioOwner, BioSubmit, Buffer, IoBuf};
 use crate::os::kernel::local_clock;
-use crate::util::log::LogMsg;
 use crate::util::par::{self, Backend};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Head, SelfSized,
                             Unvalidated};
@@ -937,7 +936,7 @@ impl<'a> DevReader<'a> {
 
         let mut violations = Printbuf::new();
         if !bucket_seqs_monotonic(bucket_seq, max_bucket, &mut violations) {
-            let mut msg = LogMsg::new(self.fs);
+            let mut msg = self.fs.log().msg();
             prt!(&mut msg, "{}: journal bucket seqs not monotonic\n  \
                             last_seq bucket {} write head bucket {} seq {}:\n",
                  &**self.ca, last_seq_idx, max_bucket, bucket_seq[max_bucket]);
@@ -1130,7 +1129,7 @@ fn journal_check_for_missing(fs: &Fs, entries: &JournalEntries, start_seq: u64, 
 }
 
 fn journal_print_checksum_error(fs: &Fs, j: &Replay) {
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
 
     let csum_type = j.j.csum_type();
     let mut have_good = false;

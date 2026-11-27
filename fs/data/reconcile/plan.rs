@@ -72,7 +72,7 @@ use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::BchError;
 use crate::format::{BkeyType, CsumOpt};
 use crate::fs::Fs;
-use crate::{log_msg_ratelimited, warn_on_once};
+use crate::{ratelimit, warn_on_once};
 use crate::debug::trace::events;
 use crate::util::rcu::read_lock;
 use core::mem::size_of;
@@ -210,7 +210,7 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &InodeOpts) -> Result
     // warning fails the CI test that gets here, making it a reproducer - once,
     // as the same keys come back every pass.
     {
-        let mut msg = log_msg_ratelimited!(fs);
+        let mut msg = ratelimit!(fs.log()).msg();
         write!(msg, "got extent to reconcile but nothing to do, confused\n  {}", k.to_text(fs));
     }
     warn_on_once!(true);

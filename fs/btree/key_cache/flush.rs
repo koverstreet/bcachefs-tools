@@ -15,7 +15,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::format::Btree;
 use crate::fs::{Fs, FsFlag};
 use crate::journal::pins::PinHolder;
-use crate::util::{alloc::{flags, Vec}, log::LogMsg, rcu::read_lock};
+use crate::util::{alloc::{flags, Vec}, rcu::read_lock};
 use crate::{fs_fatal_error, prt};
 use crate::journal::pins::JournalPinType::JOURNAL_PIN_TYPE_key_cache;
 use crate::locking::six::SixLockType::SIX_LOCK_intent;
@@ -33,7 +33,7 @@ use core::sync::atomic::Ordering::Relaxed;
 #[cold]
 #[inline(never)]
 fn bkey_cached_pin_warn(fs: &Fs, ck: LockedNode<'_, BkeyCached>, what: &str) {
-    let mut buf = LogMsg::new(fs);
+    let mut buf = fs.log().msg();
     let key = ck.key.get();
     prt!(buf, "{} {}: dirty {} seq {} pin seq {}, journal last_seq {}",
          Btree(key.btree_id), { key.pos }, ck.dirty() as u32,

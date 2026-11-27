@@ -149,7 +149,6 @@ use crate::os::kernel::{jiffies, jiffies_to_msecs, local_clock, msecs_to_jiffies
 use crate::os::workqueue::{Own, DelayedWork, OnQueue, ReffedWork, Workqueue, WqFlags};
 use crate::util::futex::EventCount;
 use crate::util::rcu::read_lock;
-use crate::util::log::LogMsg;
 use crate::util::sleep::Sleep;
 use crate::util::printbuf::HumanReadable;
 use crate::util::vstructs::Head;
@@ -975,7 +974,7 @@ impl Journal {
             (flags & Watermark::MASK) >= Watermark::reclaim as u32;
 
         if ret {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             msg.set_suppressed(true); /* only print once, when we go ERO */
 
             prt!(&mut *msg, "Journal stuck! Have a pre-reservation but journal full (error {})", error.msg());
@@ -1239,7 +1238,7 @@ impl Journal {
             .next_multiple_of(512 << fs.block_bits()) >> 9) as u32;
         if unlikely(sectors > *g.get_of(&buf.sectors)) {
             let _f = MemallocFlags::noreclaim();
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut *msg, "journal entry overran reserved space: {sectors} > {}\n", g.get_of(&buf.sectors));
             prt!(&mut *msg, "buf u64s {offset} u64s reserved {u64s_reserved} cur_entry_u64s {} block_bits {}\n",
                  self.lock.hot.cur_entry_u64s.get(),
@@ -1358,7 +1357,7 @@ impl Journal {
 
         if unlikely(cur_seq >= JOURNAL_SEQ_MAX) {
             let _f = MemallocFlags::noreclaim();
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut *msg, "cannot start: journal seq overflow\n");
             fs.emergency_read_only_locked(&mut msg, g);
             return fs.throw(Errcode::journal_shutdown);
@@ -1366,7 +1365,7 @@ impl Journal {
 
         if unlikely(fs.journal_seq_is_blacklisted(cur_seq + 1, false)) {
             let _f = MemallocFlags::noreclaim();
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut *msg, "attempting to open blacklisted journal seq {}\n", cur_seq + 1);
             fs.emergency_read_only_locked(&mut msg, g);
             return fs.throw(Errcode::journal_shutdown);
@@ -1856,7 +1855,7 @@ impl Journal {
 
         /* every waiter times out together: one report per time we're stuck */
         if !self.flags.swap(JournalFlag::stuck_reported, true) {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut *msg, "Journal stuck? Waited for {}s, err {}\n",
                  total_wait / HZ as isize, ret.get().err().map_or("", |e| e.msg()));
             self.to_text(&mut msg);
@@ -2053,7 +2052,7 @@ impl Journal {
         if slot.as_ref().as_pin_ref().expect("just made").armed() {
             pin_init::stack_pin_init!(let _timer = Timer::new(timed_out, total_wait));
             if wait.wait_sync(Sleep::UNINTERRUPTIBLE) & FLUSHED == 0 {
-                let mut msg = LogMsg::new(fs);
+                let mut msg = fs.log().msg();
                 prt!(&mut *msg, "journal flush_seq() stuck? Waited {}s for seq {seq}\n", total_wait / HZ);
                 self.to_text(&mut msg);
             }

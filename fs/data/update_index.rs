@@ -47,8 +47,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::posix::inode_opts::get_io_opts;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::debug::trace::{events, TraceEvent};
-use crate::util::{log::LogMsg, Printbuf};
-use crate::log_msg_ratelimited;
+use crate::util::Printbuf;
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::sync::atomic::{fence, Ordering};
@@ -152,7 +151,7 @@ fn merge_ptrs<'t>(t: &TransAttempt<'_, 't>, op: &WriteOp, u: &DataUpdateIndex, o
                                              |i, kill| i.ptrs_in(fs, kill).any(|p| p.cached() == 0));
 
     if replacing_non_cached && ptrs(fs, new).ptrs(fs).any(|p| p.cached() != 0) {
-        let mut msg = log_msg_ratelimited!(fs);
+        let mut msg = crate::ratelimit!(fs.log()).msg();
         write!(msg, "data update tried to replace non cached data with cached:\n");
         key_to_text(&mut msg, fs, op, u, k, new.as_sc(), insert.as_sc());
         return Ok(ControlFlow::Break(next_pos));
@@ -344,7 +343,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, op: &WriteOp, u: &DataUpdateIn
                 op.opts.change_cookie == fs.opt_change_cookie.get()
             }
         {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             write!(msg, "Data update would have reduced extent durability:\n");
             write!(msg, "Old extent {}, new {}, option specifies {}\n",
                    old_durability.total, new_durability.total, opts.data_replicas);
@@ -383,7 +382,7 @@ fn insert_is_extent(fs: &Fs, insert: &BkeyI) -> bool {
         return true;
     }
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     write!(msg, "Got non-extent key to insert in data update path - confused:\n{}",
            BkeySC::from(insert).to_text(fs));
     let counted = count_fsck_err(fs, id::data_update_got_non_extent, &mut msg);
@@ -449,7 +448,7 @@ pub(crate) fn index_update_nowrite(trans: &TransGuard<'_>, u: &DataUpdate) -> Re
     let old = BkeySC::from(u.index.k.as_ref());
     let old_p = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     write!(msg, "data_update_index_update_nowrite():\n");
     write!(msg, "old: {}", old.to_text(fs));
     msg.newline();

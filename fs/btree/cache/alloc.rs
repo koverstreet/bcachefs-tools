@@ -3,7 +3,7 @@
 use super::reclaim::ReclaimFlags;
 use super::{cache_node_struct_alloc, cached_node, NodeBufs, BtreeCacheGuard, BtreeNodeList};
 use crate::btree::bkey::{bkey_val_to_text, BkeyI, BkeySC};
-use crate::util::{alloc::{flags, Flags}, time_stats::TimeStat, log::LogMsg};
+use crate::util::{alloc::{flags, Flags}, time_stats::TimeStat};
 use crate::btree::iter::BtreeTrans;
 use crate::btree::node::{BtreeNode, BtreeWriteType};
 use crate::btree::path::{btree_path_to_text, LockedNode, PathIdx, Paths, Write};
@@ -349,20 +349,20 @@ impl BtreeTrans<'_> {
         ebug_assert!(path.is_none_or(|p| level + 1 == paths[p].level() as usize));
 
         if unlikely(level >= BTREE_MAX_DEPTH as usize) {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(msg, "attempting to get btree node at level {level}, >= max depth {}", BTREE_MAX_DEPTH);
             return Err(fs.topology_error(&mut msg));
         }
 
         if unlikely(!k.k.is_btree_ptr()) {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(msg, "attempting to get btree node with non-btree key ");
             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(k));
             return Err(fs.topology_error(&mut msg));
         }
 
         if unlikely(usize::from(k.k.u64s) > BKEY_BTREE_PTR_U64s_MAX) {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(msg, "attempting to get btree node with too big key ");
             bkey_val_to_text(&mut msg, Some(fs), BkeySC::from(k));
             return Err(fs.topology_error(&mut msg));

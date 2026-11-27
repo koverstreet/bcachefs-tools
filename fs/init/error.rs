@@ -40,7 +40,7 @@ use crate::{prt, new_lock};
 use crate::sb::errors::{FsckFlags, SbErrorId, SbErrorEntryCpu};
 use crate::util::alloc::Vec;
 use crate::os::{kernel::{jiffies, time_after, HZ}, workqueue::Queue};
-use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
+use crate::util::log::{print_str, LogLevel};
 use crate::util::printbuf::Msg;
 use crate::util::prompt::{Choice, Prompt, Question, Reply};
 use crate::util::{Printbuf, ToText};
@@ -225,7 +225,7 @@ pub fn log_fsck_err(ctx: &impl FsckErrCtx, err: SbErrorId, msg: &dyn ToText) -> 
 /// Without offering a repair, for damage another pass owns: counted in the
 /// superblock, and logged unless it's a repeat or being ratelimited.
 pub fn fsck_err_report(fs: &Fs, err: SbErrorId, msg: &dyn ToText) {
-    let mut buf = LogMsg::new(fs);
+    let mut buf = fs.log().msg();
     msg.to_text(&mut buf);
 
     let log = count_fsck_err(fs, err, &mut buf);
@@ -261,7 +261,7 @@ pub fn fs_inconsistent(fs: &Fs, msg: &dyn ToText) -> bool {
 /// Go emergency read-only, logging @msg as a fatal error from @from - if this
 /// is what took us read-only.
 pub fn fs_fatal_error(fs: &Fs, from: &CStr, msg: &dyn ToText) {
-    let mut m = LogMsg::new(fs);
+    let mut m = fs.log().msg();
     m.set_suppressed(true);
 
     prt!(&mut m, "{}: fatal error ", from.to_str().unwrap_or("?"));
@@ -974,18 +974,14 @@ fn panic_after_error(fs: &Fs) -> ! {
 /// too: in a NORECLAIM scope, the message doesn't sleep to grow.
 fn fs_trans_inconsistent(fs: &Fs, t: Option<&TransAttempt<'_, '_>>, msg: &dyn ToText) -> bool {
     let _noreclaim = MemallocFlags::noreclaim();
-    let mut out = Printbuf::new();
-
-    log_msg_start(&mut out, fs.name());
+    let mut out = fs.log().msg();
     msg.to_text(&mut out);
     out.newline();
 
     if let Some(t) = t {
         t.updates_to_text(&mut out);
     }
-    let ret = fs.inconsistent_error(&mut out);
-    print_str(fs, LogLevel::ERR, &mut out);
-    ret
+    fs.inconsistent_error(&mut out)
 }
 
 impl Fs {
@@ -1043,16 +1039,14 @@ pub(crate) fn io_error_work(ca: &Dev) {
         return;
     }
 
-    let mut buf = Printbuf::new();
-    log_msg_start(&mut buf, ca.name().as_cstr());
+    let mut buf = ca.log().msg();
     write!(buf, "writes erroring for {timeout} seconds\n");
 
     let dev = state.dev_set_state(ca, MemberState::ro,
                                   ForceIf::DEGRADED, &mut buf).is_ok();
     write!(buf, "setting {} ro", if dev { "device" } else { "filesystem" });
-    if dev || fs.emergency_read_only(&mut buf) {
-        print_str(fs, LogLevel::ERR, &mut buf);
-    }
+    let print = dev || fs.emergency_read_only(&mut buf);
+    buf.set_suppressed(!print);
 }
 
 // ── Macros: the functions above, with message!() written for you ──────────

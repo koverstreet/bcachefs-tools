@@ -23,7 +23,6 @@ use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::siphash::{SipHash24, SIPHASH_KEY};
 use crate::util::Printbuf;
-use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use bitflags::bitflags;
 use cstruct_macros::MaybeZeroable;
@@ -644,7 +643,7 @@ impl Repair<'_, '_> {
 
         // printed only if every name is taken, with a sample of the dirents
         // already at the fsck_renamed-N names
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         msg.set_suppressed(true);
         write!(msg, "couldn't rename dirent to resolve hash collision: all 1000 \"");
         msg.write_bytes(old_name.as_bytes());

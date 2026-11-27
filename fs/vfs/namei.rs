@@ -31,7 +31,7 @@ use crate::errcode::{Errcode, BchError};
 use crate::posix::{inode, namei, quota, str_hash};
 use crate::posix::quota::{QuotaAcctMode, QuotaWarnings};
 use crate::os::kernel::{current_fsgid, current_fsuid};
-use crate::util::{log::LogMsg, os_str::OsStr};
+use crate::util::os_str::OsStr;
 use crate::os::file::OpeningTmpfile;
 use crate::os::security;
 use crate::posix::xattr::{self, XattrType};
@@ -491,7 +491,7 @@ fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: SubvolI
     -> Result<(), BchError>
 {
     let fs = t.fs();
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
 
     write!(msg, "dirent to missing inode: ({err})\n{}\n in: ", d.k().to_text(fs));
     namei::inum_to_path(t, dir, &mut msg)?;

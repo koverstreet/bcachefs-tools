@@ -10,7 +10,6 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::format::{Bpos, Btree};
 use crate::fs::Fs;
-use crate::util::log::{LogLevel, LogMsg};
 use crate::util::refcount::TryRefcount;
 use crate::{message, btree_trans, prt};
 
@@ -183,7 +182,7 @@ impl Fs {
             });
 
             if split_count != 0 {
-                let mut msg = LogMsg::with_level(self, LogLevel::INFO);
+                let mut msg = self.log().msg().info();
                 prt!(&mut msg, "presplit_shard_boundaries: {split_count} splits in btree {btree}");
             }
 

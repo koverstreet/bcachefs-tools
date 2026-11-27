@@ -23,7 +23,6 @@ use crate::fs::Fs;
 use crate::journal::pins::{PinHolder, JournalPinType};
 use crate::types::Le64;
 use crate::os::kernel::unlikely;
-use crate::util::log::LogMsg;
 
 /// A whiteout for @pos - packed, if it packs - in @b's unwritten whiteouts:
 /// for a deletion of a key a write still has to see deleted.
@@ -301,7 +300,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn insert_topology_check(&self, t: &TransAttempt<'_, '_>, b: LockedNode<'_, BtreeNode>) -> bool {
         let fs = self.fs();
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         msg.set_suppressed(true);
 
         let bad = check_topology_msg(t, b, &mut msg).is_err();

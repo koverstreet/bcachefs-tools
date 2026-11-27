@@ -28,7 +28,6 @@ use super::file::InodeFile;
 use crate::util::gather::Gather;
 use crate::os::kernel::{current_id, ktime_get_coarse_real_ts64, ktime_get_ns, MAX_FILE_SIZE, PAGE_BYTES, PAGE_SECTORS,
                         PAGE_SECTORS_SHIFT};
-use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
@@ -399,7 +398,7 @@ impl InodeInfo {
     #[inline(never)]
     fn i_blocks_not_zero_at_truncate(&self) {
         let fs = self.fs();
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "inode {} truncated to 0 but i_blocks {} (ondisk {})",
              self.inum().inum, self.vfs().blocks(), self.inode().bi_sectors as i64);
 

@@ -57,7 +57,7 @@ use crate::locking::{ExclusiveGuard, Locked, Mutex, SpinLock, SpinLockIrq, TwoSt
     TwoState, TwoStateGuard};
 use crate::{published, prt};
 use crate::posix::quota::{QuotaAcctMode, QuotaWarnings, Qid};
-use crate::util::{ffi::Opaque, log::LogMsg, projections::Volatile, rcu::{read_lock, ReadGuard}};
+use crate::util::{ffi::Opaque, projections::Volatile, rcu::{read_lock, ReadGuard}};
 use crate::os::iattr::{ATTR_ATIME, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
 use crate::os::kernel::HZ;
 use crate::os::workqueue::RawDelayedWork;
@@ -724,7 +724,7 @@ impl InodeInfo {
     fn i_blocks_underflow(&self, IBlocksUnderflow { blocks, sectors }: IBlocksUnderflow) {
         let fs = self.fs();
         let inum = self.inum();
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "subvol {} inode {} i_blocks underflow: {} + {} < 0 (ondisk {})",
              inum.subvol, inum.inum, blocks, sectors, self.inode().bi_sectors as i64);
 

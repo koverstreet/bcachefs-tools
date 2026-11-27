@@ -491,7 +491,6 @@ use crate::init::error::BkeyValidate;
 use crate::opts::data_type_str;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::util::rcu::read_lock;
-use crate::util::log::LogMsg;
 use crate::util::{varint, Join, Printbuf, ToText};
 use crate::util::vstructs::{ArmRef, Unvalidated};
 use crate::util::backtrace::prt_current_backtrace;
@@ -1455,7 +1454,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_, '_>) -> Result
         match alloc_v4_whole_mut(op.new.as_s()) {
             Some(a) => a,
             None => {
-                let mut msg = LogMsg::new(fs);
+                let mut msg = fs.log().msg();
                 prt!(msg, "alloc trigger in {}: key isn't all of a current alloc_v4 - not from alloc_to_v4_mut()\n{}",
                      t.fn_name(), BkeySC::from(&op.new).to_text(fs));
                 fs.emergency_read_only(&mut msg);

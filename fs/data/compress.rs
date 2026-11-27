@@ -53,7 +53,7 @@ use crate::sb::errors::decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
 use crate::os::bio::{BioRange, Mapped};
 use crate::util::{alloc::Box,
-                  late::{Late, SbLock}, log::LogMsg, mempool::Mempool,
+                  late::{Late, SbLock}, mempool::Mempool,
                   volatile::{Out, VolatileSlice}, Printbuf, ToText};
 use crate::os::compress::{lz4, zlib, zstd};
 use core::mem::MaybeUninit;
@@ -563,7 +563,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
         return true;
     }
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     write!(msg, "Decompressing compressed data did not produce the same result ({})", t);
     let trans = btree_trans!(fs);
     let _ = trans.lockrestart_do(|t| crate::init::error::inum_offset_err_msg(t, &mut msg, 0, pos));

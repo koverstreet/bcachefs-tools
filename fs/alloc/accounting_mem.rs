@@ -26,7 +26,6 @@ use crate::locking::{Exclusive, ExclusiveGuard, Guard, Noio, PercpuRwSem, Shared
 use crate::debug::trace::events;
 use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::eytzinger::Eytzinger0;
-use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::os::percpu::{Counters as _, CpuGuard, PerCpuRef, PerCpuU64s};
 use crate::util::printbuf::{Join, Msg};
 use crate::util::{rcu, Printbuf};
@@ -341,7 +340,7 @@ fn read_key(fs: &Fs, entries: &mut Vec<Entry>, k: BkeySC<'_>) -> Result<(), BchE
         let mut buf = Printbuf::new();
         if !can_read_with_devs(r, &fs.devs_online.load(), flags, Some(&mut buf)) {
             fs.missing_devs_to_text(&mut buf);
-            print_str(fs, LogLevel::ERR, &mut buf);
+            fs.log().err(&buf);
             return Err(fs.err(Errcode::insufficient_devices_to_start));
         }
     }
@@ -626,7 +625,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
      */
     mem_gc(fs);
 
-    let mut underflow_err = LogMsg::new(fs);
+    let mut underflow_err = fs.log().msg();
     underflow_err.set_suppressed(true);
 
     let mut usage = FsUsageBase::default();

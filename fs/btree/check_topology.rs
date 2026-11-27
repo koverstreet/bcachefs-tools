@@ -29,7 +29,7 @@ use crate::format::{BkeyType, Bpos, Btree, Bkey, BTREE_MAX_DEPTH};
 use crate::fs::{btree_id_can_reconstruct, btree_id_recovers_from_scan, Fs};
 use crate::init::recovery::btree_lost_data;
 use crate::sb::errors::FsckFlags;
-use crate::util::{log::LogMsg, vstructs::{plain_bytes, plain_bytes_mut}, Printbuf};
+use crate::util::{vstructs::{plain_bytes, plain_bytes_mut}, Printbuf};
 use crate::{message, btree_trans, fsck_err_flags, mustfix_fsck_err,
             mustfix_fsck_err_on, prt};
 
@@ -540,7 +540,7 @@ fn topology_check_root(t: &TransAttempt<'_, '_>, btree: Btree,
         return Ok(());
     };
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(&mut *msg, "btree root {btree} unreadable: {}\n", err.msg());
 
     let mut fake_root = |level| {

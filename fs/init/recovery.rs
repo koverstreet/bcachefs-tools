@@ -31,7 +31,7 @@ use crate::snapshots::snapshot::snapshots_read;
 use crate::snapshots::subvolume;
 use crate::types::Le64;
 use crate::locking::Guard as _;
-use crate::util::{alloc::Vec, log::LogMsg, os_str::{OsStr, OsStrExt}, Printbuf};
+use crate::util::{alloc::Vec, os_str::{OsStr, OsStrExt}, Printbuf};
 use crate::os::kernel::{cond_resched, sort_nonatomic, unlikely};
 use crate::posix::{inode, logged_ops, namei, quota};
 use crate::posix::namei::CreateFlags;
@@ -867,7 +867,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
             keys_sort(fs)?;
         }
         if rewind_seq != 0 {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut msg, "journal scrub: device not honoring flush/FUA, rewinding from seq {} (",
                  journal_start.replay_end);
             fs.journal_seq_datetime_to_text(&mut msg, journal_start.replay_end);
@@ -936,7 +936,7 @@ fn recovery(fs: &Fs) -> Result<(), BchError> {
     }
 
     if error::fsck_errs_seen(fs) {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "errors this recovery:\n");
         error::fsck_err_counts_to_text(&mut msg, fs);
         error::fsck_damaged_paths_to_text(&mut msg, fs);
@@ -1061,7 +1061,7 @@ pub fn fs_recovery(fs: &Fs) -> Result<(), BchError> {
     error::flush_fsck_errs(fs, true);
 
     if let Err(e) = ret {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "unexpected error in fs_recovery(): {}\n", e.msg());
         fs.emergency_read_only(&mut msg);
     }

@@ -18,7 +18,7 @@ use crate::btree::path::{LockedNode, PathIdx, Paths, Write};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::read::BsetHolder;
 use crate::btree::validate::{validate_bset, validate_bset_keys, NodeIo, NodeValidate};
-use crate::{btree_trans, fs_fatal_error, fs_inconsistent, log_msg_ratelimited, prt};
+use crate::{btree_trans, fs_fatal_error, fs_inconsistent, prt};
 use crate::c;
 use crate::data::ptrs::IoFailures;
 use crate::data::extents_format::{BKEY_BTREE_PTR_U64s_MAX, BtreePtrV2};
@@ -40,7 +40,6 @@ use crate::os::bio::{Bio, BioInPlace, BioOwner, BvecMempool};
 use crate::os::kernel::{dump_stack, local_clock, unlikely};
 use crate::os::module::{Quiesced, ThisModule};
 use crate::os::workqueue::Queue;
-use crate::util::log::LogMsg;
 use crate::util::mempool::Mempool;
 use crate::util::task::{exclusive_size, requeue, requeue_on_cpu, Resume, Spawn, TaskSlot};
 use crate::util::vstructs::{cast_plain_mut, cast_plain_slice_mut, plain_bytes, Head, Unvalidated};
@@ -288,12 +287,14 @@ fn report_write_error(fs: &Fs, b: &BtreeNode, key: &NodeKey, ret: Result<(), Bch
      * arriving in the same window.
      */
     let mut msg = if ret.is_ok() && failed.all_dev_removed() {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         msg.set_suppressed(true);
         msg
     } else {
         /* Separate ratelimit_states for hard and soft errors */
-        log_msg_ratelimited!(fs, ret.is_err() as usize, 2)
+        static RATELIMIT: [crate::util::ratelimit::Ratelimit; 2] =
+            [const { crate::util::ratelimit::Ratelimit::new() }; 2];
+        fs.log().ratelimited(&RATELIMIT[ret.is_err() as usize]).msg()
     };
 
     prt!(&mut *msg, "error writing btree node at {}", b.pos_to_text(fs));

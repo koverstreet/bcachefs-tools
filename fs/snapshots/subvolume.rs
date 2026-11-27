@@ -44,7 +44,6 @@ use crate::snapshots::{snapshot, FsSnapshots};
 use crate::util::alloc::Vec;
 use crate::util::place::Contained;
 use crate::util::Printbuf;
-use crate::util::log::{LogLevel, LogMsg};
 use crate::{message, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
 use core::mem::offset_of;
@@ -77,7 +76,7 @@ macro_rules! has_field {
 /// Report @subvol missing, and schedule check_inodes to recreate it.
 #[cold]
 fn missing(fs: &Fs, subvol: u32) -> Result<(), BchError> {
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     writeln!(msg, "missing subvolume {subvol}");
     let log = count_fsck_err(fs, id::subvol_missing, &mut msg);
     msg.set_suppressed(!log);
@@ -476,7 +475,7 @@ fn check_subvol<'a, 't>(
     let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<Snapshot>(t) {
         Ok(r) => r,
         Err(e) if e.matches(c::ENOENT) => {
-            let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+            let mut msg = fs.log().msg().notice();
             prt!(&mut msg, "subvolume points to missing snapshot\n{}\n", s.to_text(fs));
             passes::run_explicit(fs, &mut msg, RecoveryPass::reconstruct_snapshots,
                                  RunRecoveryPassFlags::from_bits_retain(0))?;

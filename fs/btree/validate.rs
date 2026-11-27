@@ -13,7 +13,7 @@ use crate::data::ptrs::BkeyVRead;
 use crate::format::{BkeyType, Btree, MetadataVersion, Bkey, Bset, btree_node, KEY_FORMAT_CURRENT};
 use crate::fs::{Dev, Fs};
 use crate::init::{error::{id, BkeyValidate}, passes::RecoveryPass};
-use crate::util::{vstructs::{Head, Unvalidated}, log::LogMsg, Printbuf, ToText};
+use crate::util::{vstructs::{Head, Unvalidated}, Printbuf, ToText};
 use crate::{bkey_fsck_err_on, prt};
 use core::cmp::Ordering;
 
@@ -148,7 +148,7 @@ impl NodeValidate<'_> {
 
     fn write_err(&self, at: ErrAt, msg: &dyn ToText) -> BchError {
         let (fs, b) = (self.fs, self.b);
-        let mut m = LogMsg::new(fs);
+        let mut m = fs.log().msg();
 
         prt!(&mut m, "corrupt btree node before write at btree {}\n", b.pos_to_text(fs));
         err_msg(&mut m, None, b, at, msg);

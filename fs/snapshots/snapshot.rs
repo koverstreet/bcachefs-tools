@@ -309,7 +309,6 @@ use crate::snapshots::subvolume::SubvolInum;
 use crate::errcode::{Errcode, BchError};
 use crate::fs::{Fs, FsFlag};
 use crate::snapshots::{check_snapshots, delete, subvolume, FsSnapshots};
-use crate::util::log::{LogLevel, LogMsg};
 use crate::util::alloc::{AllocError, Vec};
 use crate::data_structures::bitmap::{BitArray, AtomicBitArray};
 use crate::util::projections::Publish;
@@ -1492,7 +1491,7 @@ pub(crate) fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
     })?;
 
     if nr_empty_interior != 0 {
-        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+        let mut msg = fs.log().msg().notice();
 
         let _ = writeln!(msg, "Found {nr_empty_interior} empty interior snapshot nodes");
         passes::run_explicit(fs, &mut msg, RecoveryPass::delete_dead_interior_snapshots,

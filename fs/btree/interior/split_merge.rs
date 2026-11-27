@@ -33,7 +33,6 @@ use crate::sb::errors::SbErrorId;
 use crate::util::Printbuf;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::{kernel::{dump_stack, local_clock}, sched};
-use crate::util::log::LogMsg;
 use crate::util::vstructs::Head;
 
 use super::{InteriorUpdate, NewNode, ParentKeys, StartOpts, TakenNode};
@@ -134,7 +133,7 @@ fn interior_insert_done(t: &TransAttempt<'_, '_>, b: Node<'_>, list: &mut Parent
     -> Result<(), BchError>
 {
     let fs = t.fs();
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     msg.set_suppressed(true);
 
     if let Err(e) = check_topology_msg(t, b.held(), &mut msg) {
@@ -279,7 +278,7 @@ pub(crate) fn check_topology_msg(t: &TransAttempt<'_, '_>, b: Node<'_>, out: &mu
 }
 
 pub(crate) fn check_topology(t: &TransAttempt<'_, '_>, b: Node<'_>) -> Result<(), BchError> {
-    let mut msg = LogMsg::new(t.fs());
+    let mut msg = t.fs().log().msg();
     msg.set_suppressed(true);
     check_topology_msg(t, b, &mut msg)
 }
@@ -734,7 +733,7 @@ pub(crate) fn insert_node(update: &InteriorUpdate<'_>, paths: &mut Paths<'_>, pa
     update.verify_parent_keys_sorted();
 
     if !paths[path].intent_locked(level) {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(msg, "insert_node(): node not locked at level {level}\n");
         update.to_text(&mut msg);
         paths[path].to_text(&mut msg, path);
@@ -942,7 +941,7 @@ fn merge_topology_check(fs: &Fs, srcs: &[Node<'_>]) -> Result<(), BchError> {
             continue;
         }
 
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(msg, "btree node merge: end of prev node doesn't match start of next node\n");
         prt!(msg, "prev ends at   {prev_end}\n");
         prt!(msg, "next starts at {next_start}\n");

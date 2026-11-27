@@ -17,8 +17,6 @@ use crate::util::{alloc::{Flags, AllocError}, vstructs::{Validated, ValidatedEnt
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
-#[cfg(all(CONFIG_BCACHEFS_TESTS, not(kernel)))]
-use bcachefs_shim as kernel;
 
 #[cfg(CONFIG_BCACHEFS_TESTS)]
 crate::module_param! {
@@ -282,6 +280,8 @@ impl<'a> Intake<'a> {
     fn key_to_wb_slowpath(&mut self, idx: WbBtree, k: &BkeyI) -> Result<(), BchError> {
         let u64s = wb_key_u64s(&k.k);
         let seq = self.seq;
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        let fs = self.fs;
 
         loop {
             #[cfg(CONFIG_BCACHEFS_TESTS)]
@@ -331,14 +331,14 @@ impl<'a> Intake<'a> {
                      */
                     if let Some(f) = b.wb.flushing.try_lock() {
                         if !f.keys.is_empty() {
-                            kernel::pr_info!("WB_PIN_REPRO observer flushing={} fpin={}\n",
-                                             f.keys.len(), b.wb.pin(Buf::Flushing).seq());
+                            fs.log().info(crate::message!("WB_PIN_REPRO observer flushing={} fpin={}",
+                                                          f.keys.len(), b.wb.pin(Buf::Flushing).seq()));
                         } else {
-                            kernel::pr_info!("WB_PIN_REPRO observer drained; retrying\n");
+                            fs.log().info(crate::message!("WB_PIN_REPRO observer drained; retrying"));
                             TEST_WB_PIN_STATE.store(0, Relaxed);
                         }
                     } else {
-                        kernel::pr_err!("WB_PIN_REPRO observer lock unavailable\n");
+                        fs.log().err(crate::message!("WB_PIN_REPRO observer lock unavailable"));
                         TEST_WB_PIN_STATE.store(0, Relaxed);
                     }
                     self.test_wb_pin_armed = false;
@@ -362,7 +362,7 @@ impl<'a> Intake<'a> {
             b.wb.pin(Buf::Flushing).seq() == 0 &&
             TEST_WB_PIN_STATE.compare_exchange(0, 1, Relaxed, Relaxed).is_ok() {
             b.room = 0;
-            kernel::pr_info!("WB_PIN_REPRO staged flushing={} fpin={}\n", u64s, b.wb.pin(Buf::Flushing).seq());
+            fs.log().info(crate::message!("WB_PIN_REPRO staged flushing={} fpin={}", u64s, b.wb.pin(Buf::Flushing).seq()));
             self.test_wb_pin_armed = true;
         }
         Ok(())

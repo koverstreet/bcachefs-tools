@@ -6,7 +6,7 @@
 
 use crate::alloc::{backpointers::{backpointer_get_key, BackpointerPos}, capacity::DiskReservation};
 use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
-use crate::util::{vstructs::{Unvalidated, Validated}, log::LogMsg, Join, Printbuf};
+use crate::util::{vstructs::{Unvalidated, Validated}, Join, Printbuf};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
@@ -268,7 +268,7 @@ fn stripe_update_inject_crash(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         trans.unlock();
         let _ = fs.journal_flush();
 
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         // printed once, when we go emergency read-only
         msg.set_suppressed(true);
         write!(msg, "logged_op_fail_next: stripe update stopped after its carried blocks\n");

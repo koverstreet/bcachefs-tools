@@ -27,7 +27,7 @@ use crate::sb::io::Holder;
 use crate::util::alloc::{Arc, Vec};
 use crate::util::backref::BackRef;
 use crate::util::futex::EventCount;
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::util::printbuf::{Printbuf, ToText};
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
@@ -64,7 +64,7 @@ pub fn devs<'a>(paths: impl Iterator<Item = &'a CStr>) -> Result<Vec<dev_t>, Bch
     let mut devs = Vec::new();
     for path in paths {
         let dev = crate::os::blkdev::lookup(path).inspect_err(|e| {
-            log_no_fs(LogLevel::ERR, crate::message!("cannot open with device {}: {}",
+            Log::NO_FS.err(crate::message!("cannot open with device {}: {}",
                                                      path.to_str().unwrap_or("?"), e.msg()));
         })?;
         devs.push(dev)?;
@@ -141,7 +141,7 @@ impl Registry {
             });
         if let Some(other) = other {
             if !(by.shares() && other.by.shares()) {
-                log_no_fs(LogLevel::ERR, crate::message!("filesystem {key} is being opened by {}",
+                Log::NO_FS.err(crate::message!("filesystem {key} is being opened by {}",
                                                          other.by.name()));
                 return Err(Errcode::EBUSY_fs_opening_by_other.into());
             }
@@ -150,7 +150,7 @@ impl Registry {
 
         if let Some(fs) = self.find(key) {
             if !by.shares() {
-                log_no_fs(LogLevel::ERR, crate::message!("filesystem {key} already open: mounted?"));
+                Log::NO_FS.err(crate::message!("filesystem {key} already open: mounted?"));
                 return Err(Errcode::EBUSY_fs_already_open.into());
             }
             return Ok(Found::Open(fs));

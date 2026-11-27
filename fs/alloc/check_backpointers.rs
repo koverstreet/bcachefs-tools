@@ -52,8 +52,6 @@ use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::types::bits_to_longs;
 use crate::data_structures::bitmap::{AtomicBitmap, AtomicULong};
-use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg};
-use crate::util::ratelimit::Ratelimit;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
@@ -273,7 +271,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
     }
 
     if extents_match(fs, extent.into(), other_extent.into()) {
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "duplicate versions of same extent, deleting smaller\n{}\n{}",
              extent.to_text(fs), other_extent.to_text(fs));
 
@@ -331,7 +329,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
                 p1.crc.live_size == p2.crc.live_size &&
                 extent.k.size == other_extent.k.size;
             if !same_view {
-                let mut msg = LogMsg::new(fs);
+                let mut msg = fs.log().msg();
                 prt!(&mut msg, "duplicate compressed extents pointing to overlapping space on dev {dev}, \
                                 not the same data - can't share them\n{}\n{}",
                      extent.to_text(fs), other_extent.to_text(fs));
@@ -362,7 +360,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut Bke
         return Ok(());
     }
 
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(&mut msg, "duplicate extents pointing to same space on dev {}\n{}\n{}",
          { bp.k.p.inode }, extent.to_text(fs), other_extent.to_text(fs));
     fs.throw(Errcode::fsck_repair_unimplemented)
@@ -514,7 +512,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         backpointers_maybe_flush(t, alloc_k, last_flushed.reborrow())?;
 
         let p = alloc_k.k.p;
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "more backpointers than the bucket accounts for, but found no bad backpointers\n\
                         bucket {}:{} data type ", { p.inode }, { p.offset });
         a.data_type().to_text(&mut msg);
@@ -598,8 +596,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     let nr = ca.bucket_backpointer_mismatch.nr();
     let allowed = if copygc { ca.mi.get().nbuckets >> 7 } else { 0 };
 
-    let mut buf = Printbuf::new();
-    log_msg_start(&mut buf, ca.name().as_cstr());
+    let mut buf = crate::ratelimit!(ca.log()).msg();
     prt!(&mut buf, "Detected missing backpointers in bucket {bucket}, now have {nr}/{} with missing\n",
          { ca.mi.get().nbuckets });
 
@@ -612,10 +609,6 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     let _ = passes::run_explicit(fs, &mut buf,
                                  RecoveryPass::check_extents_to_backpointers, flags);
 
-    static RATELIMIT: Ratelimit = Ratelimit::new();
-    if !fs.ratelimit_suppress(&RATELIMIT, &"check_one_bucket_backpointer_mismatch") {
-        print_str(fs, LogLevel::ERR, &mut buf);
-    }
     Ok(())
 }
 
@@ -759,7 +752,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &Dev, bucket: u64) -> 
         a.data_type.set(DataType::free);
         a.set_data_type(data_type);
 
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
              { bucket.inode }, { bucket.offset });
         a.data_type().to_text(&mut msg);

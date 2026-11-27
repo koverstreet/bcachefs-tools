@@ -44,7 +44,7 @@ use crate::snapshots::subvolume::for_each_in_subvolume_max;
 use crate::util::mempool::Mempool;
 use crate::util::sleep::Sleep;
 use crate::util::task::{exclusive_size, waiter, TaskSlot, WaitSync};
-use crate::{btree_trans, c, log_msg_ratelimited};
+use crate::{btree_trans, c, ratelimit};
 use core::pin::Pin;
 use pin_init::{pin_data, pin_init, pinned_drop, stack_pin_init};
 use crate::opts::InodeOpts;
@@ -315,7 +315,7 @@ fn read_pagecache(w: &PagecacheRead<'_>, iter: &mut ReadaheadIter) -> Result<(),
     });
 
     if let Err(e) = ret {
-        let mut m = log_msg_ratelimited!(w.fs);
+        let mut m = ratelimit!(w.fs.log()).msg();
         write!(m, "data read error at ");
         inum_offset_err_msg_trans(&trans, &mut m, inum.subvol as u32, pos(inum.inum, iter.pos));
         write!(m, ": data read error: {e}");

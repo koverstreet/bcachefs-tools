@@ -26,7 +26,6 @@ use crate::fs::{Fs, FsFlag};
 use crate::prt;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::os::kernel::race_fault;
-use crate::util::log::LogMsg;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 
 // ── A level: its node, and its node iterator ────────────────────────────────
@@ -213,7 +212,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn node_root_err(&self, b: &BtreeNode) -> BchError {
         let fs = self.fs();
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
 
         prt!(&mut *msg, "btree root doesn't cover expected range:\n{}\n", b.pos_to_text(fs));
 
@@ -372,7 +371,7 @@ impl BtreeTrans<'_> {
     fn node_missing_err(&self, paths: &Paths<'_>, idx: PathIdx) -> BchError {
         let fs = self.fs();
         let path = &paths[idx];
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
 
         prt!(&mut *msg, "node not found at pos: {}", path.pos);
         prt!(&mut *msg, "\n  within parent node ");
@@ -388,7 +387,7 @@ impl BtreeTrans<'_> {
     fn node_gap_err(&self, t: &TransAttempt<'_, '_>, paths: &Paths<'_>, idx: PathIdx, k: &BkeyI) -> BchError {
         let fs = self.fs();
         let path = &paths[idx];
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
 
         let level = path.level() as usize;
         let b = path.locked_btree_node(level).expect("a path goes down from a locked node");

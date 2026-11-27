@@ -53,7 +53,7 @@ use crate::util::alloc::{Box, Vec, Global};
 use crate::util::thin::{ThinBox, ThinMut, ThinRef};
 use crate::data_structures::gap_buffer::GapBuffer;
 use crate::os::kernel::cond_resched;
-use crate::util::log::{LogLevel, LogMsg};
+use crate::util::log::LogLevel;
 use crate::util::place::Placed;
 use crate::util::rcu::{self, ReadGuard, RcuArray};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
@@ -1029,7 +1029,7 @@ pub(crate) fn keys_sort(fs: &Fs) -> Result<(), BchError> {
         }
     }
 
-    let mut msg = LogMsg::with_level(fs, if nr_extra_sorts != 0 { LogLevel::DEBUG } else { LogLevel::NOTICE });
+    let mut msg = fs.log().msg().with_level(if nr_extra_sorts != 0 { LogLevel::DEBUG } else { LogLevel::NOTICE });
     prt!(&mut msg, "Journal keys: {nr_read} read, {} after sorting and compacting", keys.len());
     if nr_extra_sorts != 0 {
         prt!(&mut msg, "\nRequired {nr_extra_sorts} extra sorts due to low memory");

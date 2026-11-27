@@ -23,7 +23,6 @@ use crate::types::bits_to_longs;
 use crate::os::kernel::time_after64;
 use crate::os::percpu::{free_percpu, raw_smp_processor_id, CpuGuard, PerCpu, PerCpuRef};
 use crate::os::sched::{set_current_wake_cpu, task_pid};
-use crate::util::log::{print_str, LogLevel};
 use crate::util::rcu::{self, ReadGuard};
 use crate::util::Printbuf;
 use core::ffi::{c_uint, c_void};
@@ -430,7 +429,7 @@ impl LockGraph {
             out.newline();
         }
 
-        print_str(fs, LogLevel::ERR, &mut out);
+        fs.log().err(&out);
         panic!("cycle of nofail locks");
     }
 

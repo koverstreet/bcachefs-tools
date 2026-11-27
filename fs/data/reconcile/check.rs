@@ -39,7 +39,7 @@ use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_
 use crate::errcode::BchError;
 use crate::data::reconcile::trigger::PerSnapshotIoOpts;
 use crate::posix::inode_opts::get_io_opts;
-use crate::util::{log::{LogLevel, LogMsg}, printbuf::Msg, vstructs::plain_bytes, Printbuf};
+use crate::util::{log::LogLevel, printbuf::Msg, vstructs::plain_bytes, Printbuf};
 use crate::{fsck_err, fsck_err_on, prt, SPOS_MAX};
 use core::mem::size_of;
 use crate::format::{Bpos, Btree, BkeyType, Backpointer, BTREE_MAX_DEPTH, Deleted};
@@ -525,7 +525,7 @@ crate::recovery_pass!(check_reconcile_work => check_reconcile_work);
 /// their phys btree entries - expected, not damage: check_reconcile_work is
 /// scheduled to repair them, quietly.
 pub fn rotational_changed(fs: &Fs, ca: &Dev) {
-    let mut msg = LogMsg::with_level(fs, LogLevel::INFO);
+    let mut msg = fs.log().msg().info();
     write!(msg, "{}: rotational changed, repairing backpointer reconcile phys bits\n",
            ca);
 

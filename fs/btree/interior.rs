@@ -655,7 +655,7 @@ impl<'t> InteriorUpdate<'t> {
             .and_then(|()| update.reserve(paths, nr_nodes, target, update.flags, write))
             .and_then(|()| trans.relock_from(paths));
         if let Err(e) = ret {
-            if crate::util::log::should_print_err(&e) &&
+            if !e.is_restart() &&
                !e.matches(c::ENOSPC) &&
                !e.matches(c::EROFS) &&
                e != BchError::from(Errcode::journal_reclaim_would_deadlock) &&

@@ -57,7 +57,7 @@ use crate::util::rcu::read_lock;
 use crate::util::refcount::{TryRefcount, AtomicRef, RefGuard};
 use crate::util::vstructs::{cast_plain_slice_mut, SelfSized, ValidatedEntriesMut, cast_plain,
     cast_plain_mut, plain_bytes, plain_bytes_mut, Head, Unvalidated};
-use crate::{log_msg_ratelimited, prt};
+use crate::prt;
 use crate::os::bio::{BioRange, MappedPages};
 use crate::util::place::Placed;
 use core::mem;
@@ -716,12 +716,14 @@ fn write_done(w: &JournalBuf, written: Written) {
          * read-only on it.
          */
         let mut msg = if err.is_ok() && written.failed.all_dev_removed() && written.flush_failed.all_dev_removed() {
-            let mut msg = crate::util::log::LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             msg.set_suppressed(true);
             msg
         } else {
             /* Separate ratelimit_states for hard and soft errors */
-            log_msg_ratelimited!(fs, err.is_err() as usize, 2)
+            static RATELIMIT: [crate::util::ratelimit::Ratelimit; 2] =
+                [const { crate::util::ratelimit::Ratelimit::new() }; 2];
+            fs.log().ratelimited(&RATELIMIT[err.is_err() as usize]).msg()
         };
 
         prt!(&mut *msg, "error writing journal entry {seq_wrote}\n");
@@ -1282,7 +1284,7 @@ fn write_start(w: &JournalBuf, seq: u64, b: BufLockGuard<'_>, closed: &Closed, w
 fn write_start_err(w: &JournalBuf, data: &JsetBuf, e: BchError) {
     let j = w.journal();
     let fs = j.fs();
-    let mut msg = crate::util::log::LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     msg.set_suppressed(true); /* only print once, when we go ERO */
 
     prt!(&mut *msg, "Unable to do journal write at seq {} for {} sectors: {}",

@@ -38,7 +38,7 @@ use crate::posix::inode_opts::InodeOpt;
 use crate::sb::{io::SbState, members, members_format::{MemberState, Member, MemberFlags}};
 use crate::prt;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, plain_bytes_mut, Unvalidated};
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::util::names::{self, Names};
 use crate::util::{HumanReadable, Printbuf};
 use crate::util::printbuf::parse_human_u64;
@@ -1196,7 +1196,7 @@ pub fn parse_one_mount_opt(fs: Option<&Fs>, opts: Option<&mut Opts>,
     };
 
     if opt.has(OptFlags::mount_old) {
-        log_no_fs(LogLevel::ERR, crate::message!(
+        Log::NO_FS.err(crate::message!(
             "option {} may no longer be specified at mount time; set via sysfs opts dir", opt.name));
         return Ok(());
     }
@@ -1225,7 +1225,7 @@ pub fn parse_mount_opts_into(fs: Option<&Fs>, opts: &mut Opts, mut parse_later: 
         match parse_one_mount_opt(fs, Some(opts), parse_later.as_deref_mut(), name, val, &mut err) {
             Err(e) if e == Errcode::option_name.into() && ignore_unknown => {}
             Err(e) => {
-                log_no_fs(LogLevel::ERR, crate::message!("Error parsing option {}", err.as_str()));
+                Log::NO_FS.err(crate::message!("Error parsing option {}", err.as_str()));
                 return Err(e);
             }
             Ok(()) => {}
@@ -1330,7 +1330,7 @@ pub fn opts_to_text(out: &mut Printbuf, opts: &Opts, fs: Option<&Fs>, sb: Option
 // ── The superblock ───────────────────────────────────────────────────────
 
 fn warn_no_member(opt: &Opt, dev: u32) {
-    log_no_fs(LogLevel::WARN, crate::message!(
+    Log::NO_FS.warn(crate::message!(
         "tried to set device option {} on nonexistent device {dev}", opt.name));
     crate::warn_on!(true);
 }

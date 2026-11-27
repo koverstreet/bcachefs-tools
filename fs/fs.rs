@@ -55,7 +55,7 @@ use crate::os::kernel::READ;
 use crate::os::sched;
 use crate::os::kobject::{into_ref, GroupList, KobjOwner, Kobject};
 use crate::os::module::ModuleRef;
-use crate::util::log::{log_msg_start, print_lines, print_str, LogLevel, LogMsg};
+use crate::util::log::{print_str, Log, LogLevel};
 use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::util::place::{PlacedDrop, Placed};
 use crate::util::rcu::{read_lock, RcuPtrWriter};
@@ -1100,7 +1100,7 @@ impl OpenFs {
 
 fn open_failed(e: BchError, out: &mut Printbuf) -> BchError {
     prt!(out, "error starting filesystem: {}", e.msg());
-    print_lines(&LogLevel::ERR.prefix(), out.as_bytes());
+    Log::NO_FS.err(&out);
     e
 }
 
@@ -1124,7 +1124,7 @@ impl Claimed {
             Err(e) => Err(open_failed(e, &mut self.out)),
             Ok(fs) => {
                 if !self.out.as_bytes().is_empty() {
-                    LogMsg::with_level(&fs, LogLevel::INFO).write_bytes(self.out.as_bytes());
+                    fs.log().msg().info().write_bytes(self.out.as_bytes());
                 }
                 Ok(fs)
             }
@@ -1331,17 +1331,15 @@ pub fn filter_dead(sbs: &mut Vec<SbHandle>, opts: &Opts,
 
 impl Fs {
     pub fn start(&self) -> Result<(), BchError> {
-        let mut err = Printbuf::new();
-        log_msg_start(&mut err, self.name());
+        let mut err = self.log().msg();
         let prefix = err.as_bytes().len();
 
         let ret = self.start_to(&mut err);
         if let Err(e) = &ret {
             prt!(&mut err, "error starting filesystem: {}", e.msg());
         }
-        if err.as_bytes().len() != prefix {
-            print_str(self, LogLevel::ERR, &mut err);
-        }
+        let nothing = err.as_bytes().len() == prefix;
+        err.set_suppressed(nothing);
         ret
     }
 

@@ -35,7 +35,7 @@ use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
 use crate::data::ptrs::BkeyVPtrs;
 use crate::data::reconcile::trigger::data_to_rb_work_pos;
 use crate::errcode::{Errcode, BchError};
-use crate::util::{alloc::AllocError, log::LogMsg, vstructs::plain_bytes};
+use crate::util::{alloc::AllocError, vstructs::plain_bytes};
 use crate::os::kernel::{cold_path, unlikely};
 use crate::{message, fs_inconsistent, fsck_err_on, prt};
 use crate::alloc::accounting;
@@ -228,7 +228,7 @@ fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new:
 /// to it rather than guessing here.
 #[cold]
 fn stripe_refcount_saturated(fs: &Fs, bucket: Bpos, stripe: u64, overflow: bool) {
-    let mut msg = LogMsg::new(fs);
+    let mut msg = fs.log().msg();
     prt!(&mut msg, "stripe_refcount {} at bucket {}:{} {} stripe {stripe}\n",
          if overflow { "overflow" } else { "underflow" }, { bucket.inode }, { bucket.offset },
          if overflow { "adding ref to" } else { "dropping ref to" });
@@ -290,7 +290,7 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &Dev, s: StripeK<'_>, 
         }
 
         if inconsistent(a) {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(&mut msg, "Parity bucket with dirty_sectors/stripe_refcount inconsistency at {}:{}\n",
                  { bucket.inode }, { bucket.offset });
             prt!(&mut msg, "stripe_refcount {} but dirty_sectors {}\n", a.stripe_refcount, a.dirty_sectors);

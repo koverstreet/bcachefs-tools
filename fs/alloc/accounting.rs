@@ -63,7 +63,7 @@ use crate::init::error::BkeyValidate;
 use crate::types::ArmOf;
 use crate::util::{rcu, Printbuf};
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut, ArmError, Head, Unvalidated, VStructError};
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::os::percpu::Counters as _;
 use crate::util::printbuf::Join;
 use crate::{bkey_fsck_err, bkey_fsck_err_on, btree_trans, message, percpu_field};
@@ -499,14 +499,14 @@ pub fn verify_accounting_clean(fs: &Fs) {
 
         let v = mem_read(fs, &acc_k);
         if d[..] != v[..nr] {
-            log_no_fs(LogLevel::ERR, message!("{} != {}", k.to_text(fs), Join(" ", v[..nr].iter())));
+            Log::NO_FS.err(message!("{} != {}", k.to_text(fs), Join(" ", v[..nr].iter())));
             mismatch = true;
         }
 
         let (u, inmem) = usage_of(fs, &acc_k, d, |c| c.map(|c| c.sum()));
         base = base.wrapping_add(u);
         if let Some(v) = inmem.filter(|v| d[..] != v[..]) {
-            log_no_fs(LogLevel::ERR, message!("dev accounting mismatch: {} in mem {}",
+            Log::NO_FS.err(message!("dev accounting mismatch: {} in mem {}",
                                              k.to_text(fs), Join(" ", v[..nr].iter())));
             mismatch = true;
         }
@@ -520,7 +520,7 @@ pub fn verify_accounting_clean(fs: &Fs) {
                                 ("cached",   base.cached,   base_inmem.cached),
                                 ("reserved", base.reserved, base_inmem.reserved)] {
         if base != inmem {
-            log_no_fs(LogLevel::ERR, message!("fs_usage_base.{name} mismatch: {base} != {inmem}"));
+            Log::NO_FS.err(message!("fs_usage_base.{name} mismatch: {base} != {inmem}"));
             mismatch = true;
         }
     }

@@ -34,7 +34,7 @@ use crate::util::task::{waiter, Resume, WaitSync, Waiter};
 use crate::os::workqueue::Queue;
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
-use crate::{log_msg_ratelimited, prt};
+use crate::{ratelimit, prt};
 use core::pin::Pin;
 use cstruct_macros::args_stored_once;
 use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
@@ -436,7 +436,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
     }
 
     if stale != StripeBlockMask::default() {
-        let mut m = log_msg_ratelimited!(fs);
+        let mut m = ratelimit!(fs.log()).msg();
         prt!(&mut m, "Stripe with stale pointer(s):\n{}", s.to_text(fs));
         count_fsck_err(fs, id::stale_dirty_ptr, &mut m);
         let _ = passes::run_explicit(fs, &mut m, RecoveryPass::check_allocations,

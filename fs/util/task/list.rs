@@ -11,7 +11,7 @@ use crate::os::{kernel::msleep, module::{Quiesced, ThisModule}};
 use crate::prt;
 use crate::errcode::BchError;
 use crate::util::alloc::init_at;
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::util::printbuf::Msg;
 use crate::util::rcu::{self, ReadGuard};
 use crate::util::Printbuf;
@@ -74,7 +74,7 @@ impl TaskList {
             msleep(1);
             waited += 1;
             if waited == 10_000 {
-                log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| {
+                Log::NO_FS.warn(&Msg(|out: &mut Printbuf| {
                     prt!(out, "tasks still running at teardown, waiting on them:\n");
                     let (_noreclaim, rcu) = (MemallocFlags::noreclaim(), rcu::read_lock());
                     for (_, task) in self.items_from(0, &rcu) {

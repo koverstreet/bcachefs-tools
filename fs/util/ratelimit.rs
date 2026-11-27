@@ -7,7 +7,7 @@
 //! steady BURST per INTERVAL. One quiet interval and it's INTERVAL again.
 
 use crate::os::kernel::{jiffies, time_after, HZ};
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 
 const INTERVAL: usize = 5 * HZ;
@@ -94,8 +94,7 @@ impl Ratelimit {
                 self.interval.store(next as usize, Relaxed);
 
                 if m != 0 {
-                    log_no_fs(LogLevel::WARN,
-                              crate::message!("{func}: {m} callbacks suppressed"));
+                    Log::NO_FS.warn(crate::message!("{func}: {m} callbacks suppressed"));
                 }
             }
 

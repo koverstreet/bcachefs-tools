@@ -83,7 +83,7 @@ use crate::fs::{Fs, FsFlag};
 use crate::data::reconcile::trigger::PerSnapshotIoOpts;
 use crate::posix::inode_opts::get_io_opts;
 use crate::debug::trace::events;
-use crate::{prt, message, log_msg_ratelimited, warn_once, SPOS_MAX};
+use crate::{prt, message, ratelimit, warn_once, SPOS_MAX};
 use crate::util::alloc::Vec;
 use crate::util::backtrace::prt_task_backtrace;
 use crate::data_structures::cuckoo::Cuckoo;
@@ -394,12 +394,12 @@ fn stripe_park(t: &TransAttempt<'_, '_>, s: BkeySC<'_, Stripe<Validated>>, e: Op
     // out once the stripe's parked
     let _msg = match e {
         None => {
-            let mut msg = log_msg_ratelimited!(fs);
+            let mut msg = ratelimit!(fs.log()).msg();
             write!(msg, "error retrying stripe: repair still not finished\n{}", s.to_text(fs));
             msg
         }
         Some(e) => {
-            let mut msg = log_msg_ratelimited!(fs);
+            let mut msg = ratelimit!(fs.log()).msg();
             write!(msg, "error repairing stripe, leaving it for a later pass: {e}\n{}", s.to_text(fs));
             msg
         }

@@ -245,12 +245,12 @@ use crate::util::maybe_rcu_alloc::MaybeRcuAlloc;
 use crate::os::file::read_file;
 use crate::os::kernel::{ktime_get_real_seconds, READ, WRITE};
 use crate::os::kobject::{into_ref, GroupList, KobjOwner, Kobject};
-use crate::util::log::{log_dev, log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::os::percpu::{Counters, PerCpu};
-use crate::util::printbuf::{DateTime, Msg};
+use crate::util::printbuf::DateTime;
 use crate::util::rcu::{read_lock, RcuHead};
 use crate::util::{Nsecs, Printbuf, ToText};
-use crate::prt;
+use crate::{message, prt};
 use core::ffi::CStr;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
@@ -258,7 +258,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{bch_enum, Fieldwise, Init, MaybeZeroable, TypeInfo};
 use pin_init::pin_data;
 #[cfg(kernel)]
-use {crate::fs::RoRef, crate::sb::io::Holder, crate::util::log::{log_msg_start, print_str},
+use {crate::fs::RoRef, crate::sb::io::Holder,
      crate::util::sleep::Sleep, core::sync::atomic::Ordering::Acquire};
 use crate::types::bits_to_longs;
 use crate::os::{bio::{Bio, BioBox, BioSet, IO_ALIGN}, workqueue::ReffedWork};
@@ -842,7 +842,7 @@ impl NewDev {
         state.devs()[dev_idx as usize].publish(ca.clone());
 
         if ca.sysfs_online().is_err() {
-            log_no_fs(LogLevel::WARN, &Msg(|out: &mut Printbuf| prt!(out, "error creating sysfs objects")));
+            Log::NO_FS.warn(message!("error creating sysfs objects"));
         }
         ca
     }
@@ -928,24 +928,22 @@ pub fn dev_in_fs(fs: &Sb, fs_bdev: Option<&crate::os::blkdev::BlockDevice>, sb: 
     let seq_from_fs = sb_member(fs, dev.dev_idx.into()).map_or(0, |m| m.seq.get());
 
     if fs.seq == dev.seq && fs.write_time != dev.write_time {
-        log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
-            prt!(out, "Split brain detected between {dev_bdev} and {fs_bdev}:\n\
-                       seq={} but write_time different, got\n\
-                       {fs_bdev} {}\n\
-                       {dev_bdev} {}\n\
-                       Not using older sb",
-                 dev.seq.get(), DateTime(fs.write_time.get() as i64), DateTime(dev.write_time.get() as i64));
-        }));
+        Log::NO_FS.err(message!(
+            "Split brain detected between {dev_bdev} and {fs_bdev}:\n\
+             seq={} but write_time different, got\n\
+             {fs_bdev} {}\n\
+             {dev_bdev} {}\n\
+             Not using older sb",
+            dev.seq.get(), DateTime(fs.write_time.get() as i64), DateTime(dev.write_time.get() as i64)));
         return Err(Errcode::device_splitbrain.into());
     }
 
     if seq_from_fs != 0 && seq_from_fs < dev.seq.get() {
-        log_no_fs(LogLevel::ERR, &Msg(|out: &mut Printbuf| {
-            prt!(out, "Split brain detected between {dev_bdev} and {fs_bdev}:\n\
-                       {fs_bdev} believes seq of {dev_bdev} to be {seq_from_fs}, but {dev_bdev} has {}\n\
-                       Not using {dev_bdev}",
-                 dev.seq.get());
-        }));
+        Log::NO_FS.err(message!(
+            "Split brain detected between {dev_bdev} and {fs_bdev}:\n\
+             {fs_bdev} believes seq of {dev_bdev} to be {seq_from_fs}, but {dev_bdev} has {}\n\
+             Not using {dev_bdev}",
+            dev.seq.get()));
         return Err(Errcode::device_splitbrain.into());
     }
     Ok(())
@@ -1151,7 +1149,7 @@ impl StateLockWrite<'_> {
             self.dev_read_only(ca);
         }
 
-        log_dev(ca, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| prt!(out, "{new_state}")));
+        ca.log().notice(message!("{new_state}"));
 
         if do_reconcile_scan {
             fs.request_scan(s, false)?;
@@ -1947,8 +1945,7 @@ impl crate::os::blkdev::HolderOps for Holder {
         let Some(ca) = fs.members().find(|ca| ca.disk_sb.bdev.get().cast_const() == core::ptr::from_ref(bdev))
         else { return };
 
-        let mut msg = Printbuf::new();
-        log_msg_start(&mut msg, ca.name().as_cstr());
+        let mut msg = ca.log().msg();
         prt!(&mut msg, "offline from block layer\n");
 
         let dev = state.dev_may_offline(&ca, ForceIf::DEGRADED, &mut msg).is_ok();
@@ -1963,12 +1960,9 @@ impl crate::os::blkdev::HolderOps for Holder {
             let _ = fs.journal_flush();
         }
         let print = dev || fs.emergency_read_only(&mut msg);
+        msg.set_suppressed(!print);
 
         state.dev_offline(&ca);
-
-        if print {
-            print_str(&fs, LogLevel::ERR, &mut msg);
-        }
     }
 
     fn sync(r: RoRef) {

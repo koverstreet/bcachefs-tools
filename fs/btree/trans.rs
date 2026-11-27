@@ -347,9 +347,7 @@ use kernel::sync::SetOnce;
 #[cfg(not(kernel))]
 use bcachefs_shim::sync::SetOnce;
 use crate::os::kernel::{cond_resched, local_clock, prefetch, time_after64};
-#[cfg(any(CONFIG_BCACHEFS_DEBUG, CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE))]
-use crate::util::log::LogMsg;
-use crate::util::log::{log_no_fs, LogLevel};
+use crate::util::log::Log;
 use crate::os::{percpu::{Counters, CpuGuard}, sched};
 use crate::util::{rcu, Printbuf, ToText};
 use crate::util::refcount::{AtomicRef, RefGuard, TryRefcount, WaitableRef};
@@ -858,7 +856,7 @@ fn check_btree_paths_leaked(trans: &BtreeTrans<'_>, paths: &Paths<'_>) {
 
     if leaked().next().is_some() {
         let c = trans.fs();
-        let mut msg = LogMsg::new(c);
+        let mut msg = c.log().msg();
 
         prt!(&mut *msg, "btree paths leaked from {}!\n", trans.fn_name());
         for i in leaked() {
@@ -1095,7 +1093,7 @@ impl BtreeTrans<'_> {
         if crate::warn_on_once!(new_bytes > BTREE_TRANS_MEM_MAX) {
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
             {
-                let mut msg = LogMsg::new(c);
+                let mut msg = c.log().msg();
                 prt!(&mut *msg, "bump allocator exceeded BTREE_TRANS_MEM_MAX ({})\n", BTREE_TRANS_MEM_MAX);
 
                 let trace = self.trans_kmalloc_trace.take();
@@ -1429,7 +1427,7 @@ fn trans_get_fn_idx(name: &'static str) -> u32 {
 
     static WARNED: AtomicBool = AtomicBool::new(false);
     if !WARNED.swap(true, Ordering::Relaxed) {
-        log_no_fs(LogLevel::WARN, crate::message!("TRANSACTIONS_NR not big enough!"));
+        Log::NO_FS.warn(crate::message!("TRANSACTIONS_NR not big enough!"));
     }
     0
 }

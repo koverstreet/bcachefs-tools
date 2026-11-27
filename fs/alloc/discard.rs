@@ -75,7 +75,6 @@ use crate::util::task::{waiter, WaitSync};
 use crate::os::blkdev;
 use crate::os::kernel::{unlikely, READ};
 use crate::util::place::Contained;
-use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::{HumanReadable, Printbuf};
@@ -506,7 +505,7 @@ impl<'a> Worker<'a> {
         let fs = t.fs();
 
         if a.v().data_type() != DataType::need_discard {
-            let mut msg = LogMsg::new(fs);
+            let mut msg = fs.log().msg();
             prt!(msg, "Discarded bucket that is no longer BCH_DATA_need_discard!\n{}", a.as_sc().to_text(fs));
             fs.emergency_read_only(&mut msg);
             return fs.throw(Errcode::emergency_ro);

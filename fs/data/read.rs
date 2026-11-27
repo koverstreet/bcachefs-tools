@@ -80,7 +80,7 @@ use crate::btree::bkey::{pos, prelude::*, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          LoopFlow, TransAttempt, UpdateTriggerFlags};
-use crate::{message, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
+use crate::{message, btree_trans, c, fs_inconsistent, ratelimit, prt};
 use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch, InlineDataRef},
                   promote::{promote_alloc, Promoted, PromoteTask}, update::read_err_benign};
 use crate::data::ptrs::{crc_is_compressed, extent_nonce, BkeyVPtrs, BkeyVRead, Ptrs, PtrsMut};
@@ -786,7 +786,9 @@ fn retry_report(fs: &Fs, read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
         };
 
         if !read.report(failed.err_mask(), &msg) {
-            let mut m = log_msg_ratelimited!(fs, ret.is_some() as usize, 2);
+            static RATELIMIT: [crate::util::ratelimit::Ratelimit; 2] =
+                [const { crate::util::ratelimit::Ratelimit::new() }; 2];
+            let mut m = fs.log().ratelimited(&RATELIMIT[ret.is_some() as usize]).msg();
             msg(&mut m);
         }
     }
@@ -918,7 +920,7 @@ fn read_inline_csum_err(t: &TransAttempt<'_, '_>, read: &Rbio, e: Extent<'_>, in
     let msg = if in_retry {
         None
     } else {
-        let mut m = log_msg_ratelimited!(fs);
+        let mut m = ratelimit!(fs.log()).msg();
         if let Err(restart) = read_err_msg_in_attempt(t, &mut m, read, e.read_pos) {
             return restart;
         }
@@ -947,7 +949,7 @@ fn read_extent_pick_err(t: &TransAttempt<'_, '_>, orig: &Rbio, e: Extent<'_>, fl
         Some(_) => ret,
         None => {
             assert!(!csum_err, "a terminal checksum error outside a retry");
-            let mut m = log_msg_ratelimited!(fs);
+            let mut m = ratelimit!(fs.log()).msg();
             if let Err(restart) = read_err_msg_in_attempt(t, &mut m, orig, e.read_pos) {
                 return restart;
             }
@@ -1174,7 +1176,7 @@ fn fragment_of<'r, 'k>(t: &TransAttempt<'_, '_>, fs: &'r Fs, orig: &'r Rbio, mut
 
     let csum_type = pick.crc.csum_type.get();
     if csum_type.is_encryption() && fs.encryption_key().is_none() {
-        let mut m = log_msg_ratelimited!(fs);
+        let mut m = ratelimit!(fs.log()).msg();
         read_err_msg_in_attempt(t, &mut m, orig, read_pos)?;
         write!(m, "attempting to read encrypted data without encryption key\n  {}", k.to_text(fs));
         return Err(fs.err(err::data_read_no_encryption_key));
@@ -1989,7 +1991,7 @@ fn read_walk<'s, 'r: 's>(fs: &'r Fs, orig: &'r Rbio, inum: SubvolInum, flags: F,
 
     if let Err(e) = ret {
         if !e.matches(err::extent_poisoned) {
-            let mut m = log_msg_ratelimited!(fs);
+            let mut m = ratelimit!(fs.log()).msg();
             read_err_msg(&trans, &mut m, orig, pos(inum.inum, walk.range().pos().bi_sector));
             write!(m, "data read error: {e}");
         }

@@ -163,7 +163,6 @@ use crate::data_structures::bitmap::LeBitmap;
 use crate::util::{names, DateTime, Nsecs, Printbuf};
 use crate::os::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::os::kthread::Kthread;
-use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::place::Contained;
 use crate::os::workqueue::Queue;
@@ -793,7 +792,7 @@ fn failing_pass_backoff(r: &Runner, pass: usize) -> u32 {
 fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
     let silent = pass.when().intersects(PassFlags::SILENT);
     if !silent {
-        log_start(fs, LogLevel::INFO, message!("{}...", pass.name()));
+        fs.log().info_start(message!("{}...", pass.name()));
     }
 
     let start_time = ktime_get_real_seconds();
@@ -830,7 +829,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
     }
 
     if !silent {
-        log_cont(fs, message!(" done ({} seconds)", ktime_get_real_seconds() - start_time));
+        fs.log().cont(message!(" done ({} seconds)", ktime_get_real_seconds() - start_time));
     }
 
     let mut r = lock(fs);
@@ -1053,7 +1052,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
     fs.flags.set(FsFlag::in_recovery, false);
 
     if defer != 0 {
-        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+        let mut msg = fs.log().msg().notice();
         write!(msg, "Running the following recovery passes in the background:\n");
         names::prt_set::<Pass>(&mut msg, defer);
 

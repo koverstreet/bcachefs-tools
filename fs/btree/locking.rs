@@ -1122,7 +1122,7 @@ impl BtreeTrans<'_> {
         if !self.srcu_io_submitted() &&
            time_after(jiffies(), lock_time.wrapping_add(HZ * 10)) &&
            time_after(jiffies(), lock_time.wrapping_add(srcu_hold_warn_thresh(fs))) {
-            let mut msg = crate::log_msg_ratelimited!(fs);
+            let mut msg = crate::ratelimit!(fs.log()).msg();
 
             prt!(&mut msg, "btree trans held srcu lock (delaying memory reclaim) for {} seconds\n",
                  jiffies().wrapping_sub(lock_time) / HZ);

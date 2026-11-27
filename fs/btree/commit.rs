@@ -44,7 +44,6 @@ use crate::journal::validate::journal_entry_validate;
 use crate::locking::MemallocFlags;
 use crate::util::backtrace::{prt_symbol, prt_task_backtrace};
 use crate::os::{kernel::{likely, prefetch, unlikely}, sched};
-use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{plain_bytes, EntryWalk, Validated};
 use crate::{message, fs_fatal_error, fs_inconsistent, prt};
@@ -302,7 +301,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn commit_invalid_entry(&self, err: BchError) -> BchError {
         let fs = self.fs();
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "{}(): invalid journal entry on insert\n", self.fn_name());
         self.updates_to_text(&mut msg);
         fs.sb_error_count(SbErrorId::validate_error_in_commit);
@@ -315,7 +314,7 @@ impl BtreeTrans<'_> {
     #[inline(never)]
     fn commit_invalid_key(&self, i: &BtreeInsertEntry, err: BchError) -> BchError {
         let fs = self.fs();
-        let mut msg = LogMsg::new(fs);
+        let mut msg = fs.log().msg();
         prt!(&mut msg, "{}() -> ", self.fn_name());
         prt_symbol(&mut msg, i.ip_allocated);
         prt!(&mut msg, ": invalid bkey on insert from\n");

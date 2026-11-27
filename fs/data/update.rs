@@ -53,7 +53,6 @@ use crate::data_structures::cuckoo::{Cuckoo, Entry, RegisterError, Registration}
 use crate::locking::MemallocFlags;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
-use crate::util::log::should_print_err;
 use crate::{message, ratelimit, here_str, prt};
 use crate::debug::trace::events;
 use core::ptr::NonNull;
@@ -519,7 +518,7 @@ impl DataUpdate {
                 Ok(wp) => wp,
                 Err(e) if e.matches(Errcode::operation_blocked) => continue,
                 Err(e) => {
-                    if should_print_err(&e) {
+                    if !e.is_restart() {
                         ratelimit!(fs.log()).err(message!(
                             "{}: error allocating for an unwritten extent: {e}",
                             here_str!()));
@@ -786,7 +785,7 @@ impl DataUpdate {
             let r = fs.trans_commit_do(None, CommitFlags::NO_ENOSPC,
                                        |t| crate::init::damage::record_key(t, btree, pos, err));
             if let Err(e) = r {
-                if should_print_err(&e) {
+                if !e.is_restart() {
                     ratelimit!(fs.log()).err(message!(
                         "{}: error recording a data update's read error: {e}",
                         here_str!()));
