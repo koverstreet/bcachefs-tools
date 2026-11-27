@@ -936,7 +936,7 @@ pub mod ioctl {
     use crate::opts::parse_mount_opts_cstr;
     use crate::os::kernel::{capable, Capability};
     use crate::util::refcount::TryRefcount;
-    use crate::util::{alloc::Arc, log::Only, thread_with_file::{StdioRedirect, ThreadWithFile}};
+    use crate::util::{alloc::Arc, log::{print_str, Log, LogLevel, Only}, names::set, thread_with_file::{StdioRedirect, ThreadWithFile}};
     use crate::os::ioctl::{UserStr, UserVstruct};
 
     /// The options at user address @addr, or none if it's 0.
@@ -991,7 +991,15 @@ pub mod ioctl {
         }
 
         thr.run_stdio(move |(), stdio| fsck_offline_thread(fs, stdio))
-            .inspect_err(|e| kernel::pr_err!("ret {}\n", e.msg()))
+            .inspect_err(|e| Log::NO_FS.err(message!("fsck_offline: error starting fsck thread: {}", e.msg())))
+    }
+
+    /// The fsck(8) exit status, and what it means for whoever's at the redirect.
+    fn fsck_result(fs: &Fs) -> i32 {
+        let mut buf = Printbuf::new();
+        let ret = fs.fsck_errcode(&mut buf);
+        print_str(fs, LogLevel::ERR, &mut buf);
+        ret
     }
 
     fn fsck_offline_thread(fs: Result<(OpenFs, Printbuf), BchError>, stdio: &Arc<StdioRedirect>) -> i32 {
@@ -1008,22 +1016,17 @@ pub mod ioctl {
 
         fs.recovery_task.store(crate::os::sched::current(), core::sync::atomic::Ordering::Relaxed);
 
-        let mut buf = Printbuf::new();
         let ret = match fs.start() {
             Err(e) => {
-                prt!(&mut buf, "{}: error starting filesystem: {}\n",
-                     fs.name().to_str().unwrap_or("?"), e.msg());
+                fs.log().err(message!("error starting filesystem: {}", e.msg()));
                 // What we return is an fsck(8) exit status, not an errcode -
                 // see Fs::fsck_errcode(). A filesystem we couldn't start
                 // is an operational error, same as the online path reports
                 // for recovery passes that fail outright.
                 8
             }
-            Ok(()) => fs.fsck_errcode(&mut buf),
+            Ok(()) => fsck_result(&fs),
         };
-        if ret != 0 {
-            let _ = stdio.write(buf.as_bytes());
-        }
 
         // shutting down attached, so what it says reaches the user too; the
         // guard's borrow of the filesystem ends before exit() takes it
@@ -1052,7 +1055,16 @@ pub mod ioctl {
 
     fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &Arc<StdioRedirect>) -> i32 {
         let fs: &Fs = &fs_ref;
-        let mut buf = Printbuf::new();
+
+        // Another fsck is running, attached: this one tells its user itself.
+        let Some(_run) = fs.recovery.run_lock.try_lock() else {
+            let mut buf = Printbuf::new();
+            prt!(&mut buf, "{}: error running recovery passes: {}\n", fs.name().to_str().unwrap_or("?"),
+                 BchError::from(Errcode::EAGAIN_fsck_online_recovery_running).msg());
+            let _ = stdio.write(buf.as_bytes());
+            return 8;
+        };
+        let _attached = fs.stdio.attach(stdio, Only::Task);
 
         let online = passes_match(PassFlags::ONLINE);
         let mut passes = passes_match(PassFlags::FSCK) & online;
@@ -1061,50 +1073,36 @@ pub mod ioctl {
             passes = opts.recovery_passes;
 
             if passes & online != passes {
-                prt!(&mut buf, "Cannot run passes ");
-                crate::util::names::prt_set::<RecoveryPass>(&mut buf, passes & !online);
-                prt!(&mut buf, " online\n");
-                let _ = stdio.write(buf.as_bytes());
+                fs.log().err(message!("Cannot run passes {} online", set::<RecoveryPass>(passes & !online)));
                 return -fs.err(Errcode::EINVAL_fsck_online_bad_passes).raw();
             }
         }
 
-        let mut ret = Err(BchError::from(Errcode::EAGAIN_fsck_online_recovery_running));
-        if let Some(_run) = fs.recovery.run_lock.try_lock() {
-            let attached = fs.stdio.attach(stdio, Only::Task);
+        // XXX: can we figure out a way to do this without mucking with c->opts?
+        let old_fix_errors = fs.opts.fix_errors.get();
+        {
+            let mut sb = fs.sb_lock();
+            let w = fs.opts_writer(&mut sb);
+            w.fix_errors.set(if opts.defined(OptId::fix_errors) {
+                opts.fix_errors
+            } else {
+                FsckErrOpt::ask as u8
+            });
+            w.fsck.set(1);
+        }
+        fs.flags.set(FsFlag::in_fsck, true);
 
-            // XXX: can we figure out a way to do this without mucking with c->opts?
-            let old_fix_errors = fs.opts.fix_errors.get();
-            {
-                let mut sb = fs.sb_lock();
-                let w = fs.opts_writer(&mut sb);
-                w.fix_errors.set(if opts.defined(OptId::fix_errors) {
-                    opts.fix_errors
-                } else {
-                    FsckErrOpt::ask as u8
-                });
-                w.fsck.set(1);
+        let ret = run_passes(&fs, passes, true);
+
+        fs.flags.set(FsFlag::in_fsck, false);
+        fs.opts_writer(&mut fs.sb_lock()).fix_errors.set(old_fix_errors);
+
+        match ret {
+            Ok(()) => fsck_result(fs),
+            Err(e) => {
+                fs.log().err(message!("error running recovery passes: {}", e.msg()));
+                8
             }
-            fs.flags.set(FsFlag::in_fsck, true);
-
-            ret = run_passes(&fs, passes, true)
-                .map(|()| fs.fsck_errcode(&mut buf));
-
-            fs.flags.set(FsFlag::in_fsck, false);
-
-            drop(attached);
-            fs.opts_writer(&mut fs.sb_lock()).fix_errors.set(old_fix_errors);
         }
-
-        let ret = ret.unwrap_or_else(|e| {
-            prt!(&mut buf, "{}: error running recovery passes: {}\n",
-                 fs.name().to_str().unwrap_or("?"), e.msg());
-            8
-        });
-
-        if !buf.as_bytes().is_empty() {
-            let _ = stdio.write(buf.as_bytes());
-        }
-        ret
     }
 }
