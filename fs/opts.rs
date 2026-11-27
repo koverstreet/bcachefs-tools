@@ -520,10 +520,6 @@ pub struct Opts {
           default = VersionUpgradeOpt::compatible.0)]
     pub version_upgrade: u8,
 
-    /// Pointer to a StdioRedirect (os/linux_kernel/thread_with_file.rs)
-    #[opt(uint(0, i64::MAX))]
-    pub stdio: u64,
-
     #[opt(bool, flags = inode | nodoc)]
     pub project: u8,
 

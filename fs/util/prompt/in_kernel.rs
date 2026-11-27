@@ -3,12 +3,13 @@ use core::time::Duration;
 use super::{Question, Reply, UNANSWERED};
 use crate::c;
 use crate::fs::Fs;
-use crate::util::alloc::Vec;
+use crate::util::alloc::{Arc, Vec};
 use crate::os::kernel::{jiffies, HZ};
 use crate::util::thread_with_file::StdioRedirect;
 use crate::util::Printbuf;
 
-pub struct Prompt<'a>(&'a StdioRedirect);
+/// A question for whoever's at the redirect.
+pub struct Prompt(Arc<StdioRedirect>);
 
 /// What to do if the answer's slow coming: @then, once, after @after.
 pub struct Slow<'a> {
@@ -16,10 +17,10 @@ pub struct Slow<'a> {
     pub then:  &'a mut dyn FnMut(),
 }
 
-impl<'a> Prompt<'a> {
+impl Prompt {
     /// None: there's nobody to ask.
-    pub fn for_fs(fs: &'a Fs) -> Option<Self> {
-        crate::util::log::stdio_redirect(fs, true).map(Prompt)
+    pub fn for_fs(fs: &Fs) -> Option<Self> {
+        fs.stdio.get(true).map(Prompt)
     }
 
     pub fn put<A: Copy + PartialEq>(&self, q: &Question<'_, A>, slow: Option<Slow<'_>>) -> Reply<A> {

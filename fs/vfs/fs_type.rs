@@ -179,11 +179,9 @@ impl Bcachefs {
             return Err(Errcode::EINVAL_block_size_needs_thp.into());
         }
 
-        // The status channel is scoped to recovery: c->stdio mustn't outlive
-        // the reference free drops on the file it points into, and the
-        // channel's filesystem mustn't outlive @fs, which an error tears down.
-        // stdio_user_only describes that redirect, so it dies with it: an
-        // online fsck later installs its own c->stdio.
+        // The status channel is scoped to recovery: attached for it, while the
+        // mount holds the file it's in, and its filesystem mustn't outlive @fs,
+        // which an error tears down. An online fsck later attaches its own.
         match &p.status {
             Some(s) => s.attached(&fs, || fs.start()),
             None    => fs.start(),

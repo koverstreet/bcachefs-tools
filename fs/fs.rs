@@ -216,26 +216,11 @@ pub struct Fs {
     pub(crate) module_ref: Option<crate::os::module::ModuleRef>,
     pub name: [c_char; 40],
 
-    /// This, stdio_filter and stdio_user_only: set as a redirect attaches and
-    /// detaches - the status fd's, online fsck's - and read by every print,
-    /// on any thread. stdio published last, Release, and read Acquire.
-    pub stdio: AtomicPtr<crate::util::thread_with_file::StdioRedirect>,
-    pub stdio_filter: AtomicPtr<c::task_struct>,
-    /*
-     * Online fsck redirects everything it prints; mounting doesn't - a boot
-     * splash wants the questions and the hard errors, not a running
-     * commentary of IO errors. Set this and the redirect carries only what
-     * bch2_print_str_user() sends.
-     */
-    pub stdio_user_only: core::sync::atomic::AtomicBool,
-    /*
-     * Someone is polling BCH_IOCTL_RECOVERY_STATUS on that redirect, so
-     * they're drawing progress themselves and progress indicators keep off
-     * the console entirely. Set by the first such ioctl, cleared when the
-     * channel detaches - a mount that asks for a status fd but never polls
-     * still gets its progress in dmesg.
-     */
-    pub stdio_progress_reader: core::sync::atomic::AtomicBool,
+    /// Where its messages go while someone's listening: log.rs.
+    #[cfg(kernel)]
+    #[pin]
+    #[init(crate::util::log::StdioAttach::init())]
+    pub stdio: crate::util::log::StdioAttach,
     /// These two and recovery_task: C's plain fields, atomic here, so Rust
     /// writes them through a shared Fs.
     pub loglevel: AtomicU32,
@@ -569,7 +554,10 @@ impl Fs {
     /// A mount is reading recovery progress from BCH_IOCTL_RECOVERY_STATUS,
     /// so progress indicators needn't print it
     pub fn stdio_progress_reader(&self) -> bool {
-        self.stdio_progress_reader.load(Relaxed)
+        #[cfg(kernel)]
+        return self.stdio.progress_reader.load(Relaxed);
+        #[cfg(not(kernel))]
+        false
     }
 
     pub fn journal_cur_seq(&self) -> u64 {
@@ -791,7 +779,7 @@ fn alloc(sbs: &mut Vec<SbHandle>, opts: &Opts, holder: Arc<Holder>,
     let mut b = crate::util::alloc::alloc_pinned_or(Fs::init(opts), Errcode::ENOMEM_fs_alloc)?;
     // nothing else reaches it till init_from() registers it; if init_early()
     // fails, the OpenFs exits it
-    let early = b.as_pin_mut().init_early(sbs, opts, holder);
+    let early = b.as_pin_mut().init_early(sbs, holder);
     let fs = OpenFs::from_ref(into_ref(b));
     early?;
     fs.init_from(sbs, user_key, out)?;
@@ -806,10 +794,9 @@ const DEFAULT_UTF8_ENCODING: u32 = (12 << 16) | (1 << 8);
 impl Fs {
     /// What's set while nothing else can reach it: its @holder, its superblock,
     /// and its name.
-    fn init_early(mut self: Pin<&mut Self>, sbs: &Vec<SbHandle>, opts: &Opts,
+    fn init_early(mut self: Pin<&mut Self>, sbs: &Vec<SbHandle>,
                   holder: Arc<Holder>) -> Result<(), BchError> {
         *self.as_mut().project().holder = Some(holder);
-        self.stdio.store(opts.stdio as usize as *mut _, Relaxed);
         self.recovery_task.store(sched::current(), Relaxed);
         *self.as_mut().project().module_ref = Some(ModuleRef::get());
 
@@ -1119,15 +1106,20 @@ impl Claimed {
     }
 
     /// @key unwraps the superblock's key, instead of the keyring
-    pub fn open(mut self, opts: &mut Opts, key: Option<&Key>) -> Result<OpenFs, BchError> {
+    pub fn open(self, opts: &mut Opts, key: Option<&Key>) -> Result<OpenFs, BchError> {
+        let (fs, out) = self.open_keeping(opts, key)?;
+        if !out.as_bytes().is_empty() {
+            fs.log().info(&out);
+        }
+        Ok(fs)
+    }
+
+    /// open(), what it had to say kept for the caller to print: after attaching
+    /// a redirect for it, say.
+    pub fn open_keeping(mut self, opts: &mut Opts, key: Option<&Key>) -> Result<(OpenFs, Printbuf), BchError> {
         match self.open_to(opts, key) {
             Err(e) => Err(open_failed(e, &mut self.out)),
-            Ok(fs) => {
-                if !self.out.as_bytes().is_empty() {
-                    fs.log().msg().info().write_bytes(self.out.as_bytes());
-                }
-                Ok(fs)
-            }
+            Ok(fs) => Ok((fs, core::mem::replace(&mut self.out, Printbuf::new()))),
         }
     }
 
@@ -1141,13 +1133,12 @@ impl Claimed {
         let fs = alloc(sbs, &fs_opts, self.holder.clone(), key, out)?;
         self.holder.fs.store(fs.as_ptr(), core::sync::atomic::Ordering::Release);
 
-        // opt_version_init()'s messages, before startup's
-        if !out.as_bytes().is_empty() {
-            print_str(&fs, LogLevel::INFO, out);
-            out.reset();
-        }
-
         if fs.opts().nostart.get() == 0 {
+            // opt_version_init()'s messages, before startup's
+            if !out.as_bytes().is_empty() {
+                print_str(&fs, LogLevel::INFO, out);
+                out.reset();
+            }
             fs.start_to(out)?;
         }
         Ok(fs)

@@ -18,9 +18,9 @@ use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::util::{loan::Loan, vstructs::plain_bytes, ioctl::Ioctl};
 use crate::os::file::File;
-use crate::util::thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile};
+use crate::util::{log::Only, thread_with_file::{Inner, Stdio, StdioFile, ThreadWithFile}};
 use kernel::sync::aref::ARef;
-use core::sync::atomic::Ordering::{Relaxed, Release};
+use core::sync::atomic::Ordering::Relaxed;
 use core::ops::ControlFlow;
 use kernel::uaccess::{UserPtr, UserSlice};
 use pin_init::{pin_data, pin_init};
@@ -63,7 +63,7 @@ impl StdioFile for StatusFd {
             }
 
             // Whoever's asking is drawing it: keep it off the console.
-            fs.stdio_progress_reader.store(true, Relaxed);
+            fs.stdio.progress_reader.store(true, Relaxed);
 
             let r = &fs.recovery;
             {
@@ -115,17 +115,12 @@ impl StatusFile {
     /// @f - @fs starting up - with the channel: what @fs prints for the user,
     /// and its questions, go to it, and its ioctl answers for @fs.
     pub(crate) fn attached<R>(&self, fs: &Fs, f: impl FnOnce() -> R) -> R {
-        fs.stdio_user_only.store(true, Relaxed);
-        fs.stdio.store(self.status().redirect.as_ptr(), Release);
-        let ret = self.status().data.fs.lend(fs, f);
+        let _attached = fs.stdio.attach(&self.status().redirect, Only::User);
 
-        // The loan over first is what makes the reader flag safe to clear
-        // after it: the ioctl only sets it having seen a filesystem lent, so
-        // no further ioctl can set it.
-        fs.stdio.store(core::ptr::null_mut(), Release);
-        fs.stdio_user_only.store(false, Relaxed);
-        fs.stdio_progress_reader.store(false, Relaxed);
-        ret
+        // The loan over before the guard drops is what makes the reader flag
+        // safe to clear as it does: the ioctl only sets it having seen a
+        // filesystem lent, so no further ioctl can set it.
+        self.status().data.fs.lend(fs, f)
     }
 }
 

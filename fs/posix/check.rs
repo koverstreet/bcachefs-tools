@@ -930,14 +930,13 @@ pub mod ioctl {
     use crate::format::ErrorAction;
     use crate::fs::FsFlag;
     use crate::opts::{Opts, FsckErrOpt, OptId};
-    use core::sync::atomic::Ordering::{Relaxed, Release};
     use crate::fs::{OpenFs, RoRef};
     use crate::init::registry::{self, Claim, FsHandle, Opener};
     use crate::init::passes::{passes_match, run_passes, PassFlags, RecoveryPass};
     use crate::opts::parse_mount_opts_cstr;
     use crate::os::kernel::{capable, Capability};
     use crate::util::refcount::TryRefcount;
-    use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
+    use crate::util::{alloc::Arc, log::Only, thread_with_file::{StdioRedirect, ThreadWithFile}};
     use crate::os::ioctl::{UserStr, UserVstruct};
 
     /// The options at user address @addr, or none if it's 0.
@@ -969,7 +968,6 @@ pub mod ioctl {
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
 
-        opts.set_stdio(thr.stdio().as_ptr() as u64);
         opts.set_read_only(true);
         opts.set_ratelimit_errors(false);
         // We need request_key() to be called before we punt to kthread:
@@ -983,10 +981,10 @@ pub mod ioctl {
                 let Claim::Ours(_opening, claimed) = opening.claim(devs.iter().map(UserStr::as_cstr), &mut opts)? else {
                     return Err(Errcode::EBUSY_fsck_offline_claim.into());
                 };
-                claimed.open(&mut opts, None)
+                claimed.open_keeping(&mut opts, None)
             });
 
-        if let Ok(fs) = &fs {
+        if let Ok((fs, _)) = &fs {
             if fs.opts.errors() == ErrorAction::panic {
                 fs.opts_writer(&mut fs.sb_lock()).set_errors(ErrorAction::ro);
             }
@@ -996,11 +994,17 @@ pub mod ioctl {
             .inspect_err(|e| kernel::pr_err!("ret {}\n", e.msg()))
     }
 
-    fn fsck_offline_thread(fs: Result<OpenFs, BchError>, stdio: &StdioRedirect) -> i32 {
-        let fs = match fs {
+    fn fsck_offline_thread(fs: Result<(OpenFs, Printbuf), BchError>, stdio: &Arc<StdioRedirect>) -> i32 {
+        let (fs, opened) = match fs {
             Ok(fs) => fs,
             Err(e) => return -e.raw(),
         };
+
+        // the filesystem is fsck's alone: everything it says is for its user
+        let attached = fs.stdio.attach(stdio, Only::All);
+        if !opened.as_bytes().is_empty() {
+            fs.log().info(&opened);
+        }
 
         fs.recovery_task.store(crate::os::sched::current(), core::sync::atomic::Ordering::Relaxed);
 
@@ -1021,6 +1025,10 @@ pub mod ioctl {
             let _ = stdio.write(false, buf.as_bytes());
         }
 
+        // shutting down attached, so what it says reaches the user too; the
+        // guard's borrow of the filesystem ends before exit() takes it
+        let _ = fs.stop();
+        drop(attached);
         let _ = fs.exit();
         ret
     }
@@ -1042,7 +1050,7 @@ pub mod ioctl {
         fs.log().err_fn(thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
-    fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &StdioRedirect) -> i32 {
+    fn fsck_online_thread(fs_ref: RoRef, opts: Opts, stdio: &Arc<StdioRedirect>) -> i32 {
         let fs: &Fs = &fs_ref;
         let mut buf = Printbuf::new();
 
@@ -1063,8 +1071,7 @@ pub mod ioctl {
 
         let mut ret = Err(BchError::from(Errcode::EAGAIN_fsck_online_recovery_running));
         if let Some(_run) = fs.recovery.run_lock.try_lock() {
-            fs.stdio_filter.store(crate::os::sched::current(), Relaxed);
-            fs.stdio.store(stdio.as_ptr(), Release);
+            let attached = fs.stdio.attach(stdio, Only::Task);
 
             // XXX: can we figure out a way to do this without mucking with c->opts?
             let old_fix_errors = fs.opts.fix_errors.get();
@@ -1085,8 +1092,7 @@ pub mod ioctl {
 
             fs.flags.set(FsFlag::in_fsck, false);
 
-            fs.stdio.store(core::ptr::null_mut(), Release);
-            fs.stdio_filter.store(core::ptr::null_mut(), Relaxed);
+            drop(attached);
             fs.opts_writer(&mut fs.sb_lock()).fix_errors.set(old_fix_errors);
         }
 

@@ -55,7 +55,9 @@ use crate::errcode::{BchError, Errcode};
 use crate::locking::{ExclusiveGuard, Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::Fifo;
-use crate::util::alloc::{kbox_pin_init, KBox, Vec};
+use crate::util::alloc::{kbox_pin_init, Arc, KBox, Vec};
+use kernel::alloc::flags::GFP_KERNEL;
+use kernel::init::InPlaceInit;
 use crate::util::ffi::c_char;
 use crate::util::rcu::{FreeAnytime, NothingToDetach};
 use crate::os::file::{file_data, Any, File, FileData, FileOps, NewFile, PollQueue, PollTable, UserBuf};
@@ -110,10 +112,6 @@ impl<T: ThreadFile> ThreadWithFile<T> {
     pub fn new(data: impl PinInit<T, BchError>) -> Result<Self, BchError> {
         let init = pin_init!(Inner::<T> { thread: None, data <- data }? BchError);
         Ok(ThreadWithFile(kbox_pin_init(init)?))
-    }
-
-    pub fn data(&self) -> &T {
-        &self.0.data
     }
 
     /// The kthread's named for the caller.
@@ -214,16 +212,12 @@ pub struct StdioRedirect {
 }
 
 impl StdioRedirect {
-    fn new() -> impl PinInit<Self> {
-        pin_init!(StdioRedirect {
+    fn new() -> Result<Arc<Self>, BchError> {
+        Arc::try_pin_init(pin_init!(StdioRedirect {
             input  <- StdioBuf::new(),
             output <- StdioBuf::new(),
             done:     AtomicBool::new(false),
-        })
-    }
-
-    pub fn as_ptr(&self) -> *mut Self {
-        core::ptr::from_ref(self).cast_mut()
+        }? BchError), GFP_KERNEL)
     }
 
     fn done(&self) -> bool {
@@ -401,8 +395,7 @@ impl StdioFile for () {}
 
 #[pin_data]
 pub struct Stdio<T> {
-    #[pin]
-    pub redirect: StdioRedirect,
+    pub redirect: Arc<StdioRedirect>,
     ret:          AtomicI32,
     #[pin]
     pub data:     T,
@@ -442,18 +435,15 @@ impl<T: StdioFile> ThreadFile for Stdio<T> {
 
 impl<T: StdioFile> ThreadWithFile<Stdio<T>> {
     pub fn new_stdio(data: impl PinInit<T, BchError>) -> Result<Self, BchError> {
+        let redirect = StdioRedirect::new()?;
         Self::new(pin_init!(Stdio::<T> {
-            redirect <- StdioRedirect::new(),
-            ret:        AtomicI32::new(0),
-            data     <- data,
+            redirect,
+            ret:  AtomicI32::new(0),
+            data <- data,
         }? BchError))
     }
 
-    pub fn stdio(&self) -> &StdioRedirect {
-        &self.data().redirect
-    }
-
-    pub fn run_stdio(self, f: impl FnOnce(&T, &StdioRedirect) -> i32 + Send + FreeAnytime + NothingToDetach + 'static)
+    pub fn run_stdio(self, f: impl FnOnce(&T, &Arc<StdioRedirect>) -> i32 + Send + FreeAnytime + NothingToDetach + 'static)
         -> Result<i32, BchError>
     {
         self.run(move |s: &Stdio<T>| {

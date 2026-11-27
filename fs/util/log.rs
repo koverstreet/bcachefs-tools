@@ -9,6 +9,12 @@
 
 #[cfg(kernel)]
 use crate::c;
+#[cfg(kernel)]
+use {crate::locking::{Locked, SpinLockIrq},
+     crate::util::{alloc::Arc, thread_with_file::StdioRedirect},
+     core::sync::atomic::AtomicBool,
+     cstruct_macros::{Init, MaybeZeroable},
+     pin_init::pin_data};
 use crate::fs::{Dev, Fs};
 use crate::errcode::BchError;
 use crate::util::{ratelimit::Ratelimit, Printbuf, ToText};
@@ -61,7 +67,7 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
     }
 
     #[cfg(kernel)]
-    if let Some(stdio) = stdio_redirect(fs, false) {
+    if let Some(stdio) = fs.stdio.get(false) {
         let _ = stdio.write(true, &buf.as_bytes()[2..]);
         return;
     }
@@ -104,20 +110,87 @@ pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
 /// The most printk() takes at once.
 const PRINTK_LIMIT: usize = 1024;
 
-/// The filesystem's redirect, if it's to get this message - @user: one for
-/// the person running the fsck, which a mount that only wants those gets -
-/// and if this is the task it's for.
+// ── The stdio redirect ──────────────────────────────────────────────────
+//
+// A redirect - an fsck's, or the mount's status fd - is attached to the
+// filesystem while someone's listening: attach(), for as long as its guard
+// lives. A use of it - a printer's write, or a prompt waiting for its answer -
+// is a ref on it, which may outlive the guard: the redirect lives as long as
+// its last ref, and a write to it once it's done gets EPIPE.
+
+/// Which of the filesystem's messages an attached redirect gets.
 #[cfg(kernel)]
-pub(crate) fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
-    let stdio = fs.stdio.load(Ordering::Acquire);
-    let filter = fs.stdio_filter.load(Ordering::Relaxed);
-    if stdio.is_null() ||
-       (!user && fs.stdio_user_only.load(Ordering::Relaxed)) ||
-       (!filter.is_null() && filter != crate::os::sched::current()) {
-        return None;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Only {
+    /// Everything: an offline fsck's own filesystem.
+    All,
+    /// What this task prints: online fsck, on a filesystem others use.
+    Task,
+    /*
+     * What's for the user - questions, hard errors: the mount's status fd.
+     * A boot splash wants those, not a running commentary of IO errors.
+     */
+    User,
+}
+
+#[cfg(kernel)]
+pub struct Attached {
+    redirect: Arc<StdioRedirect>,
+    only:     Only,
+    /// The attaching task's address, for Only::Task.
+    task:     usize,
+}
+
+#[cfg(kernel)]
+#[pin_data]
+#[derive(MaybeZeroable, Init)]
+pub struct StdioAttach {
+    #[pin]
+    #[init(crate::new_lock!(None, "&c->stdio"))]
+    attached: Locked<SpinLockIrq, Option<Attached>>,
+    /*
+     * Someone is polling BCH_IOCTL_RECOVERY_STATUS on the redirect, so
+     * they're drawing progress themselves and progress indicators keep off
+     * the console entirely. Set by the first such ioctl, cleared as the
+     * redirect detaches - a mount that asks for a status fd but never polls
+     * still gets its progress in dmesg.
+     */
+    pub progress_reader: AtomicBool,
+}
+
+/// The redirect attached for as long as it lives.
+#[cfg(kernel)]
+pub struct AttachGuard<'a>(&'a StdioAttach);
+
+#[cfg(kernel)]
+impl StdioAttach {
+    /// @redirect, to get the messages @only says until the guard drops.
+    pub fn attach(&self, redirect: &Arc<StdioRedirect>, only: Only) -> AttachGuard<'_> {
+        let task = crate::os::sched::current().addr();
+        let old = self.attached.lock().replace(Attached { redirect: redirect.clone(), only, task });
+        assert!(old.is_none(), "a stdio redirect attached over another");
+        AttachGuard(self)
     }
-    // SAFETY: the filesystem's redirect, set while it's attached
-    Some(unsafe { &*stdio })
+
+    /// The redirect, if it's to get this message - @user: one for whoever's
+    /// running fsck - from this task.
+    pub fn get(&self, user: bool) -> Option<Arc<StdioRedirect>> {
+        let attached = self.attached.lock();
+        let a = attached.as_ref()?;
+        if (!user && a.only == Only::User) ||
+           (a.only == Only::Task && a.task != crate::os::sched::current().addr()) {
+            return None;
+        }
+        Some(a.redirect.clone())
+    }
+}
+
+#[cfg(kernel)]
+impl Drop for AttachGuard<'_> {
+    fn drop(&mut self) {
+        self.0.attached.lock().take();
+        self.0.progress_reader.store(false, Ordering::Relaxed);
+    }
 }
 
 /// @s at printk level @level - None, the previous message's - if the
@@ -133,7 +206,7 @@ fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
     let Some(level) = loglevel(fs, level) else { return };
 
     #[cfg(kernel)]
-    if let Some(stdio) = stdio_redirect(fs, false) {
+    if let Some(stdio) = fs.stdio.get(false) {
         let _ = stdio.write(true, &s[..len]);
         return;
     }
@@ -149,7 +222,7 @@ fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
 /// else the log at err.
 pub fn print_user(fs: &Fs, s: &[u8]) {
     #[cfg(kernel)]
-    if let Some(stdio) = stdio_redirect(fs, true) {
+    if let Some(stdio) = fs.stdio.get(true) {
         let _ = stdio.write(true, s);
         return;
     }
