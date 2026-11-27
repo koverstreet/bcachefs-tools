@@ -45,7 +45,7 @@ use crate::fs::{Fs, FsFlag};
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::snapshots::{delete, snapshot, subvolume};
-use crate::util::{alloc::Vec, Join, Printbuf, ToText};
+use crate::util::{alloc::Vec, vstructs::Validated, Join, Printbuf, ToText};
 use crate::{message, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use crate::format::{Bpos, Btree, MetadataVersion, BTREE_MAX_DEPTH};
@@ -189,6 +189,25 @@ fn check_snapshot_tree<'t>(
         Err(_) => true,
         Ok(r)  => root_id != fs.snapshots.root(root_id) || k.k.p.offset as u32 != r.v.tree(),
     };
+
+    // A root missing while nodes of the tree name it as their parent: they're
+    // check_snapshots' to repair, and this key is where the root belongs.
+    let tree_id = k.k.p.offset as u32;
+    let nodes_say_root = match &root {
+        Err(_) => find_key(t, Btree::snapshots, |k| k.arm::<Snapshot>().is_some_and(|s| {
+            let s = s.v();
+            s.state_decoded() != Some(SnapshotState::deleted) && s.tree() == tree_id && s.parent() == root_id
+        }))?.is_some(),
+        Ok(_) => false,
+    };
+    if nodes_say_root {
+        fsck_err_report!(fs, snapshot_tree_to_missing_snapshot,
+                         "snapshot tree's root {root_id} is missing, but nodes in the tree still name it -\n\
+                          leaving it for check_snapshots:\n{}",
+                         k.to_text(fs));
+        return Ok(());
+    }
+
     if bad {
         let mut found = Printbuf::new();
         match &root {
@@ -480,7 +499,7 @@ impl Role {
 }
 
 /// Whether @s, as @role, points at @other.
-fn points_at(s: &Snapshot, role: Role, other: u32) -> bool {
+fn points_at(s: &Snapshot<Validated>, role: Role, other: u32) -> bool {
     match role {
         Role::Parent => s.children().contains(&other),
         Role::Child  => s.parent() == other,
@@ -622,29 +641,34 @@ fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError>
     edge_repair_commit(t)
 }
 
-/// Recreate missing child @id of @parent_id, as a leaf. Nothing we write
-/// removes a node with keys still accounted to it, so it was destroyed, and
-/// its keys are still reachable from every view below it. A leaf is what
-/// @parent_id's pointer justifies; descendants, if any, come back through
-/// their own parent pointers on a later pass. A subvolume claiming @id comes
-/// back with it.
-fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<(), BchError> {
-    let fs = t.fs();
+/// Where a missing node goes: under @parent - 0, as a tree's root - in @tree,
+/// with @children.
+#[derive(Clone, Copy, Debug)]
+struct Place {
+    parent:   u32,
+    children: [u32; 2],
+    tree:     u32,
+}
 
-    let Some(parent) = lookup_node(t, parent_id)? else {
-        return Err(fs.err(Errcode::EINVAL_snapshot_edge_to_missing_node));
-    };
+/// Recreate missing node @id at @place, its depth and skiplist the parent's to
+/// give, a subvolume claiming it back with it.
+fn recreate(t: &TransAttempt<'_, '_>, id: u32, place: Place) -> Result<(), BchError> {
+    let fs = t.fs();
 
     let mut n = t.bkey_alloc_typed::<Snapshot>()?;
     n.k_mut().p = pos(0, id as u64);
 
     let v = n.v_mut();
-    v.parent    = parent_id.into();
-    v.tree      = parent.v.tree;
-    v.depth     = fs.snapshots.depth(parent_id).into();
+    v.parent    = place.parent.into();
+    v.children  = place.children.map(Into::into);
+    if v.children()[0] < v.children()[1] {
+        v.children.swap(0, 1);
+    }
+    v.tree      = place.tree.into();
+    v.depth     = fs.snapshots.depth(place.parent).into();
     v.btime.lo  = fs.current_time().into();
     for skip in &mut v.skip {
-        *skip = fs.snapshots.skiplist_get(parent_id).into();
+        *skip = fs.snapshots.skiplist_get(place.parent).into();
     }
     v.skip.sort_unstable_by_key(|s| (*s).get());
     v.subvol    = subvol_claiming(t, id)?.unwrap_or(0).into();
@@ -652,6 +676,53 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
 
     fs.snapshots.table_make_room(id)?;
     t.insert(Btree::snapshots, n, UpdateTriggerFlags::empty())
+}
+
+/// The nodes from @start up that @pred accepts.
+fn find_nodes(t: &TransAttempt<'_, '_>, start: u32, mut pred: impl FnMut(u32, &Snapshot<Validated>) -> bool)
+    -> Result<Vec<u32>, BchError>
+{
+    let mut ids = Vec::new();
+    let mut iter = BtreeIter::new(t, Btree::snapshots, pos(0, start as u64), BtreeIterFlags::PREFETCH);
+    iter.for_each_norestart(t, |_, k| {
+        let id = k.k.p.offset as u32;
+        if k.arm::<Snapshot>().is_some_and(|s| pred(id, s.v())) {
+            ids.push(id)?;
+        }
+        Ok(())
+    })?;
+    Ok(ids)
+}
+
+/// The live nodes - not deleted - whose @role pointer names @id: its children,
+/// as Child, or its parent, as Parent.
+fn nodes_naming(t: &TransAttempt<'_, '_>, id: u32, role: Role) -> Result<Vec<u32>, BchError> {
+    find_nodes(t, 0, |_, s| s.state_decoded() != Some(SnapshotState::deleted) && points_at(s, role, id))
+}
+
+/// Missing node @id's place, as the nodes around it have it - if they agree:
+/// one or two children naming it as parent, in one tree, and above them the
+/// tree's key naming it as root, or one node of the tree naming it as child.
+fn missing_interior(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<Place>, BchError> {
+    let fs = t.fs();
+
+    let children = nodes_naming(t, id, Role::Child)?;
+    let tree = match &children[..] {
+        &[c]                                                         => fs.snapshots.tree(c),
+        &[c0, c1] if fs.snapshots.tree(c0) == fs.snapshots.tree(c1) => fs.snapshots.tree(c0),
+        _                                                            => return Ok(None),
+    };
+
+    let parent = match &nodes_naming(t, id, Role::Parent)?[..] {
+        &[]                                      => 0,
+        &[p] if fs.snapshots.tree(p) == tree     => p,
+        _                                        => return Ok(None),
+    };
+    if parent == 0 && snapshot::tree_lookup(t, tree).found()?.is_none_or(|st| st.root_snapshot.get() != id) {
+        return Ok(None);
+    }
+
+    Ok(Some(Place { parent, children: [children[0], children.get(1).copied().unwrap_or(0)], tree }))
 }
 
 /// The nodes an edge repair is between, keys and all: which pointer is wrong
@@ -720,8 +791,8 @@ enum EdgeRepair {
     /// The target's pointer slot that should name us, empty or stale: aim it
     /// at us.
     Complete(u32),
-    /// Recreate the missing child as a leaf.
-    Resurrect,
+    /// Recreate the missing node our pointer names, here.
+    Recreate(Place),
 }
 
 /// Check the edge between node @n, as @role, and @other_id, which its
@@ -812,6 +883,23 @@ fn edge_repair(
         }
     }
 
+    // A pointer to a node that isn't there, with children naming it, which they
+    // and the tree or node above agree on the place of: recreate it there.
+    // Before clearing a child pointer to it, below: that would lose where it was.
+    //
+    // Not autofix: deletion tombstones, so this is damage, and a snapshot
+    // deletion that runs into it stops rather than deleting past a repair.
+    if other.is_none() {
+        if let Some(place) = missing_interior(t, other_id)? {
+            if fsck_err!(t, snapshot_edge_bad,
+                         "snapshot {id} {ptr} pointer {other_id} does not exist, but the nodes around it place it -\n\
+                          recreating it: {place:?}{}",
+                         EdgeNodes::new(fs, n, None, None))? {
+                return Ok(Some(EdgeRepair::Recreate(place)));
+            }
+        }
+    }
+
     // A child pointer to a node that isn't there: keys accounted to it mean it
     // was destroyed, and recreating it keeps them reachable. With none, clear the
     // pointer - so a garbage id doesn't conjure a snapshot.
@@ -824,7 +912,7 @@ fn edge_repair(
                                 "snapshot {id} child pointer {other_id} does not exist, but keys are\n\
                                  accounted to {other_id} - recreating it as a leaf so they stay reachable{}",
                                 EdgeNodes::new(fs, n, None, None))?;
-            return Ok(fix.then_some(EdgeRepair::Resurrect));
+            return Ok(fix.then_some(EdgeRepair::Recreate(Place { parent: id, children: [0, 0], tree: n.v().tree() })));
         }
 
         if sibling != 0 &&
@@ -880,8 +968,8 @@ fn check_edge<'a, 't>(
             edit_node(t, id, |u| undelete_owns_data(t, u))?,
         EdgeRepair::Complete(old) =>
             edit_node(t, other_id, |u| Ok(set_ptr(u.v_mut(), role.other(), old, id)))?,
-        EdgeRepair::Resurrect =>
-            resurrect_child(t, id, other_id)?,
+        EdgeRepair::Recreate(place) =>
+            recreate(t, other_id, place)?,
         EdgeRepair::Retarget(_) => unreachable!("repaired above"),
     }
     edge_repair_commit(t)
