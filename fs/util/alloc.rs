@@ -38,15 +38,53 @@ pub struct Vmalloc;
 /// # Safety
 /// If KVFREE, kvfree() - in-kernel - frees what it gives: as kvfree_rcu()
 /// does, from a work item or an RCU callback. A zero-sized one has no state:
-/// stateless() makes it from nothing.
+/// stateless() makes it from nothing. If its Frees are AtOnce, what's freed
+/// to it waits out RCU readers before it's anything but the type it was.
 pub unsafe trait Alloc: Allocator {
     /// Its memory is kvfree()'s to free: so kvfree_rcu()'s, a grace period on.
     const KVFREE: bool = false;
+
+    /// How a T it gave is freed: as T says, or at once.
+    type Frees: Frees = AsTypeSays;
+}
+
+/// How a T in memory of its own layout - nothing allocated before it, as a
+/// box's - is dropped and freed.
+pub trait Frees {
+    /// # Safety
+    /// @p is a T in @a's memory, of T's layout, and nothing but RCU readers
+    /// uses it after.
+    unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A);
+}
+
+/// As T says: given back at once, or by its own head a grace period on.
+pub enum AsTypeSays {}
+
+impl Frees for AsTypeSays {
+    unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A) {
+        use crate::util::maybe_rcu_alloc::{assert_head_in_place, RcuFreeing};
+        assert_head_in_place::<T>();
+        unsafe { <T as RcuFreeing>::free(p, a) }
+    }
+}
+
+/// At once: the allocator's frees wait out RCU readers already.
+pub enum AtOnce {}
+
+impl Frees for AtOnce {
+    unsafe fn free<T, A: Alloc>(p: NonNull<T>, a: &A) {
+        <T as crate::util::maybe_rcu_alloc::RcuFreeing>::assert_drops_at_free();
+        unsafe {
+            core::ptr::drop_in_place(p.as_ptr());
+            a.deallocate(p.cast(), Layout::new::<T>());
+        }
+    }
 }
 
 /// An allocator by reference: what keeps one keeps &A - a pool's.
 unsafe impl<A: Alloc + ?Sized> Alloc for &A {
     const KVFREE: bool = A::KVFREE;
+    type Frees = A::Frees;
 }
 
 /// Allocator's allocate() and grow(), with flags: for what knows its context
@@ -100,6 +138,7 @@ unsafe impl<A: AllocGfp> Allocator for WithFlags<A> {
 
 unsafe impl<A: AllocGfp> Alloc for WithFlags<A> {
     const KVFREE: bool = A::KVFREE;
+    type Frees = A::Frees;
 }
 
 /// Its flags, and what's asked

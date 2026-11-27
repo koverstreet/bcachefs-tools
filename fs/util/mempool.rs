@@ -300,7 +300,9 @@ unsafe impl<A: AllocGfp> Allocator for Mempool<A> {
     }
 }
 
-unsafe impl<A: AllocGfp> Alloc for Mempool<A> {}
+unsafe impl<A: AllocGfp> Alloc for Mempool<A> {
+    type Frees = A::Frees;
+}
 
 impl<A: AllocGfp> Mempool<A> {
     fn free_reserve(&self) {

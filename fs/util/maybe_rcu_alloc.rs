@@ -283,7 +283,43 @@ impl<T: ?Sized + SelfSized + HasRcuHead, H: HeadKind> RcuHeadAt<H> for T {
 struct NoHead<T: ?Sized>(PhantomData<T>);
 
 impl<T: ?Sized> NoHead<T> {
-    const ERR: () = panic!("a DST freed by a callback - dropped after a grace period - needs an rcu_head of its own");
+    const ERR: () = panic!("freed a grace period on with no room for a head before it - a DST dropped by the callback, \
+                            or a box's T: it needs an rcu_head of its own");
+}
+
+/// A build error for a T freed a grace period on - !FreeAnytime - with no head
+/// of its own: one in memory of its own layout, a box's, has no room for one
+/// before it.
+pub(crate) fn assert_head_in_place<T: ?Sized>() {
+    <T as InPlace>::assert();
+}
+
+trait InPlace {
+    fn assert();
+}
+
+impl<T: ?Sized> InPlace for T {
+    default fn assert() {
+        <T as OwnHead>::assert();
+    }
+}
+
+impl<T: ?Sized + FreeAnytime> InPlace for T {
+    fn assert() {}
+}
+
+trait OwnHead {
+    fn assert();
+}
+
+impl<T: ?Sized> OwnHead for T {
+    default fn assert() {
+        let () = NoHead::<T>::ERR;
+    }
+}
+
+impl<T: ?Sized + HasRcuHead> OwnHead for T {
+    fn assert() {}
 }
 
 /// @head, then @value: a Headed's layout, and its value's offset.

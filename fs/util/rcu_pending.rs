@@ -25,7 +25,7 @@ use crate::locking::{Locked, SpinLockIrq};
 use crate::new_lock;
 use crate::types::GenRadix;
 use crate::os::alloc::Global;
-use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, Flags, Vec};
+use crate::util::alloc::{flags, init_at, Alloc, AllocError, AllocGfp, Allocator, AtOnce, Flags, Vec};
 use crate::util::mempool::Mempool;
 use crate::util::ffi::Opaque;
 use crate::data_structures::genradix::NewNode;
@@ -758,7 +758,9 @@ unsafe impl<T: RcuRealloc, A: Alloc> Allocator for RcuPending<'_, T, A> {
     }
 }
 
-unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {}
+unsafe impl<T: RcuRealloc, A: Alloc> Alloc for RcuPending<'_, T, A> {
+    type Frees = AtOnce;
+}
 
 /// A pool of T's, each RCU readers may still be in when it's handed out
 /// again - as a T - and back to the port's allocator a grace period after

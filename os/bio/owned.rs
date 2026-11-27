@@ -42,7 +42,7 @@ use crate::data_structures::dst_vec::DstVec;
 use crate::errcode::{BchError, Errcode};
 use crate::locking::MemallocFlags;
 use crate::os::blkdev::BlockDevice;
-use crate::util::alloc::{Flags, init_at, stateless, Alloc, AllocError, Allocator, Kmalloc};
+use crate::util::alloc::{Flags, Frees, init_at, stateless, Alloc, AllocError, Allocator, Kmalloc};
 use crate::util::late::LateInit;
 use crate::util::mempool::Mempool;
 
@@ -744,11 +744,12 @@ impl<T: HasBio, A: Alloc> Drop for BioBox<'_, T, A> {
         let t = self.t.as_ptr();
         let bio = bio_of(t);
         unsafe {
-            let set = (*bio).bi_pool.cast::<BioPool>().as_ref();
-            core::ptr::drop_in_place(t);
-            match set {
-                Some(set) => set.free(bio),
-                None      => self.alloc.deallocate(self.t.cast(), Layout::new::<T>()),
+            match (*bio).bi_pool.cast::<BioPool>().as_ref() {
+                Some(set) => {
+                    core::ptr::drop_in_place(t);
+                    set.free(bio)
+                }
+                None => <A::Frees as Frees>::free(self.t, &self.alloc),
             }
         }
     }
