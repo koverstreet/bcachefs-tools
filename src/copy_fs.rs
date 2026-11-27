@@ -368,14 +368,16 @@ fn copy_xattrs(
         )?;
     }
 
-    // Each set above reads the inode back into @dst, so a flag set before
-    // the last would be lost: set them now. Written with the rest of the
-    // inode by the caller.
+    // Each xattr set above reads the inode back into @dst, and so does
+    // creating a child when this is a directory. Set the flags after the
+    // last xattr, and write them now, before the caller creates children.
+    if acl_flags.is_empty() {
+        return Ok(());
+    }
     for flag in acl_flags {
         dst.set_flag(flag, true);
     }
-
-    Ok(())
+    update_inode(fs, dst)
 }
 
 /// A POSIX ACL as the xattr API gives it - <linux/posix_acl_xattr.h>: a
@@ -1078,11 +1080,8 @@ pub fn copy_fs(
 
     rustix::process::fchdir(src_fd).map_err(rustix_err)?;
 
-    // Xattrs first: setting each reads the inode back, over the times.
     let dot = CString::new(".").unwrap();
     copy_xattrs(fs, &mut root_inode, &dot)?;
-
-    copy_times(fs, &mut root_inode, &stat);
 
     let dup_fd = rustix::io::dup(src_fd).map_err(rustix_err)?;
     copy_dir(fs, s, &mut root_inode, dup_fd, src_path)?;
@@ -1091,6 +1090,7 @@ pub fn copy_fs(
         reserve_old_fs_space(fs, &mut root_inode, &mut s.extents, s.reserve_start)?;
     }
 
+    copy_times(fs, &mut root_inode, &stat);
     update_inode(fs, &root_inode)?;
 
     // Print summary
