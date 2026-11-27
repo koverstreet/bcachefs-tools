@@ -25,12 +25,12 @@ use crate::util::rcu::FreeAnytime;
 // RCU read section's, where vfree() can't sleep. In userspace, std's
 // allocator. Each port's impls are its own (os::alloc).
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ::pin_init::Zeroable)]
 pub struct Kmalloc;
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ::pin_init::Zeroable)]
 pub struct KVmalloc;
 /// vmalloc(): pages one at a time, mapped - no high-order allocation, to wait on compaction.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ::pin_init::Zeroable)]
 pub struct Vmalloc;
 
 /// An Allocator of ours, which says whether kvfree() frees what it gives.
