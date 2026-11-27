@@ -1021,7 +1021,9 @@ impl Fs {
     }
 
     /// Entries that no accounting is kept for dropped - journal entries
-    /// aside, which have none.
+    /// aside, which have none, and entries intake has taken a key in for,
+    /// which replicas_kill_dead() kills when they're dead: the in-memory
+    /// counter can be zero with a key still on its way to the btree.
     pub fn replicas_gc_accounted(&self) -> Result<(), BchError> {
         accounting_mem::mem_gc(self);
 
@@ -1030,7 +1032,9 @@ impl Fs {
             let mark = self.mark_lock().write();
             let mut r = self.replicas.write();
 
-            r.retain(|e, _| e.data_type == DataType::journal || accounting_mem::has_replicas(self, &mark, e));
+            r.retain(|e, s| e.data_type == DataType::journal ||
+                     s.seq.load(Ordering::Relaxed) != 0 ||
+                     accounting_mem::has_replicas(self, &mark, e));
             r.write_sb(self, &mut sb)?;
         }
         self.write_super(&mut sb);
