@@ -11,7 +11,7 @@
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::posix::logged_ops_format::LoggedOpsInum;
 use crate::errcode::{Errcode, BchError};
@@ -237,8 +237,8 @@ pub fn finish(
         return op_ret;
     }
 
-    commit_do(trans, None, flags.flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC),
-              |t| t.delete(Btree::logged_ops, k.k.p, UpdateTriggerFlags::empty()))
+    trans.commit_do(None, flags.flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC),
+                    |t| t.delete(Btree::logged_ops, k.k.p, UpdateTriggerFlags::empty()))
     .inspect_err(|e| {
         /*
          * This needs to be a fatal error because we've left an unfinished

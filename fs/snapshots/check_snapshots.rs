@@ -31,7 +31,7 @@ use crate::alloc::accounting;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
-    commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
 };
 use crate::btree::trans::TransGuard;
@@ -1315,7 +1315,7 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
 
     for tree in r.trees.iter() {
         for &id in tree.iter() {
-            commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| reconstruct_node(t, id, tree))?;
+            trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| reconstruct_node(t, id, tree))?;
         }
     }
 

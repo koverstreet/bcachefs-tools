@@ -42,7 +42,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{fence, Ordering::SeqCst};
 
 use crate::btree::bkey::pos;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
 use crate::c;
 use crate::init::{dev::AtomicDevsMask, error::{count_fsck_err, id}};
 use crate::posix::inode::{InodeUnpacked, VolatileInodeUnpacked};
@@ -253,7 +253,7 @@ impl InodeInfo {
         // before the locks its insert will be under
         fs.vfs.inode_cache.make_room();
         let trans = crate::btree_trans!(fs);
-        lockrestart_do(&trans, |t| Self::get_in(t, inum, warn))
+        trans.lockrestart_do(|t| Self::get_in(t, inum, warn))
     }
 
     /// A new VFS inode for @inum, made from @bi and put in the inode cache -
@@ -611,7 +611,7 @@ impl<'i> UpdateLock<'i> {
         // commit
         let mut opt_change = InodeOptChange::new();
 
-        let wrote = lockrestart_do(&trans, |t| {
+        let wrote = trans.lockrestart_do(|t| {
             opt_change = InodeOptChange::new();
 
             let mut iter = BtreeIter::uninit(t.trans());

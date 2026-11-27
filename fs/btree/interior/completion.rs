@@ -10,7 +10,6 @@ use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV, BkeyVMut};
 use crate::data_structures::{fifo::FifoRead, array_vec::ArrayVec};
 use crate::btree::cache::btree_ptr_hash_val;
-use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
                          TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::node::{BtreeNode, NR_WRITES, BtreeNodeFlags, BtreeWriteType};
@@ -406,7 +405,7 @@ fn nodes_written(fs: &Fs, owner: UpdateBox) {
     let ret = {
         let mut commit_lock = fs.btree.interior_updates.commit_lock.lock();
 
-        let ret = lockrestart_do(&trans, |t| {
+        let ret = trans.lockrestart_do(|t| {
             let key_changed = nodes_written_trans(t, u, &mut commit_lock)?;
             t.commit(Some(&u.disk_res), CommitOpts::new()
                      .watermark(Watermark::interior_updates)

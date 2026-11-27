@@ -18,7 +18,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::interior::check_topology;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt,
                          UpdateTriggerFlags};
 use crate::btree::trans::BtreeTrans;
 use crate::btree::trigger::{key_trigger, TriggerOp};
@@ -254,7 +254,7 @@ fn gc_btree(trans: &BtreeTrans<'_>, progress: &Progress<'_>, btree: Btree, targe
         })?;
     }
 
-    lockrestart_do(trans, |t| gc_btree_root(t, btree))
+    trans.lockrestart_do(|t| gc_btree_root(t, btree))
 }
 
 fn gc_btrees(fs: &Fs) -> Result<(), BchError> {

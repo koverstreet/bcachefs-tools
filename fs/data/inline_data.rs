@@ -10,7 +10,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{AnyKeySC, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, ByFlag,
     FamilyVal, FieldOffsets, BkeyOps};
 use crate::btree::bkey_buf::BtreeKeyBuf;
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents_format::{InlineData, InlineDataCsum,
     InlineDataV2};
@@ -200,7 +200,7 @@ async fn poison_task(fs: &Fs, key: BtreeKeyBuf, read_pos: Bpos, record: bool) {
     // an extents update commits with a reservation: an empty one, the key's
     // size unchanged
     let res = DiskReservation::new(fs);
-    let ret = commit_do(&trans, Some(&res), CommitFlags::empty(), |t| {
+    let ret = trans.commit_do(Some(&res), CommitFlags::empty(), |t| {
         let read = key.key();
         let mut iter = BtreeIter::new(t, key.btree, read.k.start_pos(), BtreeIterFlags::INTENT);
 

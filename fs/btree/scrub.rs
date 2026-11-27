@@ -8,7 +8,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{types_with, BkeySC};
 use crate::btree::bkey_buf::BtreeKeyBuf;
 use crate::btree::cache::{btree_pos_to_text, Bounce};
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags};
 use crate::btree::read::{BsetHolder, NodePtr};
 use crate::c;
 use crate::data::extents::ReadFlags;
@@ -214,7 +214,7 @@ async fn rewrite_if_bad(fs: &Fs, key: BtreeKeyBuf, dev: u32, io: MovingIo) {
     }
 
     let trans = crate::btree_trans!(fs);
-    let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
+    let ret = trans.commit_do(None, CommitFlags::empty(), |t| {
         t.btree_node_rewrite_key(key.btree, key.level - 1, key.key(), CommitFlags::empty())
     });
 

@@ -8,7 +8,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::{BtreeNodeType, journal_overlay};
 use crate::btree::bkey::{BkeyV, bkey_maybe_mergable, bkey_eq, bkey_gt, bkey_le, bkey_lt,
     bkey_merge, BkeyI, BkeyS, BkeySC, BkeyWhole, MutBkey, ValidatedVal, BKEY_U64S};
-use crate::btree::iter::{btree_id_cached, commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{btree_id_cached, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::path::{BtreePath, KeyVal, PathIdx, Paths};
 use crate::btree::write_buffer::insert_checks;
@@ -250,7 +250,7 @@ impl Fs {
             self.journal.early_entry_add(JsetEntryType::log, 0, 1, buf.as_bytes())
         } else {
             let trans = crate::btree_trans!(self);
-            commit_do(&trans, None, flags, |t| t.log_msg(&buf))
+            trans.commit_do(None, flags, |t| t.log_msg(&buf))
         }
     }
 
@@ -307,8 +307,8 @@ impl Fs {
         iter_flags:   u32,
     ) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
-        commit_do(&trans, disk_res, commit_flags,
-                  |t| t.insert_raw(btree_id, t.bkey_copy(key)?, iter_flags))
+        trans.commit_do(disk_res, commit_flags,
+                        |t| t.insert_raw(btree_id, t.bkey_copy(key)?, iter_flags))
     }
 
     pub fn fs_log_msg(&self, msg: &dyn ToText) -> Result<(), BchError> {
@@ -1455,7 +1455,7 @@ impl BtreeTrans<'_> {
         let mut iter = BtreeIter::new(self, btree, start, BtreeIterFlags::INTENT | BtreeIterFlags::from_bits_retain(flags));
 
         let ret = loop {
-            if let Err(e) = lockrestart_do(self, |t| {
+            if let Err(e) = self.lockrestart_do(|t| {
                 delete_range_one(t, &mut iter, end, UpdateTriggerFlags::from_bits_retain(flags))
             }) {
                 break e;

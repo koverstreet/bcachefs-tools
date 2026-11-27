@@ -21,7 +21,7 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
+use crate::btree::iter::{CommitFlags, TransAttempt};
 use crate::c;
 use crate::alloc::disk_groups_format;
 use crate::bcachefs_ioctl::{IoctlPreadRaw, IoctlSubvolume, IoctlSubvolumeV2,
@@ -202,7 +202,7 @@ fn reinherit_attrs(file: &File, dir: &InodeInfo, name: &OsStr) -> Result<isize, 
     let hash = str_hash::hash_info_init(fs, &dir.inode())?;
     let inum = dirent::lookup(fs, dir.inum(), &hash, name)?;
     let trans = btree_trans!(fs);
-    let inode = lockrestart_do(&trans, |t| InodeInfo::get_trans(t, inum))?;
+    let inode = trans.lockrestart_do(|t| InodeInfo::get_trans(t, inum))?;
     // Ended before the update locks, which are taken outside transactions
     drop(trans);
 
@@ -459,7 +459,7 @@ fn clear_damage(file: &File, inode: &InodeInfo) -> Result<(), BchError> {
     let _write = WriteAccess::get(file)?;
 
     let trans = btree_trans!(inode.fs());
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| damage::clear(t, inode.inum()))
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| damage::clear(t, inode.inum()))
 }
 
 /// Whether the caller may see @n, which a recursive READDIR_FLAGS found under

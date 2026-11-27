@@ -6,7 +6,7 @@
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::data::ec::format::Stripe;
 use crate::data::ec::head::StripeBlockMask;
@@ -392,7 +392,7 @@ fn reconstruct_start(fs: &Fs, btree: Btree, data_pos: Bpos, iter: c::bvec_iter,
     let mut stale = StripeBlockMask::default();
     let found = {
         let trans = crate::btree_trans!(fs);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             let mut iter = BtreeIter::new(t, btree, data_pos, BtreeIterFlags::empty());
             // @pick may have been moved to the part of the extent read, with
             // @data_pos: matched by where its data starts, as narrow_crcs does

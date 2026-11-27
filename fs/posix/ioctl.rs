@@ -11,7 +11,7 @@ use crate::alloc::{accounting, capacity::DiskReservation, disk_groups_format};
 use crate::{bch_warn, btree_trans};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::bcachefs_ioctl::{IoctlGetDamage, IoctlReaddirFlags, IoctlSnapshotNode,
     IoctlSnapshotNodeV2, IoctlSnapshotTreeQuery, IoctlSnapshotTreeQueryV2,
@@ -125,7 +125,7 @@ pub fn get_damage(fs: &Fs, inum: SubvolInum, user: UserVstruct<IoctlGetDamage>)
 
     let errors = {
         let trans = btree_trans!(fs);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
             damage::accumulate(t, inum.inum, snapshot)
         })?
@@ -182,7 +182,7 @@ fn readdir_plain(fs: &Fs, dir: SubvolInum, flags: ReaddirFlags, out: &mut Entrie
     -> Result<u64, BchError>
 {
     let trans = btree_trans!(fs);
-    let view = lockrestart_do(&trans, |t| subvolume::get_snapshot(t, dir.subvol as u32))?;
+    let view = trans.lockrestart_do(|t| subvolume::get_snapshot(t, dir.subvol as u32))?;
 
     let mut cursor = pos;
     let mut iter = BtreeIter::new(&trans, Btree::dirents, bkey::pos(dir.inum, pos),
@@ -262,7 +262,7 @@ where
     /// twice.
     fn damaged(&mut self, fs: &Fs, pos: [u64; 2]) -> Result<[u64; 2], BchError> {
         let trans = btree_trans!(fs);
-        let view = lockrestart_do(&trans, |t| {
+        let view = trans.lockrestart_do(|t| {
             self.dir_path.reset();
             let view = subvolume::get_snapshot(t, self.dir.subvol as u32)?;
             namei::inum_to_path(t, self.dir, &mut self.dir_path)?;
@@ -303,7 +303,7 @@ where
     /// dirent, so no path - by their roots.
     fn subvols(&mut self, fs: &Fs, pos: u64) -> Result<u64, BchError> {
         let trans = btree_trans!(fs);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             self.dir_path.reset();
             namei::inum_to_path(t, self.dir, &mut self.dir_path)
         })?;
@@ -456,7 +456,7 @@ pub fn subvolume_to_path(fs: &Fs, user: UserArg<IoctlSubvolToPath>) -> Result<()
     let mut path = Printbuf::new();
     {
         let trans = btree_trans!(fs);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             path.reset();
             let s = subvolume::get(t, arg.subvolid, false)?;
             let root = SubvolInum { subvol: arg.subvolid.into(), inum: s.inode.get() };
@@ -500,7 +500,7 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
 
     let (tree_id, tree) = {
         let trans = btree_trans!(fs);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             let tree_id = if tree_id != 0 {
                 tree_id
             } else {

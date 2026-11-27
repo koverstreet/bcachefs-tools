@@ -23,7 +23,7 @@ use crate::posix::{dirent_format, inode, namei, str_hash};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::c;
@@ -548,7 +548,7 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
 
         // The last directory's subdirectory counts, as in the loop, with the
         // restart it may end in retried here.
-        lockrestart_do(&trans, |t| check_subdir_dirents_count(t, &mut st.dir))?;
+        trans.lockrestart_do(|t| check_subdir_dirents_count(t, &mut st.dir))?;
 
         // A directory that's become a file, or the reverse, may have been
         // counted in its parent before the walk got to it:

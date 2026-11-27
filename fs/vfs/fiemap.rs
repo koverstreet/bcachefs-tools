@@ -29,7 +29,7 @@ use core::ops::Range;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
 use crate::data::reflink_format::{ReflinkP, ReflinkV};
 use crate::data::extents::{BkeyVExtents, Extents};
@@ -200,7 +200,7 @@ pub(crate) fn fiemap(inode: &InodeInfo, mut info: Fiemap<'_>, start: u64, mut le
     let mut prev: Option<Mapping> = None;
 
     while start < end {
-        let cur = lockrestart_do(&trans, |t| next_mapping(t, inode, start, end))?;
+        let cur = trans.lockrestart_do(|t| next_mapping(t, inode, start, end))?;
         let s = cur.sectors();
         assert!(start <= s.start && s.end <= end,
                 "fiemap: mapping {s:?} outside the window {start}..{end}");

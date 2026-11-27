@@ -8,7 +8,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_buf::BtreeKeyBuf;
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeNodeIter, CommitFlags,
                          TransAttempt};
 use crate::btree::scrub::{read_replicas, ReplicaRead, Replicas};
 use crate::c;
@@ -213,7 +213,7 @@ fn scrub_extent(m: &Moving<'_>, found: &Gather<Bad, waiter::Sync>, io_opts: &Ino
         ..::pin_init::zeroed()
     };
 
-    lockrestart_do(m.trans(), |t| {
+    m.trans().lockrestart_do(|t| {
         let mut iter = BtreeNodeIter::new(t, btree, k.k.p, 0, level, BtreeIterFlags::ALL_SNAPSHOTS);
         let k2 = iter.iter().peek_slot(t)?.expect("a slot always has a key");
         assert!(k2.and_val_eq(k), "the journal's key is the btree's: journal keys are frozen");
@@ -544,7 +544,7 @@ pub fn do_repairs(fs: &Fs) {
         let k = r.key.key();
 
         /* Errors are counted, not returned - don't want them blocking mount */
-        match lockrestart_do(ctxt.trans(), |t| repair_one(&ctxt, t, r)) {
+        match ctxt.trans().lockrestart_do(|t| repair_one(&ctxt, t, r)) {
             Ok(Outcome::Unchanged) => {}
             Ok(Outcome::Repaired)  => {
                 repaired += 1;

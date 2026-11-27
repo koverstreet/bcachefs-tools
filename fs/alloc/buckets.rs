@@ -11,7 +11,7 @@ use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitOpts, TransAttempt,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::trans::TransGuard;
 use crate::data::ec::format::Stripe;
@@ -885,10 +885,10 @@ pub fn trans_mark_metadata_bucket(trans: &TransGuard<'_>, ca: &Dev, b: u64, data
     }
 
     if flags.contains(UpdateTriggerFlags::GC) {
-        lockrestart_do(trans, |t| mark_metadata_bucket_gc(t, ca, b, data_type, sectors, flags))
+        trans.lockrestart_do(|t| mark_metadata_bucket_gc(t, ca, b, data_type, sectors, flags))
     } else if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        commit_do(trans, None, CommitOpts::new().watermark(Watermark::btree),
-                  |t| trans_mark_metadata_bucket_key(t, ca, b, data_type, sectors))
+        trans.commit_do(None, CommitOpts::new().watermark(Watermark::btree),
+                        |t| trans_mark_metadata_bucket_key(t, ca, b, data_type, sectors))
     } else {
         panic!("marking metadata, neither gc nor transactional");
     }

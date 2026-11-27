@@ -18,7 +18,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::{vstructs::Unvalidated, ffi::c_str, Printbuf, ToText};
-use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::c;
@@ -624,7 +624,7 @@ pub fn resume_propagate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
         op.v.cursor_snapshot = ancestor.into();
 
         let mut done = false;
-        commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+        trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
             done = propagate_one(t, inum, origin_snapshot, ancestor, None)?.is_break();
             logged_ops::update(t, op.as_ref())
         })?;
@@ -638,7 +638,7 @@ pub fn resume_propagate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
      * lands here, not when setxattr returns: a scan before the ancestors
      * carry the new options would find nothing to do.
      */
-    commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| needs_scan(t, inum))?;
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| needs_scan(t, inum))?;
     fs.reconcile_wakeup();
     Ok(())
 }

@@ -299,7 +299,7 @@ use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, AnyKeySC, BkeyI, BkeySC, B
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::{prt, bch_err, bkey_fsck_err_on};
 use crate::util::vstructs::{Unvalidated, Validated, Whole};
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::locking::{ExclusiveGuard, Mutex};
@@ -1646,7 +1646,7 @@ pub fn tree_keys_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, start: u32)
         }
         prev_depth = depth;
 
-        lockrestart_do(trans, |t| {
+        trans.lockrestart_do(|t| {
             let restore = out.state_save();
             node_to_text(out, t, id).inspect_err(|e| if is_restart(e) {
                 out.state_restore(restore);

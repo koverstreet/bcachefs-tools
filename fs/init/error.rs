@@ -34,7 +34,7 @@ use crate::fs::{Dev, FsFlag, Fs};
 use crate::btree::bkey::{pos, AnyKeySC, BkeySC, BkeyVal, POS_MIN, ValidateFlags,
     BkeyValidateContext, BkeyValidateFrom};
 use crate::btree::trans::TransGuard;
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::errcode::{Errcode, BchError};
 use crate::{prt, new_lock};
 use crate::sb::errors::{FsckFlags, SbErrorId, SbErrorEntryCpu};
@@ -840,7 +840,7 @@ fn damaged_path_resolve(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32, path
 pub fn damaged_path_to_text(out: &mut Printbuf, trans: &TransGuard<'_>, p: &FsckDamagedPath) {
     // into a buffer of its own, so a restart doesn't print it twice
     let mut path = Printbuf::new();
-    match lockrestart_do(trans, |t| damaged_path_resolve(t, p.inum, p.snapshot, &mut path)) {
+    match trans.lockrestart_do(|t| damaged_path_resolve(t, p.inum, p.snapshot, &mut path)) {
         Ok(()) => out.write_bytes(path.as_bytes()),
         Err(_) => write!(out, "inum {}:{}", p.inum, p.snapshot),
     }
@@ -917,7 +917,7 @@ pub fn inum_offset_err_msg(t: &TransAttempt<'_, '_>, out: &mut Printbuf, subvol:
 /// inum_offset_err_msg(), in transactions of its own - so never from inside
 /// an attempt: that's the attempt's end. For C's callers.
 pub fn inum_offset_err_msg_trans(trans: &BtreeTrans<'_>, out: &mut Printbuf, subvol: u32, pos: Bpos) {
-    let _ = lockrestart_do(trans, |t| inum_offset_err_msg(t, out, subvol, pos));
+    let _ = trans.lockrestart_do(|t| inum_offset_err_msg(t, out, subvol, pos));
 }
 
 // ── Filesystem errors ────────────────────────────────────────────────────

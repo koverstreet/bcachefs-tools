@@ -14,7 +14,7 @@ use core::ffi::CStr;
 use crate::os::posix_acl::{AclType, PosixAcl};
 use crate::init::{passes::{RecoveryPass, RunRecoveryPassFlags}, passes};
 use crate::btree::bkey::BkeyV;
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
@@ -95,7 +95,7 @@ impl InodeInfo {
             !self.ei_flags.get(InodeInfoFlag::EI_INODE_SNAPSHOT)
         };
 
-        let inum = lockrestart_do(&trans, |t| {
+        let inum = trans.lockrestart_do(|t| {
             namei::create_trans(t, self.inum(), &mut dir_u, &mut inode_u, &mut subvol,
                                 name.map(|d| d.name()), uid, gid, mode, rdev,
                                 default_acl.as_ref(), acl.as_ref(), snapshot_src, flags)?;
@@ -161,7 +161,7 @@ impl InodeInfo {
         self.fs().vfs.inode_cache.make_room();
         let trans = crate::btree_trans!(self.fs());
 
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             let mut iter = BtreeIter::uninit(t.trans());
             let k = dirent::lookup_key(t, &mut iter, dir, hash, name, BtreeIterFlags::empty())?;
             let inum = dirent::lookup_target(t, dir, k)?;
@@ -206,7 +206,7 @@ impl InodeInfo {
         let trans = crate::btree_trans!(self.fs());
         let [mut dir_u, mut inode_u] = [InodeUnpacked::default(); 2];
 
-        commit_do(&trans, None, CommitOpts::new(), |t| {
+        trans.commit_do(None, CommitOpts::new(), |t| {
             dir.fold_times_trans(t)?;
             self.fold_times_trans(t)?;
             namei::link_trans(t, dir.inum(), &mut dir_u, self.inum(), &mut inode_u, name)
@@ -225,7 +225,7 @@ impl InodeInfo {
             let trans = crate::btree_trans!(self.fs());
             let [mut dir_u, mut inode_u] = [InodeUnpacked::default(); 2];
 
-            commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
+            trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
                 self.fold_times_trans(t)?;
                 inode.fold_times_trans(t)?;
                 namei::unlink_trans(t, self.inum(), &mut dir_u, inode.inum(), &mut inode_u,
@@ -395,7 +395,7 @@ impl InodeOps for DirOps {
         let ret = (|| {
             let trans = crate::btree_trans!(fs);
 
-            lockrestart_do(&trans, |t| {
+            trans.lockrestart_do(|t| {
                 subvolume::is_ro_trans(t, src_dir.inum().subvol as u32)?;
                 subvolume::is_ro_trans(t, dst_dir.inum().subvol as u32)?;
                 Ok(())
@@ -417,7 +417,7 @@ impl InodeOps for DirOps {
             let mut src_opt_change = InodeOptChange::new();
             let mut dst_opt_change = InodeOptChange::new();
 
-            lockrestart_do(&trans, |t| {
+            trans.lockrestart_do(|t| {
                 for inode in [src_dir, dst_dir, src_inode].into_iter().chain(dst_inode) {
                     inode.fold_times_trans(t)?;
                 }

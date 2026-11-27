@@ -24,7 +24,6 @@ use bcachefs_kernel::posix::inode::InodeUnpacked;
 use bcachefs_kernel::posix::dev::dev_t;
 use bcachefs_kernel::posix::mode::{umode_t, S_IFREG};
 use bcachefs_kernel::snapshots::{format::Subvolume, subvolume};
-use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{spos, BkeyI, BkeyV, BKEY_U64S};
 use bcachefs_kernel::btree::iter::{CommitFlags, UpdateTriggerFlags};
 use bcachefs_kernel::data::extents::bkey_append_ptr;
@@ -152,8 +151,7 @@ fn unlink_and_rm(
     let child_name = OsStr::from_bytes(child_name.to_bytes());
     let mut child: InodeUnpacked = Default::default();
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -208,8 +206,7 @@ fn create_or_update_link(
     let mut dir_u: InodeUnpacked = Default::default();
     let mut inode: InodeUnpacked = Default::default();
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::empty(),
         |t| namei::link_trans(t, dir_inum, &mut dir_u, inum, &mut inode, os_name),
@@ -253,8 +250,7 @@ fn create_or_update_file(
     } else {
         inode::init_early(fs, &mut child_inode);
 
-        btree::iter::trans_commit_do(
-            fs,
+        fs.trans_commit_do(
             None,
             CommitFlags::empty(),
             |t| {
@@ -352,8 +348,7 @@ fn copy_xattrs(
             &val_buf[..val_size]
         };
 
-        btree::iter::trans_commit_do(
-            fs,
+        fs.trans_commit_do(
             None,
             CommitFlags::empty(),
             |t| {
@@ -476,7 +471,7 @@ fn link_data(
         let res = DiskReservation::new(fs);
         res.add(sectors, 1, ReservationFlags::nofail)?;
 
-        btree::iter::trans_commit_do(fs, Some(&res), CommitFlags::empty(), |t| {
+        fs.trans_commit_do(Some(&res), CommitFlags::empty(), |t| {
             let mut new = t.bkey_reassemble_room((&*k).into(), BKEY_EXTENT_U64s_MAX * size_of::<u64>())?;
             let opts = get_io_opts(t, None, new.as_sc())?;
             new.set_needs_reconcile(t, None, &opts, SetNeedsReconcileCtx::SET_NEEDS_RECONCILE_opt_change, 0)?;

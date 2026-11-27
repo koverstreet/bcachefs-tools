@@ -8,7 +8,7 @@ use crate::btree::bkey::{self, bkey_validate, BkeyI, BkeyP, BkeySC, BkeyV, Valid
                          BKEY_FORMAT_CURRENT, POS_MIN, SPOS_MAX, BkeyFormatState};
 use crate::btree::cache::btree_ptr_hash_val;
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitFlags,
                          CommitOpts, TransAttempt, Watermark};
 use crate::btree::journal_overlay::{journal_key_overwrite, key_deleted_in_journal, BtreeAndJournalIter};
 use crate::btree::node::{BtreeNode, NodeContents, BtreeWriteType};
@@ -862,7 +862,7 @@ fn merge_btree_nodes(fs: &Fs) -> Result<(), BchError> {
 
         for level in 0..BTREE_MAX_DEPTH {
             let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, level, BtreeIterFlags::PREFETCH);
-            while !lockrestart_do(&trans, |t| merge_btree_node_one(t, &progress, &mut iter, &mut merge_count))? {}
+            while !trans.lockrestart_do(|t| merge_btree_node_one(t, &progress, &mut iter, &mut merge_count))? {}
         }
 
         if merge_count != 0 {

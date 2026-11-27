@@ -5,7 +5,7 @@ use super::{insert_checks, resize_gfp, wb_btree_to_btree, Buf, Flushing, Flushin
 use crate::alloc::{accounting, accounting_mem};
 use crate::btree::async_ops::AsyncBtreeOp;
 use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
-use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::write_buffer::{FsBtreeWriteBuffer, BtreeWriteBufferedKey, WbKeyRef,
     WbFlushCaller};
@@ -539,14 +539,14 @@ pub(super) fn flush_locked(trans: &BtreeTrans<'_>, wb: &FsBtreeWriteBuffer, g: &
                     wb.pin_update(Buf::Flushing, k.journal_seq);
                 }
 
-                let ret = commit_do(trans, None,
-                                    CommitOpts::new()
-                                    .watermark(Watermark::reclaim)
-                                    .flags(CommitFlags::JOURNAL_RECLAIM |
-                                           CommitFlags::NO_CHECK_RW |
-                                           CommitFlags::NO_ENOSPC |
-                                           CommitFlags::NO_JOURNAL_RES),
-                                    |t| btree_write_buffered_insert(t, btree, k));
+                let ret = trans.commit_do(None,
+                                          CommitOpts::new()
+                                          .watermark(Watermark::reclaim)
+                                          .flags(CommitFlags::JOURNAL_RECLAIM |
+                                                 CommitFlags::NO_CHECK_RW |
+                                                 CommitFlags::NO_ENOSPC |
+                                                 CommitFlags::NO_JOURNAL_RES),
+                                          |t| btree_write_buffered_insert(t, btree, k));
                 if ret.is_err() {
                     break 'err ret;
                 }

@@ -39,7 +39,7 @@ use crate::fs::{Dev, Fs};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, pos, spos, BkeyI, BkeyS, BkeySC, BkeyOps};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags, BtreeNodeRef, BtreeTrans,
+use crate::btree::iter::{polonius_key, BtreeIter, BtreeIterFlags, BtreeNodeRef, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbFlush;
@@ -629,7 +629,7 @@ impl<'p> BpScanIter<'p> {
         F: for<'a> FnMut(&TransAttempt<'a, '_>, BkeySC<'_, Backpointer>, WbFlush<'_>)
             -> Result<(), BchError>,
     {
-        while lockrestart_do(trans, |t| {
+        while trans.lockrestart_do(|t| {
             let Some(bp) = self.peek(t, end, &last_flushed)? else { return Ok(false) };
             f(t, bp, last_flushed.reborrow())?;
             Ok(true)

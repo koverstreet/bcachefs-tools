@@ -149,7 +149,6 @@ pub trait Run {
     fn run(fs: &Fs) -> Result<(), BchError>;
 }
 
-use crate::btree::iter::lockrestart_do;
 use crate::init::passes_format::{SbFieldRecoveryPasses, RecoveryPassEntry};
 use crate::init::progress::ProgressIndicator;
 use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
@@ -250,7 +249,7 @@ crate::recovery_pass!(recovery_pass_empty => recovery_pass_empty);
 fn lookup_root_inode(fs: &Fs) -> Result<(), BchError> {
     let inum = SubvolInum { subvol: BCACHEFS_ROOT_SUBVOL.into(), inum: BCACHEFS_ROOT_INO.into() };
     let trans = crate::btree_trans!(fs);
-    lockrestart_do(&trans, |t| {
+    trans.lockrestart_do(|t| {
         subvolume::get(t, BCACHEFS_ROOT_SUBVOL, true)?;
         inode::find_by_inum_trans(t, inum, here!()).map(drop)
     })

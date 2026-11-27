@@ -47,7 +47,7 @@ use crate::c;
 use crate::data::extents::ExtentCrcUnpacked;
 use crate::format::{CompressionOpt as opts, Bpos, CompressionType, SbFeatures, CompressionOpt_arms};
 use crate::errcode::{Errcode as e, BchError, ZSTD_ERRS};
-use crate::{bch_err, btree::iter::lockrestart_do, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
+use crate::{bch_err, btree_trans, fs::{Fs, SbLockGuard}, fsck_err};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::decompress_sb_err;
 use crate::os::kernel::{unlikely, READ, WRITE};
@@ -565,7 +565,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: CompressionType, pos: 
     let mut msg = LogMsg::new(fs);
     write!(msg, "Decompressing compressed data did not produce the same result ({})", t);
     let trans = btree_trans!(fs);
-    let _ = lockrestart_do(&trans, |t| crate::init::error::inum_offset_err_msg(t, &mut msg, 0, pos));
+    let _ = trans.lockrestart_do(|t| crate::init::error::inum_offset_err_msg(t, &mut msg, 0, pos));
     drop(trans);
     writeln!(msg, " len {src_len}");
     let suppress = count_fsck_err(fs, id::compression_error, &mut msg);

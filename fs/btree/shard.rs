@@ -4,7 +4,7 @@
 
 use crate::btree::bkey::{spos, POS_MIN};
 use crate::btree::interior::split_leaf;
-use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, CommitOpts, TransAttempt};
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitOpts, TransAttempt};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::errcode::BchError;
@@ -176,7 +176,7 @@ impl Fs {
             let ret = (1..n_shards).try_for_each(|shard| -> Result<(), BchError> {
                 let boundary = shard << bits;
                 let pos = if btree == Btree::inodes { spos(0, boundary, 0) } else { spos(boundary, 0, 0) };
-                while lockrestart_do(&trans, |t| split_at_shard_boundary(t, btree, pos))? {
+                while trans.lockrestart_do(|t| split_at_shard_boundary(t, btree, pos))? {
                     split_count += 1;
                 }
                 Ok(())

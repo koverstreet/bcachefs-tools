@@ -177,7 +177,7 @@ impl Fs {
 
     pub fn btree_root_alloc_fake(&self, btree: Btree, level: u32) {
         let trans = crate::btree_trans!(self);
-        let _ = crate::btree::trans_attempt::lockrestart_do(&trans, |_| root_alloc_fake_trans(&trans, btree, level));
+        let _ = trans.lockrestart_do(|_| root_alloc_fake_trans(&trans, btree, level));
     }
 
     /// A btree root as journal entry @e has it, propagated back to the

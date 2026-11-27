@@ -45,7 +45,7 @@ use bcachefs_kernel::btree::bkey::{AnyKeySC, BkeySC, BkeyVal, POS_MIN, SPOS_MAX}
 use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
+    BtreeIter, BtreeIterFlags, CommitFlags,
     TransBkey, UpdateTriggerFlags,
 };
 use bcachefs_kernel::data::write::WriteFlags;
@@ -484,7 +484,7 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: Btree, pos: Bpos, level: u32, filtered: 
             how: Render<'_>) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
-    let out = lockrestart_do(&trans, |t| {
+    let out = trans.lockrestart_do(|t| {
         let mut iter;
         let out = if level > 0 {
             // h_read() takes -L for get only
@@ -679,8 +679,7 @@ fn cmd_update(
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
 
-    let commit = commit_do(
-        &trans,
+    let commit = trans.commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -743,8 +742,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, level: u32, assigns
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
 
-    let commit = commit_do(
-        &trans,
+    let commit = trans.commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -809,7 +807,7 @@ fn cmd_copy(fs: &Fs, btree: Btree, pos: Bpos, new_pos: Bpos, level: u32, assigns
 /// an interior update, which commits itself.
 fn cmd_rewrite(fs: &Fs, btree: Btree, pos: Bpos, level: u32) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
-    lockrestart_do(&trans, |t| {
+    trans.lockrestart_do(|t| {
         t.btree_node_rewrite_pos(btree, level, pos, 0, CommitFlags::NO_ENOSPC, WriteFlags::empty())
     })
     .map_err(|e| anyhow!("rewriting the node the level {level} pointer of {btree} at {pos} points to: {e}"))?;
@@ -833,8 +831,7 @@ fn cmd_set(
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
 
-    let commit = commit_do(
-        &trans,
+    let commit = trans.commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -1086,7 +1083,7 @@ impl Repl<'_> {
         let fs = self.fs.offline()?;
         let trans = bcachefs_kernel::btree_trans!(fs);
         for (btree, level, pos) in self.injected.drain(..) {
-            lockrestart_do(&trans, |t| t.btree_node_write_at(btree, level, pos))
+            trans.lockrestart_do(|t| t.btree_node_write_at(btree, level, pos))
                 .map_err(|e| anyhow!("writing the node at level {level} of {btree} at {pos}, keys injected into: {e}"))?;
         }
         Ok(())

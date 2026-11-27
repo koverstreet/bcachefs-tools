@@ -4,7 +4,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, pos, spos, BkeyI, BkeySC};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents_format::BKEY_EXTENT_U64s_MAX;
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
@@ -311,7 +311,7 @@ async fn nocow_write_pass<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32, at
     let mut extents = NocowExtents::new();
     let ret = {
         let trans = btree_trans!(op.fs());
-        lockrestart_do(&trans, |t| nocow_write_submit(t, op, data, &mut extents))
+        trans.lockrestart_do(|t| nocow_write_submit(t, op, data, &mut extents))
     };
     // its transaction gone first: the error's message has one of its own
     let more = ret.unwrap_or_else(|e| {

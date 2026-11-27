@@ -7,7 +7,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering::{AcqRel, Acquire}};
 use cstruct_macros::{Init, Late};
 use pin_init::pin_data;
-use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts, TransAttempt};
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, CommitOpts, TransAttempt};
 use crate::btree::node::{BtreeNode, NodeContents};
 use crate::c;
 use crate::data::write::WriteFlags;
@@ -140,7 +140,7 @@ impl AsyncOps {
 
 async fn task(fs: &Fs, a: OpBox) {
     let trans = crate::btree_trans!(fs);
-    if let Err(e) = lockrestart_do(&trans, |t| a.run(t)) {
+    if let Err(e) = trans.lockrestart_do(|t| a.run(t)) {
         if !e.matches(c::ENOENT) && !e.matches(c::EROFS) &&
            !e.matches(Errcode::no_btree_node_nofill) {
             crate::bch_err_ratelimited!(fs, "{}: error {}", crate::here_str!(), e.msg());

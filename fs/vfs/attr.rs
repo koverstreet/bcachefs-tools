@@ -24,7 +24,7 @@
 
 use crate::posix::{acl, inode};
 use crate::os::{inode_ops::InodeAttrs, kernel::dev_to_kernel, posix_acl::{AclType, PosixAcl}};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::posix::inode::InodeUnpacked;
 use crate::posix::mode::{S_IFDIR, S_IFREG, S_ISGID};
@@ -296,7 +296,7 @@ impl InodeInfo {
         lock.quota_transfer(qid, !0, QuotaAcctMode::PREALLOC)?;
 
         let trans = crate::btree_trans!(fs);
-        let ret = lockrestart_do(&trans, |t| {
+        let ret = trans.lockrestart_do(|t| {
             let mut iter = BtreeIter::uninit(t.trans());
             let mut bi = inode::__peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT,
                                        Some(crate::here!()))?;

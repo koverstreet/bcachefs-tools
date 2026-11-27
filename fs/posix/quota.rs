@@ -231,7 +231,7 @@ mod vfs {
     use crate::init::dev::bch_sb_buf;
     use crate::snapshots::subvolume::SubvolInum;
     use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
-    use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
+    use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::Errcode;
     use crate::locking::{ExclusiveGuard, Guard as _};
@@ -983,7 +983,7 @@ mod vfs {
         let mut new_quota = BkeyI::<Quota>::at(pos(kqid.type_ as u64, kqid.id() as u64));
 
         let trans = crate::btree_trans!(fs);
-        commit_do(&trans, None, CommitOpts::new(), |t| set_quota_trans(t, &mut new_quota, qdq))?;
+        trans.commit_do(None, CommitOpts::new(), |t| set_quota_trans(t, &mut new_quota, qdq))?;
         set(fs, BkeySC::from(new_quota.as_ref()), Some(qdq))
     }
 

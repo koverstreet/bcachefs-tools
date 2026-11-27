@@ -16,7 +16,7 @@
 //! directory's dirents are searched for one that names the inode.
 
 
-use crate::btree::{bkey::{pos, spos}, iter::{lockrestart_do, BtreeIter, BtreeIterFlags}};
+use crate::btree::{bkey::{pos, spos}, iter::{BtreeIter, BtreeIterFlags}};
 use crate::c;
 use crate::snapshots::{subvolume::SubvolInum, subvolume};
 use crate::posix::{dirent::{self, Dirent}, inode, namei::subvol_inum_eq};
@@ -86,7 +86,7 @@ impl ExportOps for Fs {
 
         let (dir_inum, inum) = (dir.inum(), child.inode().inum());
         let trans = crate::btree_trans!(self);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             let snapshot = subvolume::get_snapshot(t, dir_inum.subvol as u32)?;
             let bi = inode::find_by_inum_trans(t, inum, crate::here!())?;
 

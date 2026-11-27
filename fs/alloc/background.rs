@@ -480,7 +480,7 @@ use crate::alloc::check::need_discard_or_freespace_err;
 use crate::alloc::lru::{dev_remove_lrus, lru_change, LruId};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyVal, BkeyWhole, POS_MIN, BkeyOps};
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt, TransBkey,
                          UpdateTriggerFlags};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::alloc::format::{Alloc, AllocV2, AllocV3, AllocV4, BucketGens,
@@ -1122,7 +1122,7 @@ fn bucket_gens_init(fs: &Fs) -> Result<(), BchError> {
     })?;
 
     match g {
-        Some(last) => commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| insert(t, last)),
+        Some(last) => trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| insert(t, last)),
         None       => Ok(()),
     }
 }

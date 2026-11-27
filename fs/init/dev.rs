@@ -221,7 +221,7 @@ use crate::opts::Opts;
 use crate::sb::members_format::{Member, SbFieldMembersV2,
     MEMBERS_MAX, MemberErrorType};
 use crate::alloc::accounting::{self, dev_usage_init};
-use crate::btree::iter::{trans_commit_do, CommitFlags, UpdateTriggerFlags};
+use crate::btree::iter::{CommitFlags, UpdateTriggerFlags};
 use crate::sb::io::{SbFieldOps, read_super, SbReadScratch, SbWriteFlags};
 use crate::alloc::capacity::recalc_capacity;
 use crate::alloc::check::{dev_freespace_init, fs_freespace_init};
@@ -1799,7 +1799,7 @@ impl Dev {
     pub fn resize_alloc(&self, old_nbuckets: u64, new_nbuckets: u64) -> Result<(), BchError> {
         let fs = self.fs();
 
-        trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+        fs.trans_commit_do(None, CommitFlags::empty(), |t| {
             accounting::add(t, accounting::DevDataType { dev: self.dev_idx, data_type: DataType::free.into() },
                             accounting::DevDataTypeCounters {
                                 buckets: new_nbuckets.wrapping_sub(old_nbuckets) as i64, sectors: 0, fragmented: 0,

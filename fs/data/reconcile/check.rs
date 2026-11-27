@@ -22,7 +22,7 @@ use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_rec
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
-use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
+use crate::btree::iter::{peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
                          CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -231,7 +231,7 @@ fn check_reconcile_work_data_btree<'t>(trans: &'t TransGuard<'t>, btree: Btree, 
     loop {
         res.put();
 
-        commit_do(trans, Some(&res), NO_ENOSPC, |t| {
+        trans.commit_do(Some(&res), NO_ENOSPC, |t| {
             fs.recovery.progress.update(t, &data_iter)?;
             check_reconcile_work_one(t, &mut data_iter, rb, s, last_flushed, &mut cur_pos)
         })?;
@@ -344,7 +344,7 @@ fn check_reconcile_work_phys(trans: &TransGuard<'_>) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new();
 
     loop {
-        commit_do(trans, None, NO_ENOSPC, |t| {
+        trans.commit_do(None, NO_ENOSPC, |t| {
             fs.recovery.progress.update(t, &bp_iter)?;
             check_reconcile_work_phys_one(t, &mut bp_iter, &mut phys, &mut last_flushed, &mut cur_pos)
         })?;
@@ -497,7 +497,7 @@ fn check_stripe_can_widen(trans: &TransGuard<'_>) -> Result<(), BchError> {
     fs.recovery.progress.init(fs, c"check_stripe_can_widen", &[Btree::stripes], &[]);
 
     let mut cache = WidenCache::new();
-    let scan_pending = lockrestart_do(trans, |t| {
+    let scan_pending = trans.lockrestart_do(|t| {
         t.scan_requested(ReconcileScan::stripes)
     })?;
 

@@ -34,7 +34,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::cache::BtreeCachePins;
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -577,7 +577,7 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     // backpointers against their extents, check_bucket_backpointer_mismatch()
     // restarts - reset this and it does that forever.
     let mut checked_bad = POS_MAX;
-    let had_mismatch = lockrestart_do(trans, |t| {
+    let had_mismatch = trans.lockrestart_do(|t| {
         // Not BTREE_ITER_cached: scrub calls this once per bucket for a whole
         // device (move_data_phys() fills in the gaps between
         // backpointers), and a cached iterator would leave a key cache entry
@@ -704,7 +704,7 @@ fn check_extents_to_backpointers_pass(fs: &Fs, trans: &TransGuard<'_>, s: &mut E
         let depth = if btree.has_data_ptrs() { 0 } else { 1 };
 
         let mut root_level = 0;
-        commit_do(trans, Some(&res), CommitFlags::NO_ENOSPC, |t| {
+        trans.commit_do(Some(&res), CommitFlags::NO_ENOSPC, |t| {
             root_level = check_btree_root_to_backpointers(t, s, btree)?;
             Ok(())
         })?;
@@ -917,7 +917,7 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
         trans.write_buffer_flush_sync()?;
         for ca in fs.members() {
             for b in (0..ca.mi.get().nbuckets).filter(|&b| ca.bucket_backpointer_mismatch.test(b)) {
-                commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| bucket_multiple_resolved(t, &ca, b))?;
+                trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| bucket_multiple_resolved(t, &ca, b))?;
             }
         }
         Ok(())

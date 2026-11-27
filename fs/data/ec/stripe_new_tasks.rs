@@ -6,7 +6,7 @@
 
 use crate::alloc::{capacity::DiskReservation, foreground::Watermark};
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
-use crate::btree::iter::{commit_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags};
 use crate::c;
 use crate::data::ec::format::Stripe;
@@ -467,7 +467,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         Some(res) => res,
         None      => DiskReservation::new(fs),
     };
-    trans_commit_do(fs, Some(&res), opts, |t| {
+    fs.trans_commit_do(Some(&res), opts, |t| {
         stripe_key_update(t, new)?;
         logged_ops::start(t, op.as_mut())
     })?;
@@ -484,7 +484,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
 
     // The trigger and the delete worker skip open stripes, and both of ours
     // may have emptied while we held them:
-    commit_do(&trans, None, opts, |t| {
+    trans.commit_do(None, opts, |t| {
         if old_idx != 0 && old_idx != new_idx {
             stripe_delete(t, old_idx, true)?;
         }

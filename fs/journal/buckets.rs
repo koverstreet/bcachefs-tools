@@ -20,7 +20,7 @@ use self::JournalBucketStage::{self as Stage, JOURNAL_BUCKET_cur as CUR, JOURNAL
 
 use crate::alloc::buckets::{trans_mark_metadata_bucket, DiskReservation, ReservationFlags};
 use crate::alloc::foreground::{AllocWait, Watermark};
-use crate::btree::iter::{lockrestart_do, UpdateTriggerFlags};
+use crate::btree::iter::UpdateTriggerFlags;
 use crate::errcode::{Errcode, BchError};
 use crate::format::{DataType, SbFeature, JOURNAL_BUCKETS_MIN, Sb, SbFieldJournal,
     SbFieldJournalV2};
@@ -497,7 +497,7 @@ fn set_nr_iter(fs: &Fs, ca: &Dev, nr: u32, watermark: Watermark)
         while bu.len() < want {
             let trans = btree_trans!(fs);
             let first = bu.is_empty();
-            let ob = lockrestart_do(&trans, |t| {
+            let ob = trans.lockrestart_do(|t| {
                 let mut req = t.alloc_request(0, false, None, 1, 0, watermark, WriteFlags::empty(),
                                               if first { AllocWait::Sync(None) } else { AllocWait::Never })?;
                 req.data_type = DataType::journal;

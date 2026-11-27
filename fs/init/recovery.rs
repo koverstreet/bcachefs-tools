@@ -8,7 +8,7 @@ use crate::alloc::accounting;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{commit_do, trans_commit_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags, Watermark};
 use crate::btree::journal_overlay::{journal_keys_put_initial, keys_sort, shoot_down_journal_keys,
     journal_key, JournalKeys};
@@ -406,7 +406,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         let flags = CommitOpts::new()
             .flags(replay_flags | CommitFlags::JOURNAL_RECLAIM | CommitFlags::NO_JOURNAL_RES)
             .watermark(Watermark::reclaim);
-        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_accounting_key(t, jk, k)) {
+        if let Err(e) = trans.commit_do(None, flags, |t| journal_replay_accounting_key(t, jk, k)) {
             fs_fatal_error!(fs, "error replaying accounting; {}", e.msg());
             return Err(e);
         }
@@ -451,10 +451,10 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         let self_reclaim = fs.btree.cache.nr_self_reclaim.load(Relaxed);
         let replayed = fs.journal.watermark() == Watermark::stripe &&
             self_reclaim == 0 &&
-            commit_do(&trans, None,
-                      replay_flags | CommitFlags::JOURNAL_RECLAIM |
-                      if !k.allocated() { CommitFlags::NO_JOURNAL_RES } else { CommitFlags::empty() },
-                      |t| journal_replay_key(t, jk, idx)).is_ok();
+            trans.commit_do(None,
+                            replay_flags | CommitFlags::JOURNAL_RECLAIM |
+                            if !k.allocated() { CommitFlags::NO_JOURNAL_RES } else { CommitFlags::empty() },
+                            |t| journal_replay_key(t, jk, idx)).is_ok();
         if !replayed {
             keys_sorted.push(idx)?;
         }
@@ -482,7 +482,7 @@ fn journal_replay(fs: &Fs) -> Result<(), BchError> {
         if !k.allocated() {
             flags = flags.flags(CommitFlags::NO_JOURNAL_RES).watermark(Watermark::reclaim);
         }
-        if let Err(e) = commit_do(&trans, None, flags, |t| journal_replay_key(t, jk, idx)) {
+        if let Err(e) = trans.commit_do(None, flags, |t| journal_replay_key(t, jk, idx)) {
             return bch_err_msg!(fs, Err(e), "while replaying key at btree={} level={}:", k.btree_id(), k.level());
         }
 
@@ -1131,7 +1131,7 @@ pub fn fs_initialize(fs: &Fs) -> Result<(), BchError> {
     inode::init_early(fs, &mut lostfound_inode);
 
     let mut new_subvol = Subvolume::default();
-    bch_err_msg!(fs, trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+    bch_err_msg!(fs, fs.trans_commit_do(None, CommitFlags::empty(), |t| {
         namei::create_trans(t, SubvolInum::ROOT, &mut root_inode, &mut lostfound_inode, &mut new_subvol,
                             Some(OsStr::from_bytes(b"lost+found")), 0, 0, S_IFDIR | umode_t(0o700), dev_t::NONE,
                             None, None, SubvolInum::default(), CreateFlags::empty())

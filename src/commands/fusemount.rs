@@ -77,7 +77,7 @@ use bcachefs_kernel::btree;
 use bcachefs_kernel::alloc::accounting;
 use bcachefs_kernel::posix::{dirent, namei, str_hash, inode, inode_opts};
 use bcachefs_kernel::btree::bkey::{pos, BkeyV};
-use bcachefs_kernel::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags};
+use bcachefs_kernel::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags};
 use bcachefs_kernel::format::Btree;
 use bcachefs_kernel::posix::xattr::{self, XattrType};
 
@@ -297,7 +297,7 @@ fn xattr_set(fs: &Fs, inum: SubvolInum, name: &OsStr, value: Option<&[u8]>, flag
 {
     let (ty, name) = xattr_type(name)?;
     let mut inode_u = InodeUnpacked::default();
-    btree::iter::trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+    fs.trans_commit_do(None, CommitFlags::empty(), |t| {
         xattr::set_trans(t, inum, &mut inode_u, name, value, ty, flags)
     }).map_err(|e| bch_err(&e))
 }
@@ -326,8 +326,7 @@ fn fuse_create_inode(
 
     inode::init_early(fs, &mut inode);
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::empty(),
         |t| {
@@ -358,8 +357,7 @@ fn fuse_unlink(fs: &Fs, dir: SubvolInum, name: &OsStr) -> Result<InodeUnpacked, 
     let mut dir_u: InodeUnpacked = Default::default();
     let mut inode: InodeUnpacked = Default::default();
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -386,8 +384,7 @@ fn fuse_link(
     let mut dir_u: InodeUnpacked = Default::default();
     let mut inode: InodeUnpacked = Default::default();
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::empty(),
         |t| namei::link_trans(t, newparent, &mut dir_u, inum, &mut inode, name),
@@ -426,8 +423,7 @@ fn fuse_rename(
     let mut src_opt_change: InodeOptChange = Default::default();
     let mut dst_opt_change: InodeOptChange = Default::default();
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::empty(),
         |t| {
@@ -471,8 +467,7 @@ fn fuse_setattr(
 ) -> Result<InodeUnpacked, BchError> {
     let mut inode_out: InodeUnpacked = Default::default();
 
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -566,8 +561,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: SubvolInum, bi: &InodeUnpack
         return;
     }
 
-    let ret = btree::iter::trans_commit_do(
-        fs,
+    let ret = fs.trans_commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -588,8 +582,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: SubvolInum, bi: &InodeUnpack
 }
 
 fn fuse_update_inode_after_write(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
-    btree::iter::trans_commit_do(
-        fs,
+    fs.trans_commit_do(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
@@ -1688,7 +1681,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let trans = bcachefs_kernel::btree_trans!(self.fs());
-        let value = lockrestart_do(&trans, |t| {
+        let value = trans.lockrestart_do(|t| {
             let inode_u = inode::find_by_inum_trans(t, inum, bcachefs_kernel::here!())?;
             let mut iter = BtreeIter::uninit(t.trans());
             let k = xattr::lookup(t, &mut iter, &inode_u, inum, ty, name, BtreeIterFlags::empty())?;

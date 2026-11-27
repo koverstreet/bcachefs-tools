@@ -21,7 +21,7 @@ use crate::btree::bkey::{AnyKeySC, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole,
 use crate::util::{vstructs::Unvalidated, log::should_print_err, max_of, Printbuf};
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::{AllocWait, OpenBuckets, Watermark};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::alloc::buckets::ReservationFlags;
 use crate::alloc::write_point::WritePointSpecifier;
@@ -116,7 +116,7 @@ pub fn extent_fallocate<'t>(t: &TransAttempt<'_, 't>, inum: SubvolInum, iter: &m
         Err(e) if should_print_err(e) => {
             let mut buf = Printbuf::new();
             let pos = iter.pos();
-            let _ = lockrestart_do(t.trans(), |t| {
+            let _ = t.trans().lockrestart_do(|t| {
                 crate::init::error::inum_offset_err_msg(t, &mut buf, inum.subvol as u32, pos)
             });
             write!(buf, "fallocate error: {e}");
@@ -202,7 +202,7 @@ pub fn fpunch_at<'t>(
     end:                 u64,
     mut i_sectors_delta: Option<&mut i64>,
 ) -> Result<(), BchError> {
-    while !lockrestart_do(trans, |t| fpunch_one(t, iter, inum, end, i_sectors_delta.as_deref_mut()))? {}
+    while !trans.lockrestart_do(|t| fpunch_one(t, iter, inum, end, i_sectors_delta.as_deref_mut()))? {}
     Ok(())
 }
 
@@ -252,8 +252,8 @@ fn __resume_truncate(
     let warn_errors = i_sectors_delta.is_some();
 
     let ret = (|| {
-        commit_do(trans, None, CommitFlags::NO_ENOSPC,
-                  |t| truncate_set_isize(t, inum, new_i_size, warn_errors))?;
+        trans.commit_do(None, CommitFlags::NO_ENOSPC,
+                        |t| truncate_set_isize(t, inum, new_i_size, warn_errors))?;
 
         // An i_size within a block of U64_MAX has nothing past its block
         let from = new_i_size.checked_next_multiple_of(fs.block_bytes()).unwrap_or(u64::MAX) >> 9;
@@ -287,7 +287,7 @@ pub fn truncate(fs: &Fs, inum: SubvolInum, new_i_size: u64, i_sectors_delta: &mu
     let _create_lock = fs.snapshots.create_lock.read();
     let trans = crate::btree_trans!(fs);
 
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
     let ret = __resume_truncate(&trans, &op, Some(i_sectors_delta));
     logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new())
 }
@@ -412,7 +412,7 @@ fn __resume_finsert(
      * check for missing subvolume before fpunch, as in resume we don't want
      * it to be a fatal error
      */
-    lockrestart_do(trans, |t| subvolume::__get_snapshot(t, inum.subvol as u32, warn_errors))?;
+    trans.lockrestart_do(|t| subvolume::__get_snapshot(t, inum.subvol as u32, warn_errors))?;
 
     let ret = (|| {
         let mut iter = BtreeIter::new(trans, Btree::extents, pos(inum.inum, 0), BtreeIterFlags::INTENT);
@@ -425,7 +425,7 @@ fn __resume_finsert(
             op.v.state = S::LOGGED_OP_FINSERT_shift_extents.0 as u8;
 
             if insert {
-                commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+                trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
                     adjust_i_size(t, inum, src_offset, len as i64, warn_errors)?;
                     logged_ops::update(t, op.as_ref())
                 })?;
@@ -435,12 +435,12 @@ fn __resume_finsert(
                 fpunch_at(trans, &mut iter, inum, src_offset.wrapping_add(len), i_sectors_delta.as_deref_mut())?;
 
                 // Unchecked, as in C: the shift below runs either way
-                let _ = commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::update(t, op.as_ref()));
+                let _ = trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| logged_ops::update(t, op.as_ref()));
             }
         }
 
         loop {
-            let done = lockrestart_do(trans, |t| -> Result<bool, BchError> {
+            let done = trans.lockrestart_do(|t| -> Result<bool, BchError> {
                 let disk_res = DiskReservation::new(fs);
                 let snapshot = subvolume::__get_snapshot(t, inum.subvol as u32, warn_errors)?;
 
@@ -523,7 +523,7 @@ fn __resume_finsert(
          * we need an inode update to update bi_journal_seq for fsync:
          */
         let (offset, len) = if insert { (0, 0) } else { (src_offset, shift) };
-        commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+        trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
             adjust_i_size(t, inum, offset, len, warn_errors)?;
             logged_ops::update(t, op.as_ref())
         })
@@ -563,7 +563,7 @@ pub fn fcollapse_finsert(
     let _create_lock = fs.snapshots.create_lock.read();
     let trans = crate::btree_trans!(fs);
 
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
     let ret = __resume_finsert(&trans, &mut op, Some(i_sectors_delta));
     logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new())
 }

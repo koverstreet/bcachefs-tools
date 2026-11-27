@@ -714,7 +714,7 @@
 use crate::alloc::foreground::{AllocWait, Blocked, OpenBuckets, Watermark};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_ge, BkeyS, BkeySC};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags};
 use crate::c;
 use crate::alloc::buckets::DiskReservation;
 use crate::alloc::write_point::{WritePoint, WritePointSpecifier};
@@ -963,7 +963,7 @@ fn write_index_default(op: &mut Op, mut flush: Option<&mut Option<Flush<'_>>>) -
     let check_enospc = op.has(w::check_enospc);
 
     loop {
-        let next = lockrestart_do(&trans, |t| {
+        let next = trans.lockrestart_do(|t| {
             let k = op.insert_keys.front().expect("an index update with no keys");
 
             let is_last = usize::from(k.k().u64s) == op.insert_keys.u64s();
@@ -1087,7 +1087,7 @@ fn log_write_error_start(out: &mut Printbuf, op: &Op, update: Option<&DataUpdate
     let pos = Bpos { offset, ..op.pos };
 
     let trans = btree_trans!(op.fs());
-    let _ = lockrestart_do(&trans, |t| crate::init::error::inum_offset_err_msg(t, out, op.subvol, pos));
+    let _ = trans.lockrestart_do(|t| crate::init::error::inum_offset_err_msg(t, out, op.subvol, pos));
     out.newline();
 
     write_op_to_text(out, op, update);
@@ -1286,7 +1286,7 @@ fn next_extent<'s>(op: &mut Op, data: &mut BioRange<'s>, opf: u32, update: Optio
         Next::Stop
     };
 
-    let ret = lockrestart_do(&trans, |t| {
+    let ret = trans.lockrestart_do(|t| {
         let wait = match (io_in_flight, in_caller) {
             (true, _)      => AllocWait::Never,
             (false, true)  => AllocWait::Sync(None),

@@ -6,7 +6,7 @@ use kernel::page::PAGE_SHIFT;
 use pin_init::stack_pin_init;
 
 use crate::btree::bkey::{bkey_ge, pos};
-use crate::btree::iter::{lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::alloc::write_point::WritePointSpecifier;
 use crate::init::{dev::DevsMask, error::{count_fsck_err, id}};
@@ -89,7 +89,7 @@ impl InodeInfo {
             return fs.throw(Errcode::erofs_no_writes_inode_flush);
         };
 
-        trans_commit_do(fs, None, CommitFlags::empty(), |t| {
+        fs.trans_commit_do(None, CommitFlags::empty(), |t| {
             *flushed_seq = inode_journal_seq(t, self.inum())?;
             Ok(())
         })?;
@@ -493,7 +493,7 @@ impl InodeInfo {
         let mut ret = Ok(());
 
         while ret.is_ok() {
-            let step = lockrestart_do(&trans, |t| -> Result<bool, BchError> {
+            let step = trans.lockrestart_do(|t| -> Result<bool, BchError> {
                 // each try, not each step: a step that restarts may have moved
                 // @iter to the end
                 if bkey_ge(iter.pos(), end_pos) {

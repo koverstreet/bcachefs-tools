@@ -7,7 +7,7 @@ use crate::alloc::buckets::FsUsageBase;
 use crate::alloc::replicas::{can_read_with_devs, try_replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, LoopFlow,
                          TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::alloc::capacity::MarkLockAt;
@@ -330,7 +330,7 @@ pub(crate) fn gc_accounting_done(fs: &Fs) -> Result<(), BchError> {
         }
 
         let acc_k = acc_k.validate().expect("the table's positions are its keys', validated");
-        mark.with_unlocked(|| commit_do(&trans, None, CommitFlags::SKIP_ACCOUNTING_APPLY, |t| {
+        mark.with_unlocked(|| trans.commit_do(None, CommitFlags::SKIP_ACCOUNTING_APPLY, |t| {
             accounting::mod_normal(t, &acc_k, d)
         }))?;
 
@@ -516,7 +516,7 @@ fn read_walk(trans: &TransGuard<'_>, journal_keys: &JournalKeys, not_rw: &mut No
         Ok(LoopFlow::Continue)
     })?;
 
-    lockrestart_do(trans, |t| {
+    trans.lockrestart_do(|t| {
         while jk < end {
             jk = accumulate_and_read(t, fs, journal_keys, not_rw, entries, jk)?;
         }
@@ -629,7 +629,7 @@ fn read_mem_fixups(trans: &TransGuard<'_>) -> Result<(), BchError> {
             continue;
         }
 
-        match lockrestart_do(trans, |t| validate_late(t, &DiskAccountingPos::from_bpos(p), &v[..nr])) {
+        match trans.lockrestart_do(|t| validate_late(t, &DiskAccountingPos::from_bpos(p), &v[..nr])) {
             Err(e) if e.matches(Errcode::remove_disk_accounting_entry) => {
                 let mut mark = fs.mark_lock().write();
                 let acc = fs.accounting_mem_mut(&mut mark);

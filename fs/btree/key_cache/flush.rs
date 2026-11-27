@@ -2,7 +2,7 @@
 
 use super::LockedEntry;
 use crate::btree::bkey::BkeySC;
-use crate::btree::trans_attempt::{lockrestart_do, TransAttempt};
+use crate::btree::trans_attempt::TransAttempt;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, UpdateTriggerFlags, Watermark};
 use crate::btree::path::{LockedNode, NodePtr, PathIdx, PathNode, Paths};
 use crate::btree::trans::BtreeTrans;
@@ -194,7 +194,7 @@ impl PinHolder<crate::field!(journal)> for BkeyCached {
 
         let trans = crate::btree_trans!(fs);
 
-        let ret = lockrestart_do(&trans, |t| {
+        let ret = trans.lockrestart_do(|t| {
             let mut paths = trans.paths();
             let path_idx = trans.node_lock_with_path(&mut paths, &self.c, SIX_LOCK_intent, 0)?;
             let ck = paths[path_idx].locked_key_cached().expect("an entry just locked");
@@ -289,7 +289,7 @@ impl Fs {
             heapsort_by(&mut keys, |l, r| l.btree_id.cmp(&r.btree_id).then({ l.pos }.cmp(&{ r.pos })));
 
             for k in keys.iter() {
-                let ret = lockrestart_do(&trans, |t| {
+                let ret = trans.lockrestart_do(|t| {
                     btree_key_cache_flush_pos(t, *k, 0, CommitFlags::NO_JOURNAL_RES, false)
                 });
                 if let Err(e) = ret {

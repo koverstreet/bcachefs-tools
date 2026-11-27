@@ -60,7 +60,7 @@ use core::mem::{offset_of, align_of, size_of};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::init::progress::Progress;
 use crate::btree::iter::{
-    commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+    is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
     TransAttempt, TransBkey, UpdateTriggerFlags,
 };
 use crate::btree::trans::TransGuard;
@@ -627,7 +627,7 @@ pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: SubvolInum)
 /// The inode @inum, in its own transaction.
 pub fn find_by_inum(fs: &Fs, inum: SubvolInum) -> Result<InodeUnpacked, BchError> {
     let trans = crate::btree_trans!(fs);
-    lockrestart_do(&trans, |t| find_by_inum_trans(t, inum, c"find_by_inum"))
+    trans.lockrestart_do(|t| find_by_inum_trans(t, inum, c"find_by_inum"))
 }
 
 /// The oldest version of @inum that a key in @snapshot sees - the version all
@@ -732,7 +732,7 @@ pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut InodeUnpacked)
     -> Result<(), BchError>
 {
     let fs = trans.fs();
-    bch_err_fn!(fs, commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| fsck_write(t, inode)))
+    bch_err_fn!(fs, trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| fsck_write(t, inode)))
 }
 
 /// Write @inode, in its own commit, through the key cache, at snapshot
@@ -1410,7 +1410,7 @@ pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
 
     let mut inode = InodeUnpacked::default();
-    let mut ret = lockrestart_do(&trans, |t| may_delete_deleted_inum(t, inum, &mut inode));
+    let mut ret = trans.lockrestart_do(|t| may_delete_deleted_inum(t, inum, &mut inode));
 
     if matches!(&ret, Err(e) if !e.matches(c::EIO) && !e.matches(c::EROFS)) {
         let mut buf = Printbuf::new();
@@ -1418,7 +1418,7 @@ pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
         {
             let mut buf = buf.indent(2);
             // For the message: not finding the path isn't an error.
-            let _ = lockrestart_do(&trans, |t| crate::posix::namei::inum_to_path(t, inum, &mut buf));
+            let _ = trans.lockrestart_do(|t| crate::posix::namei::inum_to_path(t, inum, &mut buf));
             buf.newline();
             inode.to_text(&mut buf);
         }
@@ -1442,7 +1442,7 @@ pub fn rm(fs: &Fs, inum: SubvolInum) -> Result<(), BchError> {
     delete_keys(&trans, inum, Btree::xattrs)?;
 
     let mut snapshot = 0;
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
         snapshot = rm_trans(t, inum)?;
         Ok(())
     })?;
@@ -1472,7 +1472,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
     }
 
     if ret.is_ok() {
-        return commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+        return trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
             t.delete(Btree::inodes, spos(0, inum, snapshot),
                      UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             crate::init::damage::delete(t, inum, snapshot)
@@ -1484,7 +1484,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
     // scan/fsck can still find this position:
     let ret = bch_err_msg!(fs, ret, "deleting content of inode {inum}:{snapshot}, leaving whiteout");
 
-    commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
         let whiteout = t.bkey_alloc_init::<Whiteout>(0,
                                          spos(0, inum, snapshot))?;
         t.insert(Btree::inodes, whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
@@ -1510,7 +1510,7 @@ pub fn or_descendents_is_open(_t: &TransAttempt<'_, '_>, _pos: Bpos) -> Result<b
 /// and not open in other subvolumes: as delete_ancestor_snapshot_inodes().
 fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: Bpos) -> Result<(), BchError> {
     loop {
-        let parent = lockrestart_do(trans, |t| {
+        let parent = trans.lockrestart_do(|t| {
             let mut iter = BtreeIter::uninit(t.trans());
             Ok(snapshot_parent(t, &mut iter, p)?.map(|k| (k.k.p, is_unlinked(k.flags()))))
         })?;
@@ -1518,7 +1518,7 @@ fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: Bpos) -> Resul
         let Some((parent, true)) = parent else { return Ok(()) };
 
         p = parent;
-        if lockrestart_do(trans, |t| or_descendents_is_open(t, p))? {
+        if trans.lockrestart_do(|t| or_descendents_is_open(t, p))? {
             return Ok(());
         }
 
@@ -1556,7 +1556,7 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(&trans, Btree::deleted_inodes, POS_MIN, flags);
 
     loop {
-        let next = lockrestart_do(&trans, |t| {
+        let next = trans.lockrestart_do(|t| {
             let Some(k) = iter.peek_max_type(t, SPOS_MAX, flags)? else { return Ok(None) };
             let p = k.k.p;
 

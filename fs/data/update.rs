@@ -25,7 +25,7 @@ use crate::alloc::foreground::{AllocWait, Watermark};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::alloc::buckets::ReservationFlags;
@@ -493,7 +493,7 @@ impl DataUpdate {
         let end = self.key().k.p;
         while self.op.pos < end {
             let ours = BkeySC::from(self.index.k.as_ref());
-            if !lockrestart_do(trans, |t| {
+            if !trans.lockrestart_do(|t| {
                 let mut iter = BtreeIter::new(t, self.index.btree_id, self.op.pos, BtreeIterFlags::SLOTS);
                 let k = iter.peek_slot(t)?.expect("a slot always has a key");
                 Ok(crate::data::ptrs::extents_match(fs, k, ours))
@@ -501,7 +501,7 @@ impl DataUpdate {
                 break;
             }
 
-            let r = lockrestart_do(trans, |t| {
+            let r = trans.lockrestart_do(|t| {
                 let op = &mut self.op;
                 let nr = op.bits.nr_replicas().into();
                 let mut req = t.alloc_request(op.target.into(), false, Some(&op.devs_have), nr, nr,
@@ -782,8 +782,8 @@ impl DataUpdate {
         } else {
             let err = crate::data::read::data_read_sb_err(e);
             let (btree, pos) = (self.index.btree_id, self.key().k.p);
-            let r = trans_commit_do(fs, None, CommitFlags::NO_ENOSPC,
-                                    |t| crate::init::damage::record_key(t, btree, pos, err));
+            let r = fs.trans_commit_do(None, CommitFlags::NO_ENOSPC,
+                                       |t| crate::init::damage::record_key(t, btree, pos, err));
             if let Err(e) = r {
                 if should_print_err(&e) {
                     bch_err_ratelimited!(fs, "{}: error recording a data update's read error: {e}",
@@ -807,7 +807,7 @@ impl DataUpdate {
             let mut bit = 1u32;
             for d in kp.ptrs_decoded(fs) {
                 if bit & u32::from(self.index.opts.ptrs_io_error) != 0 && bit & u32::from(self.index.opts.ptrs_kill) == 0 {
-                    if let Ok(dur) = lockrestart_do(&trans, |t| extent_ptr_durability(t, &d.p)) {
+                    if let Ok(dur) = trans.lockrestart_do(|t| extent_ptr_durability(t, &d.p)) {
                         nr += dur;
                     }
                     self.index.opts.ptrs_kill |= bit as u16;

@@ -23,7 +23,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, pos, spos, BkeySC, POS_MIN, SPOS_MAX, BkeyOps};
 use crate::util::{vstructs::Unvalidated, rcu::read_lock, Printbuf};
 use crate::btree::cache::BtreeCachePins;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -382,7 +382,7 @@ fn check_lrus(fs: &Fs) -> Result<(), BchError> {
 
     loop {
         // The next lru with entries
-        let Some(id) = lockrestart_do(trans, |t| {
+        let Some(id) = trans.lockrestart_do(|t| {
             let mut iter = BtreeIter::new(t, Btree::lru, next, BtreeIterFlags::empty());
             Ok(iter.peek(t)?.map(|k| LruPos::from_bpos(k.k.p).id))
         })? else { return Ok(()) };

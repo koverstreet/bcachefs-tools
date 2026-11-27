@@ -30,7 +30,7 @@ use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_eq, bkey_lt, bkey_min, pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
-use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -408,7 +408,7 @@ fn check_btree_alloc(fs: &Fs, trans: &TransGuard<'_>) -> Result<(), BchError> {
     let mut last_flushed = WbMaybeFlush::new();
     let mut ca = None;
 
-    while lockrestart_do(trans, |t| {
+    while trans.lockrestart_do(|t| {
         check_btree_alloc_iter(t, &mut ca, &mut iter, &mut iters, &progress, &mut last_flushed)
     })? {}
 
@@ -555,7 +555,7 @@ fn repair_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: Fre
 /// transaction of its own, if it's still there.
 fn recheck_freespace_key(fs: &Fs, pos: Bbpos) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    lockrestart_do(&trans, |t| {
+    trans.lockrestart_do(|t| {
         let mut iter = BtreeIter::new(t, pos.btree, pos.pos, BtreeIterFlags::empty());
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         if k.k.key_type() != BkeyType::set {
@@ -634,7 +634,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
         loop {
             passes::cancelled(fs)?;
 
-            let done = lockrestart_do(&trans, |t| {
+            let done = trans.lockrestart_do(|t| {
                 let Some(k) = iter.peek(t)?.map(|k| *k.k) else { return Ok(true) };
                 repair_freespace_key(t, &iter, FreespaceCheck::Fsck)
                     .inspect_err(|e| if !is_restart(e) { bch_err!(fs, "while checking {k}") })
@@ -774,7 +774,7 @@ pub(crate) fn dev_freespace_init(fs: &Fs, ca: &Dev, bucket_start: u64, bucket_en
             last_updated = local_clock();
         }
 
-        lockrestart_do(&trans, |t| dev_freespace_init_iter(t, ca, &mut iter, end))?;
+        trans.lockrestart_do(|t| dev_freespace_init_iter(t, ca, &mut iter, end))?;
     }
 
     fs.sb_lock().fs_member_mut(dev).set_freespace_initialized(true);

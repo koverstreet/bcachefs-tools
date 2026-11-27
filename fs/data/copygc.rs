@@ -61,7 +61,7 @@ use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::{u64_to_bucket, DevUsage};
 use crate::alloc::lru::{LruId, LruPos};
 use crate::btree::bkey::{pos, BkeyV};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, LoopFlow, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::c;
 use crate::data::ec::format::Stripe;
@@ -597,7 +597,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             let end = lru.end().to_bpos();
             let mut iter = BtreeIter::new(trans, Btree::lru, lru.start().to_bpos(), BtreeIterFlags::empty());
 
-            if let Ok(Some(p)) = lockrestart_do(trans, |t| Ok(iter.peek_max(t, end)?.map(|k| k.k.p))) {
+            if let Ok(Some(p)) = trans.lockrestart_do(|t| Ok(iter.peek_max(t, end)?.map(|k| k.k.p))) {
                 let time = LruPos::from_bpos(p).time;
                 if bucket_frag_ratio == 0 || time < bucket_frag_ratio {
                     bucket_frag_ratio = time;

@@ -11,7 +11,6 @@ use super::keys::{key_at, Keys};
 use super::sort::maybe_compact_whiteouts;
 use super::{BtreeNode, NodeContents};
 use crate::btree::bkey::{BkeyI, BkeyP, BKEY_U64S};
-use crate::btree::trans_attempt::lockrestart_do;
 use crate::btree::interior::check_topology_msg;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::btree::path::{LockedNode, PathIdx, PathsUpdates, Write};
@@ -211,7 +210,7 @@ impl<const I: usize> PinHolder<crate::field!(writes[I])> for BtreeNode {
         }
 
         let trans = crate::btree_trans!(fs);
-        let ret = lockrestart_do(&trans, |t| {
+        let ret = trans.lockrestart_do(|t| {
             let trans = t.trans();
             let mut paths = trans.paths();
             let path_idx = trans.node_lock_with_path(&mut paths, &self.c, SixLockType::SIX_LOCK_read, hash_val)?;

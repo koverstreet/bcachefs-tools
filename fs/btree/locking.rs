@@ -585,7 +585,7 @@ impl BtreeTrans<'_> {
                                     mut f: impl FnMut(&mut Paths<'_>, PathIdx) -> Result<T, BchError>)
         -> Result<T, BchError>
     {
-        crate::btree::trans_attempt::lockrestart_do(self, |_| {
+        self.lockrestart_do(|_| {
             let mut paths = self.paths();
             let idx = self.node_lock_with_path(&mut paths, b, ty, hash_val)?;
             let ret = f(&mut paths, idx);

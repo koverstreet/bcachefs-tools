@@ -14,7 +14,7 @@ use crate::wrappers::fs::FsExt;
 use bcachefs_kernel::alloc::accounting;
 use bcachefs_kernel::alloc::{accounting_mem, replicas::replicas_acct};
 use bcachefs_kernel::util::{HumanReadable, ToText, vstructs::Head, printbuf::Printbuf};
-use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
+use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::c;
 use bcachefs_kernel::alloc::buckets::DevUsageFull;
 use bcachefs_kernel::alloc::write_point::WritePointSpecifier;
@@ -183,7 +183,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     );
 
     // Extract type and offset inside the closure to avoid lifetime escape.
-    let result: Result<(BkeyType, u64), _> = lockrestart_do(&trans, |t| {
+    let result: Result<(BkeyType, u64), _> = trans.lockrestart_do(|t| {
         match iter.peek_prev(t)? {
             Some(k) => Ok((k.k.key_type(), k.k.p.offset)),
             None => Err(bcachefs_kernel::errcode::BchError::from(Errcode::ENOENT_image_nbuckets_used)),

@@ -3,7 +3,7 @@
 use super::bkey::*;
 use super::iter::{BtreeIter, polonius_key, BtreeIterFlags, BtreeNodeIter};
 use super::trans::BtreeTrans;
-use super::trans_attempt::{is_restart, lockrestart_do, lockrestart_do_in, CommitOpts, TransAttempt};
+use super::trans_attempt::{is_restart, CommitOpts, TransAttempt};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::{node::BtreeNode, path::{LockedNode, Paths}};
 use crate::errcode::{BchError, Errcode};
@@ -150,47 +150,51 @@ impl Keys {
     }
 }
 
-/// lockrestart_do(), committing after @f.
-pub fn commit_do<'t, F>(
-    trans: &BtreeTrans<'t>,
-    disk_res: Option<&DiskReservation<'_>>,
-    flags: impl Into<CommitOpts>,
-    mut f: F,
-) -> Result<(), BchError>
-where
-    F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<(), BchError>,
-{
-    let flags = flags.into();
-    lockrestart_do(trans, |t| {
-        // If @f fails, the commit - which resets the updates whether it
-        // succeeds or fails - never runs. An error that isn't a restart
-        // abandons the attempt: drop what @f queued, as the commit would
-        // have, so the next begin doesn't take them for updates someone
-        // forgot to commit. A restart's are dropped by the restart. As C's
-        // __commit_do().
-        if let Err(e) = f(t) {
-            if !is_restart(&e) {
-                let trans = t.trans();
-                trans.reset_updates(&mut trans.paths());
+impl<'t> BtreeTrans<'t> {
+    /// lockrestart_do(), committing after @f.
+    pub fn commit_do<F>(
+        &self,
+        disk_res: Option<&DiskReservation<'_>>,
+        flags: impl Into<CommitOpts>,
+        mut f: F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<(), BchError>,
+    {
+        let flags = flags.into();
+        self.lockrestart_do(|t| {
+            // If @f fails, the commit - which resets the updates whether it
+            // succeeds or fails - never runs. An error that isn't a restart
+            // abandons the attempt: drop what @f queued, as the commit would
+            // have, so the next begin doesn't take them for updates someone
+            // forgot to commit. A restart's are dropped by the restart. As C's
+            // __commit_do().
+            if let Err(e) = f(t) {
+                if !is_restart(&e) {
+                    let trans = t.trans();
+                    trans.reset_updates(&mut trans.paths());
+                }
+                return Err(e);
             }
-            return Err(e);
-        }
-        t.commit(disk_res, flags)
-    })
+            t.commit(disk_res, flags)
+        })
+    }
 }
 
-/// commit_do() in a transaction of its own.
-pub fn trans_commit_do<'t, F>(
-    fs: &'t Fs,
-    disk_res: Option<&DiskReservation<'_>>,
-    flags: impl Into<CommitOpts>,
-    f: F,
-) -> Result<(), BchError>
-where
-    F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<(), BchError>,
-{
-    let trans = crate::btree_trans!(fs);
-    commit_do(&trans, disk_res, flags, f)
+impl Fs {
+    /// commit_do() in a transaction of its own.
+    pub fn trans_commit_do<'t, F>(
+        &'t self,
+        disk_res: Option<&DiskReservation<'_>>,
+        flags: impl Into<CommitOpts>,
+        f: F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<(), BchError>,
+    {
+        let trans = crate::btree_trans!(self);
+        trans.commit_do(disk_res, flags, f)
+    }
 }
 
 impl<'t> BtreeIter<'t> {
@@ -231,7 +235,7 @@ impl<'t> BtreeIter<'t> {
     {
         let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
+            let step = trans.lockrestart_do_in(&mut paths, |t, paths| {
                 keys.begin(t, paths, self)?;
                 self.key(t, paths, keys, &mut f)
             })?;
@@ -270,8 +274,8 @@ impl<'t> BtreeIter<'t> {
     {
         let mut paths = trans.paths();
         loop {
-            if let Some(b) = lockrestart_do_in(trans, &mut paths,
-                                               |t, paths| self.walk_attempt(t, paths, keys, &mut f))? {
+            if let Some(b) = trans.lockrestart_do_in(&mut paths,
+                                                     |t, paths| self.walk_attempt(t, paths, keys, &mut f))? {
                 return Ok(b);
             }
         }
@@ -411,7 +415,7 @@ impl<'t> BtreeIter<'t> {
     {
         let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
+            let step = trans.lockrestart_do_in(&mut paths, |t, paths| {
                 keys.begin(t, paths, self)?;
                 match self.key(t, paths, keys, &mut f) {
                     Err(e) if e.matches(Errcode::fc_continue) => Ok(Some(Step::Next)),
@@ -509,7 +513,7 @@ impl<'t> BtreeNodeIter<'t> {
     {
         let mut paths = trans.paths();
         loop {
-            let step = lockrestart_do_in(trans, &mut paths, |t, paths| {
+            let step = trans.lockrestart_do_in(&mut paths, |t, paths| {
                 if !self.raw.peek_node_in(t, paths)? {
                     return Ok(None);
                 }
@@ -608,7 +612,7 @@ impl BtreeLevels {
         let iter_flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::ALL_SNAPSHOTS;
 
         for level in self.levels.clone() {
-            lockrestart_do(trans, |t| {
+            trans.lockrestart_do(|t| {
                 let mut iter = BtreeIter::uninit(t.trans());
                 let Some((iter, k)) = iter.peek_root(t, self.btree, level)? else { return Ok(()) };
                 f(t, iter, level, k)?;

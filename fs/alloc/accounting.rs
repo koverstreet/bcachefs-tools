@@ -54,7 +54,7 @@ use crate::alloc::buckets::FsUsageBase;
 use crate::alloc::replicas::{replicas_acct, SbEntry};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{AnyKeySC, BkeyI, BkeyS, BkeySC, BkeyTag, POS_MIN, ValidateFlags, BkeyOps};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, LoopFlow, TransAttempt};
 use crate::alloc::replicas_format::ReplicasEntryV1;
 use crate::sb::members_format::MEMBER_INVALID;
 use crate::errcode::{Errcode, BchError};
@@ -446,7 +446,7 @@ impl Fs {
         let (start, end) = (at(DataType::free), at(DataType(u8::MAX.into())));
 
         trans.write_buffer_flush_sync()?;
-        commit_do(&trans, None, CommitFlags::empty(), |t| {
+        trans.commit_do(None, CommitFlags::empty(), |t| {
             let mut iter = BtreeIter::new(t, format::Btree::accounting, start, BtreeIterFlags::ALL_SNAPSHOTS);
             iter.for_each_max_norestart(t, end, |_, k| {
                 let Some(a) = k.arm::<Accounting>() else { return Ok(LoopFlow::Continue) };
@@ -464,7 +464,7 @@ impl Fs {
 pub fn dev_usage_init(ca: &Dev, gc: bool) -> Result<(), BchError> {
     let fs = ca.fs();
     let trans = btree_trans!(fs);
-    bch_err_fn!(fs, lockrestart_do(&trans, |t| {
+    bch_err_fn!(fs, trans.lockrestart_do(|t| {
         /*
          * Set, not add: subtract whatever's currently accounted so the
          * free count lands at exactly nbuckets. This makes

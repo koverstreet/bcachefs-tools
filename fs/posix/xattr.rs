@@ -371,7 +371,7 @@ mod vfs {
     use crate::format::BkeyType;
     use core::ffi::CStr;
     use crate::btree::bkey::pos;
-    use crate::btree::iter::{lockrestart_do, CommitFlags};
+    use crate::btree::iter::CommitFlags;
     use crate::errcode::Errcode;
     use crate::posix::inode_opts::{self, InodeOpt};
     use crate::locking::MemallocFlags;
@@ -460,7 +460,7 @@ mod vfs {
     {
         let name = OsStr::from_bytes(name.to_bytes());
         let trans = crate::btree_trans!(v.fs());
-        lockrestart_do(&trans, |t| get_trans(t, &v.inode(), v.inum(), ty, name, buffer.as_deref_mut()))
+        trans.lockrestart_do(|t| get_trans(t, &v.inode(), v.inum(), ty, name, buffer.as_deref_mut()))
             .map_err(|e| if e.matches(c::ENOENT) { Errcode::ENODATA_xattr_get.into() } else { e })
     }
 
@@ -475,7 +475,7 @@ mod vfs {
         // Updating the VFS inode wants the inode's btree position still
         // locked: in the attempt that wrote it, after its commit.
         let trans = crate::btree_trans!(v.fs());
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             set_trans(t, v.inum(), &mut inode, name, value, ty, flags)?;
             t.commit(None, CommitFlags::empty())?;
             v.update_after_write(t.trans(), &inode, ATTR_CTIME);

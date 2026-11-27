@@ -186,41 +186,43 @@ pub fn is_restart(e: &BchError) -> bool {
     e.matches(Errcode::transaction_restart)
 }
 
-pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
-where
-    F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<T, BchError>
-{
-    loop {
-        let t = trans.begin();
+impl<'t> BtreeTrans<'t> {
+    pub fn lockrestart_do<T, F>(&self, mut f: F) -> Result<T, BchError>
+    where
+        F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<T, BchError>
+    {
+        loop {
+            let t = self.begin();
 
-        match f(&t) {
-            Err(e) if is_restart(&e) => continue,
-            Err(e) => return Err(e),
-            Ok(v) => {
-                t.verify_not_restarted();
-                return Ok(v);
+            match f(&t) {
+                Err(e) if is_restart(&e) => continue,
+                Err(e) => return Err(e),
+                Ok(v) => {
+                    t.verify_not_restarted();
+                    return Ok(v);
+                }
             }
         }
     }
-}
 
-/// lockrestart_do(), for the btree code's own loops: each attempt begun, and @f
-/// run, under the caller's borrow of the path table - @f lends it to whatever
-/// public code it runs.
-pub(in crate::btree) fn lockrestart_do_in<'t, T, F>(trans: &BtreeTrans<'t>, paths: &mut Paths<'_>, mut f: F)
-    -> Result<T, BchError>
-where
-    F: for<'a> FnMut(&TransAttempt<'a, 't>, &mut Paths<'_>) -> Result<T, BchError>
-{
-    loop {
-        let t = TransAttempt::new(trans, trans.begin_raw(paths, AttemptKey(())));
+    /// lockrestart_do(), for the btree code's own loops: each attempt begun, and @f
+    /// run, under the caller's borrow of the path table - @f lends it to whatever
+    /// public code it runs.
+    pub(in crate::btree) fn lockrestart_do_in<T, F>(&self, paths: &mut Paths<'_>, mut f: F)
+        -> Result<T, BchError>
+    where
+        F: for<'a> FnMut(&TransAttempt<'a, 't>, &mut Paths<'_>) -> Result<T, BchError>
+    {
+        loop {
+            let t = TransAttempt::new(self, self.begin_raw(paths, AttemptKey(())));
 
-        match f(&t, paths) {
-            Err(e) if is_restart(&e) => continue,
-            Err(e) => return Err(e),
-            Ok(v) => {
-                t.verify_not_restarted();
-                return Ok(v);
+            match f(&t, paths) {
+                Err(e) if is_restart(&e) => continue,
+                Err(e) => return Err(e),
+                Ok(v) => {
+                    t.verify_not_restarted();
+                    return Ok(v);
+                }
             }
         }
     }

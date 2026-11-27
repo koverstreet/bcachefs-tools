@@ -24,7 +24,7 @@ use crate::util::vstructs::{Unvalidated, Validated, Whole};
 use crate::btree::trigger::{Trigger, TriggerOp};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, KeyFn,
     Keys, LoopControl, TransAttempt, TransBkey, UpdateTriggerFlags,
 };
 use crate::btree::trans::TransGuard;
@@ -162,7 +162,7 @@ pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchErro
 
 pub fn is_ro(fs: &Fs, subvol: u32) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    lockrestart_do(&trans, |t| is_ro_trans(t, subvol).map(|_| ()))
+    trans.lockrestart_do(|t| is_ro_trans(t, subvol).map(|_| ()))
 }
 
 /// ENOTEMPTY_subvol_not_empty if @subvol has subvolumes under it.
@@ -723,7 +723,7 @@ fn reparent(
 
 /// Point @subvol's snapshots at @subvol's own creation_parent.
 fn reparent_children(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
-    let s = lockrestart_do(trans, |t| get(t, subvol, true))?;
+    let s = trans.lockrestart_do(|t| get(t, subvol, true))?;
     let new = s.creation_parent.get();
 
     let mut iter = BtreeIter::new(trans, Btree::subvolumes, POS_MIN,
@@ -775,7 +775,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
 
 fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
     reparent_children(trans, subvol)?;
-    commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| __set_deleted(t, subvol))
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| __set_deleted(t, subvol))
 }
 
 /// Waits for inodes still in use.
@@ -942,7 +942,7 @@ crate::recovery_pass!(initialize_subvolumes => initialize);
 /// Set bi_subvol on the root inode, upgrading to subvolumes.
 fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
         let mut iter = BtreeIter::new(t, Btree::inodes,
                                       Bpos { inode: 0, offset: BCACHEFS_ROOT_INO as u64,
                                                 snapshot: u32::MAX },

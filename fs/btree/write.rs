@@ -4,7 +4,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bkey_validate, BkeyS, BkeySC, ValidateFlags, BkeyValidateContext,
     BkeyValidateFrom};
 use crate::btree::cache::Bounce;
-use crate::btree::iter::{lockrestart_do, BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
+use crate::btree::iter::{BtreeNodeIter, BtreeNodeRef, CommitFlags, CommitOpts, TransAttempt,
                          Watermark};
 use crate::btree::node::sort::{
     btree_node_compact, btree_node_set_needs_whiteout, btree_node_sort, build_aux_trees, drop_whiteouts,
@@ -252,7 +252,7 @@ async fn write_task<'h>(wbio: Pin<&'h mut Bio>, fs: BackRef<Fs>, b: BackRef<Btre
     if fs.journal.error().is_ok() &&
         (!first || !failed.is_empty())
     {
-        let ret = lockrestart_do(&trans, |t| write_update_key(t, &key, &failed, &b));
+        let ret = trans.lockrestart_do(|t| write_update_key(t, &key, &failed, &b));
         if ret.is_err() {
             b.flags.set_noevict(true);
         }
@@ -264,7 +264,7 @@ async fn write_task<'h>(wbio: Pin<&'h mut Bio>, fs: BackRef<Fs>, b: BackRef<Btre
 
     fs.times.get(TimeStat::btree_node_write as usize).update(start_time);
 
-    lockrestart_do(&trans, |_| {
+    trans.lockrestart_do(|_| {
         /* identity pinned: write_in_flight (cleared below) blocks reclaim */
         let mut paths = trans.paths();
         let idx = trans.node_lock_with_path(&mut paths, &b.c, SixLockType::SIX_LOCK_read, 0)?;

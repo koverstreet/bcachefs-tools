@@ -30,7 +30,7 @@ use crate::util::vstructs::cast_plain_mut;
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
-    lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt, TransBkey,
+    BtreeIter, BtreeIterFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
 };
 use crate::c;
@@ -436,7 +436,7 @@ pub fn lookup(
 ) -> Result<SubvolInum, BchError> {
     let trans = crate::btree_trans!(fs);
 
-    lockrestart_do(&trans, |t| {
+    trans.lockrestart_do(|t| {
         let mut iter = BtreeIter::uninit(t.trans());
         lookup_trans(t, &mut iter, dir, hash_info, name, BtreeIterFlags::empty())
     })

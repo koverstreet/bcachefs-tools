@@ -8,7 +8,7 @@ use crate::alloc::{backpointers::{backpointer_get_key, BackpointerPos}, capacity
 use crate::btree::bkey::{pos, AnyKeySC, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::util::{vstructs::{Unvalidated, Validated}, log::LogMsg, Join, Printbuf};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::data::ec::format::Stripe;
@@ -319,7 +319,7 @@ pub fn resume_logged_op(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
     let op = op_k.arm::<LoggedOpStripeUpdate>().expect("a stripe update op");
     let (old_idx, new_idx) = (op.v.old_idx.get(), op.v.new_idx.get());
 
-    let get = |idx| lockrestart_do(trans, |t| {
+    let get = |idx| trans.lockrestart_do(|t| {
         let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx), BtreeIterFlags::CACHED);
         let k = iter.peek_slot(t)?.expect("a slot always has a key");
         Ok(k.arm::<Stripe>().is_some().then(|| BkeyBuf::from_key(k)))

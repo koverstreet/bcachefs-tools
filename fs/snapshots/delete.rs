@@ -55,7 +55,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
 };
 use crate::btree::trans::TransGuard;
@@ -944,7 +944,7 @@ fn delete_dead_snapshot_keys_v2(trans: &TransGuard<'_>, run: &Run<'_>) -> Result
     // inode at its exact position - enforced by check_damage), so we can use
     // this to greatly accelerate scanning:
     loop {
-        let p = lockrestart_do(trans, |t| {
+        let p = trans.lockrestart_do(|t| {
             let p = iter.peek(t)?.map(|k| k.k.p);
             if p.is_some() {
                 let _ = d.progress.update(t, &iter);
@@ -1321,7 +1321,7 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     let mut buf = Printbuf::new();
     nodes_to_text(&mut buf, Some(run.nodes), false);
     prt!(&mut buf, "{data}");
-    commit_do(&trans, None, CommitFlags::empty(), |t| t.log_msg(&mut buf))?;
+    trans.commit_do(None, CommitFlags::empty(), |t| t.log_msg(&mut buf))?;
 
     bch_verbose!(fs, "{data}");
 
@@ -1340,15 +1340,15 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     // This can't precede the migration above: what the check reads is
     // whether the keys that were supposed to move actually did.
     for &i in run.nodes.delete_leaves.iter() {
-        lockrestart_do(&trans, |t| check_no_data(t, i, "leaf delete", Some(&run)))?;
+        trans.lockrestart_do(|t| check_no_data(t, i, "leaf delete", Some(&run)))?;
     }
 
     for i in run.nodes.delete_interior.iter() {
-        lockrestart_do(&trans, |t| check_no_data(t, i.id, "set_no_keys", Some(&run)))?;
+        trans.lockrestart_do(|t| check_no_data(t, i.id, "set_no_keys", Some(&run)))?;
     }
 
     for &i in run.nodes.delete_leaves.iter() {
-        let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
+        let ret = trans.commit_do(None, CommitFlags::empty(), |t| {
             check_deletable(t, i, false, Some(&run))?;
             node_delete(t, i)
         });
@@ -1357,7 +1357,7 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     }
 
     for i in run.nodes.delete_interior.iter() {
-        commit_do(&trans, None, CommitFlags::empty(), |t| node_set_no_keys(t, i.id, &run))?;
+        trans.commit_do(None, CommitFlags::empty(), |t| node_set_no_keys(t, i.id, &run))?;
     }
 
     Ok(())
@@ -1469,7 +1469,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
         // that never happened - skip[] pointing above parent, which
         // validation rejects on the next write.
         for i in delete.iter() {
-            let ret = lockrestart_do(&trans, |t| check_deletable(t, i.id, true, None));
+            let ret = trans.lockrestart_do(|t| check_deletable(t, i.id, true, None));
             refusal_to_text(&trans, &ret, i.id, None);
             ret?;
         }
@@ -1489,7 +1489,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
         })?;
 
         for i in delete.iter() {
-            let ret = commit_do(&trans, None, CommitFlags::empty(), |t| node_delete(t, i.id));
+            let ret = trans.commit_do(None, CommitFlags::empty(), |t| node_delete(t, i.id));
             if !ret.is_err_and(|e| e.matches(c::EROFS)) {
                 let _ = bch_err_msg!(fs, ret, "deleting snapshot {}", i.id);
             }

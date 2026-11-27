@@ -57,7 +57,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags,
                          CommitFlags, TransAttempt};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -466,7 +466,7 @@ impl<'a, 'f> Walker<'a, 'f> {
                 return Ok(());
             }
 
-            lockrestart_do(ctxt.trans(), |t| {
+            ctxt.trans().lockrestart_do(|t| {
                 let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, r.idx),
                                               BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
                 let k = iter.peek_slot(t)?.expect("a slot");
@@ -650,7 +650,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
         }
 
         let work = Bbpos { btree: work_pos.btree, pos: p };
-        if lockrestart_do(trans, |t| walker.extent_phys(t, work)).is_err() {
+        if trans.lockrestart_do(|t| walker.extent_phys(t, work)).is_err() {
             break;
         }
     }
@@ -770,7 +770,7 @@ impl<'f> Reconciler<'f, '_> {
                 // The backpointer is checked against its node's pointer in the
                 // attempt that read it, its reconcile_scan leaf still locked: a
                 // node rewrite deletes it there, and can't land in between
-                PhaseKind::Btree => match lockrestart_do(trans, |t| {
+                PhaseKind::Btree => match trans.lockrestart_do(|t| {
                     let next = next_key_in(t, phase.btree, work_pos.pos, phase.end, BkeyI::<Backpointer>::from_key)?;
                     let Some((at, bp)) = next else { return Ok(None) };
                     work_pos.pos = at;
@@ -784,7 +784,7 @@ impl<'f> Reconciler<'f, '_> {
                     let Some(at) = p.w.work.next(trans, &mut work_pos, phase.end)? else { return Ok(()) };
                     work_pos.pos = at;
                     set_status(fs, Status::Running { phase: Some(phase), pos: at });
-                    lockrestart_do(trans, |t| p.w.extent(t, work_pos))
+                    trans.lockrestart_do(|t| p.w.extent(t, work_pos))
                 }
                 PhaseKind::Phys => unreachable!("a phys phase is walked by its threads"),
             };
@@ -1137,7 +1137,7 @@ impl Fs {
 
         let trans = crate::btree_trans!(self);
         let mut iter = BtreeIter::new(&trans, Btree::reconcile_scan, POS_MIN, BtreeIterFlags::empty());
-        let _ = lockrestart_do(&trans, |t| iter.peek(t).map(|_| ()));
+        let _ = trans.lockrestart_do(|t| iter.peek(t).map(|_| ()));
         write!(out, "{}\n", u32::from(iter.pos().inode == 0));
     }
 }

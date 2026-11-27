@@ -14,7 +14,7 @@
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, POS_MIN};
 use crate::btree::iter::{
-    commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::posix::{inode_format::BCACHEFS_ROOT_INO, inode};
 use crate::posix::dev::dev_t;
@@ -104,7 +104,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
 /// Get the root directory, creating it if it doesn't exist.
 fn check_root(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, check_root_trans)
+    trans.commit_do(None, CommitFlags::NO_ENOSPC, check_root_trans)
 }
 
 crate::recovery_pass!(check_root => check_root);

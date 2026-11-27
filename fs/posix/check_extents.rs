@@ -33,7 +33,7 @@ use crate::btree::bkey::prelude::*;
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
+    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
 };
 use crate::posix::inode_format::{BCACHEFS_ROOT_INO, InodeFlags};
@@ -445,7 +445,7 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
     // The last inode's i_sectors, as in the walk, with a restart retrying it
     // here: whatever it repaired is in memory, so the retry has nothing left
     // to do.
-    lockrestart_do(&trans, |t| check_i_sectors(t, &mut st.w))
+    trans.lockrestart_do(|t| check_i_sectors(t, &mut st.w))
 }
 
 fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {

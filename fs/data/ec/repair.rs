@@ -12,7 +12,7 @@ use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::data::ec::format::Stripe;
@@ -380,7 +380,7 @@ fn stripe_repair_unrebuildable(ctxt: &Moving<'_>, h: OpenStripe<'_>, s: BkeySC<'
     }
 
     let mut key = BkeyBuf::new();
-    lockrestart_do(trans, |t| stripe_repair_reload(t, &mut key, s.k.p))?;
+    trans.lockrestart_do(|t| stripe_repair_reload(t, &mut key, s.k.p))?;
     let s = BkeySC::from(&key).arm::<Stripe>().expect("a stripe, as reloaded");
     let b = StripeBlocks::get(fs, s)?;
 
@@ -393,7 +393,7 @@ fn stripe_repair_unrebuildable(ctxt: &Moving<'_>, h: OpenStripe<'_>, s: BkeySC<'
 
     if b.live == 0 {
         let idx = s.k.p.offset;
-        commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| stripe_delete(t, idx, true))?;
+        trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| stripe_delete(t, idx, true))?;
         return Ok(StripeRepair::Done);
     }
 
@@ -447,7 +447,7 @@ fn stripe_open_for_repair<'f>(
     idx:        u64,
     mut blocks: impl FnMut(BkeySC<'_, Stripe<Validated>>) -> Result<Option<StripeBlocks>, BchError>,
 ) -> Result<Option<(OpenStripe<'f>, BkeyBuf, StripeBlocks)>, BchError> {
-    lockrestart_do(trans, |t| {
+    trans.lockrestart_do(|t| {
         let mut iter = BtreeIter::new(t, Btree::stripes, pos(0, idx),
                                       BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
         let Some(k) = iter.peek_slot(t)?.filter(|k| k.k.key_type() == BkeyType::stripe) else {
@@ -674,7 +674,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, Stripe<Validated>>, h: OpenSt
         let mut i = ns.lock();
         i.make_bufs(fs, MemWait::Never)
             .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), ReservationFlags::empty()) } else { Ok(()) })
-    }.and_then(|()| lockrestart_do(trans, |t| stripe_idx_alloc(t, &mut ns.lock())));
+    }.and_then(|()| trans.lockrestart_do(|t| stripe_idx_alloc(t, &mut ns.lock())));
     if let Err(e) = ret {
         discard_held(fs, b);
         return Err(e);
@@ -682,7 +682,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, Stripe<Validated>>, h: OpenSt
 
     let target = if v.disk_label != 0 { Target::Group(u32::from(v.disk_label) - 1).encode().into() } else { 0 };
 
-    let ret = lockrestart_do(trans, |t| {
+    let ret = trans.lockrestart_do(|t| {
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
         let mut req = t.alloc_request(target, false, None, 0, 0,
                                       Watermark::normal, WriteFlags::empty(), AllocWait::Sync(None))?;

@@ -13,7 +13,7 @@ use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeyI, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::interior::{check_topology as node_check_topology, root_alloc_fake_trans};
-use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt};
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter, CommitFlags, TransAttempt};
 use crate::btree::journal_overlay::{self, shoot_down_journal_keys, BtreeAndJournalIter};
 use crate::btree::node::iter::KeyIter;
 use crate::btree::node::BtreeNode;
@@ -404,7 +404,7 @@ fn repair_node_end(t: &TransAttempt<'_, '_>, btree: Btree, level: usize, node: &
 /// The node at @k, a child of a node at @level, out of the cache and its key
 /// out of its parent.
 fn drop_node(trans: &BtreeTrans<'_>, btree: Btree, level: usize, k: &BkeyI) -> Result<(), BchError> {
-    lockrestart_do(trans, |t| {
+    trans.lockrestart_do(|t| {
         let iter = node_at(t, btree, level - 1, k, BtreeIterFlags::INTENT | BtreeIterFlags::READ_ERRORS)?;
         t.trans().node_evict(&mut t.trans().paths(), iter.raw.path, level - 1)
     })?;
@@ -421,7 +421,7 @@ fn check_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &Bke
     let mut again = false;
 
     while let Some((k, repair)) =
-        lockrestart_do(trans, |t| check_child(t, btree, level, node, pos, prev.as_deref()))?
+        trans.lockrestart_do(|t| check_child(t, btree, level, node, pos, prev.as_deref()))?
     {
         let end = k.k.p;
 
@@ -445,7 +445,7 @@ fn check_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &Bke
     }
 
     if let Some(prev) = &prev {
-        again |= lockrestart_do(trans, |t| repair_node_end(t, btree, level, node, prev))? == Repair::FilledFromScan;
+        again |= trans.lockrestart_do(|t| repair_node_end(t, btree, level, node, prev))? == Repair::FilledFromScan;
     }
     Ok(again)
 }
@@ -475,7 +475,7 @@ fn repair_children(trans: &BtreeTrans<'_>, btree: Btree, level: usize, node: &Bk
         let mut have_child = false;
         let mut again = false;
 
-        while let Some(k) = lockrestart_do(trans, |t| next_child(t, btree, level, node, pos))? {
+        while let Some(k) = trans.lockrestart_do(|t| next_child(t, btree, level, node, pos))? {
             if repair_topology_recurse(trans, btree, level - 1, &k)? == Repair::DropThis {
                 drop_node(trans, btree, level, &k)?;
                 again = true;
@@ -515,7 +515,7 @@ fn repair_topology_recurse(trans: &BtreeTrans<'_>, btree: Btree, level: usize,
     let ret = repair_children(trans, btree, level, node);
 
     if ret == Ok(Repair::None) {
-        lockrestart_do(trans, |t| {
+        trans.lockrestart_do(|t| {
             let iter = node_at(t, btree, level, node, BtreeIterFlags::empty())?;
             let paths = t.trans().paths();
             let b = paths[iter.raw.path].locked_btree_node(level).expect("a node, peeked");
@@ -665,12 +665,12 @@ fn check_topology(fs: &Fs) -> Result<(), BchError> {
         let mut reconstructed_root = false;
 
         loop {
-            lockrestart_do(&trans, |t| topology_check_root(t, btree, &mut reconstructed_root))?;
+            trans.lockrestart_do(|t| topology_check_root(t, btree, &mut reconstructed_root))?;
 
-            let (level, root_k) = lockrestart_do(&trans, |t| check_root_boundaries(t, btree))?;
+            let (level, root_k) = trans.lockrestart_do(|t| check_root_boundaries(t, btree))?;
 
             if repair_topology_recurse(&trans, btree, level, &root_k)? == Repair::DropThis {
-                lockrestart_do(&trans, |t| drop_root(t, btree, level, &root_k))?;
+                trans.lockrestart_do(|t| drop_root(t, btree, level, &root_k))?;
 
                 if !reconstructed_root {
                     fs.btree_id_root_set_error(i, -(c::EIO as i32));

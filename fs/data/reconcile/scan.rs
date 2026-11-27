@@ -19,7 +19,7 @@
 use crate::alloc::{backpointers::{backpointer_get_key, BpScanIter}, capacity::DiskReservation};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeLevels,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -103,7 +103,7 @@ impl ReconcileScan {
             Self::inum(i) => {
                 write!(out, "inum: ");
                 let trans = crate::btree_trans!(fs);
-                let _ = lockrestart_do(&trans, |t| {
+                let _ = trans.lockrestart_do(|t| {
                     let restore = out.state_save();
                     inum_snapshot_to_path(t, i, 0, out).inspect_err(|_| out.state_restore(restore))
                 });
@@ -136,7 +136,7 @@ impl Fs {
     /// Request @scan, committed - and kick reconcile, if @wakeup.
     pub fn request_scan(&self, scan: ReconcileScan, wakeup: bool) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
-        commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan))?;
+        trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan))?;
         if wakeup {
             self.reconcile_wakeup();
         }
@@ -170,7 +170,7 @@ impl ScanCookie {
     pub fn complete(self, trans: &TransGuard<'_>) -> Result<bool, BchError> {
         let fs = trans.fs();
         let mut now = 0;
-        commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
+        trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| {
             let mut iter = BtreeIter::new(t, Btree::reconcile_scan, self.pos, BtreeIterFlags::INTENT);
             now = cookie_generation(iter.peek_slot(t)?.expect("a slot"));
             if now == self.generation {
@@ -233,7 +233,7 @@ impl Fs {
             s.nr += 1;
         }
         let trans = crate::btree_trans!(self);
-        commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan))
+        trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan))
     }
 
     /// The option change has landed: @scan requested again, now against the
@@ -241,7 +241,7 @@ impl Fs {
     /// registration is dropped with the change, not here.
     pub fn opt_change_scan_post(&self, scan: ReconcileScan) -> Result<(), BchError> {
         let trans = crate::btree_trans!(self);
-        let ret = commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan));
+        let ret = trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan));
         self.reconcile_wakeup();
         ret
     }

@@ -174,7 +174,7 @@ mod vfs {
     use crate::posix::xattr_format::Xattr;
     use crate::snapshots::subvolume::SubvolInum;
     use crate::bch_err;
-    use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
+    use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
     use crate::errcode::{Errcode, BchError};
@@ -259,7 +259,7 @@ mod vfs {
         }
 
         let trans = crate::btree_trans!(fs);
-        let acl = lockrestart_do(&trans, |t| {
+        let acl = trans.lockrestart_do(|t| {
             let mut iter = BtreeIter::uninit(t.trans());
             PosixAcl::lookup(t, &mut iter, inode, inum, ty, BtreeIterFlags::empty())
         })?;
@@ -311,7 +311,7 @@ mod vfs {
         let _lock = v.update_lock();
 
         let trans = crate::btree_trans!(fs);
-        lockrestart_do(&trans, |t| {
+        trans.lockrestart_do(|t| {
             let mut acl = acl.map(PosixAcl::borrowed);
 
             subvolume::is_ro_trans(t, inum.subvol as u32)?;

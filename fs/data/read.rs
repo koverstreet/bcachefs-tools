@@ -78,7 +78,7 @@ use crate::alloc::{background::bucket_read_time_reset, capacity::DiskReservation
 use crate::bcachefs_ioctl::ReadErr;
 use crate::btree::bkey::{pos, prelude::*, BkeyI, BkeySC};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          LoopFlow, TransAttempt, UpdateTriggerFlags};
 use crate::{bch_err, btree_trans, c, fs_inconsistent, log_msg_ratelimited, prt};
 use crate::data::{compress::bio_uncompress, ec, inline_data::{self, CsumMismatch, InlineDataRef},
@@ -809,7 +809,7 @@ fn retry_report(fs: &Fs, read: &Rbio, read_pos: Bpos, k: BkeySC<'_>,
 
         let damage = ret.map_or(outcome, data_read_sb_err);
         if !read.is_update() && read.subvol != 0 && have_key {
-            let _ = commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| damage::record(t, read_pos, damage));
+            let _ = trans.commit_do(None, CommitFlags::NO_ENOSPC, |t| damage::record(t, read_pos, damage));
         }
     }
 }
@@ -998,7 +998,7 @@ fn narrow_crcs_from_read(fs: &Fs, rbio: &Rbio, p: &Plan) {
 
     let trans = btree_trans!(fs);
     let res = DiskReservation::new(fs);
-    match commit_do(&trans, Some(&res), CommitFlags::NO_ENOSPC, |t| narrow_crcs_update(t, p, new)) {
+    match trans.commit_do(Some(&res), CommitFlags::NO_ENOSPC, |t| narrow_crcs_update(t, p, new)) {
         Ok(()) => fs.event_inc_trace(events::data_read_narrow_crcs, |out| rbio.to_text_atomic(out, p.read_pos, p.flags)),
         Err(e) => fs.event_inc_trace(events::data_read_narrow_crcs_fail, |out| {
             write!(out, "{e}\n");
@@ -1069,7 +1069,7 @@ fn stale_dirty_pointer(trans: &BtreeTrans<'_>, ca: &Dev, k: BkeySC<'_>, ptr: Ext
             let mut out = buf.indent(2);
             write!(out, "{}\nmemory gen: {generation}", k.to_text(fs));
 
-            let alloc = lockrestart_do(trans, |t| {
+            let alloc = trans.lockrestart_do(|t| {
                 let mut iter = BtreeIter::new(t, Btree::alloc, bucket, BtreeIterFlags::CACHED);
                 Ok(iter.peek_slot(t)?.map(BkeyBuf::from_key))
             });
@@ -1670,7 +1670,7 @@ fn retry_fragment<'r>(fs: &'r Fs, read: &'r Rbio, at: Locate<'_>, walk: &mut Wal
                       prev_read: &mut BkeyBuf, f: &mut Option<Fragment<'r>>) -> Result<Step, BchError>
 {
     let trans = btree_trans!(fs);
-    lockrestart_do(&trans, |t| {
+    trans.lockrestart_do(|t| {
         let e = locate(t, at, walk.range())?;
         retry_fragment_of(t, fs, read, e, walk, failed, prev_read, f)
     })
@@ -1728,7 +1728,7 @@ fn retry_key(fs: &Fs, data_btree: Btree, data_pos: Bpos, pick: &ExtentPtrDecoded
     // @data_pos: matched by where its data starts
     let data_offset = data_pos.offset.wrapping_sub(pick.crc.offset.into());
     let trans = btree_trans!(fs);
-    let _ = lockrestart_do(&trans, |t| {
+    let _ = trans.lockrestart_do(|t| {
         let mut iter = BtreeIter::new(t, data_btree, data_pos, BtreeIterFlags::empty());
         if let Some(k) = iter.peek_slot(t)? {
             if k.arm::<Ptrs>().is_some_and(|kp| kp.matches_ptr(fs, &pick.ptr, data_offset)) {
@@ -1898,7 +1898,7 @@ fn update_fragment<'r>(fs: &'r Fs, rbio: &'r Rbio, k: &BkeyI, btree: Btree, buf:
 {
     let e = Extent { read_pos: k.k.start_pos(), btree, k: BkeySC::from(k), offset: 0, sectors: buf.len() >> 9 };
     let trans = btree_trans!(fs);
-    lockrestart_do(&trans, |t| {
+    trans.lockrestart_do(|t| {
         if let Some(p) = fragment_of(t, fs, rbio, buf, e, None, flags, false, dev)? {
             p.make(fs, rbio, f)?;
         }

@@ -52,7 +52,7 @@ use crate::alloc::lru::LruPos;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          LoopFlow, TransAttempt, TransBkey, UpdateTriggerFlags, Watermark};
 use crate::btree::trans::TransGuard;
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
@@ -542,7 +542,7 @@ impl<'a> Worker<'a> {
         let mut ret = Ok(());
         for d in done {
             let bucket = u64_to_bucket(d.dev_bucket);
-            ret = lockrestart_do(trans, |t| {
+            ret = trans.lockrestart_do(|t| {
                 let mut iter = BtreeIter::new(t, Btree::alloc, bucket,
                                               BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
                 let k = iter.peek_slot(t)?.expect("a slot always has a key");
@@ -801,7 +801,7 @@ pub(crate) fn do_discards_fast(ca: &Dev) {
         let Some(bucket) = ca.discard_fast.lock().pop() else { break };
         let bucket = pos(ca.dev_idx.into(), bucket);
         ret = loop {
-            match lockrestart_do(&trans, |t| w.one_bucket(t, bucket, ca.mi.get().bucket_size.into())) {
+            match trans.lockrestart_do(|t| w.one_bucket(t, bucket, ca.mi.get().bucket_size.into())) {
                 Err(e) if e.matches(Errcode::max_discards_in_flight) => ca.discard_slot_wait(&trans, true),
                 r => break r,
             }

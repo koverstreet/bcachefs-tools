@@ -32,7 +32,7 @@ use crate::btree::bkey::{AnyKeySC, BkeyVal, bkey_eq, bkey_ge, bkey_gt, bkey_lt, 
     BkeySC, BkeyV, BkeyVMut, ByFlag, FamilyVal, FieldOffsets, POS_MAX, POS_MIN, BkeyOps};
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::trigger::{Trigger, TriggerOp};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::data::reconcile::trigger::SetNeedsReconcileCtx;
 use crate::data::reflink_format::{IndirectInlineData, IndirectInlineDataV2, ReflinkP,
@@ -876,7 +876,7 @@ pub fn remap_range(
     let mut ret = Ok(());
 
     while ret.is_ok() && bkey_lt(dst_iter.pos(), dst_end) {
-        ret = lockrestart_do(&trans, |t| -> Result<(), BchError> {
+        ret = trans.lockrestart_do(|t| -> Result<(), BchError> {
             if fatal_signal_pending() {
                 return fs.throw(Errcode::EINTR_remap_range_fatal_signal);
             }
@@ -949,7 +949,7 @@ pub fn remap_range(
     let dst_done = dst_iter.pos().offset - dst_start.offset;
     new_i_size = new_i_size.min(dst_iter.pos().offset << 9);
 
-    let ret2 = lockrestart_do(&trans, |t| {
+    let ret2 = trans.lockrestart_do(|t| {
         let mut inode_iter = BtreeIter::uninit(t.trans());
         let mut inode_u = inode::__peek(t, &mut inode_iter, dst_inum, BtreeIterFlags::INTENT,
                                         Some(c"remap_range"))?;

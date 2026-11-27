@@ -13,7 +13,7 @@ use core::ffi::CStr;
 use core::ops::ControlFlow;
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{lockrestart_do, BtreeIterFlags, BtreeNodeIter};
+use crate::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use crate::btree::BtreeIter;
 use crate::btree::node::BtreeNode;
 use crate::btree::trans::transaction_fn;
@@ -94,7 +94,7 @@ impl DebugFile for Formats {
                 let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), from, 0, level,
                                                   BtreeIterFlags::empty());
                 loop {
-                    let step = lockrestart_do(&trans, |t| {
+                    let step = trans.lockrestart_do(|t| {
                         let end = {
                             let Some(n) = iter.peek(t)? else { return Ok(None) };
                             let b = n.node();

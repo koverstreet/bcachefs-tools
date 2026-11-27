@@ -3,7 +3,7 @@
 use crate::init::passes::{RecoveryPass, RunRecoveryPassFlags};
 use crate::fs::{Dev, Fs, SbLockGuard};
 use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN, ValidateFlags};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::init::dev::{DevsList, DevsMask, bch_sb_buf, DevFlag};
@@ -887,7 +887,7 @@ impl Fs {
                 let root = self.btree_id_root(btree).expect("a root for every btree");
                 let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, root.c.level.get().into(),
                                                   BtreeIterFlags::empty());
-                lockrestart_do(&trans, |t| {
+                trans.lockrestart_do(|t| {
                     let n = iter.peek(t)?.expect("the root node");
                     self.btree_bitmap_mark_if_unmarked(n.node().key().as_sc());
                     Ok(())

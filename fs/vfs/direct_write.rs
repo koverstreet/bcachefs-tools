@@ -9,7 +9,7 @@
 //! the caller's address space. Then it's ended, as a read dio is: the
 //! kiocb's completion, or the caller waiting for it.
 
-use crate::btree::{bkey::{pos, spos}, iter::{lockrestart_do, BtreeIter, BtreeIterFlags}};
+use crate::btree::{bkey::{pos, spos}, iter::{BtreeIter, BtreeIterFlags}};
 use crate::btree_trans;
 use crate::c;
 use crate::alloc::{buckets::ReservationFlags, write_point::WritePointSpecifier};
@@ -92,7 +92,7 @@ fn check_range_allocated(fs: &Fs, inum: SubvolInum, mut offset: u64, size: u64,
     let end = offset + size;
     let mut allocated = true;
 
-    let ret = lockrestart_do(&trans, |t| {
+    let ret = trans.lockrestart_do(|t| {
         let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
 
         let mut iter = BtreeIter::new(t, Btree::extents, spos(inum.inum, offset, snapshot),
